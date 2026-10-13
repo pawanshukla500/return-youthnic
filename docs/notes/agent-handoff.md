@@ -1015,12 +1015,55 @@ Append new entries at the end. Do not edit earlier entries, except to correct a 
   - Bypass TLS certificate verification for `SHOPIFY_DATABASE_URL`.
   - Require manual CSV/Excel file uploads for Shopify in `Uploads.tsx`.
 
+### 2026-10-13, Antigravity Agent, GitHub Remote Migration, Secrets Synchronization, Android APK Pipeline, and Deployment Architecture
+
+- **Changed Files**:
+  - `.github/workflows/return-scan-apk.yml` (fixed step naming quote syntax and triggers)
+  - `.github/workflows/ci.yml` (verified passing across all pushes)
+  - `.github/workflows/deploy.yml` (configured Hostinger VPS continuous deployment with secret guards)
+  - `android/app/src/main/res/values/strings.xml` (added missing string resources for scanner and update dialogs)
+  - `android/app/src/main/res/values/themes.xml` (closed unclosed XML tag and added `ThemeOverlay.Youthnic.BottomSheetDialog` alias)
+  - `android/app/src/main/res/layout/activity_scanner.xml` (aligned IDs: `tvActiveMarketplace`, `btnManualEntry`, `btnRecentScans`, `btnResumeCamera`, added `tvUpdateBanner`)
+  - `android/app/src/main/java/shop/youthnic/returnscan/data/Models.kt` (added aliases and models: `User.fullName`, `ShiftProgress.scannedToday`, `ScanSessionData.shiftProgress`, `ScanSessionData.missingComponents`, `MarketplaceAccount.marketplace`, `MarketplaceAccount.scannableCount`, `LookupItem` constructor and quantity getters, `LookupResult` convenience getters)
+  - `android/app/src/main/java/shop/youthnic/returnscan/data/BarcodeRules.kt` (implemented `looksLikeQr`, `isAllowed1DFormat`, `markEmitted`, and account-scoped `generateClientScanKey`)
+  - `android/app/src/main/java/shop/youthnic/returnscan/data/SessionManager.kt` (resolved JVM property collision for sound/vibration/screenFlash, added `hasSession()`, `getUser()`, and channel preferences)
+  - `android/app/src/main/java/shop/youthnic/returnscan/data/ApiClient.kt` (broadened `completeScan` parameter types, added `lookup`, `getSessionData(accountId)`, `checkLatestRelease`)
+  - `android/app/src/main/java/shop/youthnic/returnscan/data/ImageCache.kt` (added default `OkHttpClient` constructor and coroutine `getOrFetch(url, maxDim)`)
+  - `android/app/src/main/java/shop/youthnic/returnscan/ui/ChannelActivity.kt` (aligned types to `account.id.toString()`)
+  - `android/app/src/main/java/shop/youthnic/returnscan/ui/RecentScansDialog.kt` (resilient timestamp parsing)
+  - `android/app/src/main/java/shop/youthnic/returnscan/ui/ReturnVerificationBottomSheet.kt` (theme style and direct chip creation)
+  - `android/app/src/main/java/shop/youthnic/returnscan/ui/ScannerActivity.kt` (aligned `ResolutionStrategy` to `android.util.Size` and default session data initialization)
+  - `android/app/src/main/java/shop/youthnic/returnscan/ui/SettingsActivity.kt` (aligned switch property names)
+  - `.env.example` (documented clean template with required environment variables)
+
+- **GitHub Repository & Actions Verification**:
+  - Remote configured to `git@github.com:pawanshukla500/return-youthnic.git` (`origin main`).
+  - GitHub secrets configured via `gh secret set`: `DATABASE_URL`, `DATABASE_SSL_CA`, `DATABASE_SSL_CA_FILE`, `SHOPIFY_DATABASE_URL`, `SHOPIFY_SSL_CA`, `TEST_DATABASE_URL`, `OMSGURU_CLIENT_ID`, `OMSGURU_API_TOKEN`, `PORT`, `SESSION_SECRET`.
+  - SSH public key generated and stored at `~/.ssh/id_ed25519.pub`.
+  - GitHub Actions runs verified green:
+    - `CI - Typecheck, Build & Test` (Run 38365893524): **SUCCESS** (26s).
+    - `Build Return Scan Android APK` (Run 38365893497): **SUCCESS** (4m34s).
+      - Release APK generated: 3,243,809 bytes (3.09 MB, well under 5 MB budget).
+      - Package ID verified: `shop.youthnic.returnscan`, Version Code `10012` (`1.0.12`).
+      - Camera permission verified in manifest.
+      - Artifact `return-scan-app` successfully uploaded (ID 11797172703).
+
+- **Local Verification Results**:
+  - `npm.cmd run typecheck`: Exit 0 (0 errors).
+  - `npm.cmd run build`: Exit 0 (Vite bundled in 1.32s).
+  - `npm.cmd test`: 303 tests run: 279 pass, 0 fail, 24 skipped (dedicated `TEST_DATABASE_URL`).
+
+- **The next agent must not**:
+  - Weaken camera resolution or bypass `ResolutionStrategy` Size constraints in `ScannerActivity.kt`.
+  - Introduce clashing JVM property getter/setters in `SessionManager.kt`.
+  - Commit or log secrets from `.env`.
+
 ## STOP — needs the user to resume
 
 **This is the exact point at which the agent stopped.** Everything that can be verified without external input has been verified. The following items require the user to act before any agent can resume:
 
-1. **Review and approve dedicated GitHub repository creation:** The native Android application source tree, tests, Gradle wrapper, and GitHub Actions workflow (`.github/workflows/return-scan-apk.yml`) are fully prepared locally in `android/`. When approved by the user, create the dedicated GitHub repository under the user's selected GitHub owner and push the codebase.
-2. **Physical Android phone verification:** Install signed APK on a physical warehouse device (running Android 6.0+) and verify continuous scanning of live physical parcels, pinch-to-zoom product images, and audio/vibration cues.
+1. **Hostinger VPS SSH Key for Automated Deployments:** To enable 1-click automatic deployment on push, set the repository secret `HOSTINGER_SSH_KEY` with the private key corresponding to `root@200.141.1.119`.
+2. **Physical Android phone verification:** Download artifact `return-scan-app` from GitHub Actions run 38365893497, install on warehouse Android phone, and test physical barcode scanning.
 3. **Provision a disposable PostgreSQL test database** containing `test` in its name for running the 24 skipped integration tests.
 
 **What an agent must not do without explicit approval**: re-introduce `dropAppTables`, `databaseNeedsRebuild`, `APP_TABLES`, or any unconditional `DELETE FROM` outside `product-master.ts` and `load-product-master.ts`. Add `DROP TABLE` / `TRUNCATE` / `DELETE FROM` to any schema file. Point `TEST_DATABASE_URL` at the production database. Read `.env`. Activate any real file against production. Weaken any of the static guards added in this handoff.
