@@ -62,6 +62,37 @@ class SessionManager(private val context: Context) {
         get() = prefs.getString("last_marketplace_name", "") ?: ""
         set(value) = prefs.edit().putString("last_marketplace_name", value).apply()
 
+    var lastAccountId: String
+        get() = prefs.getString("last_account_id", "") ?: ""
+        set(value) = prefs.edit().putString("last_account_id", value).apply()
+
+    var lastAccountName: String
+        get() = prefs.getString("last_account_name", "") ?: ""
+        set(value) = prefs.edit().putString("last_account_name", value).apply()
+
+    var lastMarketplace: String
+        get() = prefs.getString("last_marketplace", "") ?: ""
+        set(value) = prefs.edit().putString("last_marketplace", value).apply()
+
+    var lastColor: String
+        get() = prefs.getString("last_color", "") ?: ""
+        set(value) = prefs.edit().putString("last_color", value).apply()
+
+    var askedNotificationPermission: Boolean
+        get() = prefs.getBoolean("asked_notification_permission", false)
+        set(value) = prefs.edit().putBoolean("asked_notification_permission", value).apply()
+
+    fun getUser(): User? {
+        if (!isLoggedIn) return null
+        return User(
+            id = userId,
+            name = userName,
+            email = userEmail,
+            role = userRole,
+            sidebarLabel = ""
+        )
+    }
+
     var soundEnabled: Boolean
         get() = prefs.getBoolean("sound_enabled", true)
         set(value) = prefs.edit().putBoolean("sound_enabled", value).apply()

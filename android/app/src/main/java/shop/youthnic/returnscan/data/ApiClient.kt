@@ -38,7 +38,7 @@ class ApiClient(private val sessionManager: SessionManager) {
 
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
 
-    suspend fun login(email: String, pass: String, rememberDevice: Boolean): Result<LoginResponse> =
+    suspend fun login(email: String, pass: String, rememberDevice: Boolean = true): Result<LoginResponse> =
         withContext(Dispatchers.IO) {
             try {
                 val json = JSONObject().apply {
@@ -89,7 +89,7 @@ class ApiClient(private val sessionManager: SessionManager) {
         }
     }
 
-    suspend fun getSessionData(): Result<ScanSessionData> = withContext(Dispatchers.IO) {
+    suspend fun getSessionData(accountId: Any? = null): Result<ScanSessionData> = withContext(Dispatchers.IO) {
         try {
             val req = authorizedRequestBuilder("/api/scan/session").get().build()
             execute(req) { json ->
@@ -146,6 +146,8 @@ class ApiClient(private val sessionManager: SessionManager) {
                 Result.failure(mapException(e))
             }
         }
+
+    suspend fun lookup(accountId: Any?, awb: String): Result<LookupResult> = lookupAwb(awb, "")
 
     suspend fun saveScan(
         shipmentId: Int,
@@ -204,16 +206,16 @@ class ApiClient(private val sessionManager: SessionManager) {
     }
 
     suspend fun completeScan(
-        accountId: Int,
-        shipmentId: String,
+        accountId: Any,
+        shipmentId: Any,
         clientScanKey: String,
         scannedTracking: String,
         items: List<shop.youthnic.returnscan.ui.ItemVerificationState>
     ): Result<ScanReceipt> = withContext(Dispatchers.IO) {
         try {
             val submission = JSONObject().apply {
-                put("accountId", accountId)
-                put("shipmentId", shipmentId.toIntOrNull() ?: 0)
+                put("accountId", accountId.toString().toIntOrNull() ?: 0)
+                put("shipmentId", shipmentId.toString().toIntOrNull() ?: 0)
                 put("clientScanKey", clientScanKey)
                 put("scannedTracking", scannedTracking)
                 put("notes", "")
@@ -223,7 +225,7 @@ class ApiClient(private val sessionManager: SessionManager) {
                 val itemsArr = JSONArray()
                 for (item in items) {
                     val itemObj = JSONObject().apply {
-                        put("itemId", item.item.itemId)
+                        put("itemId", item.itemId.toIntOrNull() ?: 0)
                         put("receivedQty", item.receivedQty)
                         put("verified", item.physicalChecked)
 

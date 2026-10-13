@@ -246,10 +246,11 @@ class ScannerActivity : AppCompatActivity() {
         val provider = cameraProvider ?: return
         provider.unbindAll()
 
+        val hdSize = android.util.Size(CameraTuning.HD.first, CameraTuning.HD.second)
         val preview = Preview.Builder()
             .setResolutionSelector(
                 ResolutionSelector.Builder()
-                    .setResolutionStrategy(ResolutionStrategy(CameraTuning.HD, ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER))
+                    .setResolutionStrategy(ResolutionStrategy(hdSize, ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER))
                     .build()
             )
             .build()
@@ -258,7 +259,7 @@ class ScannerActivity : AppCompatActivity() {
         val imageAnalysis = ImageAnalysis.Builder()
             .setResolutionSelector(
                 ResolutionSelector.Builder()
-                    .setResolutionStrategy(ResolutionStrategy(CameraTuning.HD, ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER))
+                    .setResolutionStrategy(ResolutionStrategy(hdSize, ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER))
                     .build()
             )
             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)

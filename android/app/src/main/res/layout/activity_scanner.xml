@@ -7,6 +7,19 @@
     android:background="@color/background"
     android:orientation="vertical">
 
+    <TextView
+        android:id="@+id/tvUpdateBanner"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@color/colorPrimary"
+        android:textColor="@color/text_on_primary"
+        android:paddingHorizontal="14dp"
+        android:paddingVertical="8dp"
+        android:gravity="center"
+        android:textStyle="bold"
+        android:textSize="13sp"
+        android:visibility="gone" />
+
     <!-- Header -->
     <LinearLayout
         android:layout_width="match_parent"
@@ -45,7 +58,7 @@
                 android:backgroundTint="@color/colorPrimary" />
 
             <TextView
-                android:id="@+id/tvScannerChannelName"
+                android:id="@+id/tvActiveMarketplace"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
@@ -239,6 +252,7 @@
                 android:textSize="12sp" />
 
             <TextView
+                android:id="@+id/btnResumeCamera"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="12dp"
@@ -473,7 +487,7 @@
         </LinearLayout>
 
         <LinearLayout
-            android:id="@+id/btnManual"
+            android:id="@+id/btnManualEntry"
             style="@style/ScannerAction">
 
             <ImageView
@@ -486,7 +500,7 @@
         </LinearLayout>
 
         <LinearLayout
-            android:id="@+id/btnRecent"
+            android:id="@+id/btnRecentScans"
             style="@style/ScannerAction">
 
             <ImageView

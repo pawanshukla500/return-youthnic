@@ -41,7 +41,19 @@ class RecentScansDialog(
                     .filter { it.isNotBlank() }
                     .joinToString(" · ")
                 row.tvRecentMeta.text = metaText.ifBlank { "Return Scan" }
-                row.tvRecentTime.text = timeFormat.format(Date(scan.timestamp))
+                val displayTime = try {
+                    val tsLong = scan.timestamp.toLongOrNull()
+                    if (tsLong != null) {
+                        timeFormat.format(Date(tsLong))
+                    } else if (scan.timestamp.isNotBlank()) {
+                        scan.timestamp
+                    } else {
+                        "Just now"
+                    }
+                } catch (_: Exception) {
+                    "Just now"
+                }
+                row.tvRecentTime.text = displayTime
 
                 row.tvRecentOutcomeBadge.text = scan.outcome
                 val isNormal = scan.outcome.equals("NORMAL", ignoreCase = true) ||

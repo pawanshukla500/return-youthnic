@@ -10,6 +10,7 @@ data class User(
     val role: String,
     val sidebarLabel: String
 ) {
+    val fullName: String get() = name
     companion object {
         fun fromJson(json: JSONObject): User {
             return User(
@@ -75,7 +76,9 @@ data class ShiftProgress(
     val scansToday: Int,
     val issuesToday: Int,
     val clearRate: String
-)
+) {
+    val scannedToday: Int get() = scansToday
+}
 
 data class IssueCategory(
     val code: String,
@@ -102,15 +105,17 @@ data class IssueCategory(
 }
 
 data class SubIssue(
-    val id: Int,
-    val label: String,
-    val categoryCode: String
+    val id: String,
+    val name: String,
+    val categoryCode: String = ""
 ) {
+    val label: String get() = name
+    constructor(id: Int, label: String, categoryCode: String) : this(id.toString(), label, categoryCode)
     companion object {
         fun fromJson(json: JSONObject): SubIssue {
             return SubIssue(
-                id = json.optInt("id", 0),
-                label = json.optString("label", ""),
+                id = json.optString("id", json.optInt("id", 0).toString()),
+                name = json.optString("name", json.optString("label", "")),
                 categoryCode = json.optString("categoryCode", "")
             )
         }
@@ -122,30 +127,57 @@ data class ScanSessionData(
     val accounts: List<MarketplaceAccount>,
     val categories: List<IssueCategory>,
     val subIssues: List<SubIssue>
-)
+) {
+    val shiftProgress: ShiftProgress get() = shift
+    val missingComponents: List<SubIssue> get() = subIssues.filter { it.categoryCode.contains("MISSING", ignoreCase = true) || it.categoryCode.isEmpty() }
+}
 
 data class LookupItem(
-    val itemId: Int,
-    val orderItemId: String,
-    val shipmentId: String,
-    val marketplaceSku: String,
-    val productSku: String,
-    val title: String,
-    val imageUrl: String,
-    val expectedQty: Int,
-    var receivedQty: Int,
-    val color: String,
-    val size: String,
+    val itemId: String,
+    val orderItemId: String = "",
+    val shipmentId: String = "",
+    val marketplaceSku: String = "",
+    val productSku: String = "",
+    val title: String = "",
+    val imageUrl: String = "",
+    val expectedQty: Int = 1,
+    var receivedQty: Int = 1,
+    val color: String = "",
+    val size: String = "",
     var physicalChecked: Boolean = false,
     var selectedCategoryCode: String = "clear",
     var selectedSubIssueId: Int? = null,
     var itemNotes: String = ""
 ) {
+    val quantity: Int get() = expectedQty
+    val masterSku: String get() = productSku
+
+    constructor(
+        itemId: String,
+        marketplaceSku: String,
+        masterSku: String,
+        title: String,
+        quantity: Int,
+        imageUrl: String
+    ) : this(
+        itemId = itemId,
+        orderItemId = "",
+        shipmentId = "",
+        marketplaceSku = marketplaceSku,
+        productSku = masterSku,
+        title = title,
+        imageUrl = imageUrl,
+        expectedQty = quantity,
+        receivedQty = quantity,
+        color = "",
+        size = ""
+    )
+
     companion object {
         fun fromJson(json: JSONObject): LookupItem {
             val exp = json.optInt("expectedQty", json.optInt("expected_units", 1))
             return LookupItem(
-                itemId = json.optInt("itemId", json.optInt("id", 0)),
+                itemId = json.optString("itemId", json.optString("id", "0")),
                 orderItemId = json.optString("orderItemId", json.optString("order_item_id", "")),
                 shipmentId = json.optString("shipmentId", json.optString("shipment_id", "")),
                 marketplaceSku = json.optString("marketplaceSku", json.optString("marketplace_sku", "")),
@@ -153,7 +185,7 @@ data class LookupItem(
                 title = json.optString("title", json.optString("name", "Product Item")),
                 imageUrl = json.optString("imageUrl", json.optString("image_url", "")),
                 expectedQty = exp,
-                receivedQty = exp, // Default received qty to expected
+                receivedQty = exp,
                 color = json.optString("color", ""),
                 size = json.optString("size", "")
             )
@@ -172,7 +204,7 @@ data class LookupResult(
     val matchLeg: String,
     val marketplace: String,
     val account: String,
-    val shipmentId: Int,
+    val shipmentId: String,
     val tracking: String,
     val orderId: String,
     val shipmentCode: String,
@@ -192,6 +224,12 @@ data class LookupResult(
 
     val trackingNumber: String
         get() = tracking
+
+    val sku: String get() = items.firstOrNull()?.marketplaceSku.orEmpty()
+    val masterSku: String get() = items.firstOrNull()?.productSku.orEmpty()
+    val productTitle: String get() = items.firstOrNull()?.title.orEmpty()
+    val expectedQty: Int get() = items.firstOrNull()?.expectedQty ?: 1
+    val imageUrl: String get() = items.firstOrNull()?.imageUrl.orEmpty()
 
     companion object {
         fun fromJson(json: JSONObject, fallbackTracking: String): LookupResult {
@@ -218,7 +256,7 @@ data class LookupResult(
                 matchLeg = json.optString("matchLeg", "return"),
                 marketplace = json.optString("marketplace", ""),
                 account = json.optString("account", ""),
-                shipmentId = json.optInt("shipmentId", json.optInt("shipment_id", 0)),
+                shipmentId = json.optString("shipmentId", json.optString("shipment_id", "0")),
                 tracking = json.optString("tracking", fallbackTracking),
                 orderId = json.optString("orderId", json.optString("order_id", "")),
                 shipmentCode = json.optString("shipmentCode", json.optString("shipment_id", "")),
