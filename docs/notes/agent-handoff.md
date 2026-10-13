@@ -1107,6 +1107,39 @@ Append new entries at the end. Do not edit earlier entries, except to correct a 
   - Expose raw unprotected database ports on VPS.
   - Bypass healthcheck polling in deployment workflow.
 
+### 2026-10-13, Antigravity Agent, Hostinger VPS hPanel Docker Integration & Automated CI/CD Deployment
+
+- **Changed Files**:
+  - `docker-compose.production.yml`: Created production Compose file with project `name: return-app`, `container_name: Return-App`, Traefik reverse-proxy labels for `return.youthnic.shop` and fallback domain `return.srv1845788.hstgr.cloud`, `shared_infra` Docker network integration, and `extra_hosts` host-gateway mapping for PostgreSQL database connectivity.
+  - `docker-compose.yml`: Set project `name: return-app` and container `Return-App` with local port forwarding.
+  - `.github/workflows/deploy.yml`: Aligned production deployment to `/opt/return-app/Return-App`, maintaining symlink `/docker/return-app` for Hostinger hPanel Docker Manager discovery, preserving certificates in `certs/` and persistent data in `data/`, running `docker compose -p return-app -f docker-compose.production.yml`, and verifying internal and public health endpoints.
+  - `docs/notes/agent-handoff.md`: Updated session log.
+
+- **Verification Results**:
+  - **Hostinger VPS Live Status**:
+    - `docker compose ls -a`: Shows `return-app` running under `/opt/return-app/Return-App/docker-compose.production.yml`.
+    - Hostinger hPanel discovery: `/docker/return-app -> /opt/return-app/Return-App` verified.
+    - `docker ps --filter "name=Return-App"`: Container `Return-App` is `Up (healthy)`.
+    - `curl -fsS http://127.0.0.1:3001/api/health`: HTTP 200 `{"ok":true,"database":"connected","name":"return-scan_youthnic"}`.
+    - Public Traefik HTTPS route `https://return.youthnic.shop/api/health`: HTTP 200.
+    - Public Traefik HTTPS route `https://return.srv1845788.hstgr.cloud/api/health`: HTTP 200.
+    - Frontend SPA delivery: Verified `<title>Return Operations</title>` delivered via Traefik.
+  - **GitHub Actions Remote Deployment (Run 38375717851)**:
+    - Job `Test and Build Web & Server`: **SUCCESS** (59s).
+    - Job `Deploy to Production VPS`: **SUCCESS** (1m 15s).
+  - **Local Checks**:
+    - `npm.cmd run typecheck`: Exit 0 (0 errors).
+    - `npm.cmd run build`: Exit 0 (Vite bundled in 1.49s).
+    - `npm.cmd test`: 303 tests run: 279 pass, 0 fail, 24 skipped (`TEST_DATABASE_URL`).
+
+- **What was not run**:
+  - 24 database integration tests skipped because `TEST_DATABASE_URL` is not configured on a dedicated test database.
+
+- **The next agent must not**:
+  - Remove or rename `/docker/return-app` symlink or change project name `return-app`, which Hostinger hPanel Docker Manager requires to list the application.
+  - Remove `shared_infra` network or Traefik labels from `docker-compose.production.yml`.
+  - Disconnect `extra_hosts` host-gateway mapping needed for PostgreSQL access on the VPS.
+
 ## STOP — needs the user to resume
 
 **This is the exact point at which the agent stopped.** Everything that can be verified without external input has been verified. The following items require the user to act before any agent can resume:
