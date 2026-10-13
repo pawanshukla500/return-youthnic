@@ -2,7 +2,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { getMobileReleaseInfo } from "../mobile-release.js"
 import { submissionFrom } from "../register-routes.js"
-import { validateScanSubmission, type CategoryRule, type SubIssueRule } from "../register-rules.js"
+import { normalizeTracking, validateScanSubmission, type CategoryRule, type SubIssueRule } from "../register-rules.js"
 
 // Invariant 9: Test data is synthetic, and every value starts with SYN-.
 const SYN_AWB_EXACT = "SYN-1490711818486605"
@@ -164,4 +164,12 @@ test("mobile scan body: a missing item must cover exactly the units not received
     { 202: 1 },
   )
   assert.deepEqual(validateScanSubmission(items, submissionFrom(partial), SEEDED_CATEGORIES, SEEDED_SUB_ISSUES), { ok: true })
+})
+
+test("normalizeTracking cleans Amazon Order ID formats and barcode prefixes", () => {
+  assert.equal(normalizeTracking("408-4485117-1368304").value, "408-4485117-1368304")
+  assert.equal(normalizeTracking("ORD: 408-4485117-1368304").value, "408-4485117-1368304")
+  assert.equal(normalizeTracking("#408-4485117-1368304").value, "408-4485117-1368304")
+  assert.equal(normalizeTracking("ORDER: 40844851171368304").value, "408-4485117-1368304")
+  assert.equal(normalizeTracking("40844851171368304").value, "408-4485117-1368304")
 })

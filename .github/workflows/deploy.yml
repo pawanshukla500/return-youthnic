@@ -95,6 +95,8 @@ jobs:
           OMSGURU_TOKEN: ${{ secrets.OMSGURU_TOKEN || secrets.OMSGURU_API_TOKEN || '' }}
           OMSGURU_API_TOKEN: ${{ secrets.OMSGURU_API_TOKEN || secrets.OMSGURU_TOKEN || '' }}
           FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON || '' }}
+          PAYMENT_DATABASE_URL: ${{ secrets.PAYMENT_DATABASE_URL || '' }}
+          PAYMENT_SSL_CA: ${{ secrets.PAYMENT_SSL_CA || '' }}
           PORT: ${{ vars.PORT || '3001' }}
           NODE_ENV: 'production'
         run: |
@@ -113,6 +115,7 @@ jobs:
           OMSGURU_CLIENT_SECRET=${OMSGURU_CLIENT_SECRET}
           OMSGURU_TOKEN=${OMSGURU_TOKEN}
           OMSGURU_API_TOKEN=${OMSGURU_API_TOKEN}
+          PAYMENT_DATABASE_URL=${PAYMENT_DATABASE_URL}
           EOF
 
           mkdir -p /tmp/certs
@@ -122,8 +125,11 @@ jobs:
           if [ -n "$SHOPIFY_SSL_CA" ]; then
             printf '%s\n' "$SHOPIFY_SSL_CA" > /tmp/certs/shopify-ca.pem
           fi
-          if [ -n "$FIREBASE_SERVICE_ACCOUNT_JSON" ]; then
+          if ( [ -n "$FIREBASE_SERVICE_ACCOUNT_JSON" ] ); then
             printf '%s\n' "$FIREBASE_SERVICE_ACCOUNT_JSON" > /tmp/certs/firebase-service-account.json
+          fi
+          if ( [ -n "$PAYMENT_SSL_CA" ] ); then
+            printf '%s\n' "$PAYMENT_SSL_CA" > /tmp/certs/payment-ca.pem
           fi
 
           tar --warning=no-file-changed \
@@ -215,6 +221,9 @@ jobs:
 
           echo ">>> [4/7] Deploying Docker container via Docker Compose under project 'return-app'..."
           docker compose -p return-app -f docker-compose.production.yml --env-file .env up -d --build --remove-orphans
+
+          echo ">>> Configuring host cron job for nightly 4:30 AM IST payment sync under VPS docker..."
+          (crontab -l 2>/dev/null | grep -v 'sync:payment' || true; echo '30 4 * * * docker exec Return-App npm run sync:payment >> /var/log/return-app-payment-sync.log 2>&1') | crontab - || true
 
           echo ">>> [5/7] Cleaning up dangling Docker build images..."
           docker image prune -f || true

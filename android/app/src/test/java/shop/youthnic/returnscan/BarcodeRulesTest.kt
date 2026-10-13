@@ -108,4 +108,34 @@ class BarcodeRulesTest {
         assertTrue(key.startsWith("SYN-MOBILE-meesho-"))
         assertTrue(key.contains("1490711818486605"))
     }
+
+    @Test
+    fun testAmazonOrderIdExtraction() {
+        // Standard hyphenated Amazon order ID
+        assertEquals("408-1234567-1234567", BarcodeRules.extractScannedIdentifier("408-1234567-1234567"))
+        assertEquals("408-1234567-1234567", BarcodeRules.extractScannedIdentifier("  408-1234567-1234567  \n"))
+
+        // Prefix stripping (#, ORDER#, ORD:)
+        assertEquals("408-1234567-1234567", BarcodeRules.extractScannedIdentifier("#408-1234567-1234567"))
+        assertEquals("408-1234567-1234567", BarcodeRules.extractScannedIdentifier("ORDER: 408-1234567-1234567"))
+        assertEquals("408-1234567-1234567", BarcodeRules.extractScannedIdentifier("ORD#408-1234567-1234567"))
+
+        // 17-digit numeric unhyphenated Amazon order ID
+        assertEquals("408-1234567-1234567", BarcodeRules.extractScannedIdentifier("40812345671234567"))
+
+        // Embedded in URL
+        assertEquals("408-1234567-1234567", BarcodeRules.extractScannedIdentifier("https://sellercentral.amazon.in/order/408-1234567-1234567"))
+
+        // Standard AWBs pass through unchanged
+        assertEquals("FMPP0982341278", BarcodeRules.extractScannedIdentifier("FMPP0982341278"))
+    }
+
+    @Test
+    fun testSupportedBarcodeFormatsInclude2D() {
+        assertTrue(BarcodeRules.isSupportedBarcodeFormat(Barcode.FORMAT_CODE_128))
+        assertTrue(BarcodeRules.isSupportedBarcodeFormat(Barcode.FORMAT_QR_CODE))
+        assertTrue(BarcodeRules.isSupportedBarcodeFormat(Barcode.FORMAT_DATA_MATRIX))
+        assertTrue(BarcodeRules.isSupportedBarcodeFormat(Barcode.FORMAT_PDF417))
+        assertFalse(BarcodeRules.isSupportedBarcodeFormat(Barcode.FORMAT_AZTEC))
+    }
 }

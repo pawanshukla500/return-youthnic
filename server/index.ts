@@ -43,6 +43,9 @@ import { handleLatestRelease, handleApkDownload } from "./mobile-release.js"
 import { mountOmsguruRoutes } from "./omsguru-routes.js"
 import { runScheduledOmsguruUpdate, getOmsguruConfig } from "./omsguru-daily.js"
 import { isFirebaseConfigured } from "./firebase-storage.js"
+import { mountPaymentRoutes } from "./payment/routes.js"
+import { runScheduledPaymentSync } from "./payment/sync.js"
+import { closePaymentPool, paymentDatabaseUrl } from "./payment/db.js"
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 dotenv.config({ path: path.join(root, ".env") })
@@ -435,6 +438,9 @@ mountShopifyRoutes(app, requireUser)
 
 // OMSGuru Daily Inventory Update & Firebase Storage routes live in omsguru-routes.ts.
 mountOmsguruRoutes(app, requireUser)
+
+// Payment & Sales Amount sync routes live in payment/routes.ts.
+mountPaymentRoutes(app, requireUser)
 
 // ---- Administrator pages. Every route here needs the Admin role. ----
 
@@ -975,6 +981,12 @@ app.get("/api/admin/system", requireUser, requireAdmin, async (_req, res, next) 
           status: (await getOmsguruConfig(getPool())).dailyEnabled ? "Active" : "Disabled",
           tone: (await getOmsguruConfig(getPool())).dailyEnabled ? "success" : "neutral",
         },
+        {
+          title: "Sales & Payment Database (PAYMENT_DATABASE_URL)",
+          detail: Boolean(paymentDatabaseUrl()) ? "Connected · Scheduled daily at 04:30 AM IST (twice-weekly check)" : "Not configured in .env",
+          status: Boolean(paymentDatabaseUrl()) ? "Active" : "Disabled",
+          tone: Boolean(paymentDatabaseUrl()) ? "success" : "neutral",
+        },
       ],
     })
   } catch (error) {
@@ -1032,10 +1044,11 @@ initDatabase()
     dbMessage = result.message
     console.log(result.ok ? "PostgreSQL connected. Workspace data is ready." : result.message)
     if (result.ok) {
-      // Background worker for idempotent Resend email reports and OMSGuru daily updates (checked every 60s)
+      // Background worker for idempotent Resend email reports, OMSGuru daily updates, and payment sync (checked every 60s)
       schedulerInterval = setInterval(() => {
         runScheduledReports(getPool()).catch((err) => console.error("[Report Scheduler Error]", err))
         runScheduledOmsguruUpdate(getPool()).catch((err) => console.error("[OMSGuru Scheduler Error]", err))
+        runScheduledPaymentSync(getPool()).catch((err) => console.error("[Payment Sync Scheduler Error]", err))
       }, 60_000)
 
       // Background worker for real-time Shopify return & RTO ingestion (every 5 min)
@@ -1069,6 +1082,7 @@ function handleGracefulShutdown(signal: string) {
   }
   server.close(() => {
     console.log("HTTP server closed.")
+    closePaymentPool().catch((err) => console.error("Error closing payment pool:", err))
     getPool()
       .end()
       .then(() => {

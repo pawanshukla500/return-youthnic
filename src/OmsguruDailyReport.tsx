@@ -46,6 +46,15 @@ export type OmsguruConfig = {
   ccEmails: string[]
 }
 
+export type UnmappedScannedItem = {
+  scanId: number
+  account: string
+  tracking: string
+  orderNumber: string
+  listingSku: string
+  qty: number
+}
+
 export function OmsguruDailyReport() {
   const [updates, setUpdates] = useState<OmsguruDailyUpdateItem[]>([])
   const [summary, setSummary] = useState<OmsguruSummary | null>(null)
@@ -73,10 +82,21 @@ export function OmsguruDailyReport() {
     totalSkus: number
     totalQty: number
     skus: SkuBreakdownItem[]
+    unmappedItems?: UnmappedScannedItem[]
   } | null>(null)
   const [loadingPreview, setLoadingPreview] = useState(false)
   const [showPreviewModal, setShowPreviewModal] = useState(false)
   const [previewSkuSearch, setPreviewSkuSearch] = useState("")
+
+  // Unmapped Scanned Returns Alert State
+  const [unmappedData, setUnmappedData] = useState<{
+    date: string
+    hasUnmapped: boolean
+    unmappedCount: number
+    unmappedItems: UnmappedScannedItem[]
+  } | null>(null)
+  const [showUnmappedModal, setShowUnmappedModal] = useState(false)
+  const [unmappedSearch, setUnmappedSearch] = useState("")
 
   // Settings Modal
   const [showSettingsModal, setShowSettingsModal] = useState(false)
@@ -87,6 +107,20 @@ export function OmsguruDailyReport() {
   // Action states
   const [generating, setGenerating] = useState(false)
   const [sendingId, setSendingId] = useState<number | null>(null)
+
+  const loadUnmappedCheck = async () => {
+    try {
+      const res = await api<{
+        date: string
+        hasUnmapped: boolean
+        unmappedCount: number
+        unmappedItems: UnmappedScannedItem[]
+      }>("/api/omsguru/unmapped-check")
+      setUnmappedData(res)
+    } catch {
+      // ignore
+    }
+  }
 
   const loadData = async (silent = false) => {
     if (!silent) setLoading(true)
@@ -129,6 +163,7 @@ export function OmsguruDailyReport() {
   useEffect(() => {
     loadData()
     loadConfig()
+    loadUnmappedCheck()
   }, [page, search, dateFilter])
 
   const handleDownload = async (id: number) => {
@@ -180,24 +215,40 @@ export function OmsguruDailyReport() {
   }
 
   const handleGenerateNow = async (sendEmail = false) => {
+    if (unmappedData && unmappedData.hasUnmapped) {
+      const confirmed = window.confirm(
+        `Pre-generation Alert:\n\nThere are ${unmappedData.unmappedCount} scanned return item(s) without a linked Product Master SKU.\n\n` +
+        `These unmapped items will NOT be counted in the OMSGuru stock update until their marketplace listing SKU is mapped in Admin → Product SKU master.\n\n` +
+        `Click OK to proceed with only the mapped items, or Cancel to review first.`
+      )
+      if (!confirmed) return
+    }
+
     setGenerating(true)
     setActionNotice("Aggregating good return scans & uploading to Firebase Storage...")
     try {
       const res = await api<{
         ok: boolean
         update: OmsguruDailyUpdateItem
+        unmappedWarning?: string
+        unmappedCount?: number
         emailResult?: any
       }>("/api/omsguru/daily/generate", {
         method: "POST",
         body: JSON.stringify({ sendEmail }),
       })
-      setActionNotice(`Success! Generated ${res.update.requestId} with ${res.update.totalQty} units.`)
+      if (res.unmappedWarning) {
+        setActionNotice(`Generated ${res.update.requestId} (${res.update.totalQty} units). Note: ${res.unmappedWarning}`)
+      } else {
+        setActionNotice(`Success! Generated ${res.update.requestId} with ${res.update.totalQty} units.`)
+      }
       await loadData(true)
+      await loadUnmappedCheck()
     } catch (err: any) {
       setError(`Generation failed: ${err.message}`)
     } finally {
       setGenerating(false)
-      setTimeout(() => setActionNotice(null), 5000)
+      setTimeout(() => setActionNotice(null), 6000)
     }
   }
 
@@ -331,6 +382,57 @@ export function OmsguruDailyReport() {
         <div className="omsguru-alert omsguru-alert-danger">
           <span>{error}</span>
           <button type="button" className="btn-link" onClick={() => setError(null)}>Dismiss</button>
+        </div>
+      )}
+
+      {unmappedData && unmappedData.hasUnmapped && (
+        <div
+          className="omsguru-alert"
+          style={{
+            background: "#fffbeb",
+            border: "1px solid #fde68a",
+            color: "#92400e",
+            padding: "14px 18px",
+            borderRadius: "8px",
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            flexWrap: "wrap",
+            gap: "12px",
+            marginBottom: "16px",
+          }}
+        >
+          <div>
+            <div style={{ fontWeight: 700, fontSize: "14px", display: "flex", alignItems: "center", gap: "6px" }}>
+              <span>⚠️ Pre-Generation Alert: {unmappedData.unmappedCount} Scanned Return{unmappedData.unmappedCount === 1 ? "" : "s"} Missing Product SKU</span>
+            </div>
+            <p style={{ margin: "4px 0 0 0", fontSize: "12px", color: "#78350f" }}>
+              These items were scanned physically in warehouse returns, but their marketplace listing SKUs are not yet linked to any internal VB Export Product SKU.
+              OMSGuru cannot increment inventory for these items until they are mapped in Admin → Product SKU master.
+            </p>
+          </div>
+          <div style={{ display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" }}>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={() => setShowUnmappedModal(true)}
+              style={{ fontWeight: 600 }}
+            >
+              Inspect Missing ({unmappedData.unmappedCount})
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              onClick={() =>
+                downloadFile("/api/admin/product-master/unmapped/download", "unmapped-listing-skus.csv").catch((err: Error) =>
+                  setError(err.message),
+                )
+              }
+              style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}
+            >
+              <Icon name="file" size={13} /> Download Missing SKUs CSV
+            </button>
+          </div>
         </div>
       )}
 
@@ -881,6 +983,134 @@ export function OmsguruDailyReport() {
                 </button>
               </div>
             </form>
+          </div>
+        </Modal>
+      )}
+
+      {/* Unmapped Scanned Returns Modal */}
+      {showUnmappedModal && unmappedData && (
+        <Modal onClose={() => setShowUnmappedModal(false)} wide>
+          <div className="omsguru-modal-content">
+            <div className="omsguru-modal-header">
+              <div>
+                <span
+                  style={{
+                    background: "#fef3c7",
+                    color: "#92400e",
+                    padding: "3px 8px",
+                    borderRadius: 4,
+                    fontWeight: 700,
+                    fontSize: 11,
+                    textTransform: "uppercase",
+                  }}
+                >
+                  Unlinked Items in Scanned Returns
+                </span>
+                <h3 style={{ margin: "6px 0 2px 0", fontSize: "20px" }}>
+                  Unmapped Returns Missing Product SKU ({unmappedData.unmappedCount})
+                </h3>
+                <p style={{ margin: 0, color: "var(--muted)", fontSize: "13px" }}>
+                  The items below were scanned physically in warehouse returns, but their marketplace listing SKUs are not yet linked to any internal VB Export Product SKU.
+                </p>
+              </div>
+
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  onClick={() =>
+                    downloadFile("/api/admin/product-master/unmapped/download", "unmapped-listing-skus.csv").catch((err: Error) =>
+                      setError(err.message),
+                    )
+                  }
+                  style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}
+                >
+                  <Icon name="file" size={13} /> Download Missing SKUs CSV
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => setShowUnmappedModal(false)}
+                >
+                  ✕ Close
+                </button>
+              </div>
+            </div>
+
+            <div style={{ margin: "14px 0", display: "flex", gap: "12px", alignItems: "center" }}>
+              <div className="omsguru-search-box" style={{ flex: 1 }}>
+                <Icon name="search" size={15} />
+                <input
+                  type="text"
+                  placeholder="Filter by listing SKU, order ID, or tracking ID..."
+                  value={unmappedSearch}
+                  onChange={(e) => setUnmappedSearch(e.target.value)}
+                />
+                {unmappedSearch && (
+                  <button type="button" className="omsguru-clear-btn" onClick={() => setUnmappedSearch("")}>
+                    ✕
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div className="table-wrap" style={{ maxHeight: "380px", overflowY: "auto" }}>
+              <table>
+                <thead>
+                  <tr>
+                    <th>Marketplace</th>
+                    <th>Order Number</th>
+                    <th>Tracking ID</th>
+                    <th>Marketplace Listing SKU</th>
+                    <th style={{ textAlign: "right" }}>Scanned Qty</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {unmappedData.unmappedItems
+                    .filter((item) => {
+                      if (!unmappedSearch.trim()) return true
+                      const q = unmappedSearch.toLowerCase().trim()
+                      return (
+                        item.listingSku.toLowerCase().includes(q) ||
+                        item.orderNumber.toLowerCase().includes(q) ||
+                        item.tracking.toLowerCase().includes(q) ||
+                        item.account.toLowerCase().includes(q)
+                      )
+                    })
+                    .map((item) => (
+                      <tr key={item.scanId}>
+                        <td>
+                          <span className="badge badge-neutral" style={{ fontSize: "11px", fontWeight: 600 }}>
+                            {item.account}
+                          </span>
+                        </td>
+                        <td>
+                          <span style={{ fontFamily: "monospace", fontSize: "12px" }}>
+                            {item.orderNumber || "—"}
+                          </span>
+                        </td>
+                        <td>
+                          <span style={{ fontFamily: "monospace", fontSize: "12px" }}>
+                            {item.tracking}
+                          </span>
+                        </td>
+                        <td>
+                          <strong style={{ fontFamily: "monospace", fontSize: "13px", color: "#b45309" }}>
+                            {item.listingSku || "(Missing on scan)"}
+                          </strong>
+                        </td>
+                        <td style={{ textAlign: "right", fontWeight: 700 }}>
+                          {item.qty}
+                        </td>
+                      </tr>
+                    ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div style={{ marginTop: 14, padding: "10px 14px", background: "#f8fafc", borderRadius: 8, fontSize: 12, color: "#475569" }}>
+              💡 <strong>Action Required:</strong> Download the pre-filled CSV template above, enter the corresponding <strong>Product SkuCode</strong> (VB Exports internal parent SKU) and <strong>Product Category</strong>, then upload it under <strong>Admin → Product SKU master</strong> tab. Once mapped, these items will automatically be included in future OMSGuru inventory updates.
+            </div>
           </div>
         </Modal>
       )}

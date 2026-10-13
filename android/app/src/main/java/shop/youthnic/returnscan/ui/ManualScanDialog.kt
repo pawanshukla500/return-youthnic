@@ -28,13 +28,15 @@ class ManualScanDialog(
         binding.btnCancelManual.setOnClickListener { dismiss() }
 
         binding.btnSubmitManual.setOnClickListener {
-            val text = BarcodeRules.normalize(binding.etManualAwb.text?.toString())
+            val raw = binding.etManualAwb.text?.toString()
+            val text = BarcodeRules.extractScannedIdentifier(raw)
+                .ifBlank { BarcodeRules.normalize(raw) }
             if (text.isNotBlank()) {
-                // Hand the AWB over first: the caller looks it up from the dismiss listener, which runs after dismiss().
+                // Hand the AWB / Order ID over first: caller looks it up
                 onAwbEntered(text)
                 dismiss()
             } else {
-                binding.tilManualAwb.error = "Please enter tracking number"
+                binding.tilManualAwb.error = "Please enter tracking number or Order ID"
             }
         }
     }

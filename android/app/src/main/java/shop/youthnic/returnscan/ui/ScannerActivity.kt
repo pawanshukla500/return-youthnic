@@ -288,7 +288,10 @@ class ScannerActivity : AppCompatActivity() {
                 Barcode.FORMAT_EAN_13,
                 Barcode.FORMAT_EAN_8,
                 Barcode.FORMAT_UPC_A,
-                Barcode.FORMAT_UPC_E
+                Barcode.FORMAT_UPC_E,
+                Barcode.FORMAT_QR_CODE,
+                Barcode.FORMAT_DATA_MATRIX,
+                Barcode.FORMAT_PDF417
             )
             .build()
         barcodeScanner = BarcodeScanning.getClient(options)
@@ -397,18 +400,18 @@ class ScannerActivity : AppCompatActivity() {
         if (isRequestInFlight.get() || openDialogs.get() > 0) return
 
         for (barcode in barcodes) {
-            val rawValue = BarcodeRules.normalize(barcode.rawValue)
             val format = barcode.format
+            if (!BarcodeRules.isSupportedBarcodeFormat(format)) continue
 
-            if (rawValue.isBlank()) continue
-            if (!BarcodeRules.isAllowed1DFormat(format)) continue
-            if (BarcodeRules.looksLikeQr(rawValue)) continue
+            val rawValue = BarcodeRules.normalize(barcode.rawValue)
+            val extracted = BarcodeRules.extractScannedIdentifier(rawValue)
+            if (extracted.isBlank()) continue
 
-            if (!duplicateGuard.shouldProcess(rawValue)) continue
+            if (!duplicateGuard.shouldProcess(extracted)) continue
 
-            duplicateGuard.markEmitted(rawValue)
+            duplicateGuard.markEmitted(extracted)
             runOnUiThread {
-                executeLookup(rawValue)
+                executeLookup(extracted)
             }
             break
         }
@@ -417,15 +420,16 @@ class ScannerActivity : AppCompatActivity() {
     // ---- Lookup & Verification Workflow ------------------------------------------------------------
 
     /**
-     * Looks the AWB up in the chosen marketplace account. [shipmentId] is set only when the server found several
+     * Looks the AWB or Order ID up in the chosen marketplace account. [shipmentId] is set only when the server found several
      * returns for the AWB and the scanner picked one.
      */
     private fun executeLookup(rawAwb: String, shipmentId: Int? = null) {
         if (!isRequestInFlight.compareAndSet(false, true)) return
         noteActivity()
 
+        val isOrder = rawAwb.contains("-") || rawAwb.length == 17
         binding.progressSubmitting.visibility = View.VISIBLE
-        binding.tvScannerHint.text = "Looking up AWB: $rawAwb"
+        binding.tvScannerHint.text = if (isOrder) "Looking up Order: $rawAwb" else "Looking up AWB: $rawAwb"
 
         val app = application as ReturnScanApp
         lifecycleScope.launch {

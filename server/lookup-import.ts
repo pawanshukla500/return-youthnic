@@ -13,6 +13,7 @@ import { compactSkuKey, listingSkuCandidates, marketplaceRank } from "./marketpl
 import { normalizeSkuKey } from "./oms/client.js"
 import type { PartnerMatch } from "./marketplace-rules.js"
 import { isScannableRow, rowStatus, type DisplayIdentifierKind, type MarketplaceSkuIdentifierKind, type ParsedRow } from "./sheets.js"
+import { recordUnmappedListingSkus } from "./product-master.js"
 
 export type ProductSource = "product_master" | "omsguru_master" | "unresolved"
 
@@ -581,6 +582,14 @@ export async function commitLookupUpload(db: pg.Pool, input: LookupCommitInput):
       input.onProgress,
     )
     await replaceCancelled(client, marketplaceId, batchId, cancelledRows)
+
+    const unmappedListings: string[] = []
+    for (const [listing, source] of input.sources) {
+      if (source === "unresolved" && listing) unmappedListings.push(listing)
+    }
+    if (unmappedListings.length) {
+      await recordUnmappedListingSkus(client, input.marketplaceName, unmappedListings)
+    }
 
     const superseded = await client.query(
       `UPDATE expected_returns SET lookup_status = 'superseded'

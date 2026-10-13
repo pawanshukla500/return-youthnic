@@ -78,6 +78,25 @@ export function mountOmsguruRoutes(
     }
   })
 
+  // GET /api/omsguru/unmapped-check - Pre-generation check for scanned returns without linked product SKU
+  app.get("/api/omsguru/unmapped-check", requireUser, async (req, res, next) => {
+    try {
+      const db = getPool()
+      const dateStr = typeof req.query.date === "string" && req.query.date.trim()
+        ? req.query.date.trim()
+        : getIstDateParts().dateStr
+      const preview = await calculateGoodReturnsForDay(db, dateStr)
+      res.json({
+        date: dateStr,
+        hasUnmapped: preview.unmappedItems.length > 0,
+        unmappedCount: preview.unmappedItems.length,
+        unmappedItems: preview.unmappedItems,
+      })
+    } catch (error) {
+      next(error)
+    }
+  })
+
   // GET /api/omsguru/daily - Paginated history of generated OMSGuru inventory updates
   app.get("/api/omsguru/daily", requireUser, async (req, res, next) => {
     try {

@@ -39,14 +39,64 @@ object BarcodeRules {
 
     private fun isKeyChar(c: Char): Boolean = c in 'A'..'Z' || c in 'a'..'z' || c in '0'..'9' || c == '_' || c == '-'
 
+    private val AMAZON_ORDER_REGEX = Regex("""\b(\d{3}-\d{7}-\d{7})\b""")
+    private val AMAZON_CLEAN_NUMERIC_REGEX = Regex("""\b(\d{17})\b""")
+
+    /**
+     * Extracts an actionable tracking ID or Amazon Order ID from raw scanned barcode or QR content.
+     * Handles Amazon order barcode formats (e.g. 408-1234567-1234567, 17-digit numeric, ORD#..., or URLs).
+     */
+    fun extractScannedIdentifier(raw: String?): String {
+        if (raw == null) return ""
+        var text = raw.trim().replace("\r", "").replace("\n", "").replace("\t", "")
+        if (text.isEmpty()) return ""
+
+        // Check if string contains standard Amazon Order ID (3-7-7 digits)
+        val amzMatch = AMAZON_ORDER_REGEX.find(text)
+        if (amzMatch != null) {
+            return amzMatch.groupValues[1]
+        }
+
+        // Check if string contains 17-digit Amazon Order ID
+        val amzNumeric = AMAZON_CLEAN_NUMERIC_REGEX.find(text)
+        if (amzNumeric != null) {
+            val digits = amzNumeric.groupValues[1]
+            return "${digits.substring(0, 3)}-${digits.substring(3, 10)}-${digits.substring(10, 17)}"
+        }
+
+        // Reject payments, WiFi or generic text
+        val lower = text.lowercase()
+        if (lower.startsWith("upi://") || lower.startsWith("wifi:") || lower.startsWith("mailto:")) {
+            return ""
+        }
+
+        // If URL, check if orderId or awb parameter is embedded
+        if (lower.startsWith("http://") || lower.startsWith("https://")) {
+            val urlOrder = AMAZON_ORDER_REGEX.find(text)
+            if (urlOrder != null) return urlOrder.groupValues[1]
+            return ""
+        }
+
+        // Strip prefix tags
+        if (text.startsWith("#")) text = text.substring(1).trim()
+        if (text.startsWith("ORDER:", ignoreCase = true) || text.startsWith("ORDER#", ignoreCase = true)) {
+            text = text.substring(6).trim()
+        }
+        if (text.startsWith("ORD:", ignoreCase = true) || text.startsWith("ORD#", ignoreCase = true)) {
+            text = text.substring(4).trim()
+        }
+
+        // Standard length check
+        if (text.length in 4..80) {
+            return text
+        }
+        return ""
+    }
+
     fun looksLikeQr(raw: String?): Boolean {
         if (raw == null) return true
-        val trimmed = raw.trim()
-        if (trimmed.length < 4 || trimmed.length > 64) return true
-        if (trimmed.contains(" ")) return true
-        val lower = trimmed.lowercase()
-        if (lower.startsWith("http://") || lower.startsWith("https://") || lower.startsWith("upi://") || lower.startsWith("wifi:")) return true
-        return false
+        val extracted = extractScannedIdentifier(raw)
+        return extracted.isBlank()
     }
 
     fun isAllowed1DFormat(format: Int): Boolean = when (format) {
@@ -59,6 +109,13 @@ object BarcodeRules {
         Barcode.FORMAT_EAN_8,
         Barcode.FORMAT_UPC_A,
         Barcode.FORMAT_UPC_E -> true
+        else -> false
+    }
+
+    fun isSupportedBarcodeFormat(format: Int): Boolean = isAllowed1DFormat(format) || when (format) {
+        Barcode.FORMAT_QR_CODE,
+        Barcode.FORMAT_DATA_MATRIX,
+        Barcode.FORMAT_PDF417 -> true
         else -> false
     }
 }

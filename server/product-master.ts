@@ -108,6 +108,16 @@ export async function replaceProductMaster(
       rows: rows.length,
       removed: removed.rowCount ?? 0,
     })
+
+    // Automatically mark matching entries in unmapped_listing_skus as mapped
+    await client.query(`
+      UPDATE unmapped_listing_skus u
+      SET status = 'mapped'
+      FROM product_master pm
+      WHERE u.status = 'unmapped'
+        AND LOWER(pm.listing_sku) = LOWER(u.listing_sku)
+    `)
+
     await client.query("COMMIT")
     return { inserted: rows.length, removed: removed.rowCount ?? 0, lastLoadedAt: formatUploadLabel() }
   } catch (error) {
@@ -116,4 +126,128 @@ export async function replaceProductMaster(
   } finally {
     client.release()
   }
+}
+
+export type UnmappedSkuSummary = {
+  total: number
+  byMarketplace: { marketplace: string; count: number }[]
+  sample: { marketplace: string; listingSku: string; lastSeenAt: string }[]
+}
+
+export async function recordUnmappedListingSkus(
+  client: pg.Pool | pg.PoolClient,
+  marketplace: string,
+  listings: string[],
+  sampleOrder = "",
+  sampleTracking = "",
+): Promise<number> {
+  const cleanListings = [...new Set(listings.map((l) => l.trim()).filter(Boolean))]
+  if (!cleanListings.length) return 0
+
+  let inserted = 0
+  for (const sku of cleanListings) {
+    const res = await client.query(
+      `INSERT INTO unmapped_listing_skus (marketplace, listing_sku, sample_order_number, sample_tracking_id, last_seen_at)
+       VALUES ($1, $2, $3, $4, now())
+       ON CONFLICT (marketplace, listing_sku)
+       DO UPDATE SET last_seen_at = now(),
+                     sample_order_number = CASE WHEN unmapped_listing_skus.sample_order_number = '' THEN EXCLUDED.sample_order_number ELSE unmapped_listing_skus.sample_order_number END,
+                     sample_tracking_id = CASE WHEN unmapped_listing_skus.sample_tracking_id = '' THEN EXCLUDED.sample_tracking_id ELSE unmapped_listing_skus.sample_tracking_id END`,
+      [marketplace, sku, sampleOrder, sampleTracking],
+    )
+    if ((res.rowCount ?? 0) > 0) inserted++
+  }
+  return inserted
+}
+
+export async function getUnmappedListingSkusSummary(db: pg.Pool): Promise<UnmappedSkuSummary> {
+  // Sync status against product_master first
+  await db.query(`
+    UPDATE unmapped_listing_skus u
+    SET status = 'mapped'
+    FROM product_master pm
+    WHERE u.status = 'unmapped'
+      AND LOWER(pm.listing_sku) = LOWER(u.listing_sku)
+  `)
+
+  const totalRes = await db.query(
+    "SELECT COUNT(*)::int AS count FROM unmapped_listing_skus WHERE status = 'unmapped'",
+  )
+  const mpRes = await db.query(
+    `SELECT marketplace, COUNT(*)::int AS count
+     FROM unmapped_listing_skus
+     WHERE status = 'unmapped'
+     GROUP BY marketplace
+     ORDER BY count DESC, marketplace`,
+  )
+  const sampleRes = await db.query(
+    `SELECT marketplace, listing_sku, last_seen_at
+     FROM unmapped_listing_skus
+     WHERE status = 'unmapped'
+     ORDER BY last_seen_at DESC, id DESC
+     LIMIT 50`,
+  )
+
+  return {
+    total: Number(totalRes.rows[0]?.count ?? 0),
+    byMarketplace: mpRes.rows.map((r) => ({
+      marketplace: String(r.marketplace),
+      count: Number(r.count),
+    })),
+    sample: sampleRes.rows.map((r) => ({
+      marketplace: String(r.marketplace),
+      listingSku: String(r.listing_sku),
+      lastSeenAt: r.last_seen_at ? formatUploadLabel(new Date(r.last_seen_at)) : "",
+    })),
+  }
+}
+
+export async function refreshUnmappedListingSkus(db: pg.Pool): Promise<number> {
+  // Find all listing SKUs in expected_return_items that lack a product_master mapping
+  const res = await db.query(`
+    SELECT DISTINCT m.name AS marketplace, COALESCE(NULLIF(eri.channel_listing_id, ''), eri.marketplace_sku_identifier) AS listing_sku
+    FROM expected_return_items eri
+    JOIN expected_returns er ON er.id = eri.expected_return_id
+    JOIN marketplaces m ON m.id = er.marketplace_id
+    WHERE eri.product_sku_source = 'unresolved'
+       OR NOT EXISTS (
+         SELECT 1 FROM product_master pm
+         WHERE LOWER(pm.listing_sku) = LOWER(COALESCE(NULLIF(eri.channel_listing_id, ''), eri.marketplace_sku_identifier))
+       )
+  `)
+
+  let count = 0
+  for (const row of res.rows) {
+    const mp = String(row.marketplace || "").trim()
+    const sku = String(row.listing_sku || "").trim()
+    if (mp && sku) {
+      await db.query(
+        `INSERT INTO unmapped_listing_skus (marketplace, listing_sku, last_seen_at)
+         VALUES ($1, $2, now())
+         ON CONFLICT (marketplace, listing_sku)
+         DO UPDATE SET last_seen_at = now()`,
+        [mp, sku],
+      )
+      count++
+    }
+  }
+  return count
+}
+
+export async function generateUnmappedSkusTemplateCsv(db: pg.Pool, marketplace?: string): Promise<string> {
+  const params: unknown[] = []
+  let sql = "SELECT listing_sku, marketplace FROM unmapped_listing_skus WHERE status = 'unmapped'"
+  if (marketplace && marketplace !== "All marketplaces" && marketplace !== "all") {
+    sql += " AND LOWER(marketplace) = LOWER($1)"
+    params.push(marketplace)
+  }
+  sql += " ORDER BY marketplace, listing_sku"
+
+  const res = await db.query(sql, params)
+  const header = "Channel Listing SKU Code,Product SkuCode,Product Category,Channel Image URL\n"
+  const rows = res.rows.map((r) => {
+    const sku = String(r.listing_sku || "").replace(/"/g, '""')
+    return `"${sku}","","",""`
+  })
+  return header + rows.join("\n") + (rows.length ? "\n" : "")
 }
