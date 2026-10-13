@@ -28,19 +28,19 @@ class SettingsActivity : AppCompatActivity() {
         binding.btnBackSettings.setOnClickListener { finish() }
 
         // Switch listeners
-        binding.switchAudioBeep.isChecked = sm.isSoundEnabled
+        binding.switchAudioBeep.isChecked = sm.soundEnabled
         binding.switchAudioBeep.setOnCheckedChangeListener { _, isChecked ->
-            sm.isSoundEnabled = isChecked
+            sm.soundEnabled = isChecked
         }
 
-        binding.switchVibration.isChecked = sm.isVibrationEnabled
+        binding.switchVibration.isChecked = sm.vibrationEnabled
         binding.switchVibration.setOnCheckedChangeListener { _, isChecked ->
-            sm.isVibrationEnabled = isChecked
+            sm.vibrationEnabled = isChecked
         }
 
-        binding.switchScreenFlash.isChecked = sm.isScreenFlashEnabled
+        binding.switchScreenFlash.isChecked = sm.screenFlashEnabled
         binding.switchScreenFlash.setOnCheckedChangeListener { _, isChecked ->
-            sm.isScreenFlashEnabled = isChecked
+            sm.screenFlashEnabled = isChecked
         }
 
         // Server info

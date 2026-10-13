@@ -489,7 +489,7 @@ class ScannerActivity : AppCompatActivity() {
         val app = application as ReturnScanApp
         app.soundManager.play(cue)
 
-        if (app.sessionManager.isScreenFlashEnabled) {
+        if (app.sessionManager.screenFlashEnabled) {
             flashScreen(cue)
         }
     }
