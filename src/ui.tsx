@@ -124,116 +124,16 @@ export function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
 }
 
 export function ReturnLogo({ light = false }: { light?: boolean }) {
-  const gradId = light ? "ret-grad-inv" : "ret-grad-std"
-  const arrowGradId = light ? "ret-arrow-inv" : "ret-arrow-std"
   return (
     <div className={`return-brand ${light ? "inverse" : ""}`}>
-      <svg className="return-vector-mark" viewBox="0 0 64 64" fill="none" role="img" aria-label="Return Operations">
-        <defs>
-          <linearGradient id={gradId} x1="0%" y1="0%" x2="100%" y2="100%">
-            {light ? (
-              <>
-                <stop offset="0%" stopColor="#ffffff" />
-                <stop offset="100%" stopColor="#ebf5f1" />
-              </>
-            ) : (
-              <>
-                <stop offset="0%" stopColor="#0f6b56" />
-                <stop offset="45%" stopColor="#0d5948" />
-                <stop offset="100%" stopColor="#063b2f" />
-              </>
-            )}
-          </linearGradient>
-          <linearGradient id={arrowGradId} x1="0%" y1="0%" x2="100%" y2="100%">
-            {light ? (
-              <>
-                <stop offset="0%" stopColor="#059669" />
-                <stop offset="100%" stopColor="#10b981" />
-              </>
-            ) : (
-              <>
-                <stop offset="0%" stopColor="#a7f3d0" />
-                <stop offset="50%" stopColor="#34d399" />
-                <stop offset="100%" stopColor="#059669" />
-              </>
-            )}
-          </linearGradient>
-        </defs>
-
-        {/* Base squircle container */}
-        <rect x="2" y="2" width="60" height="60" rx="16" fill={`url(#${gradId})`} />
-        <rect
-          x="2.5"
-          y="2.5"
-          width="59"
-          height="59"
-          rx="15.5"
-          fill="none"
-          stroke={light ? "rgba(14, 88, 71, 0.15)" : "rgba(255, 255, 255, 0.2)"}
-          strokeWidth="1"
-        />
-
-        {/* Isometric parcel package */}
-        <g>
-          {/* Box Right Face */}
-          <polygon
-            points="43,26 55,20 55,36 43,42"
-            fill={light ? "#083e32" : "#ffffff"}
-          />
-          {/* Box Left Face */}
-          <polygon
-            points="33,21 43,26 43,42 33,37"
-            fill={light ? "#0d5948" : "#bfe4d8"}
-          />
-          {/* Box Top Face */}
-          <polygon
-            points="43,15 55,20 43,26 33,21"
-            fill={light ? "#10b981" : "#4ade80"}
-          />
-          {/* Box Tape Stripe */}
-          <polygon
-            points="41,16 45,14 47,24 43,26"
-            fill={light ? "#34d399" : "#34d399"}
-            opacity={light ? 0.95 : 0.9}
-          />
-          <polygon
-            points="47,24 50,22.5 50,38.5 47,40"
-            fill={light ? "#4ade80" : "#10b981"}
-            opacity={light ? 0.9 : 0.85}
-          />
-
-          {/* Dynamic Return Loop Ribbon */}
-          <path
-            d="M 40,36 C 40,43 32,49 23,49 C 14,49 8,43 8,33 C 8,23 15,18 24,18 C 29,18 33,20 36,23"
-            fill="none"
-            stroke={light ? "#083e32" : "#ffffff"}
-            strokeWidth="5"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-          <path
-            d="M 40,36 C 40,43 32,49 23,49 C 14,49 8,43 8,33 C 8,23 15,18 24,18 C 29,18 33,20 36,23"
-            fill="none"
-            stroke={`url(#${arrowGradId})`}
-            strokeWidth="3"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-
-          {/* Arrow Head */}
-          <polygon
-            points="34,17 41,23 32,27"
-            fill={light ? "#083e32" : "#ffffff"}
-          />
-          <polygon
-            points="34.5,19 39.5,23 33.5,25.5"
-            fill={light ? "#10b981" : "#10b981"}
-          />
-        </g>
-      </svg>
+      <img
+        src="/logos/youthnic-mark.jpg"
+        alt="Youthnic"
+        className="return-vector-mark"
+      />
       <span className="return-wordmark">
-        <strong>return</strong>
-        {light && <small>OPERATIONS</small>}
+        <strong>Youthnic</strong>
+        <small>RETURNS</small>
       </span>
     </div>
   )

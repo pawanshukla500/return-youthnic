@@ -626,6 +626,39 @@ Append new entries at the end. Do not edit earlier entries, except to correct a 
 - Not run:
   - Activation of real marketplace files against the live production database (forbidden without explicit user instruction).
   - The 24 database integration tests requiring a dedicated test database whose name contains `test`.
+### 2026-10-13, Antigravity, Youthnic Brand Logo Overhaul, Modern Continuous Toggle, Responsive Scan Bar & Unmapped SKU Inspection
+
+- Perspective: Addressed user requests and screenshot analysis covering 4 areas: brand logo replacement from desktop assets, interactive continuous scan mode toggle switch, auto-adjustable scan control bar with live beacon, and exposure/export of pending unmapped listing SKUs on data uploads.
+- Changed:
+  - Brand Logo Overhaul (Desktop Asset Integration from `C:\Users\Pawan Shukla\Desktop\Youthnic`):
+    - Copied and verified official brand vector and raster marks: `public/logos/youthnic-mark.jpg`, `public/logos/youthnic-logo.svg`, and `public/logos/youthnic-logo.png`.
+    - Generated all web icons & favicons: `public/favicon-16x16.png`, `public/favicon-32x32.png`, `public/favicon.svg`, `public/apple-touch-icon.png`, `public/app-icon-192.png`, `public/app-icon-512.png`, and `public/manifest.json`.
+    - Generated Android mobile launcher mipmaps: `mipmap-mdpi`, `mipmap-hdpi`, `mipmap-xhdpi`, `mipmap-xxhdpi`, and `mipmap-xxxhdpi` (standard & round), `drawable/ic_launcher_youthnic.png` (512x512), adaptive foreground `drawable/ic_launcher_foreground.xml`, and white background `#FFFFFF`.
+    - Updated Android layouts and strings: `activity_login.xml`, `activity_splash.xml`, and `strings.xml` (`app_name: "Youthnic Returns"`).
+    - `src/ui.tsx`: Replaced hardcoded isometric SVG with official Youthnic mark and wordmark in `ReturnLogo`, automatically updating shell sidebar and login screens.
+  - Scan Bar & Continuous Scan Toggle Improvements (`src/pages/ScanReturns.tsx` & `src/index.css`):
+    - Replaced static text with an interactive modern toggle switch for `Continuous scan mode` persisted in `localStorage` (`scanner_continuous_mode`).
+    - Added sound chime pill toggle (`🔊 Sound on` / `🔇 Muted`).
+    - Added account selector with marketplace-specific status color dots (Amazon orange, Flipkart blue, Meesho pink, Myntra rose, Ajio teal, Shopify emerald).
+    - Added responsive scan input with barcode icon, enter prompt ("Auto opens on Enter"), and Look up action.
+    - Added live status beacon pill (`● Scan input ready` / `⚠️ Not listening – tap to reconnect`) with autofocus fallback.
+    - Added packing station fullscreen button (`⛶` / `🗗`).
+    - Auto-adjusting responsive layout (`.scan-controls-responsive`) preventing collisions on laptops and packing station monitors.
+  - Uploads Page Layout & Unmapped SKUs Inspection (`src/pages/Uploads.tsx`, `server/upload-routes.ts`, `src/types.ts`):
+    - Replaced crammed FILE TYPE and MARKETPLACE inputs with a dedicated responsive grid (`.upload-selectors-row`).
+    - Exposed full `unmappedSkus` array in preview response from `server/upload-routes.ts`.
+    - Added `UnmappedSkusModal` to search, filter, copy to clipboard, and export as CSV all unmapped listing SKUs so warehouse managers can inspect and resolve catalog mappings without guessing.
+    - Eliminated duplicate warning card between product mapping and Excel precision notices.
+- Ran:
+  - `npm.cmd run typecheck`: Passed (0 errors).
+  - `npm.cmd run build`: Passed (Vite 1.46s, esbuild 13ms).
+  - `npm.cmd test`: 306 tests — 282 passed, 0 failed, 24 skipped on dedicated `TEST_DATABASE_URL`.
+- Not run:
+  - The 24 database integration tests requiring a dedicated test database whose name contains `test`.
+- The next agent must not:
+  - Re-introduce hardcoded SVG logos or replace Youthnic assets.
+  - Revert the `continuousMode` persistence or break the autofocus restoration flow.
+
 ### 2026-10-12, Antigravity, Admin UI Redesign, Resend Reports, Persistent Login & Production Readiness
 
 - Changed:

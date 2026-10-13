@@ -14,15 +14,18 @@
         <ImageView
             android:layout_width="100dp"
             android:layout_height="100dp"
+            android:background="@drawable/bg_round_card"
+            android:backgroundTint="#FFFFFF"
             android:contentDescription="@string/app_name"
-            android:src="@drawable/ic_launcher_foreground" />
+            android:padding="6dp"
+            android:src="@drawable/ic_launcher_youthnic" />
 
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="16dp"
             android:fontFamily="sans-serif-black"
-            android:text="RETURN OPERATIONS"
+            android:text="YOUTHNIC RETURNS"
             android:textColor="@color/text_on_primary"
             android:textSize="20sp"
             android:letterSpacing="0.08" />

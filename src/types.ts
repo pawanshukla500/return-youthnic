@@ -381,6 +381,7 @@ export type UploadPreview = {
     titledRows: number
     unmappedCount: number
     unmappedSample: string[]
+    unmappedSkus?: string[]
   } | null
   warnings: string[]
   message: string

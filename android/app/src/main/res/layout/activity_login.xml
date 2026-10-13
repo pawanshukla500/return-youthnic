@@ -18,13 +18,13 @@
 
         <!-- Branded Header -->
         <ImageView
-            android:layout_width="64dp"
-            android:layout_height="64dp"
+            android:layout_width="72dp"
+            android:layout_height="72dp"
             android:background="@drawable/bg_round_card"
-            android:backgroundTint="@color/colorPrimary"
+            android:backgroundTint="#FFFFFF"
             android:contentDescription="@string/app_name"
-            android:padding="8dp"
-            android:src="@drawable/ic_launcher_foreground" />
+            android:padding="4dp"
+            android:src="@drawable/ic_launcher_youthnic" />
 
         <TextView
             android:layout_width="wrap_content"

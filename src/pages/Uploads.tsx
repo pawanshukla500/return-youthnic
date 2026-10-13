@@ -8,7 +8,7 @@ import type {
   UploadImportResult,
   UploadPreview,
 } from "../types"
-import { Badge, DataTable, Icon, MarketplaceBadge } from "../ui"
+import { Badge, DataTable, Icon, MarketplaceBadge, Modal } from "../ui"
 
 const NO_MARKETPLACE = "Select marketplace"
 
@@ -241,6 +241,123 @@ function UploadProgressBar({ progress }: { progress: BatchProgressState }) {
   )
 }
 
+function UnmappedSkusModal({
+  skus,
+  marketplace,
+  onClose,
+}: {
+  skus: string[]
+  marketplace: string
+  onClose: () => void
+}) {
+  const [filter, setFilter] = useState("")
+  const [copiedAll, setCopiedAll] = useState(false)
+  const [copiedSingle, setCopiedSingle] = useState<string | null>(null)
+
+  const filtered = skus.filter((sku) => sku.toLowerCase().includes(filter.trim().toLowerCase()))
+
+  const copyAll = async () => {
+    try {
+      await navigator.clipboard.writeText(filtered.join("\n"))
+      setCopiedAll(true)
+      setTimeout(() => setCopiedAll(false), 2000)
+    } catch {
+      // clipboard fallback
+    }
+  }
+
+  const copySingle = async (sku: string) => {
+    try {
+      await navigator.clipboard.writeText(sku)
+      setCopiedSingle(sku)
+      setTimeout(() => setCopiedSingle(null), 1500)
+    } catch {
+      // clipboard fallback
+    }
+  }
+
+  const exportCsv = () => {
+    const csvContent = "Listing SKU,Marketplace\n" + filtered.map((s) => `"${s.replace(/"/g, '""')}","${marketplace}"`).join("\n")
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement("a")
+    link.href = url
+    link.download = `unmapped-skus-${marketplace.toLowerCase().replace(/\s+/g, "-")}.csv`
+    link.click()
+    URL.revokeObjectURL(url)
+  }
+
+  return (
+    <Modal onClose={onClose} wide>
+      <div className="unmapped-modal-header">
+        <div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <h3 style={{ margin: 0, fontSize: 18, color: "var(--ink)" }}>Pending Listing SKUs</h3>
+            <span className="badge danger" style={{ fontSize: 12 }}>{count(skus.length)} unmapped</span>
+          </div>
+          <p style={{ margin: "6px 0 0", fontSize: 13, color: "var(--muted)", lineHeight: 1.45 }}>
+            These {count(skus.length)} listing SKU(s) in this <strong>{marketplace}</strong> report are not found in the Product Master or OMS catalog mappings. Physical returns will scan and record without blockers, but won't show catalog photos until mapped.
+          </p>
+        </div>
+        <button type="button" className="icon-button" onClick={onClose} title="Close modal" style={{ border: 0 }}>
+          <Icon name="close" size={16} />
+        </button>
+      </div>
+
+      <div className="unmapped-modal-toolbar">
+        <input
+          type="search"
+          placeholder="Filter SKUs by code..."
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          className="unmapped-search-input"
+          autoFocus
+        />
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <button type="button" className="btn secondary" style={{ height: 36, fontSize: 12 }} onClick={copyAll}>
+            {copiedAll ? "✓ Copied to clipboard" : `Copy ${count(filtered.length)} SKUs`}
+          </button>
+          <button type="button" className="btn secondary" style={{ height: 36, fontSize: 12 }} onClick={exportCsv}>
+            Export CSV
+          </button>
+        </div>
+      </div>
+
+      <div className="unmapped-skus-list">
+        {filtered.length === 0 ? (
+          <div className="unmapped-empty" style={{ padding: "32px 16px", textAlign: "center", color: "var(--muted)" }}>
+            No SKU matches "{filter}"
+          </div>
+        ) : (
+          filtered.map((sku, index) => (
+            <div key={`${sku}-${index}`} className="unmapped-sku-row">
+              <span className="unmapped-idx">#{index + 1}</span>
+              <strong className="unmapped-code">{sku}</strong>
+              <button
+                type="button"
+                className="btn-tiny-copy"
+                onClick={() => copySingle(sku)}
+                title="Copy SKU code"
+              >
+                {copiedSingle === sku ? "Copied" : "Copy"}
+              </button>
+            </div>
+          ))
+        )}
+      </div>
+
+      <div className="unmapped-modal-footer">
+        <span style={{ fontSize: 12, color: "var(--muted)" }}>
+          Showing {count(filtered.length)} of {count(skus.length)} pending SKUs
+        </span>
+        <button type="button" className="btn primary" onClick={onClose}>
+          Done
+        </button>
+      </div>
+    </Modal>
+  )
+}
+
 // Everything the server checked about the file, grouped cleanly into executive cards and quality metrics.
 function PreviewDetails({
   preview,
@@ -253,6 +370,7 @@ function PreviewDetails({
 }) {
   const c = preview.counts
   const [query, setQuery] = useState("")
+  const [showUnmappedModal, setShowUnmappedModal] = useState(false)
   const unmappedHint = preview.productMapping?.unmappedSample.length
     ? `, for example ${preview.productMapping.unmappedSample.slice(0, 3).join(", ")}`
     : ""
@@ -413,13 +531,33 @@ function PreviewDetails({
       {preview.productMapping && (
         <div className={`preview-product-banner ${preview.productMapping.unmappedCount > 0 ? "warning" : "success"}`}>
           <Icon name={preview.productMapping.unmappedCount > 0 ? "alert" : "check"} size={16} />
-          <span>
-            <strong>Product mapping:</strong> {count(preview.productMapping.mappedRows)} of {count(preview.productMapping.checked)} rows mapped ({Math.round((preview.productMapping.mappedRows / Math.max(1, preview.productMapping.checked)) * 100)}%).{" "}
-            {preview.productMapping.unmappedCount > 0
-              ? `${count(preview.productMapping.unmappedCount)} listing SKU(s) pending mapping${unmappedHint}. Valid returns are not blocked.`
-              : "All listing SKUs have an active mapping to the product master."}
-          </span>
+          <div style={{ flex: 1, display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+            <span>
+              <strong>Product mapping:</strong> {count(preview.productMapping.mappedRows)} of {count(preview.productMapping.checked)} rows mapped ({Math.round((preview.productMapping.mappedRows / Math.max(1, preview.productMapping.checked)) * 100)}%).{" "}
+              {preview.productMapping.unmappedCount > 0
+                ? `${count(preview.productMapping.unmappedCount)} listing SKU(s) pending mapping${unmappedHint}. Valid returns are not blocked.`
+                : "All listing SKUs have an active mapping to the product master."}
+            </span>
+            {preview.productMapping.unmappedCount > 0 && (
+              <button
+                type="button"
+                className="btn secondary"
+                style={{ height: 32, fontSize: 12, padding: "0 12px", background: "white", borderColor: "#fcd34d", color: "#92400e" }}
+                onClick={() => setShowUnmappedModal(true)}
+              >
+                <Icon name="search" size={13} />
+                <span>View all {count(preview.productMapping.unmappedCount)} pending listing SKUs</span>
+              </button>
+            )}
+          </div>
         </div>
+      )}
+      {showUnmappedModal && preview.productMapping && (
+        <UnmappedSkusModal
+          skus={preview.productMapping.unmappedSkus && preview.productMapping.unmappedSkus.length > 0 ? preview.productMapping.unmappedSkus : preview.productMapping.unmappedSample}
+          marketplace={preview.marketplace}
+          onClose={() => setShowUnmappedModal(false)}
+        />
       )}
 
       {/* Validation Exceptions Accordion / Search (Existing feature preserved) */}
@@ -782,40 +920,48 @@ export function Uploads() {
               <p>Check the file, then activate it to replace this account's active lookup data</p>
             </div>
           </div>
-          <label style={{ margin: "18px 20px 12px" }}>
-            FILE TYPE
-            <select value={mode} onChange={(event) => changeMode(event.target.value as "returns" | "scanner")}>
-              <option value="returns">Marketplace Return Master Import</option>
-              <option value="scanner">Bulk Scanned AWB List / Lookup Validation</option>
-            </select>
-          </label>
-          {mode === "returns" && accounts.length === 0 ? (
+          <div className="upload-selectors-row">
+            <div className="upload-field-group">
+              <label htmlFor="upload-file-type">FILE TYPE</label>
+              <select
+                id="upload-file-type"
+                value={mode}
+                onChange={(event) => changeMode(event.target.value as "returns" | "scanner")}
+              >
+                <option value="returns">Marketplace Return Master Import</option>
+                <option value="scanner">Bulk Scanned AWB List / Lookup Validation</option>
+              </select>
+            </div>
+            {mode === "returns" && accounts.length > 0 && (
+              <div className="upload-field-group">
+                <label htmlFor="upload-marketplace">MARKETPLACE</label>
+                <select
+                  id="upload-marketplace"
+                  value={marketplace}
+                  onChange={(event) => {
+                    // A preview belongs to the account it was read for. Changing the choice discards it.
+                    setMarketplace(event.target.value)
+                    setPreview(null)
+                    setConfirmed(false)
+                    setError("")
+                    setNotice("")
+                  }}
+                >
+                  <option>{NO_MARKETPLACE}</option>
+                  {accounts.map((account) => (
+                    <option key={account.id} value={account.name}>
+                      {account.name} {account.name === "Shopify" ? "(⚡ Real-time automated sync)" : ""}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+          </div>
+          {mode === "returns" && accounts.length === 0 && (
             <div className="form-error" style={{ margin: "12px 20px 0" }}>
               No marketplace account is assigned to you. Ask an administrator to assign one.
             </div>
-          ) : mode === "returns" ? (
-            <label>
-              MARKETPLACE
-              <select
-                value={marketplace}
-                onChange={(event) => {
-                  // A preview belongs to the account it was read for. Changing the choice discards it.
-                  setMarketplace(event.target.value)
-                  setPreview(null)
-                  setConfirmed(false)
-                  setError("")
-                  setNotice("")
-                }}
-              >
-                <option>{NO_MARKETPLACE}</option>
-                {accounts.map((account) => (
-                  <option key={account.id} value={account.name}>
-                    {account.name} {account.name === "Shopify" ? "(⚡ Real-time automated sync)" : ""}
-                  </option>
-                ))}
-              </select>
-            </label>
-          ) : null}
+          )}
 
           {isShopifySelected && (
             <div className="shopify-upload-notice-card">

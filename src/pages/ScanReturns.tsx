@@ -211,6 +211,17 @@ const STATE_LABELS: Record<ScannerState, string> = {
   AMBIGUOUS_MATCH: "Choose account",
 }
 
+function accountColorDot(accName: string): string {
+  const lower = accName.toLowerCase()
+  if (lower.includes("amazon")) return "#f59e0b"
+  if (lower.includes("flipkart")) return "#2563eb"
+  if (lower.includes("meesho")) return "#db2777"
+  if (lower.includes("myntra")) return "#e11d48"
+  if (lower.includes("ajio")) return "#0d9488"
+  if (lower.includes("shopify")) return "#10b981"
+  return "#136c57"
+}
+
 export function ScanReturns() {
   const { openPage, setClaimsBadge } = useWorkspace()
   const [scannerState, setScannerState] = useState<ScannerState>("READY")
@@ -244,6 +255,26 @@ export function ScanReturns() {
   const [multiOpen, setMultiOpen] = useState(false)
   const [verifyModalOpen, setVerifyModalOpen] = useState(false)
   const [soundEnabled, setSoundEnabled] = useState(true)
+  const [continuousMode, setContinuousMode] = useState<boolean>(() => {
+    return localStorage.getItem("scanner_continuous_mode") !== "false"
+  })
+  const [isInputFocused, setIsInputFocused] = useState(true)
+  const [isFullscreen, setIsFullscreen] = useState(false)
+
+  const toggleFullscreen = () => {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen().then(() => setIsFullscreen(true)).catch(() => {})
+    } else {
+      document.exitFullscreen().then(() => setIsFullscreen(false)).catch(() => {})
+    }
+  }
+
+  useEffect(() => {
+    const handleFsChange = () => setIsFullscreen(Boolean(document.fullscreenElement))
+    document.addEventListener("fullscreenchange", handleFsChange)
+    return () => document.removeEventListener("fullscreenchange", handleFsChange)
+  }, [])
+
   const [videoRecordingEnabled, setVideoRecordingEnabled] = useState<boolean>(() => {
     return localStorage.getItem("scanner_video_recording_enabled") === "true"
   })
@@ -1004,61 +1035,122 @@ export function ScanReturns() {
           <form onSubmit={submitLookup} className="scan-form">
             <div className="scan-form-head">
               <label>TRACKING ID / AWB</label>
-              <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-                <button
-                  type="button"
-                  onClick={() => setSoundEnabled((v) => !v)}
-                  style={{
-                    background: "transparent",
-                    border: "none",
-                    cursor: "pointer",
-                    fontSize: 12,
-                    color: soundEnabled ? "var(--green)" : "#8a9491",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 4,
-                  }}
-                  title={soundEnabled ? "Mute audio chime" : "Enable audio chime"}
+              <div className="scan-form-toggles">
+                <div
+                  className="continuous-mode-toggle"
+                  title={
+                    continuousMode
+                      ? "Continuous scan mode enabled: scanner stays ready for next box"
+                      : "Continuous scan mode disabled: scanner pauses on saved card"
+                  }
                 >
-                  <Icon name="bell" size={14} />
-                  <span>{soundEnabled ? "Sound Chime On" : "Chime Muted"}</span>
-                </button>
-                <span>
-                  <i /> Continuous scan mode
-                </span>
+                  <span className="continuous-mode-label">Continuous scan mode</span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={continuousMode}
+                    className={`modern-toggle-switch ${continuousMode ? "on" : "off"}`}
+                    onClick={() => {
+                      setContinuousMode((prev) => {
+                        const next = !prev
+                        localStorage.setItem("scanner_continuous_mode", String(next))
+                        return next
+                      })
+                    }}
+                  >
+                    <span className="modern-toggle-thumb" />
+                  </button>
+                </div>
               </div>
             </div>
-            <div className="scan-controls">
-              <select
-                aria-label="Marketplace account"
-                value={marketplace}
-                onChange={(event) => {
-                  setMarketplace(event.target.value)
-                  scanInput.current?.focus()
-                }}
-              >
-                <option>Auto detect</option>
-                {accounts.map((account) => (
-                  <option key={account.id}>{account.name}</option>
-                ))}
-              </select>
-              <div className="scan-input">
-                <Icon name="scan" size={26} />
+            <div className="scan-controls-responsive">
+              <div className="account-select-wrap">
+                <span
+                  className="account-status-dot"
+                  style={{
+                    backgroundColor: marketplace === "Auto detect" ? "#10b981" : accountColorDot(marketplace),
+                  }}
+                />
+                <select
+                  aria-label="Marketplace account"
+                  value={marketplace}
+                  onChange={(event) => {
+                    setMarketplace(event.target.value)
+                    scanInput.current?.focus()
+                  }}
+                  className="account-select-field"
+                >
+                  <option value="Auto detect">Auto detect</option>
+                  {accounts.map((account) => (
+                    <option key={account.id} value={account.name}>
+                      {account.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="scan-input-card">
+                <Icon name="scan" size={24} />
                 <input
                   ref={scanInput}
                   autoFocus
                   value={tracking}
+                  onFocus={() => setIsInputFocused(true)}
+                  onBlur={() => setIsInputFocused(false)}
                   onChange={(event) => {
                     setTracking(event.target.value)
                     setError("")
                     setNotice("")
                   }}
-                  placeholder="Scan or type tracking number"
+                  placeholder="Scan tracking ID and press Enter"
                 />
-                <button type="submit">
+                <span className="scan-input-helper">Auto opens on Enter</span>
+                <button type="submit" className="scan-submit-btn">
                   Look up <Icon name="arrow" />
                 </button>
               </div>
+
+              <button
+                type="button"
+                onClick={() => setSoundEnabled((v) => !v)}
+                className={`scan-audio-pill ${soundEnabled ? "on" : "muted"}`}
+                title={soundEnabled ? "Mute audio chime" : "Enable audio chime"}
+              >
+                <span>{soundEnabled ? "🔊 Sound on" : "🔇 Muted"}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => scanInput.current?.focus()}
+                className={`scan-status-pill ${isInputFocused ? "focused" : "unfocused"}`}
+                title={
+                  isInputFocused
+                    ? "Scanner input is focused and listening for barcodes"
+                    : "Barcode scanner input is not focused! Tap here to reconnect & focus."
+                }
+              >
+                {isInputFocused ? (
+                  <>
+                    <span className="live-status-dot" />
+                    <span>{scannerState === "READY" ? "Scan input ready" : STATE_LABELS[scannerState]}</span>
+                  </>
+                ) : (
+                  <>
+                    <span className="unfocused-warning-icon">⚠️</span>
+                    <span>Not listening – tap to reconnect</span>
+                  </>
+                )}
+              </button>
+
+              <button
+                type="button"
+                onClick={toggleFullscreen}
+                className="scan-fullscreen-btn"
+                title={isFullscreen ? "Exit fullscreen" : "Fullscreen packing station mode"}
+                aria-label="Toggle Fullscreen"
+              >
+                {isFullscreen ? "🗗" : "⛶"}
+              </button>
             </div>
             <div className="scan-hint">
               <span>Scanner stays focused after every saved return</span>

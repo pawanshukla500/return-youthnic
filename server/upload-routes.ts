@@ -273,9 +273,10 @@ export function mountUploadRoutes(app: Express, requireUser: RequestHandler): vo
               titledRows: mapping.titledRows,
               unmappedCount: mapping.unmapped.length,
               unmappedSample: mapping.unmapped.slice(0, 10),
+              unmappedSkus: mapping.unmapped,
             }
           : null,
-        warnings: warningSamples(parsed.rows, mapping?.unmapped ?? []),
+        warnings: warningSamples(parsed.rows, []),
         message: ready
           ? `${counts.scannableRows.toLocaleString("en-US")} rows ready to scan. ${(
               counts.pendingRows +
