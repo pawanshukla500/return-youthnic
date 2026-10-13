@@ -123,6 +123,8 @@ export function Admin() {
   const [optionError, setOptionError] = useState("")
   const [savingOption, setSavingOption] = useState(false)
   const [categoryError, setCategoryError] = useState("")
+  const [newCategory, setNewCategory] = useState("")
+  const [savingCategory, setSavingCategory] = useState(false)
   const [newPartner, setNewPartner] = useState("")
   const [partnerError, setPartnerError] = useState("")
   const [aliasDrafts, setAliasDrafts] = useState<Record<number, AliasDraft>>({})
@@ -505,6 +507,26 @@ export function Admin() {
       )
     } catch (err) {
       setCategoryError(err instanceof Error ? err.message : "The category was not changed.")
+    }
+  }
+
+  const addCategory = async (event: FormEvent) => {
+    event.preventDefault()
+    const label = newCategory.trim()
+    if (!label) return
+    setCategoryError("")
+    setSavingCategory(true)
+    try {
+      const data = await api<{ category: AdminIssueCategory }>("/api/admin/issue-categories", {
+        method: "POST",
+        body: JSON.stringify({ label }),
+      })
+      setCategories((current) => [...current, data.category])
+      setNewCategory("")
+    } catch (err) {
+      setCategoryError(err instanceof Error ? err.message : "Could not add the category.")
+    } finally {
+      setSavingCategory(false)
     }
   }
 
@@ -1008,6 +1030,19 @@ export function Admin() {
                 </p>
               </div>
             </div>
+            <form onSubmit={addCategory} style={{ display: "flex", gap: 8, padding: "0 20px 12px" }}>
+              <input
+                aria-label="New category name"
+                value={newCategory}
+                onChange={(event) => setNewCategory(event.target.value)}
+                placeholder="Category name, e.g. Iron Send"
+                maxLength={60}
+                style={{ flex: 1 }}
+              />
+              <button className="btn primary" type="submit" disabled={!newCategory.trim() || savingCategory}>
+                + Add category
+              </button>
+            </form>
             {categoryError && (
               <div className="form-error" style={{ margin: "0 20px 12px" }}>
                 {categoryError}

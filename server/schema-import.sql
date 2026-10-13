@@ -114,7 +114,8 @@ VALUES
   ('damaged_product', 'Damaged product', false, false, true, false, false, true, 4),
   ('other_issue', 'Other issue', false, false, false, false, false, true, 5),
   ('sku_change', 'SKU Change', false, false, false, false, false, true, 6),
-  ('size_change', 'Size Change', false, false, false, false, false, true, 7)
+  ('size_change', 'Size Change', false, false, false, false, false, true, 7),
+  ('iron_send', 'Iron Send', false, false, false, false, false, true, 8)
 ON CONFLICT (code) DO NOTHING;
 
 -- Scan bench, 2026-10-11: the scanner taps the issue. A ticket ID is not typed during the scan.

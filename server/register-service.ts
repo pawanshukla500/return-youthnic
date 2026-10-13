@@ -274,6 +274,84 @@ export async function updateCategory(
   })
 }
 
+// Allows an administrator to add a new received issue category (e.g. "Iron Send")
+export async function createCategory(
+  db: pg.Pool,
+  actor: Actor,
+  input: {
+    label: string
+    code?: string
+    requiresTicket?: boolean
+    allowsSubIssue?: boolean
+  },
+) {
+  const label = input.label.trim()
+  if (!label) throw new ServiceError(400, "Category label is required.")
+  if (label.length > 60) throw new ServiceError(400, "Category label must be 60 characters or fewer.")
+
+  let code = (input.code || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+  if (!code) {
+    code = label.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "")
+  }
+  if (!/^[a-z_]+$/.test(code)) {
+    throw new ServiceError(400, "Category code must contain lowercase letters and underscores only.")
+  }
+
+  return withClient(db, async (client) => {
+    await client.query("BEGIN")
+    try {
+      const existing = await client.query(
+        "SELECT code FROM receipt_issue_categories WHERE code = $1",
+        [code],
+      )
+      if (existing.rows[0]) {
+        throw new ServiceError(409, `An issue category with code "${code}" already exists.`)
+      }
+
+      const sortRes = await client.query(
+        "SELECT COALESCE(MAX(sort_order), 0) + 1 AS next_sort FROM receipt_issue_categories",
+      )
+      const nextSort = Number(sortRes.rows[0]?.next_sort || 10)
+
+      const result = await client.query(
+        `INSERT INTO receipt_issue_categories
+           (code, label, is_clear, is_missing, requires_ticket, allows_sub_issue, requires_sub_issue, active, sort_order)
+         VALUES
+           ($1, $2, false, false, $3, $4, false, true, $5)
+         RETURNING code, label, is_clear, is_missing, requires_ticket, allows_sub_issue, requires_sub_issue, active`,
+        [code, label, Boolean(input.requiresTicket), Boolean(input.allowsSubIssue), nextSort],
+      )
+
+      const row = result.rows[0]
+      await writeAudit(client, actor.id, "issue_category.add", "issue_category", code, {
+        label,
+        code,
+        requiresTicket: Boolean(input.requiresTicket),
+      })
+      await client.query("COMMIT")
+
+      return {
+        code: String(row.code),
+        label: String(row.label),
+        isClear: Boolean(row.is_clear),
+        isMissing: Boolean(row.is_missing),
+        requiresTicket: Boolean(row.requires_ticket),
+        allowsSubIssue: Boolean(row.allows_sub_issue),
+        requiresSubIssue: Boolean(row.requires_sub_issue),
+        active: Boolean(row.active),
+      }
+    } catch (error) {
+      await client.query("ROLLBACK")
+      throw error
+    }
+  })
+}
+
+
 // ---------------------------------------------------------------------------------------------------------------
 // Lookup
 // ---------------------------------------------------------------------------------------------------------------

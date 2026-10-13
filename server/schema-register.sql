@@ -365,4 +365,12 @@ VALUES
   ))
 ON CONFLICT (setting_key) DO NOTHING;
 
+-- Seed 'Iron Send' issue category for items needing pressing/ironing before restocking
+INSERT INTO receipt_issue_categories
+  (code, label, is_clear, is_missing, requires_ticket, allows_sub_issue, requires_sub_issue, active, sort_order)
+VALUES
+  ('iron_send', 'Iron Send', false, false, false, false, false, true, 8)
+ON CONFLICT (code) DO NOTHING;
+
+
 

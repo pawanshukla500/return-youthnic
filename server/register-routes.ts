@@ -22,6 +22,7 @@ import {
   scanSession,
   ticketHistory,
   updateCategory,
+  createCategory,
   updateTicketStatus,
   writeAudit,
   type Actor,
@@ -320,6 +321,25 @@ export function mountRegisterRoutes(app: Express, requireUser: RequestHandler): 
       if (Object.keys(changes).length === 0) throw new ServiceError(400, "Nothing to change.")
       const category = await updateCategory(getPool(), actorOf(req), String(req.params.code), changes)
       res.json({ category })
+    } catch (error) {
+      sendError(res, error, next)
+    }
+  })
+
+  app.post("/api/admin/issue-categories", requireUser, requireAdmin, async (req, res, next) => {
+    try {
+      const body = (req.body ?? {}) as Record<string, unknown>
+      const label = String(body.label || "").trim()
+      const code = body.code ? String(body.code).trim() : undefined
+      const requiresTicket = Boolean(body.requiresTicket)
+      const allowsSubIssue = Boolean(body.allowsSubIssue)
+      const category = await createCategory(getPool(), actorOf(req), {
+        label,
+        code,
+        requiresTicket,
+        allowsSubIssue,
+      })
+      res.status(201).json({ category })
     } catch (error) {
       sendError(res, error, next)
     }
