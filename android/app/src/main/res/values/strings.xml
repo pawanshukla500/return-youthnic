@@ -52,6 +52,7 @@
     <string name="marketplace_sku_label">Marketplace SKU</string>
     <string name="expected_units_label">Expected: %1$d</string>
     <string name="received_units_label">Received:</string>
+    <string name="qty_received">Received:</string>
     <string name="physical_check_label">Physical condition inspected &amp; verified</string>
     <string name="btn_save_return">Save Return (Commit)</string>
     <string name="btn_cancel">Cancel</string>
