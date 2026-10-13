@@ -625,8 +625,22 @@ Append new entries at the end. Do not edit earlier entries, except to correct a 
   - Warehouse load simulation: 2,500 synthetic SKUs parsed in 34.7 ms, warm lookup p95 < 0.1 ms (far exceeding p95 < 300 ms target).
 - Not run:
   - Activation of real marketplace files against the live production database (forbidden without explicit user instruction).
+### 2026-10-13, Antigravity, Youthnic Brand Vector Logo Alignment
+
+- Perspective: Addressed user screenshots comparing the browser tab favicon (dark green squircle with white 'Y' monogram) against the web sidebar/login brand header which previously displayed an unstyled white rectangular artifact from a legacy JPEG.
+- Changed:
+  - `src/ui.tsx`: Exported `YouthnicMark` vector component rendering the clean green gradient squircle with the white stylized "Y" monogram and subtle stroke. Updated `ReturnLogo` to use `YouthnicMark` directly, eliminating the white rectangular artifact and ensuring pixel-perfect sharpness across light and dark themes.
+  - `src/index.css`: Added crisp `.return-wordmark small` typography styling for default light mode (`color: #4b635c; font-size: 10px; font-weight: 700; letter-spacing: 1.6px`).
+  - `public/logos/youthnic-icon.svg` & `public/logos/youthnic-mark.svg`: Added standalone scalable vector assets matching the official brand identity.
+- Ran:
+  - `npm.cmd run typecheck`: Passed (0 errors).
+  - `npm.cmd run build`: Passed (Vite 1.96s, esbuild 20ms).
+  - `npm.cmd test`: 312 tests: 288 passed, 0 failed, 24 skipped on dedicated `TEST_DATABASE_URL`.
+- Not run:
   - The 24 database integration tests requiring a dedicated test database whose name contains `test`.
+
 ### 2026-10-13, Antigravity, Youthnic Brand Logo Overhaul, Modern Continuous Toggle, Responsive Scan Bar & Unmapped SKU Inspection
+
 
 - Perspective: Addressed user requests and screenshot analysis covering 4 areas: brand logo replacement from desktop assets, interactive continuous scan mode toggle switch, auto-adjustable scan control bar with live beacon, and exposure/export of pending unmapped listing SKUs on data uploads.
 - Changed:

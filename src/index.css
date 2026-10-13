@@ -70,6 +70,7 @@ button { cursor: pointer; }
 .return-brand:hover .return-vector-mark { transform: translateY(-1px); filter: drop-shadow(0 4px 8px rgba(14, 88, 71, 0.3)); }
 .return-wordmark { margin-top: 6px; display: grid; justify-items: center; }
 .return-wordmark strong { color: currentColor; font: 800 17px 'Manrope'; letter-spacing: -.4px; }
+.return-wordmark small { margin-top: 2px; color: #4b635c; font-size: 10px; font-weight: 700; letter-spacing: 1.6px; }
 .return-brand.inverse { flex-direction: row; gap: 13px; color: #f7f6ef; }
 .return-brand.inverse .return-vector-mark { width: 46px; height: 46px; filter: drop-shadow(0 4px 12px rgba(0, 0, 0, 0.28)); }
 .return-brand.inverse:hover .return-vector-mark { transform: translateY(-1px); filter: drop-shadow(0 6px 16px rgba(0, 0, 0, 0.36)); }
