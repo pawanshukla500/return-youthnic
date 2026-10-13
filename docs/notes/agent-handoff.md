@@ -1440,6 +1440,29 @@ Append new entries at the end. Do not edit earlier entries, except to correct a 
   - Rule 11: Reported only tests that were executed and passed.
   - Rule 12: Mobile APK version and manifest synchronized (`v1.0.25` / `10025`).
 
+### 2026-10-13, Antigravity Agent, In-App Update Crash Fix on "Install Now" & Release v1.0.26
+
+- **Features & Bug Fix Delivered:**
+  - **FileProvider Storage Configuration (`android/app/src/main/res/xml/update_file_paths.xml`):**
+    - Added `<external-files-path name="external_files" path="." />`, `<external-files-path name="download_files" path="Download/" />`, `<files-path name="internal_files" path="." />`, `<external-path name="external_storage" path="." />`, and `<external-cache-path name="external_cache" path="." />`.
+    - Previously, `update_file_paths.xml` only defined `<cache-path name="updates" path="updates/" />`, causing `FileProvider.getUriForFile` to throw an unhandled `IllegalArgumentException: Failed to find configured root that contains ...` when sharing APKs from `getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)`.
+  - **Defensive Update & Installation Exception Handling (`AppUpdater.kt`):**
+    - Wrapped `DownloadManager.Request` URI validation and enqueue calls in try-catch with graceful fallback to `openDownloadPage`.
+    - Wrapped `FileProvider.getUriForFile` and installer intent launch in comprehensive try-catch, guarding against any device-specific provider or activity resolution errors and falling back to manual browser download instead of crashing.
+    - Guarded progress dialog `.dismiss()` and `.show()` against activity lifecycle states (`isFinishing` / `isDestroyed`).
+  - **Release v1.0.26 (`versionCode: 10026`):**
+    - Published official release `v1.0.26` via GitHub Actions workflow run 38431359988 (`ReturnScan-v1.0.26.apk` / `ReturnScan-latest.apk`), size 3,305,402 bytes (3.15 MB, well within the 5.0 MB target limit), SHA-256 `a8d8100699f55eb75eed5beafdb858e0e7a867b8b5c551fb785d7d9d958f3934`.
+    - Synced release manifest in `data/return-scan-release.json` and `server/mobile-release.ts`.
+- **Ran:**
+  - `npm.cmd run typecheck` -> Passed (0 errors).
+  - `npm.cmd run build` -> Passed (Vite in 1.94s, server bundled in 13ms).
+  - `npm.cmd test` -> 319 tests: 295 passed, 0 failed, 24 skipped (`TEST_DATABASE_URL`).
+  - GitHub Actions `Build Return Scan Android APK` (run 38431359988) -> Passed (tests, lint, assembleRelease, APK budget, release publish).
+- **Invariants preserved:**
+  - Rule 10: Every screen control works or is disabled with explanation.
+  - Rule 11: Reported only tests that were executed and passed.
+  - Rule 12: Mobile APK version and manifest synchronized (`v1.0.26` / `10026`).
+
 ## STOP — needs the user to resume
 
 

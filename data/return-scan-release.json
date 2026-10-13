@@ -1,11 +1,11 @@
 {
-  "versionCode": 10025,
-  "versionName": "1.0.25",
+  "versionCode": 10026,
+  "versionName": "1.0.26",
   "minRequiredVersionCode": 10001,
-  "sha256": "c8e7d16bb2daa57dc25135e0c34cdeacf962e6e8f7a6ee081f8b884b91f06b09",
-  "sizeBytes": 3305191,
-  "notes": "Youthnic Native Android Return Scanner · Release v1.0.25\n- Amazon Order ID scanning & manual lookup support (hyphenated 408-XXXXXXX-XXXXXXX and numeric 17-digit IDs)\n- 2D Barcode Support: QR Code, Data Matrix, and PDF417 scanning for Amazon return labels and customer slips\n- Launcher icon fix: Native vector 'Y' monogram rendering on all Android device launchers without empty backgrounds\n- Pre-OMSGuru unmapped SKU warning alerts and CSV workflow support",
-  "publishedAt": "2026-10-13T16:20:58Z",
-  "downloadUrl": "https://github.com/pawanshukla500/return-youthnic/releases/download/v1.0.25/ReturnScan-v1.0.25.apk",
-  "pageUrl": "https://github.com/pawanshukla500/return-youthnic/releases/tag/v1.0.25"
+  "sha256": "a8d8100699f55eb75eed5beafdb858e0e7a867b8b5c551fb785d7d9d958f3934",
+  "sizeBytes": 3305402,
+  "notes": "Youthnic Native Android Return Scanner · Release v1.0.26\n- Fixed in-app update crash on 'Install Now' by adding FileProvider external storage roots and exception handling\n- Amazon Order ID scanning & manual lookup support (hyphenated 408-XXXXXXX-XXXXXXX and numeric 17-digit IDs)\n- 2D Barcode Support: QR Code, Data Matrix, and PDF417 scanning for Amazon return labels and customer slips\n- Launcher icon: Official Youthnic white cursive 'Y' monogram rendered on all device launchers\n- Pre-OMSGuru unmapped SKU warning alerts and CSV workflow support",
+  "publishedAt": "2026-10-13T16:37:43Z",
+  "downloadUrl": "https://github.com/pawanshukla500/return-youthnic/releases/download/v1.0.26/ReturnScan-v1.0.26.apk",
+  "pageUrl": "https://github.com/pawanshukla500/return-youthnic/releases/tag/v1.0.26"
 }
