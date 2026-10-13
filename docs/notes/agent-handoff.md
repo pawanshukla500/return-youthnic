@@ -1292,6 +1292,15 @@ Append new entries at the end. Do not edit earlier entries, except to correct a 
   - `npm.cmd test`: 307 tests, 283 passed, 0 failed, 24 skipped (`TEST_DATABASE_URL`).
 - **Invariants preserved:** Zero secrets printed or logged. Schema changes strictly additive. Mobile APK sync and GitHub Actions workflow compatibility preserved.
 
+### 2026-10-13, Antigravity Agent, CI/CD SSH Connection Hardening & VPS Deployment Verification
+
+- **Incident & Diagnosis:** Workflow run 38394075270 failed at step `Upload to VPS and Deploy Docker Container` with `exit code 255: ssh: connect to host ... port ...: Connection timed out` due to a transient TCP connection timeout from the Azure runner to the Hostinger VPS.
+- **Fix:** In `.github/workflows/deploy.yml`:
+  - Added `-T 10` to `ssh-keyscan` to prevent blocking indefinitely.
+  - Added robust connection options: `-o ConnectTimeout=30 -o ConnectionAttempts=5 -o ServerAliveInterval=15 -o ServerAliveCountMax=4`.
+  - Wrapped SSH and SCP invocations in `run_cmd_retry` with 4 attempts and exponential backoff (4s, 8s, 16s).
+- **Verification:** Re-ran failed run 38394075270 (`gh run rerun --failed`) -> passed in 57s. Pushed hardened workflow in commit `e53de82` -> run 38396531945 completed all jobs green in 1m18s. Health checks at `https://return.youthnic.shop/api/health` and `https://return.srv1845788.hstgr.cloud/api/health` returned HTTP 200 with `connected` status.
+
 ## STOP — needs the user to resume
 
 **This is the exact point at which the agent stopped.** Everything that can be verified without external input has been verified. The following items require the user to act before any agent can resume:
