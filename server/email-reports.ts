@@ -954,9 +954,11 @@ Sent automatically by Return App (return.scan@youthnic.shop)
 // Send an email via the official Resend API (HTTP POST https://api.resend.com/emails)
 export async function sendEmailViaResend(options: {
   to: string[]
+  cc?: string[]
   subject: string
   html: string
   text: string
+  attachments?: { filename: string; content: string }[]
 }): Promise<{ id: string } | { dryRun: true }> {
   const apiKey = process.env.RESEND_API_KEY?.trim()
   if (!apiKey) {
@@ -965,19 +967,29 @@ export async function sendEmailViaResend(options: {
     return { dryRun: true }
   }
 
+  const payload: Record<string, unknown> = {
+    from: `Youthnic Returns <${SENDER_EMAIL}>`,
+    to: options.to,
+    subject: options.subject,
+    html: options.html,
+    text: options.text,
+  }
+
+  if (options.cc && options.cc.length > 0) {
+    payload.cc = options.cc
+  }
+
+  if (options.attachments && options.attachments.length > 0) {
+    payload.attachments = options.attachments
+  }
+
   const response = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({
-      from: `Youthnic Returns <${SENDER_EMAIL}>`,
-      to: options.to,
-      subject: options.subject,
-      html: options.html,
-      text: options.text,
-    }),
+    body: JSON.stringify(payload),
   })
 
   if (!response.ok) {

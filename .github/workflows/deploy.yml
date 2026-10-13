@@ -94,6 +94,7 @@ jobs:
           OMSGURU_CLIENT_SECRET: ${{ secrets.OMSGURU_CLIENT_SECRET || '' }}
           OMSGURU_TOKEN: ${{ secrets.OMSGURU_TOKEN || secrets.OMSGURU_API_TOKEN || '' }}
           OMSGURU_API_TOKEN: ${{ secrets.OMSGURU_API_TOKEN || secrets.OMSGURU_TOKEN || '' }}
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON || '' }}
           PORT: ${{ vars.PORT || '3001' }}
           NODE_ENV: 'production'
         run: |
@@ -120,6 +121,9 @@ jobs:
           fi
           if [ -n "$SHOPIFY_SSL_CA" ]; then
             printf '%s\n' "$SHOPIFY_SSL_CA" > /tmp/certs/shopify-ca.pem
+          fi
+          if [ -n "$FIREBASE_SERVICE_ACCOUNT_JSON" ]; then
+            printf '%s\n' "$FIREBASE_SERVICE_ACCOUNT_JSON" > /tmp/certs/firebase-service-account.json
           fi
 
           tar --warning=no-file-changed \

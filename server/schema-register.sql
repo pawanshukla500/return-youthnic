@@ -325,3 +325,44 @@ ON CONFLICT (setting_key) DO NOTHING;
 -- User report preference column
 ALTER TABLE users ADD COLUMN IF NOT EXISTS can_receive_reports boolean NOT NULL DEFAULT false;
 
+-- ---------------------------------------------------------------------------------------------------------------
+-- OMSGuru daily inventory updates: daily aggregation of good-condition returns across all marketplaces,
+-- formatted for bulk inventory addition (ADD) at dropship warehouse (default 6688), stored in Firebase Storage
+-- for 180-day retention and automated Resend email delivery with CSV attachment.
+-- ---------------------------------------------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS omsguru_daily_inventory_updates (
+  id serial PRIMARY KEY,
+  request_id text NOT NULL UNIQUE,
+  update_date date NOT NULL,
+  dropship_warehouse_id text NOT NULL DEFAULT '6688',
+  total_skus integer NOT NULL DEFAULT 0,
+  total_qty integer NOT NULL DEFAULT 0,
+  csv_content text NOT NULL,
+  file_name text NOT NULL DEFAULT 'UpdateInStockQtyAnd_orLastPurchasePrice.csv',
+  storage_path text NOT NULL DEFAULT '',
+  storage_url text NOT NULL DEFAULT '',
+  email_sent boolean NOT NULL DEFAULT false,
+  email_sent_at timestamptz,
+  email_recipients text[] NOT NULL DEFAULT '{}',
+  email_cc text[] NOT NULL DEFAULT '{}',
+  sku_breakdown jsonb NOT NULL DEFAULT '[]'::jsonb,
+  generated_by integer REFERENCES users(id) ON DELETE SET NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS omsguru_daily_updates_date_idx ON omsguru_daily_inventory_updates (update_date DESC);
+CREATE INDEX IF NOT EXISTS omsguru_daily_updates_request_id_idx ON omsguru_daily_inventory_updates (request_id);
+
+INSERT INTO app_system_settings (setting_key, setting_value)
+VALUES
+  ('omsguru_config', jsonb_build_object(
+    'dailyEnabled', true,
+    'dailyTime', '19:45',
+    'dropshipWarehouseId', '6688',
+    'retentionDays', 180,
+    'storageFolder', 'inventory-update-file',
+    'ccEmails', jsonb_build_array()
+  ))
+ON CONFLICT (setting_key) DO NOTHING;
+
+

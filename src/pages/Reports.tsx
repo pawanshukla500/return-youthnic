@@ -4,6 +4,7 @@ import { Loading, PageError } from "../shell"
 import type { RegisterOptions, RegisterPage, RegisterRow, RegisterTicket, TicketHistoryEntry } from "../types"
 import { Badge, Icon, MarketplaceBadge, Modal, PartnerBadge } from "../ui"
 import { ShopifyReport } from "../ShopifyReport"
+import { OmsguruDailyReport } from "../OmsguruDailyReport"
 
 // The return register. Each row is one verified item of a return, or one line of a legacy scan. The default export is the
 // 19 columns of the approved mapping, in that order. The operational export adds the service and traceability columns.
@@ -446,14 +447,18 @@ export function Reports() {
   const [detail, setDetail] = useState<Row | null>(null)
   const [hidden, setHidden] = useState<Set<string>>(new Set())
   const [showColumns, setShowColumns] = useState(false)
-  const [viewMode, setViewMode] = useState<"register" | "shopify">(() => {
-    return new URLSearchParams(window.location.search).get("tab") === "shopify" ? "shopify" : "register"
+  const [viewMode, setViewMode] = useState<"register" | "shopify" | "omsguru">(() => {
+    const tab = new URLSearchParams(window.location.search).get("tab")
+    if (tab === "omsguru") return "omsguru"
+    if (tab === "shopify") return "shopify"
+    return "register"
   })
 
-  const changeView = (mode: "register" | "shopify") => {
+  const changeView = (mode: "register" | "shopify" | "omsguru") => {
     setViewMode(mode)
     const url = new URL(window.location.href)
     if (mode === "shopify") url.searchParams.set("tab", "shopify")
+    else if (mode === "omsguru") url.searchParams.set("tab", "omsguru")
     else url.searchParams.delete("tab")
     window.history.replaceState(null, "", url.toString())
   }
@@ -537,6 +542,15 @@ export function Reports() {
         <span>Shopify Returns & RTO</span>
         <span className="shopify-live-indicator" title="Real-time automated sync">● Real-time</span>
       </button>
+      <button
+        type="button"
+        className={`report-view-tab ${viewMode === "omsguru" ? "active" : ""}`}
+        onClick={() => changeView("omsguru")}
+      >
+        <Icon name="upload" size={16} />
+        <span>OMSGuru Update Daily</span>
+        <span className="omsguru-live-indicator" title="Daily 7:45 PM IST automated schedule">● 7:45 PM IST</span>
+      </button>
     </div>
   )
 
@@ -545,6 +559,15 @@ export function Reports() {
       <div className="page-content">
         {switcher}
         <ShopifyReport />
+      </div>
+    )
+  }
+
+  if (viewMode === "omsguru") {
+    return (
+      <div className="page-content">
+        {switcher}
+        <OmsguruDailyReport />
       </div>
     )
   }

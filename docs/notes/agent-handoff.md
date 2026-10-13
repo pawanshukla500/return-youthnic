@@ -1301,7 +1301,44 @@ Append new entries at the end. Do not edit earlier entries, except to correct a 
   - Wrapped SSH and SCP invocations in `run_cmd_retry` with 4 attempts and exponential backoff (4s, 8s, 16s).
 - **Verification:** Re-ran failed run 38394075270 (`gh run rerun --failed`) -> passed in 57s. Pushed hardened workflow in commit `e53de82` -> run 38396531945 completed all jobs green in 1m18s. Health checks at `https://return.youthnic.shop/api/health` and `https://return.srv1845788.hstgr.cloud/api/health` returned HTTP 200 with `connected` status.
 
+### 2026-10-13, Antigravity Agent, OMSGuru Daily Inventory Update Engine & Firebase Storage Integration
+
+- **Features Delivered:**
+  - **New Tab in Register:** Added `OMSGuru Update Daily` (with `● 7:45 PM IST` indicator) to `src/pages/Reports.tsx` switcher alongside `Return Register` and `Shopify Returns & RTO`.
+  - **OMSGuru Bulk CSV Format:** Exact template format `DropshipWarehouseId,Item SkuCode,InventoryAction,QtyIncludesBlocked,Qty,RackSpace,Last Purchase Price,Notes`. Default `DropshipWarehouseId: 6688`, `InventoryAction: ADD`, `Notes: <Automated Request ID>`. Attached filename: `UpdateInStockQtyAnd_orLastPurchasePrice.csv`.
+  - **Good Returns Only:** Excludes all damaged or issue-marked units (`received_qty - issue_qty > 0`). Sums good quantities across all marketplace channels per Master Product SKU.
+  - **Firebase Storage & 180-Day Retention:** Pure OAuth2 JWT service account client in `server/firebase-storage.ts` targeting bucket `return-scan-app.firebasestorage.app` under folder `inventory-update-file/`. Automatic pruning of files and database archives older than 180 days.
+  - **Automated Scheduled Dispatch & Email:** Daily runner scheduled at 7:45 PM IST (`19:45`) via advisory-locked background worker in `server/index.ts`. Rich HTML email with Youthnic styling, logo, stats table, attached CSV, and CC audit recipients.
+  - **Frontend Console:** Built `src/OmsguruDailyReport.tsx` with KPI stat cards, search by Request ID / date, direct CSV download, SKU breakdown inspector modal, live preview modal for today's scans, and admin settings modal.
+  - **Production Deployment Configuration:** Updated `docker-compose.yml`, `.github/workflows/deploy.yml` (saving `FIREBASE_SERVICE_ACCOUNT_JSON` to `certs/firebase-service-account.json` mounted in container), and `.env.example`.
+- **Changed:**
+  - `server/firebase-storage.ts` (new)
+  - `server/omsguru-daily.ts` (new)
+  - `server/omsguru-routes.ts` (new)
+  - `src/OmsguruDailyReport.tsx` (new)
+  - `server/tests/omsguru-daily.test.ts` (new)
+  - `server/schema-register.sql`
+  - `server/email-reports.ts`
+  - `server/index.ts`
+  - `src/pages/Reports.tsx`
+  - `src/index.css`
+  - `package.json`
+  - `docker-compose.yml`
+  - `.github/workflows/deploy.yml`
+  - `.env.example`
+- **Ran:**
+  - `npm.cmd run typecheck` -> Passed (0 errors).
+  - `npm.cmd run build` -> Passed (Vite in 1.69s, server bundled in 13ms).
+  - `npm.cmd test` -> 312 tests: 288 passed, 0 failed, 24 skipped (`TEST_DATABASE_URL`).
+  - `npx.cmd tsx --test server/tests/omsguru-daily.test.ts` -> 5 tests passed, 0 failed.
+- **Invariants preserved:**
+  - Rule 1 & Rule 2: Scope and Admin restrictions strictly checked.
+  - Rule 6: Schema change strictly additive (`omsguru_daily_inventory_updates`).
+  - Rule 8: Zero credentials printed, logged or committed.
+  - Rule 12: Mobile APK synchronization and release manifests intact.
+
 ## STOP — needs the user to resume
+
 
 **This is the exact point at which the agent stopped.** Everything that can be verified without external input has been verified. The following items require the user to act before any agent can resume:
 

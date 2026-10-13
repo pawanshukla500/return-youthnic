@@ -40,6 +40,9 @@ import { mountUploadRoutes } from "./upload-routes.js"
 import { mountScannerListRoutes } from "./scanner-list-routes.js"
 import { loginRateLimiter, ipRateLimiter } from "./rate-limit.js"
 import { handleLatestRelease, handleApkDownload } from "./mobile-release.js"
+import { mountOmsguruRoutes } from "./omsguru-routes.js"
+import { runScheduledOmsguruUpdate, getOmsguruConfig } from "./omsguru-daily.js"
+import { isFirebaseConfigured } from "./firebase-storage.js"
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 dotenv.config({ path: path.join(root, ".env") })
@@ -429,6 +432,9 @@ mountProductMasterRoutes(app, requireUser)
 
 // Shopify real-time return and RTO routes live in shopify/routes.ts.
 mountShopifyRoutes(app, requireUser)
+
+// OMSGuru Daily Inventory Update & Firebase Storage routes live in omsguru-routes.ts.
+mountOmsguruRoutes(app, requireUser)
 
 // ---- Administrator pages. Every route here needs the Admin role. ----
 
@@ -963,6 +969,12 @@ app.get("/api/admin/system", requireUser, requireAdmin, async (_req, res, next) 
           status: reportConfig.dailyEnabled || reportConfig.weeklyEnabled ? "Scheduled" : "Disabled",
           tone: reportConfig.dailyEnabled || reportConfig.weeklyEnabled ? "success" : "neutral",
         },
+        {
+          title: "OMSGuru Daily Inventory Updates",
+          detail: `Daily at ${(await getOmsguruConfig(getPool())).dailyTime} IST · Warehouse: ${(await getOmsguruConfig(getPool())).dropshipWarehouseId} · Firebase: ${isFirebaseConfigured() ? "Connected" : "Offline"}`,
+          status: (await getOmsguruConfig(getPool())).dailyEnabled ? "Active" : "Disabled",
+          tone: (await getOmsguruConfig(getPool())).dailyEnabled ? "success" : "neutral",
+        },
       ],
     })
   } catch (error) {
@@ -1020,9 +1032,10 @@ initDatabase()
     dbMessage = result.message
     console.log(result.ok ? "PostgreSQL connected. Workspace data is ready." : result.message)
     if (result.ok) {
-      // Background worker for idempotent Resend email reports (checked every 60s)
+      // Background worker for idempotent Resend email reports and OMSGuru daily updates (checked every 60s)
       schedulerInterval = setInterval(() => {
         runScheduledReports(getPool()).catch((err) => console.error("[Report Scheduler Error]", err))
+        runScheduledOmsguruUpdate(getPool()).catch((err) => console.error("[OMSGuru Scheduler Error]", err))
       }, 60_000)
 
       // Background worker for real-time Shopify return & RTO ingestion (every 5 min)
