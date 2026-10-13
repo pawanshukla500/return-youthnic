@@ -86,8 +86,13 @@ object BarcodeRules {
             text = text.substring(4).trim()
         }
 
+        // A valid AWB or tracking code cannot contain spaces
+        if (text.contains(" ")) {
+            return ""
+        }
+
         // Standard length check
-        if (text.length in 4..80) {
+        if (text.length in 4..64) {
             return text
         }
         return ""
@@ -95,8 +100,12 @@ object BarcodeRules {
 
     fun looksLikeQr(raw: String?): Boolean {
         if (raw == null) return true
-        val extracted = extractScannedIdentifier(raw)
-        return extracted.isBlank()
+        val trimmed = raw.trim()
+        if (trimmed.length < 4 || trimmed.length > 64) return true
+        if (trimmed.contains(" ")) return true
+        val lower = trimmed.lowercase()
+        if (lower.startsWith("http://") || lower.startsWith("https://") || lower.startsWith("upi://") || lower.startsWith("wifi:")) return true
+        return false
     }
 
     fun isAllowed1DFormat(format: Int): Boolean = when (format) {
