@@ -232,7 +232,17 @@ const COLUMNS: ColumnDef[] = [
   {
     key: "amount",
     header: "Amount",
-    render: () => <span title="Awaiting the Sales Database integration. No value is recorded yet.">—</span>,
+    sortable: true,
+    render: (row) =>
+      row.amount !== null && row.amount !== undefined ? (
+        <strong style={{ color: "#0f6b56" }}>
+          ₹{Number(row.amount).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+        </strong>
+      ) : (
+        <span title="Sales amount pending sync" style={{ color: "#94a3b8" }}>
+          —
+        </span>
+      ),
   },
   { key: "reason", header: "Return Reason", render: (row) => row.returnReason || "—" },
   {

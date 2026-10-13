@@ -1381,7 +1381,61 @@ Append new entries at the end. Do not edit earlier entries, except to correct a 
   - Rule 2: Category creation strictly protected by `requireAdmin`.
   - Rule 5: Deactivation supported, deletion forbidden.
   - Rule 6: Schema change strictly additive.
-  - Rule 8: Zero credentials printed or committed.
+### 2026-10-13, Antigravity Agent, Sales & Payment Database Synchronization (PAYMENT_DATABASE_URL)
+
+- **Features Delivered:**
+  - **Additive Database Schema (`server/schema-payment.sql`):** Added `sales_amount`, `payment_synced_at`, `payment_source` to `receipt_scan_items` and `expected_return_items`. Created audit table `payment_sync_runs` with indexes for tracking automated cron and manual executions. Registered in `server/db.ts` `SCHEMA_FILES`.
+  - **External Database Read-Only Engine (`server/payment/db.ts`):** TLS-enforced connection settings (`rejectUnauthorized: true`, support for `PAYMENT_SSL_CA`), rejecting `sslmode=no-verify`. Query guard `queryPaymentReadOnly` preventing any destructive SQL (`INSERT/UPDATE/DELETE/DROP/ALTER/TRUNCATE/GRANT/REVOKE`) against the external sales database.
+  - **Payment Sync Engine (`server/payment/sync.ts`):** Identifies scanned return items where `sales_amount IS NULL`, queries `orders`, `unified_settlements`, `myntra_order_details`, `meesho_settlement_items`, etc. by `order_item_id` / `order_line_id` and `order_number` in batches. Uses `pg_try_advisory_lock` for concurrency safety and transactionally updates Return APP database.
+  - **Nightly 04:30 AM IST Cron & Scheduler:** Integrated `runScheduledPaymentSync` into 60s in-process scheduler in `server/index.ts`. Configured host crontab in `.github/workflows/deploy.yml` (`30 4 * * * docker exec Return-App npm run sync:payment`).
+  - **Standalone Script & API Routes:** Created `server/scripts/sync-payment-amounts.ts` (`npm run sync:payment`). Mounted `mountPaymentRoutes` with `GET /api/payment/status`, `GET /api/payment/test`, `GET /api/payment/runs`, and `POST /api/payment/sync` (Admin-only).
+  - **Register UI & Column 12 Amount:** Updated `server/register-rules.ts` and `server/register-service.ts` to map `sales_amount` into `amount` in `RegisterRow` and export records. Updated `src/pages/Reports.tsx` Column 12 "Amount" to render formatted INR amount `₹...`.
+  - **Admin System Management Console:** Added Sales & Payment Database Synchronization card in `src/pages/Admin.tsx` under System tab, showing database status, pending/synced counts, scheduled cron indicator, and live manual trigger buttons.
+  - **Deployment Configuration:** Updated `docker-compose.yml`, `docker-compose.production.yml`, `.github/workflows/deploy.yml`, and `.env.example`.
+- **Ran:**
+  - `npm.cmd run typecheck` -> Passed (0 errors).
+  - `npm.cmd run build` -> Passed (Vite in 3.64s, server bundled in 33ms).
+  - `npm.cmd test` -> 317 tests: 293 passed, 0 failed, 24 skipped (`TEST_DATABASE_URL`).
+- **Invariants preserved:**
+  - Rule 1 & Rule 2: Scope and Admin restrictions strictly checked.
+  - Rule 6: Schema changes strictly additive (`schema-payment.sql`).
+  - Rule 7: Database TLS strictly verified, `sslmode=no-verify` rejected.
+  - Rule 8: Zero secrets printed or committed.
+  - Rule 10: Every screen control works or is disabled with explanation.
+
+### 2026-10-13, Antigravity Agent, Amazon Order ID Scanning, Unmapped Listing SKUs Storage & CSV, Pre-OMSGuru Warning, Mobile Launcher Icon Fix & Release v1.0.23
+
+- **Features Delivered:**
+  - **Amazon Order ID Lookup & Scanning (Server + Mobile):**
+    - In `server/register-rules.ts` & `server/register-service.ts`, added normalization for 17-digit numeric Amazon order IDs (`408...`) and standard hyphenated format (`408-XXXXXXX-XXXXXXX`), stripping barcode prefixes (`#`, `ORD:`, `ORDER:`). Matched against `REPLACE(REPLACE(UPPER(er.order_number), '-', ''), ' ', '')`.
+    - In Android client (`shop.youthnic.returnscan.data.BarcodeRules.kt` and `ScannerActivity.kt`), added support for 2D barcode formats (`FORMAT_QR_CODE`, `FORMAT_DATA_MATRIX`, `FORMAT_PDF417`) and regex extraction of order IDs from raw scanned text.
+    - In `ManualScanDialog.kt` and `dialog_manual_scan.xml`, updated UI hints and submit validation to explicitly support Amazon Order IDs.
+  - **Unmapped Marketplace Listing SKUs Storage & CSV Template Workflow:**
+    - Added additive schema `server/schema-unmapped-skus.sql` creating table `unmapped_listing_skus` and indexes, registered in `SCHEMA_FILES` (`server/db.ts`).
+    - In `server/product-master.ts`, added `recordUnmappedListingSkus`, `getUnmappedListingSkusSummary`, `refreshUnmappedListingSkus`, and `generateUnmappedSkusTemplateCsv`. Missing marketplace listing SKUs (without category or product SKU) are automatically recorded whenever lookups or scans cannot find a match in `product_master`.
+    - Mounted admin API routes: `GET /api/admin/product-master/unmapped`, `GET /api/admin/product-master/unmapped/download`, and `POST /api/admin/product-master/unmapped/refresh`.
+    - In `src/pages/Admin.tsx`, added Unmapped Listing SKUs management card under Product SKU master tab showing pending count, marketplace breakdown badges, "Re-scan Missing" button, and "Download Missing SKUs CSV" button (providing pre-filled template for warehouse team to enter `Product SkuCode` and upload back).
+  - **Pre-OMSGuru File Generation Warning & Inspection Modal:**
+    - In `server/omsguru-daily.ts` and `server/omsguru-routes.ts`, added `calculateGoodReturnsForDay` unmapped items tracking and mounted `GET /api/omsguru/unmapped-check`.
+    - In `src/OmsguruDailyReport.tsx`, added a prominent amber alert banner before file generation, an inspection modal detailing missing items (Scan ID, Order Number, Tracking ID, Marketplace, Listing SKU), confirmation prompt, and direct link to download the missing SKUs CSV.
+  - **Mobile App Launcher Icon Fix ("Y" Monogram):**
+    - Created native Android VectorDrawable in `android/app/src/main/res/drawable/ic_launcher_foreground.xml` rendering the official Youthnic white cursive 'Y' monogram centered in the safe zone at `(54, 54)` on `108x108`.
+    - Generated raster icons across all mipmap densities: `mipmap-mdpi`, `mipmap-hdpi`, `mipmap-xhdpi`, `mipmap-xxhdpi`, `mipmap-xxxhdpi` (`ic_launcher.png`, `ic_launcher_round.png`), `drawable-nodpi/ic_launcher_youthnic.png`, and `public/app-icon-*.png`.
+  - **Mobile Release v1.0.23 (`versionCode: 10023`):**
+    - Bumped release manifest in `data/return-scan-release.json` and `server/mobile-release.ts`.
+    - Added tests in `server/tests/mobile-app.test.ts` and `server/tests/unmapped-skus.test.ts`.
+- **Ran:**
+  - `npm.cmd run typecheck` -> Passed (0 errors).
+  - `npm.cmd run build` -> Passed (Vite in 1.94s, server bundled in 13ms).
+  - `npm.cmd test` -> 319 tests: 295 passed, 0 failed, 24 skipped (`TEST_DATABASE_URL`).
+- **Invariants preserved:**
+  - Rule 1 & Rule 2: Account scope and Admin role strictly enforced.
+  - Rule 6: Schema change strictly additive (`schema-unmapped-skus.sql`).
+  - Rule 7: Database TLS strictly verified.
+  - Rule 8: Zero secrets printed or committed.
+  - Rule 10: Every screen control works or is disabled with explanation.
+  - Rule 11: Reported only tests that were executed and passed.
+  - Rule 12: Mobile APK version and manifest synchronized (`v1.0.23` / `10023`).
 
 ## STOP — needs the user to resume
 

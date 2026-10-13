@@ -8,7 +8,13 @@ import type { Express, RequestHandler } from "express"
 import multer from "multer"
 import { getPool } from "./db.js"
 import { actorOf, requireAdmin, sendError } from "./http.js"
-import { productMasterState, replaceProductMaster } from "./product-master.js"
+import {
+  productMasterState,
+  replaceProductMaster,
+  getUnmappedListingSkusSummary,
+  generateUnmappedSkusTemplateCsv,
+  refreshUnmappedListingSkus,
+} from "./product-master.js"
 import { ServiceError } from "./register-service.js"
 import { parseProductMaster, previewProductMaster, productMasterTemplateCsv } from "./sheets.js"
 
@@ -90,4 +96,41 @@ export function mountProductMasterRoutes(app: Express, requireUser: RequestHandl
       }
     },
   )
+
+  // Unmapped listing SKUs summary
+  app.get("/api/admin/product-master/unmapped", requireUser, requireAdmin, async (_req, res, next) => {
+    try {
+      const summary = await getUnmappedListingSkusSummary(getPool())
+      res.json({ unmapped: summary })
+    } catch (error) {
+      sendError(res, error, next)
+    }
+  })
+
+  // Download missing listing SKUs formatted for Product Master upload
+  app.get("/api/admin/product-master/unmapped/download", requireUser, requireAdmin, async (req, res, next) => {
+    try {
+      const marketplace = req.query.marketplace ? String(req.query.marketplace) : undefined
+      const csv = await generateUnmappedSkusTemplateCsv(getPool(), marketplace)
+      const filename = marketplace && marketplace !== "all"
+        ? `unmapped-skus-${marketplace.toLowerCase().replace(/\s+/g, "-")}.csv`
+        : "unmapped-listing-skus.csv"
+      res.setHeader("Content-Type", "text/csv; charset=utf-8")
+      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`)
+      res.send(csv)
+    } catch (error) {
+      sendError(res, error, next)
+    }
+  })
+
+  // Refresh and scan for unmapped SKUs across return items
+  app.post("/api/admin/product-master/unmapped/refresh", requireUser, requireAdmin, async (_req, res, next) => {
+    try {
+      const count = await refreshUnmappedListingSkus(getPool())
+      const summary = await getUnmappedListingSkusSummary(getPool())
+      res.json({ count, unmapped: summary })
+    } catch (error) {
+      sendError(res, error, next)
+    }
+  })
 }

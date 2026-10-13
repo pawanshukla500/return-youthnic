@@ -21,6 +21,7 @@ services:
       - RESEND_API_KEY=${RESEND_API_KEY:-}
       - RESEND_FROM_EMAIL=${RESEND_FROM_EMAIL:-return.scan@youthnic.shop}
       - FIREBASE_SERVICE_ACCOUNT_JSON=${FIREBASE_SERVICE_ACCOUNT_JSON:-}
+      - PAYMENT_DATABASE_URL=${PAYMENT_DATABASE_URL:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     labels:

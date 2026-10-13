@@ -151,6 +151,37 @@ export function Admin() {
   const [savingSessionConfig, setSavingSessionConfig] = useState(false)
   const [sessionConfigNotice, setSessionConfigNotice] = useState("")
 
+  // Sales & Payment Database Synchronization state
+  const [paymentState, setPaymentState] = useState<{
+    configured: boolean
+    pendingCount: number
+    syncedCount: number
+    lastRun: {
+      id: number
+      status: string
+      startedAt: string
+      completedAt: string | null
+      checked: number
+      matched: number
+      updated: number
+      totalAmount: number
+      error: string | null
+    } | null
+    scheduledTime: string
+  } | null>(null)
+  const [syncingPayment, setSyncingPayment] = useState(false)
+  const [paymentNotice, setPaymentNotice] = useState("")
+  const [paymentError, setPaymentError] = useState("")
+
+  // Unmapped Listing SKUs state
+  const [unmappedSummary, setUnmappedSummary] = useState<{
+    totalUnmapped: number
+    pendingResolution: number
+    byMarketplace: Array<{ marketplace: string; count: number }>
+  } | null>(null)
+  const [refreshingUnmapped, setRefreshingUnmapped] = useState(false)
+  const [unmappedNotice, setUnmappedNotice] = useState("")
+
   // Add User & Password Reset state
   const [addUserOpen, setAddUserOpen] = useState(false)
   const [newUserName, setNewUserName] = useState("")
@@ -332,6 +363,8 @@ export function Admin() {
             setReportHistory(reportsData.history)
           }
           if (sessionConfData.config) setSessionConfig(sessionConfData.config)
+          loadPaymentStatus()
+          loadUnmappedSummary()
         },
       )
       .catch((err: Error) => setError(err.message))
@@ -437,6 +470,79 @@ export function Admin() {
       setReportsError(err instanceof Error ? err.message : "Failed to send test report.")
     } finally {
       setTestReportBusy(false)
+    }
+  }
+
+  // Payment sync actions
+  const loadPaymentStatus = () =>
+    api<{
+      ok: boolean
+      configured: boolean
+      pendingCount: number
+      syncedCount: number
+      lastRun: any
+      scheduledTime: string
+    }>("/api/payment/status")
+      .then((data) => setPaymentState(data))
+      .catch(() => setPaymentState(null))
+
+  const triggerPaymentSync = async (forceAll: boolean = false) => {
+    setSyncingPayment(true)
+    setPaymentNotice("")
+    setPaymentError("")
+    try {
+      const res = await api<{
+        ok: boolean
+        status: string
+        details: string
+        updated: number
+        totalAmount: number
+      }>("/api/payment/sync", {
+        method: "POST",
+        body: JSON.stringify({ forceAll }),
+      })
+      if (res.status === "success") {
+        setPaymentNotice(res.details)
+      } else {
+        setPaymentError(res.details)
+      }
+      await loadPaymentStatus()
+    } catch (err) {
+      setPaymentError(err instanceof Error ? err.message : "Payment sync failed.")
+    } finally {
+      setSyncingPayment(false)
+    }
+  }
+
+  // Unmapped Listing SKUs actions
+  const loadUnmappedSummary = () =>
+    api<{
+      summary: {
+        totalUnmapped: number
+        pendingResolution: number
+        byMarketplace: Array<{ marketplace: string; count: number }>
+      }
+    }>("/api/admin/product-master/unmapped")
+      .then((data) => setUnmappedSummary(data.summary))
+      .catch(() => undefined)
+
+  const handleRefreshUnmapped = async () => {
+    setRefreshingUnmapped(true)
+    setUnmappedNotice("")
+    try {
+      const data = await api<{
+        summary: {
+          totalUnmapped: number
+          pendingResolution: number
+          byMarketplace: Array<{ marketplace: string; count: number }>
+        }
+      }>("/api/admin/product-master/unmapped/refresh", { method: "POST" })
+      setUnmappedSummary(data.summary)
+      setUnmappedNotice("Unmapped listing SKUs scanned and refreshed successfully.")
+    } catch (err) {
+      setPmError(err instanceof Error ? err.message : "Failed to refresh unmapped listing SKUs.")
+    } finally {
+      setRefreshingUnmapped(false)
     }
   }
 
@@ -1385,6 +1491,73 @@ export function Admin() {
             </div>
           </div>
 
+          {/* Unmapped Listing SKUs Card */}
+          <div className="report-admin-card" style={{ margin: "0 20px 16px", padding: 18, background: "#fff", borderRadius: 10, border: "1px solid var(--line)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 10 }}>
+              <div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <h4 style={{ margin: 0, fontSize: 15, fontWeight: 700 }}>Unmapped Listing SKUs (Missing Product SKU Linkup)</h4>
+                  <Badge tone={(unmappedSummary?.pendingResolution ?? 0) > 0 ? "warning" : "success"}>
+                    {unmappedSummary ? `${unmappedSummary.pendingResolution} Pending` : "Loading..."}
+                  </Badge>
+                </div>
+                <p style={{ margin: "6px 0 0", color: "#64748b", fontSize: 12 }}>
+                  When scanned returns or uploaded reports contain marketplace listing SKUs that have not yet been linked to a VB Export Product SKU,
+                  they are stored here. Download the pre-filled template with missing SKUs, fill in the Product SkuCode, and re-upload above to link them.
+                </p>
+              </div>
+
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <button
+                  type="button"
+                  className="btn secondary"
+                  onClick={handleRefreshUnmapped}
+                  disabled={refreshingUnmapped}
+                  title="Re-scan all active return listings to detect missing mappings"
+                >
+                  <Icon name="scan" size={13} /> {refreshingUnmapped ? "Scanning..." : "Re-scan Missing"}
+                </button>
+                <button
+                  type="button"
+                  className="btn primary"
+                  onClick={() =>
+                    downloadFile(
+                      "/api/admin/product-master/unmapped/download" + (pmMarketplace ? `?marketplace=${encodeURIComponent(pmMarketplace)}` : ""),
+                      pmMarketplace ? `unmapped-skus-${pmMarketplace.toLowerCase().replace(/[^a-z0-9]/g, "-")}.csv` : "unmapped-listing-skus.csv"
+                    ).catch((err: Error) => setPmError(err.message))
+                  }
+                  title="Download CSV containing all unmapped listing SKUs ready to be filled and uploaded"
+                >
+                  <Icon name="file" size={13} /> Download Missing SKUs CSV
+                </button>
+              </div>
+            </div>
+
+            {unmappedNotice && <div className="form-success" style={{ marginTop: 10 }}>{unmappedNotice}</div>}
+
+            {unmappedSummary && unmappedSummary.byMarketplace.length > 0 && (
+              <div style={{ marginTop: 14, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                <span style={{ fontSize: 11, fontWeight: 700, color: "#64748b", textTransform: "uppercase" }}>By Marketplace:</span>
+                {unmappedSummary.byMarketplace.map((mp) => (
+                  <span
+                    key={mp.marketplace}
+                    style={{
+                      background: "#f1f5f9",
+                      padding: "4px 8px",
+                      borderRadius: 6,
+                      fontSize: 12,
+                      border: "1px solid #e2e8f0",
+                      fontWeight: 600,
+                      color: "#334155"
+                    }}
+                  >
+                    {mp.marketplace}: <span style={{ color: "#0f6b56" }}>{mp.count}</span>
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+
           {pmError && <div className="form-error" style={{ margin: "0 20px 12px" }}>{pmError}</div>}
           {pmNotice && <div className="form-success" style={{ margin: "0 20px 12px" }}>{pmNotice}</div>}
 
@@ -1757,6 +1930,82 @@ export function Admin() {
                 />
               </div>
             )}
+          </div>
+
+          {/* Sales & Payment Database Synchronization */}
+          <div className="report-admin-card" style={{ marginTop: 20 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 10 }}>
+              <div>
+                <h3 style={{ margin: 0, fontSize: 16 }}>Sales & Order Payment Sync (PAYMENT_DATABASE_URL)</h3>
+                <p style={{ margin: "4px 0 0", color: "#64748b", fontSize: 12 }}>
+                  Fetches verified sale amounts for scanned returns across all marketplaces · Scheduled nightly at <strong>04:30 AM IST</strong>
+                </p>
+              </div>
+              <Badge tone={paymentState?.configured ? "success" : "neutral"}>
+                {paymentState?.configured ? "Database Connected & Active" : "PAYMENT_DATABASE_URL Pending"}
+              </Badge>
+            </div>
+
+            {paymentNotice && <div className="form-success" style={{ marginTop: 12 }}>{paymentNotice}</div>}
+            {paymentError && <div className="form-error" style={{ marginTop: 12 }}>{paymentError}</div>}
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12, marginTop: 16 }}>
+              <div style={{ background: "#f8fafc", padding: "12px 16px", borderRadius: 8, border: "1px solid var(--line)" }}>
+                <div style={{ fontSize: 12, color: "#64748b", fontWeight: 600 }}>AWAITING PAYMENT SYNC</div>
+                <div style={{ fontSize: 24, fontWeight: 700, color: (paymentState?.pendingCount ?? 0) > 0 ? "#d97706" : "#0f6b56" }}>
+                  {(paymentState?.pendingCount ?? 0).toLocaleString()}
+                </div>
+                <small style={{ color: "#94a3b8" }}>Scanned items missing sale amount</small>
+              </div>
+
+              <div style={{ background: "#f8fafc", padding: "12px 16px", borderRadius: 8, border: "1px solid var(--line)" }}>
+                <div style={{ fontSize: 12, color: "#64748b", fontWeight: 600 }}>SYNCED SALE AMOUNTS</div>
+                <div style={{ fontSize: 24, fontWeight: 700, color: "#0f6b56" }}>
+                  {(paymentState?.syncedCount ?? 0).toLocaleString()}
+                </div>
+                <small style={{ color: "#94a3b8" }}>Scanned items with verified amount</small>
+              </div>
+
+              <div style={{ background: "#f8fafc", padding: "12px 16px", borderRadius: 8, border: "1px solid var(--line)" }}>
+                <div style={{ fontSize: 12, color: "#64748b", fontWeight: 600 }}>SCHEDULED CRON</div>
+                <div style={{ fontSize: 18, fontWeight: 700, color: "#1e293b", marginTop: 4 }}>
+                  04:30 AM IST
+                </div>
+                <small style={{ color: "#94a3b8" }}>Twice-weekly check & nightly cron</small>
+              </div>
+            </div>
+
+            {paymentState?.lastRun && (
+              <div style={{ marginTop: 14, padding: "10px 14px", background: "#f1f5f9", borderRadius: 6, fontSize: 12, color: "#334155" }}>
+                <strong>Last Sync Run:</strong> {new Date(paymentState.lastRun.startedAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })} IST ·{" "}
+                Status: <strong style={{ color: paymentState.lastRun.status === "success" ? "#0f6b56" : "#dc2626" }}>{paymentState.lastRun.status.toUpperCase()}</strong> ·{" "}
+                Checked: {paymentState.lastRun.checked} · Matched: {paymentState.lastRun.matched} ·{" "}
+                Total Amount: ₹{paymentState.lastRun.totalAmount.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                {paymentState.lastRun.error && <span style={{ color: "#dc2626", marginLeft: 8 }}>({paymentState.lastRun.error})</span>}
+              </div>
+            )}
+
+            <div style={{ display: "flex", gap: 10, marginTop: 16, alignItems: "center" }}>
+              <button
+                type="button"
+                className="btn primary"
+                onClick={() => void triggerPaymentSync(false)}
+                disabled={syncingPayment || !paymentState?.configured}
+                title={paymentState?.configured ? "Trigger payment sync now" : "Configure PAYMENT_DATABASE_URL in .env to enable sync"}
+              >
+                {syncingPayment ? "Syncing from Payment DB..." : "⚡ Sync Payment Amounts Now"}
+              </button>
+
+              <button
+                type="button"
+                className="btn secondary"
+                onClick={() => void triggerPaymentSync(true)}
+                disabled={syncingPayment || !paymentState?.configured}
+                title="Re-check all items, even previously synced"
+              >
+                Force Refresh All
+              </button>
+            </div>
           </div>
 
           {/* Persistent Device Login & Security Settings */}

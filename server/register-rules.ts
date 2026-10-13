@@ -22,11 +22,27 @@ export function isValidClientKey(key: string): boolean {
 // Tracking IDs are matched as the text in the file. Only surrounding spaces are removed, and letters are
 // upper-cased the same way the import does. Scientific notation is refused, because its digits are already lost.
 export function normalizeTracking(raw: string): { value: string; error: string } {
-  const value = raw.trim().toUpperCase()
-  if (!value) return { value, error: "Enter a tracking ID" }
+  let value = raw.trim().toUpperCase()
+  if (!value) return { value, error: "Enter a tracking ID or Order ID" }
   if (/^[+-]?\d+(\.\d+)?E[+-]?\d+$/.test(value)) {
     return { value, error: `${value} is in scientific notation, so its digits were lost. Scan the label again.` }
   }
+  // Strip common barcode prefixes: #, ORDER#, ORDER:, ORD#, ORD:
+  if (value.startsWith("#")) value = value.slice(1).trim()
+  if (/^ORDER[:#\s-]+/i.test(value)) value = value.replace(/^ORDER[:#\s-]+/i, "").trim()
+  if (/^ORD[:#\s-]+/i.test(value)) value = value.replace(/^ORD[:#\s-]+/i, "").trim()
+
+  // Check if string contains an Amazon Order ID pattern (e.g. 408-1234567-1234567)
+  const amzMatch = value.match(/\b\d{3}-\d{7}-\d{7}\b/)
+  if (amzMatch) {
+    return { value: amzMatch[0], error: "" }
+  }
+  // If exactly 17 digits numeric starting with 40X (Amazon order format without hyphens), standardize with hyphens
+  const amz17Match = value.match(/\b(40\d)(\d{7})(\d{7})\b/)
+  if (amz17Match) {
+    return { value: `${amz17Match[1]}-${amz17Match[2]}-${amz17Match[3]}`, error: "" }
+  }
+  if (!value) return { value, error: "Enter a tracking ID or Order ID" }
   return { value, error: "" }
 }
 
@@ -64,10 +80,23 @@ export function matchedFieldFor(
   if (!scanned) return { field: "", leg: "unknown" }
   if (scanned === trackingId) return { field: "tracking_id", leg: legFor(trackingSource) }
   if (altTrackingId && scanned === altTrackingId) return { field: "alt_tracking_id", leg: "forward" }
-  if (orderNumber && scanned.toUpperCase() === orderNumber.toUpperCase()) {
+  const cleanScanned = scanned.replace(/[-\s]/g, "").toUpperCase()
+  if (
+    orderNumber &&
+    (scanned.toUpperCase() === orderNumber.toUpperCase() ||
+      (cleanScanned.length >= 8 && cleanScanned === orderNumber.replace(/[-\s]/g, "").toUpperCase()))
+  ) {
     return { field: "order_number", leg: "return" }
   }
-  if (itemOrderIds && itemOrderIds.some((id) => id && id.toUpperCase() === scanned.toUpperCase())) {
+  if (
+    itemOrderIds &&
+    itemOrderIds.some(
+      (id) =>
+        id &&
+        (id.toUpperCase() === scanned.toUpperCase() ||
+          (cleanScanned.length >= 8 && cleanScanned === id.replace(/[-\s]/g, "").toUpperCase())),
+    )
+  ) {
     return { field: "order_number", leg: "return" }
   }
   return { field: "", leg: "unknown" }
@@ -388,6 +417,7 @@ export type RawRegisterRow = {
   return_event?: string | null
   source_filename?: string | null
   source_batch_id?: number | null
+  sales_amount?: number | string | null
 }
 
 export type RegisterTicket = { id: number; code: string; status: string; rejectionReason: string }
@@ -507,7 +537,7 @@ export function mapRegisterRow(raw: RawRegisterRow): RegisterRow {
     receivedQty: raw.received_qty === null ? null : Number(raw.received_qty),
     sourceFile: String(raw.source_filename || ""),
     sourceBatchId: raw.source_batch_id === null || raw.source_batch_id === undefined ? null : Number(raw.source_batch_id),
-    amount: null,
+    amount: raw.sales_amount !== null && raw.sales_amount !== undefined && raw.sales_amount !== "" ? Number(raw.sales_amount) : null,
     claimAmount: null,
     issues,
   }

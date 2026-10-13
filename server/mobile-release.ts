@@ -19,15 +19,15 @@ export type MobileReleaseInfo = {
 }
 
 const DEFAULT_RELEASE: MobileReleaseInfo = {
-  versionCode: 10022,
-  versionName: "1.0.22",
+  versionCode: 10023,
+  versionName: "1.0.23",
   minRequiredVersionCode: 10001,
   sha256: "354f9ff87f5638cc5c210b4da925d810d2e9dc7409b90f28c03b8df2dde1a46e",
   sizeBytes: 3254965,
-  notes: "Youthnic Native Android Return Scanner · Release v1.0.22\n- Official Youthnic brand logo & app icon alignment (crisp green squircle with white 'Y' monogram)\n- Updated splash screen and sign-in branding without white container artifacts\n- In-app update notification synchronization",
-  publishedAt: "2026-10-13T14:26:49Z",
-  downloadUrl: "https://github.com/pawanshukla500/return-youthnic/releases/download/v1.0.22/ReturnScan-v1.0.22.apk",
-  pageUrl: "https://github.com/pawanshukla500/return-youthnic/releases/tag/v1.0.22",
+  notes: "Youthnic Native Android Return Scanner · Release v1.0.23\n- Amazon Order ID scanning & manual lookup support (hyphenated 408-XXXXXXX-XXXXXXX and numeric 17-digit IDs)\n- 2D Barcode Support: QR Code, Data Matrix, and PDF417 scanning for Amazon return labels and customer slips\n- Launcher icon fix: Native vector 'Y' monogram rendering on all Android device launchers without empty backgrounds\n- Pre-OMSGuru unmapped SKU warning alerts and CSV workflow support",
+  publishedAt: "2026-10-13T16:00:00Z",
+  downloadUrl: "https://github.com/pawanshukla500/return-youthnic/releases/download/v1.0.23/ReturnScan-v1.0.23.apk",
+  pageUrl: "https://github.com/pawanshukla500/return-youthnic/releases/tag/v1.0.23",
 }
 
 let cachedRelease: MobileReleaseInfo | null = null

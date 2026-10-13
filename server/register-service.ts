@@ -428,10 +428,24 @@ const ACTIVE_MATCH_SQL = `
       er.tracking_id = $1::text
       OR er.alt_tracking_id = $1::text
       OR UPPER(er.order_number) = UPPER($1::text)
+      OR (
+        LENGTH(REPLACE(REPLACE($1::text, '-', ''), ' ', '')) >= 8
+        AND REPLACE(REPLACE(UPPER(er.order_number), '-', ''), ' ', '') = REPLACE(REPLACE(UPPER($1::text), '-', ''), ' ', '')
+      )
+      OR UPPER(COALESCE(er.forward_tracking_id, '')) = UPPER($1::text)
+      OR UPPER(COALESCE(er.return_event_id, '')) = UPPER($1::text)
       OR EXISTS (
         SELECT 1 FROM expected_return_items eri
         WHERE eri.expected_return_id = er.id
-          AND (UPPER(eri.display_order_item_id) = UPPER($1::text) OR UPPER(eri.order_line_id) = UPPER($1::text))
+          AND (
+            UPPER(eri.display_order_item_id) = UPPER($1::text)
+            OR UPPER(eri.order_line_id) = UPPER($1::text)
+            OR UPPER(COALESCE(eri.shipment_id, '')) = UPPER($1::text)
+            OR (
+              LENGTH(REPLACE(REPLACE($1::text, '-', ''), ' ', '')) >= 8
+              AND REPLACE(REPLACE(UPPER(COALESCE(eri.display_order_item_id, '')), '-', ''), ' ', '') = REPLACE(REPLACE(UPPER($1::text), '-', ''), ' ', '')
+            )
+          )
       )
     )
     AND ($2::text = '' OR m.name = $2::text)
@@ -450,10 +464,24 @@ const SCAN_MATCH_SQL = `
       er.tracking_id = $1::text
       OR er.alt_tracking_id = $1::text
       OR UPPER(er.order_number) = UPPER($1::text)
+      OR (
+        LENGTH(REPLACE(REPLACE($1::text, '-', ''), ' ', '')) >= 8
+        AND REPLACE(REPLACE(UPPER(er.order_number), '-', ''), ' ', '') = REPLACE(REPLACE(UPPER($1::text), '-', ''), ' ', '')
+      )
+      OR UPPER(COALESCE(er.forward_tracking_id, '')) = UPPER($1::text)
+      OR UPPER(COALESCE(er.return_event_id, '')) = UPPER($1::text)
       OR EXISTS (
         SELECT 1 FROM expected_return_items eri
         WHERE eri.expected_return_id = er.id
-          AND (UPPER(eri.display_order_item_id) = UPPER($1::text) OR UPPER(eri.order_line_id) = UPPER($1::text))
+          AND (
+            UPPER(eri.display_order_item_id) = UPPER($1::text)
+            OR UPPER(eri.order_line_id) = UPPER($1::text)
+            OR UPPER(COALESCE(eri.shipment_id, '')) = UPPER($1::text)
+            OR (
+              LENGTH(REPLACE(REPLACE($1::text, '-', ''), ' ', '')) >= 8
+              AND REPLACE(REPLACE(UPPER(COALESCE(eri.display_order_item_id, '')), '-', ''), ' ', '') = REPLACE(REPLACE(UPPER($1::text), '-', ''), ' ', '')
+            )
+          )
       )
     )
     AND ($2::text = '' OR m.name = $2::text)
@@ -1385,6 +1413,7 @@ const REGISTER_UNION_SQL = `
     rs.return_event_snapshot AS return_event,
     rs.source_filename_snapshot AS source_filename,
     rs.source_batch_id AS source_batch_id,
+    COALESCE(rsi.sales_amount, eri.sales_amount) AS sales_amount,
     CASE WHEN EXISTS (SELECT 1 FROM receipt_scan_issues x WHERE x.receipt_scan_item_id = rsi.id)
          THEN ARRAY(SELECT x.category_code FROM receipt_scan_issues x WHERE x.receipt_scan_item_id = rsi.id ORDER BY x.id)
          ELSE ARRAY['no_issue']::text[]
@@ -1414,6 +1443,7 @@ const REGISTER_UNION_SQL = `
   FROM receipt_scan_items rsi
   JOIN receipt_scans rs ON rs.id = rsi.receipt_scan_id
   JOIN expected_returns er ON er.id = rs.expected_return_id
+  LEFT JOIN expected_return_items eri ON eri.id = rsi.expected_return_item_id
   JOIN marketplaces m ON m.id = er.marketplace_id
   JOIN users scanner ON scanner.id = rs.scanned_by
   UNION ALL
@@ -1458,6 +1488,7 @@ const REGISTER_UNION_SQL = `
     er.return_event_id,
     COALESCE((SELECT b.filename FROM upload_batches b WHERE b.id = er.upload_batch_id), '')::text,
     er.upload_batch_id,
+    eri.sales_amount,
     CASE WHEN rs.outcome = 'clear' THEN ARRAY['no_issue']::text[] ELSE ARRAY['legacy']::text[] END,
     CASE WHEN ct.id IS NULL THEN ARRAY[]::text[] ELSE ARRAY[ct.status]::text[] END,
     json_build_array(json_build_object(
@@ -1538,6 +1569,7 @@ const SORT_COLUMNS: Record<string, string> = {
   logistic_partner_name: "r.logistic_partner_name",
   return_type: "r.return_type",
   expected_qty: "r.expected_qty",
+  amount: "r.sales_amount",
 }
 
 export function sortClauseFor(sort: string, direction: string): string {

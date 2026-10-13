@@ -18,7 +18,7 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_marginTop="4dp"
-        android:text="Enter tracking number or carrier AWB"
+        android:text="Enter tracking number, carrier AWB, or Order ID"
         android:textColor="@color/text_secondary"
         android:textSize="13sp" />
 
@@ -28,7 +28,9 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="16dp"
-        android:hint="AWB / Tracking Number"
+        android:hint="AWB Tracking Number or Order ID"
+        app:helperText="Supports carrier AWBs and Amazon Order IDs (e.g. 408-1234567-1234567)"
+        app:helperTextTextColor="@color/text_secondary"
         app:endIconMode="clear_text">
 
         <com.google.android.material.textfield.TextInputEditText

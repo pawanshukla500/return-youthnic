@@ -14,6 +14,16 @@ import {
   listFirebaseStorageFiles,
   isFirebaseConfigured,
 } from "./firebase-storage.js"
+import { recordUnmappedListingSkus } from "./product-master.js"
+
+export type UnmappedScannedItem = {
+  itemId: number
+  marketplace: string
+  trackingId: string
+  orderNumber: string
+  listingSku: string
+  goodQty: number
+}
 
 export type OmsguruConfig = {
   dailyEnabled: boolean
@@ -136,7 +146,12 @@ export async function updateOmsguruConfig(
 export async function calculateGoodReturnsForDay(
   db: pg.Pool | pg.PoolClient,
   dateStr: string,
-): Promise<{ skus: SkuUpdateItem[]; totalSkus: number; totalQty: number }> {
+): Promise<{
+  skus: SkuUpdateItem[]
+  totalSkus: number
+  totalQty: number
+  unmappedItems: UnmappedScannedItem[]
+}> {
   const periodStart = `${dateStr} 00:00:00+05:30`
   const periodEnd = `${dateStr} 23:59:59.999+05:30`
 
@@ -144,6 +159,8 @@ export async function calculateGoodReturnsForDay(
     SELECT
       rsi.id AS item_id,
       rs.scanned_at,
+      COALESCE(rs.scanned_awb, er.tracking_id, '') AS tracking_id,
+      COALESCE(er.order_number, '') AS order_number,
       COALESCE(m.name, rs.marketplace_snapshot, 'Unknown') AS marketplace,
       COALESCE(rsi.marketplace_sku, '') AS marketplace_sku,
       COALESCE(rsi.product_sku, '') AS product_sku,
@@ -194,6 +211,8 @@ export async function calculateGoodReturnsForDay(
 
   // Aggregate by resolved Master Product SKU
   const aggregation = new Map<string, { qty: number; marketplaces: Record<string, number> }>()
+  const unmappedItems: UnmappedScannedItem[] = []
+  const unmappedByMarketplace = new Map<string, Set<string>>()
 
   for (const row of rows) {
     const received = Number(row.received_qty || 0)
@@ -205,7 +224,26 @@ export async function calculateGoodReturnsForDay(
     if (!masterSku || masterSku.toUpperCase() === "UNRESOLVED") {
       const listing = String(row.marketplace_sku || "").trim()
       const normalizedKey = listing.toLowerCase().replace(/\s+/g, "")
-      masterSku = masterMap.get(normalizedKey) || String(row.sku_code || "").trim() || listing
+      const fromMaster = masterMap.get(normalizedKey)
+      const fromSkuCode = String(row.sku_code || "").trim()
+      const resolved = fromMaster || (fromSkuCode && fromSkuCode !== listing ? fromSkuCode : "")
+
+      if (resolved) {
+        masterSku = resolved
+      } else {
+        masterSku = listing
+        unmappedItems.push({
+          itemId: Number(row.item_id),
+          marketplace: String(row.marketplace || "Other"),
+          trackingId: String(row.tracking_id || ""),
+          orderNumber: String(row.order_number || ""),
+          listingSku: listing,
+          goodQty,
+        })
+        const mpSet = unmappedByMarketplace.get(String(row.marketplace || "Other")) ?? new Set()
+        mpSet.add(listing)
+        unmappedByMarketplace.set(String(row.marketplace || "Other"), mpSet)
+      }
     }
     if (!masterSku) continue
 
@@ -214,6 +252,13 @@ export async function calculateGoodReturnsForDay(
     const mp = String(row.marketplace || "Other")
     existing.marketplaces[mp] = (existing.marketplaces[mp] || 0) + goodQty
     aggregation.set(masterSku, existing)
+  }
+
+  // Auto-record any unmapped listing SKUs found in scans
+  if (unmappedByMarketplace.size > 0) {
+    for (const [mp, skusSet] of unmappedByMarketplace) {
+      await recordUnmappedListingSkus(db, mp, [...skusSet])
+    }
   }
 
   const skus: SkuUpdateItem[] = []
@@ -234,6 +279,7 @@ export async function calculateGoodReturnsForDay(
     skus,
     totalSkus: skus.length,
     totalQty,
+    unmappedItems,
   }
 }
 

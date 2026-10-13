@@ -20,12 +20,15 @@ const SCHEMA_VERSION = 1
 //  schema-register.sql      logistics partners, tracking evidence, return type and display identifiers, scan snapshots
 //  schema-scan-history.sql  scan history snapshots (original AWB, link AWB, source file, return event) and indexes
 //  schema-shopify.sql       Shopify real-time return and RTO ingestion and sync runs
+//  schema-payment.sql       Payment and sales amount synchronization and sync runs
 const SCHEMA_FILES = [
   "schema.sql",
   "schema-import.sql",
   "schema-register.sql",
   "schema-scan-history.sql",
   "schema-shopify.sql",
+  "schema-payment.sql",
+  "schema-unmapped-skus.sql",
 ] as const
 
 // History tables whose rows must never be destroyed by any code path. Listed here so they cannot silently
