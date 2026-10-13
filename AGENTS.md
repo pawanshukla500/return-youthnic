@@ -6,13 +6,14 @@ This file is for any agent, human or AI, that starts work on the Return App. Rea
 
 A return-scanning app for VB Exports. Marketplace return reports (Myntra VB and EJ, Flipkart, Meesho, Amazon, Ajio) are loaded as lookup data, one account at a time. A scan records what physically arrived in the return scan register, which is the permanent record. The stack is Express 4 and PostgreSQL on the server, React 19 with Vite on the client, strict TypeScript, and `node:test` through `tsx`. It runs on Windows, and PowerShell is the primary shell.
 
-## Current state (2026-10-12)
+## Current state (2026-10-13)
 
-- The app runs locally. On 2026-10-12 `npm run typecheck` passed, `npm run build` passed (Vite, 1.39s), and `npm test` finished with 257 tests: 233 pass, 0 fail, 24 skipped. The 24 skipped tests need `TEST_DATABASE_URL` on a database whose name contains `test`. They have not passed.
-- `GET /api/health` on that day returned HTTP 200, database connected, name `return-scan_youthnic`.
-- The user has loaded the product master from Admin (the screen showed 34,795 rows). A read of `product_master` the same day found image links: 34,574 https, 185 http, 36 empty.
+- The app runs locally and in production on Hostinger VPS (`https://return.youthnic.shop`). Local checks: `npm run typecheck` passed (0 errors), `npm run build` passed (Vite in 1.66s, server bundled with esbuild in 13ms), and `npm test` finished with 306 tests: 282 pass, 0 fail, 24 skipped (`TEST_DATABASE_URL`).
+- `GET /api/health` returns HTTP 200, database connected, name `return-scan_youthnic`.
+- Native Kotlin Android client is active in `android/` at release `v1.0.20` (`versionCode: 10020`), featuring CameraX barcode scanning, runtime camera permission flow, server contract alignment (`ScanPayload.kt`), and automated in-app updates (`AppUpdater.kt`) synchronized via GitHub Actions (`.github/workflows/return-scan-apk.yml`).
+- The product master has 34,795 rows loaded. On 2026-10-13, all test/scanned data was cleanly wiped in a database transaction, leaving active return lookups (2,539 returns, 2,548 items), `product_master`, and user credentials completely intact and ready for live warehouse scanning tomorrow.
 - `CLAUDE.md` is not in the project folder. Until it is restored, the rules in this file and in [docs/notes/agent-handoff.md](docs/notes/agent-handoff.md) are what the code follows. Do not invent a replacement.
-- What is written, what was run, and what is waiting on the user are in [docs/notes/agent-handoff.md](docs/notes/agent-handoff.md#current-state). Read the section **Start here (2026-10-12)** before the older session log.
+- What is written, what was run, and what is waiting on the user are in [docs/notes/agent-handoff.md](docs/notes/agent-handoff.md#current-state). Read the section **Start here (2026-10-13)** before the older session log.
 
 ## Read in this order
 

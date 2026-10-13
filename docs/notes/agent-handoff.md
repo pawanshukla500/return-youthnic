@@ -27,21 +27,22 @@ It does not replace [CLAUDE.md](../../CLAUDE.md), which holds the business and t
 
 ## Current state
 
-Status words used here: **Written** means the code exists and was read back. **Tested** means an automated check exists. **Verified** means the check was run and its output was read. On 2026-10-12 the local typecheck, build and non-database tests were run again (233 pass, 0 fail, 24 skipped). The database tests are still skipped.
+Status words used here: **Written** means the code exists and was read back. **Tested** means an automated check exists. **Verified** means the check was run and its output was read. On 2026-10-13 the local typecheck, build and non-database tests were run again (282 pass, 0 fail, 24 skipped). The database tests are still skipped.
 
-## Start here (2026-10-12)
+## Start here (2026-10-13)
 
 Read this before the session log. The log below is history. This section is the state the next agent should trust.
 
-- **Run.** `npm run dev` serves the web app at `http://localhost:5173` and the API at `http://127.0.0.1:3001`. Pages: `/`, `/scan`, `/register`, `/claims`, `/uploads`, `/admin` (`src/routes.ts`). Sign-in stays on the address you opened.
+- **Run.** `npm run dev` serves the web app at `http://localhost:5173` and the API at `http://127.0.0.1:3001`. Production runs on Hostinger VPS inside Docker container `Return-App` (linked at `/docker/return-app` for hPanel Docker discovery) at `https://return.youthnic.shop`. Pages: `/`, `/scan`, `/register`, `/claims`, `/uploads`, `/admin` (`src/routes.ts`). Sign-in stays on the address you opened.
 - **Do not read `.env`.** Do not print `DATABASE_URL`, `TEST_DATABASE_URL`, OMSGuru credentials, or `NEW_USER_PASSWORD`. The live database name last read from `/api/health` was `return-scan_youthnic`.
-- **Product master is loaded.** The user loaded it from Admin. A read on 2026-10-11 counted image links: 34,574 https, 185 http, 36 empty. Hosts included `img.fkcdn.com`, `images.meesho.com`, `m.media-amazon.com`, `cdn.shopify.com`. Do not replace the table unless the user asks.
+- **Product master & lookup returns.** 34,795 rows loaded in `product_master`. On 2026-10-13, all scan/receipt testing data was safely wiped in a clean database transaction; active lookup returns (2,539 returns, 2,548 items), `product_master`, and user credentials remain intact and unscanned for tomorrow's live operations.
 - **Listing SKU match.** Spaces are ignored. A short trailing token that is not a size (`_A`, `_Al`, `_NEW`) is also looked up without that token. `B126-kabira-Bottle Green_S_A` matches `B126-kabira-Bottle Green_S`. `_XL` is a size and is not stripped. `listingSkuCandidates` and `parentListingSku` in `server/marketplace-rules.ts`. `masterSkusForListings` in `server/lookup-import.ts`. The scan lookup and the register overlay an unresolved product SKU from the master. They do not rewrite the saved scan row.
 - **Catalog images.** `GET /api/catalog-image?url=` serves a stored http(s) image link. Flipkart `img.fkcdn.com` links are fetched at 416 pixels. Shopify links get `width=480`. A copy is kept in the machine temp folder. On 2026-10-11 one Flipkart link returned HTTP 200 `image/jpeg`, 26,768 bytes, 436 ms the first time and 8 ms from the copy. The scan screen uses this route. Click the photo to enlarge it. There is no "Catalog image" or "Enlarge" label.
 - **Partners.** A courier name that equals an alias, or starts with an alias of at least 6 characters, uses that partner. `delhiveryexpress` and `delhiversurface` are Delhivery. A tracking link does not name the partner. The Admin screen lists courier names and does not show tracking hosts. The host API still exists. Marks are local files in `public/logos/partners/` (`src/partners.ts`).
 - **Multi return.** One line with quantity 2, or more than one line, opens a popup for 2 seconds, then the scan screen stays ready. The return is already saved as a normal return.
 - **Register.** Filters are three rows. Empty dates say "Any day". There is no card list under the table. Details opens a two-column record sheet.
-- **Not done.** 24 database tests skipped because TEST_DATABASE_URL is not configured on a dedicated test database. `CLAUDE.md` is missing from the folder. (Git repository, Hostinger VPS deployment, and Kotlin Android mobile app with CameraX and in-app updater are built and operational).
+- **Mobile Android Client.** Production release `v1.0.20` (`versionCode: 10020`), in `android/app`, built with CameraX continuous scanning, camera permission onboarding dialog, server contract alignment (`ScanPayload.kt`), and automated in-app updater. Synced via `.github/workflows/return-scan-apk.yml`.
+- **Not done.** 24 database tests skipped because TEST_DATABASE_URL is not configured on a dedicated test database. `CLAUDE.md` is missing from the folder.
 
 | Area | Status | Tests | Notes |
 |---|---|---|---|
@@ -64,8 +65,9 @@ Read this before the session log. The log below is history. This section is the 
 | Schema: four files, additive, runs twice | Written | `access-db.test.ts`, `register-db.test.ts` (schema applied twice) | Applied on the configured PostgreSQL database; dedicated database checks are not run. |
 | Database TLS rules | Verified 2026-10-11 | `database-ssl.test.ts` | The pure checks passed in `npm test` (certificate check stays on, `sslmode=no-verify` is refused). Do not weaken them. |
 | Front end: Scan, Uploads, Register, Admin, shell; Overview, Claims, Login | Written | None (no UI test runner) | Addresses are in `src/routes.ts`. Catalog images go through `/api/catalog-image`. A multi return (more than one piece) opens a 2 second popup. |
-| Documentation | Updated 2026-10-12 from the code and from checks run on 2026-10-11 | Read against the source | `CLAUDE.md` is missing. Do not invent it. |
+| Documentation | Updated 2026-10-13 from the code and from checks run on 2026-10-13 | Read against the source | `CLAUDE.md` is missing. Do not invent it. |
 | Agency role files | Written 2026-10-11 | File count and `name:` lines read after download | 33 files in `.claude/agents/`. The 13 added on 2026-10-11 are installed and not in use. |
+| Android Mobile Client | Written & Active 2026-10-13 | `mobile-app.test.ts`, Android unit tests | Kotlin client in `android/app`, release v1.0.20 (version code 10020), CameraX scanning, in-app updater |
 
 ## Not built
 
