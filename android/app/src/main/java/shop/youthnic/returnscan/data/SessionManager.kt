@@ -74,6 +74,18 @@ class SessionManager(private val context: Context) {
         get() = prefs.getBoolean("flash_enabled", true)
         set(value) = prefs.edit().putBoolean("flash_enabled", value).apply()
 
+    var isSoundEnabled: Boolean
+        get() = soundEnabled
+        set(value) { soundEnabled = value }
+
+    var isVibrationEnabled: Boolean
+        get() = vibrationEnabled
+        set(value) { vibrationEnabled = value }
+
+    var isScreenFlashEnabled: Boolean
+        get() = flashEnabled
+        set(value) { flashEnabled = value }
+
     val isLoggedIn: Boolean
         get() = !authToken.isNullOrBlank()
 
