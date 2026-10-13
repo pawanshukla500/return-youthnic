@@ -1,0 +1,14 @@
+{
+  "doc_path": "docs/notes/omsguru-api.md",
+  "claims_checked": 18,
+  "claims_passed": 17,
+  "claims_failed": 1,
+  "failures": [
+    {
+      "line": 100,
+      "claim": "docs\\layouts\\omsguru-openapi.yaml",
+      "expected": "file exists",
+      "actual": "file not found at docs/layouts/omsguru-openapi.yaml (the note asks the user to save the spec there; it is a pending user action)"
+    }
+  ]
+}

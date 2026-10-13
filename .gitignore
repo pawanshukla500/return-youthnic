@@ -1,0 +1,32 @@
+node_modules
+dist
+.env
+.env.*
+!.env.example
+!.env.production.example
+.test-db.json
+*.log
+.DS_Store
+*.tmp
+.*-tmp*
+.temp*
+
+# Database CA certificate (self-signed, machine-specific). See docs/CONFIGURATION.md, Database SSL.
+certs
+
+# Android build outputs & local config
+android/.gradle
+android/build
+android/app/build
+android/local.properties
+android/.idea
+android/*.iml
+android/app/*.iml
+android/captures
+android/.cxx
+*.keystore
+*.jks
+
+# IDE & Editor caches
+.idea
+.vscode

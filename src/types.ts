@@ -1,0 +1,499 @@
+export type Page = "dashboard" | "scan" | "reports" | "claims" | "uploads" | "admin"
+
+export type IconName =
+  | "grid"
+  | "scan"
+  | "report"
+  | "claim"
+  | "upload"
+  | "users"
+  | "chevron"
+  | "search"
+  | "bell"
+  | "calendar"
+  | "arrow"
+  | "box"
+  | "alert"
+  | "check"
+  | "close"
+  | "file"
+  | "settings"
+  | "logout"
+  | "video"
+
+export type SessionUser = {
+  id: number
+  initials: string
+  name: string
+  email: string
+  role: string
+  sidebarLabel: string
+  assignedMarketplaces: string
+  scansToday: string
+  status: string
+  lastActive: string
+}
+
+// A marketplace account the signed-in user may use. Lists of accounts come from /api/accounts, never from a fixed list.
+export type AccountOption = { id: number; name: string }
+
+// Dashboard "recent scans" row.
+export type ReturnRow = {
+  id: string
+  order: string
+  sku: string
+  market: string
+  courier: string
+  type: string
+  issue: string
+  ticket: string
+  status: string
+  time: string
+}
+
+export type Stat = {
+  label: string
+  value: string
+  delta: string
+  icon: IconName
+  tone: string
+}
+
+export type OperatorPerf = {
+  operator_id: number
+  operator_name: string
+  shipments_count: number
+  items_qty: number
+  clear_count: number
+  issue_count: number
+  clear_rate: string
+}
+
+export type MarketplaceProcessing = {
+  marketplace_id: number
+  marketplace_name: string
+  shipments_count: number
+  items_qty: number
+  clear_count: number
+  issue_count: number
+}
+
+export type HourlyThroughput = {
+  hour: number
+  label: string
+  shipments: number
+  items_qty: number
+}
+
+export type WarehouseOperations = {
+  scanned_qty_today: number
+  scanned_shipments_today: number
+  clear_today: number
+  issues_today: number
+  clear_total: number
+  issues_total: number
+  duplicate_attempts_today: number
+  unmatched_awbs_today: number
+  pending_validation_rows: number
+  operators: OperatorPerf[]
+  marketplaces: MarketplaceProcessing[]
+  hourlyThroughput: HourlyThroughput[]
+}
+
+export type ShiftCard = {
+  scanned: string
+  correct: string
+  issues: string
+  accuracy: string
+  progress: number
+  targetLabel: string
+}
+
+export type IssueCategory = {
+  code: string
+  label: string
+  isClear: boolean
+  isMissing: boolean
+  requiresTicket: boolean
+  allowsSubIssue: boolean
+  requiresSubIssue: boolean
+}
+
+export type SubIssue = { id: number; label: string; categoryCode: string }
+
+// One line of a return, as the scan screen verifies it.
+export type LookupItem = {
+  itemId: number
+  // The display identifier when there is one (Ajio return order number, Amazon shipment id), otherwise the order line.
+  orderItemId: string
+  displayIdentifierKind: string
+  marketplaceSku: string
+  productSku: string
+  productSkuSource: string
+  marketplaceSkuIdentifier: string
+  marketplaceSkuIdentifierKind: string
+  productName: string
+  expectedQty: number
+  imageUrl: string
+  colorName: string
+  keyDetail: string
+  brandLabel: string
+  setContents: string
+  shipmentId?: string
+}
+
+// The return the scanned AWB matched. The scanned AWB and the leg it matched are shown to the scanner and saved with
+// the scan.
+export type LookupShipment = {
+  shipmentId: number
+  trackingId: string
+  csvTrackingId: string
+  urlTrackingId: string
+  altTrackingId: string
+  forwardTrackingId: string
+  returnEventId: string
+  trackingSource: string
+  trackingValidation: string
+  scannedTracking: string
+  matchedTrackingField: string
+  matchedLeg: string
+  marketplace: string
+  marketplaceId: number
+  orderId: string
+  courier: string
+  logisticPartner: string
+  partnerMethod: string
+  returnType: string
+  returnTypeRaw: string
+  returnReason: string
+  matchedFrom: string
+  sourceFile: string
+  sourceBatchId: number | null
+  productTitle: string
+  itemSummary: string
+  isMulti: boolean
+  items: LookupItem[]
+}
+
+export type LookupCandidate = {
+  shipmentId: number | null
+  accountId: number
+  accountName: string
+  alreadyReceived: boolean
+  orderId: string
+  itemCount: number
+  receivedAt: string
+  scannedBy: string
+}
+
+export type LookupResponse =
+  | { status: "found"; trackingId: string; shipment: LookupShipment }
+  | { status: "duplicate"; trackingId: string; marketplace: string; time: string; scannedBy: string }
+  | { status: "choose"; trackingId: string; candidates: LookupCandidate[] }
+  | { status: "not_found"; trackingId: string }
+
+export type ScanReceipt = {
+  replayed: boolean
+  scan: {
+    id: number
+    scannedAt: string
+    timeLabel: string
+    status: string
+    marketplace: string
+    trackingId: string
+    originalTrackingId: string
+    urlTrackingId: string
+    orderId: string
+    scannedTracking: string
+    matchedTrackingField: string
+    matchedLeg: string
+    logisticPartner: string
+    sourceFile: string
+    sourceBatchId: number | null
+  }
+  itemCount: number
+  issueCount: number
+  shift: ShiftCard
+  claimsBadge: string
+}
+
+export type RegisterTicket = {
+  id: number
+  code: string
+  status: string
+  rejectionReason: string
+}
+
+export type RegisterIssue = {
+  categoryCode: string
+  categoryLabel: string
+  subIssueLabel: string
+  qty: number
+  notes: string
+  ticket: RegisterTicket | null
+}
+
+// One row of the register: one verified item of a scan (or one legacy line). The first fields are the 19 approved columns;
+// the rest are the service and traceability columns shown in the record view and the operational export.
+export type RegisterRow = {
+  key: string
+  source: "item" | "legacy"
+  scanId: number
+  scannedAt: string
+  scanDay: string
+  scanTime: string
+  scanStatus: string
+  scannedBy: string
+  marketplaceId: number
+  marketplace: string
+  trackingId: string
+  originalTrackingId: string
+  urlTrackingId: string
+  trackingSource: string
+  forwardTrackingId: string
+  returnEventId: string
+  scannedTracking: string
+  orderId: string
+  orderItemId: string
+  displayIdentifierKind: string
+  marketplaceSku: string
+  productSku: string
+  productSkuSource: string
+  marketplaceSkuIdentifier: string
+  productName: string
+  logisticPartner: string
+  partnerMethod: string
+  trackingValidation: string
+  matchedTrackingField: string
+  matchedLeg: string
+  returnType: string
+  returnTypeRaw: string
+  returnReason: string
+  expectedQty: number
+  receivedQty: number | null
+  sourceFile: string
+  sourceBatchId: number | null
+  amount: number | null
+  claimAmount: number | null
+  issues: RegisterIssue[]
+}
+
+export type RegisterPage = {
+  rows: RegisterRow[]
+  total: number
+  page: number
+  pageSize: number
+  sort: string
+  direction: string
+}
+
+export type RegisterOptions = {
+  marketplaces: AccountOption[]
+  scanners: { id: number; name: string }[]
+  partners: string[]
+  issueCategories: { code: string; label: string }[]
+  ticketStatuses: string[]
+  today: string
+  todayLabel: string
+}
+
+export type TicketHistoryEntry = {
+  fromStatus: string
+  toStatus: string
+  reason: string
+  changedBy: string
+  changedAt: string
+}
+
+export type AdminIssueCategory = {
+  code: string
+  label: string
+  isClear: boolean
+  isMissing: boolean
+  requiresTicket: boolean
+  allowsSubIssue: boolean
+  requiresSubIssue: boolean
+  active: boolean
+}
+
+// Upload history row (GET /api/uploads). Only the accounts the user can see are listed.
+export type UploadHistoryRow = {
+  id: number
+  filename: string
+  marketplace: string
+  rowCount: string
+  scannableRows: number
+  pendingRows: number
+  rejectedRows: number
+  uploadedAt: string
+  status: string
+  format: string
+}
+
+export type UploadCounts = {
+  rows: number
+  validRows: number
+  scannableRows: number
+  pendingRows: number
+  duplicateRows: number
+  unverifiedTrackingRows: number
+  blankTrackingRows: number
+  zeroQuantityRows: number
+  errorRows: number
+  cancelledRows: number
+  exactDuplicateRows: number
+  repeatedRows: number
+  untrustedIdentifierRows: number
+  trackingCorrectedRows: number
+  trackingKeptRows: number
+  trackingUncheckedRows: number
+  warningRows: number
+}
+
+// The result of POST /api/uploads/preview. uploadId is null when the file is fatal, so there is nothing to activate.
+export type UploadPreview = {
+  uploadId: string | null
+  filename: string
+  marketplace: string
+  profile: string
+  profileVersion?: string
+  headerRow?: number
+  currentActiveRows?: number
+  fatal: string
+  headers: { found: string[]; missing: string[] }
+  counts: UploadCounts
+  blockers: string[]
+  confirmations: string[]
+  canActivate: boolean
+  exceptions: UploadException[]
+  errors: { line: number | null; message: string }[]
+  trackingCorrections: {
+    line: number | null
+    trackingId: string
+    csvTrackingId: string
+    urlTrackingId: string
+    validation: string
+  }[]
+  partners: { name: string; rows: number }[]
+  productMapping: {
+    checked: number
+    mappedRows: number
+    titledRows: number
+    unmappedCount: number
+    unmappedSample: string[]
+  } | null
+  warnings: string[]
+  message: string
+}
+
+export type UploadException = {
+  line: number | null
+  status: "pending" | "rejected" | "duplicate" | "cancelled"
+  reasons: string[]
+  trackingId: string
+  sourceTrackingId: string
+  orderId: string
+  shipmentId: string
+  quantity: number
+  returnType: string
+  carrier: string
+  listingSku: string
+}
+
+export type ScannerListCandidate = {
+  expectedReturnId: number
+  accountId: number
+  accountName: string
+  matchedTrackingField: string
+  matchedLeg: string
+  alreadyScanned: boolean
+}
+
+export type ScannerListEntry = {
+  sheet: string
+  sourceRow: number
+  sourceColumn: number
+  sourceValue: string
+  normalizedValue: string
+  status: string
+  duplicate: boolean
+  matchStatus: string
+  candidates: ScannerListCandidate[]
+  mappedAccount: string
+}
+
+export type ScannerListPreview = {
+  kind: "scanner_list"
+  filename: string
+  sheets: {
+    name: string
+    sourceRows: number
+    nonEmptyCells: number
+    columns: number[]
+    mappedAccount: string
+  }[]
+  accounts: AccountOption[]
+  counts: {
+    sheets: number
+    entries: number
+    matched: number
+    unmatched: number
+    ambiguous: number
+    previouslyScanned: number
+    unassigned: number
+    malformed: number
+    duplicateEntries: number
+  }
+  entries: ScannerListEntry[]
+  message: string
+}
+
+// The result of POST /api/uploads/import.
+export type UploadImportResult = {
+  row: UploadHistoryRow
+  activatedRows: number
+  scannableRows: number
+  pendingRows: number
+  rejectedRows: number
+  supersededRows: number
+  cancelledRows: number
+  confirmed: string[]
+}
+
+// The VB EXPORT product master (Admin "Product SKU master" tab). state is GET /api/admin/product-master.
+export type ProductMasterRow = {
+  marketplace: string
+  listingSku: string
+  masterSku: string
+  category: string
+  imageUrl: string
+}
+
+export type ProductMasterState = {
+  rows: number
+  listings: number
+  masters: number
+  withImage: number
+  lastLoadedAt: string
+  marketplaces: { marketplace: string; rows: number }[]
+  sample: ProductMasterRow[]
+}
+
+// The result of POST /api/admin/product-master/preview. A fatal error means the file cannot be read.
+export type ProductMasterPreview = {
+  fatal: string
+  rows: number
+  listings: number
+  masters: number
+  withImage: number
+  withoutImage: number
+  invalidImages: number
+  categories: number
+  skipped: number
+  // Listing SKUs the file gives more than one product SKU for. The last row wins; these are reported, never guessed.
+  conflictCount: number
+  conflictSample: { listingSku: string; marketplace: string; masterSkus: string[] }[]
+  // The marketplace scope the rows will be stored under, with the row count for each.
+  scopes: { marketplace: string; rows: number }[]
+  sample: { listingSku: string; masterSku: string; category: string; imageUrl: string }[]
+}

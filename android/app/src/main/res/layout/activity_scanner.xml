@@ -1,0 +1,506 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/background"
+    android:orientation="vertical">
+
+    <!-- Header -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@color/surface"
+        android:elevation="3dp"
+        android:orientation="vertical"
+        android:paddingStart="4dp"
+        android:paddingEnd="12dp"
+        android:paddingBottom="8dp">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:minHeight="52dp"
+            android:orientation="horizontal">
+
+            <ImageButton
+                android:id="@+id/btnBack"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="@string/change_marketplace"
+                android:padding="12dp"
+                android:src="@drawable/ic_arrow_back"
+                app:tint="@color/text_primary" />
+
+            <View
+                android:id="@+id/viewChannelColor"
+                android:layout_width="4dp"
+                android:layout_height="22dp"
+                android:layout_marginStart="2dp"
+                android:layout_marginEnd="8dp"
+                android:background="@drawable/bg_marker"
+                android:backgroundTint="@color/colorPrimary" />
+
+            <TextView
+                android:id="@+id/tvScannerChannelName"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:textColor="@color/text_primary"
+                android:textSize="16sp"
+                android:textStyle="bold"
+                tools:text="Meesho" />
+
+            <TextView
+                android:id="@+id/tvConnectionStatus"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:background="@drawable/bg_pill"
+                android:backgroundTint="@color/verdict_ok_bg"
+                android:paddingHorizontal="10dp"
+                android:paddingVertical="3dp"
+                android:text="@string/connection_online"
+                android:textColor="@color/verdict_ok"
+                android:textSize="11sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="12dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/tvProgressScanned"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:textColor="@color/text_secondary"
+                android:textSize="13sp"
+                tools:text="14 scanned today" />
+
+            <TextView
+                android:id="@+id/tvProgressPending"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textColor="@color/verdict_check"
+                android:textSize="13sp"
+                android:textStyle="bold"
+                tools:text="1,159 pending" />
+        </LinearLayout>
+
+        <ProgressBar
+            android:id="@+id/progressBarScans"
+            style="?android:attr/progressBarStyleHorizontal"
+            android:layout_width="match_parent"
+            android:layout_height="4dp"
+            android:layout_marginStart="12dp"
+            android:layout_marginTop="6dp"
+            android:max="100"
+            android:progress="0"
+            android:progressBackgroundTint="@color/progress_track"
+            android:progressTint="@color/colorPrimary" />
+    </LinearLayout>
+
+    <!-- Camera Container: always open at top (~35% of screen height) -->
+    <FrameLayout
+        android:id="@+id/cameraContainer"
+        android:layout_width="match_parent"
+        android:layout_height="240dp"
+        android:background="#000000">
+
+        <androidx.camera.view.PreviewView
+            android:id="@+id/previewView"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+
+        <!-- Green reticle viewfinder -->
+        <View
+            android:id="@+id/viewFinder"
+            android:layout_width="260dp"
+            android:layout_height="96dp"
+            android:layout_gravity="center"
+            android:background="@drawable/viewfinder_border" />
+
+        <TextView
+            android:id="@+id/tvScannerHint"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom|center_horizontal"
+            android:layout_marginBottom="10dp"
+            android:background="@drawable/bg_pill"
+            android:backgroundTint="#99000000"
+            android:paddingHorizontal="12dp"
+            android:paddingVertical="4dp"
+            android:text="@string/aim_at_awb"
+            android:textColor="#FFFFFF"
+            android:textSize="12sp" />
+
+        <ProgressBar
+            android:id="@+id/progressSubmitting"
+            android:layout_width="36dp"
+            android:layout_height="36dp"
+            android:layout_gravity="center"
+            android:indeterminateTint="@color/viewfinder_reticle"
+            android:visibility="gone" />
+
+        <!-- Full-Screen Screen Flash Overlay (OK=Green, DUPLICATE=Blue, NOT_FOUND=Purple, CHECK=Amber, STOP=Red) -->
+        <View
+            android:id="@+id/viewScreenFlash"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:visibility="gone" />
+
+        <!-- Animated Verdict Stamp -->
+        <LinearLayout
+            android:id="@+id/layoutSignalStamp"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:background="@drawable/bg_round_card"
+            android:backgroundTint="@color/verdict_ok"
+            android:elevation="8dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingHorizontal="20dp"
+            android:paddingVertical="10dp"
+            android:visibility="gone"
+            tools:visibility="visible">
+
+            <ImageView
+                android:id="@+id/ivSignalStamp"
+                android:layout_width="32dp"
+                android:layout_height="32dp"
+                android:importantForAccessibility="no"
+                android:src="@drawable/ic_signal_ok" />
+
+            <TextView
+                android:id="@+id/tvSignalStamp"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="10dp"
+                android:accessibilityLiveRegion="assertive"
+                android:maxLines="1"
+                android:textColor="@color/text_on_primary"
+                android:textSize="24sp"
+                android:textStyle="bold"
+                tools:text="SAVED" />
+        </LinearLayout>
+
+        <!-- Idle Camera Pause Overlay -->
+        <LinearLayout
+            android:id="@+id/layoutCameraPaused"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="#F0111827"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center"
+            android:orientation="vertical"
+            android:padding="16dp"
+            android:visibility="gone"
+            tools:visibility="visible">
+
+            <ImageView
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:alpha="0.85"
+                android:importantForAccessibility="no"
+                android:src="@drawable/ic_camera"
+                app:tint="@color/text_on_primary" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:gravity="center"
+                android:text="@string/camera_paused_title"
+                android:textColor="#FFFFFF"
+                android:textSize="15sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/tvCameraPausedSub"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:alpha="0.75"
+                android:gravity="center"
+                android:text="@string/camera_paused_sub"
+                android:textColor="#FFFFFF"
+                android:textSize="12sp" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:background="@drawable/bg_pill"
+                android:backgroundTint="@color/colorPrimary"
+                android:gravity="center"
+                android:minHeight="40dp"
+                android:paddingHorizontal="20dp"
+                android:text="@string/camera_paused_action"
+                android:textColor="@color/text_on_primary"
+                android:textSize="14sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+    </FrameLayout>
+
+    <!-- Content / Results Area -->
+    <ScrollView
+        android:id="@+id/scrollResultArea"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:fillViewport="true">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="12dp">
+
+            <!-- Last Scan Card -->
+            <com.google.android.material.card.MaterialCardView
+                android:id="@+id/cardLastResult"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:visibility="gone"
+                app:cardBackgroundColor="@color/surface"
+                app:cardCornerRadius="14dp"
+                app:cardElevation="1dp"
+                app:strokeColor="@color/border"
+                app:strokeWidth="1dp"
+                tools:visibility="visible">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical">
+
+                    <LinearLayout
+                        android:id="@+id/bannerLastVerdict"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:background="@color/verdict_ok"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal"
+                        android:paddingHorizontal="14dp"
+                        android:paddingVertical="8dp">
+
+                        <TextView
+                            android:id="@+id/tvLastVerdictText"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:textColor="@color/text_on_primary"
+                            android:textSize="14sp"
+                            android:textStyle="bold"
+                            tools:text="SAVED AS NORMAL RETURN" />
+
+                        <TextView
+                            android:id="@+id/tvLastVerdictTime"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:textColor="#E0FFFFFF"
+                            android:textSize="12sp"
+                            tools:text="Just now" />
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:padding="14dp">
+
+                        <TextView
+                            android:id="@+id/tvLastAwb"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:textColor="@color/text_primary"
+                            android:textSize="16sp"
+                            android:textStyle="bold"
+                            tools:text="AWB: 23409611295569" />
+
+                        <TextView
+                            android:id="@+id/tvLastProduct"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="2dp"
+                            android:ellipsize="end"
+                            android:maxLines="2"
+                            android:textColor="@color/text_secondary"
+                            android:textSize="13sp"
+                            tools:text="Women Embroidered Straight Kurta (1 unit)" />
+                    </LinearLayout>
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+
+            <!-- Idle State Card -->
+            <com.google.android.material.card.MaterialCardView
+                android:id="@+id/cardIdleState"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                app:cardBackgroundColor="@color/surface"
+                app:cardCornerRadius="14dp"
+                app:cardElevation="0dp"
+                app:strokeColor="@color/border"
+                app:strokeWidth="1dp">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:gravity="center_horizontal"
+                    android:orientation="vertical"
+                    android:paddingHorizontal="16dp"
+                    android:paddingTop="18dp"
+                    android:paddingBottom="14dp">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/ready_to_scan"
+                        android:textColor="@color/colorPrimary"
+                        android:textSize="16sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp"
+                        android:gravity="center"
+                        android:text="@string/ready_to_scan_hint"
+                        android:textColor="@color/text_secondary"
+                        android:textSize="13sp" />
+
+                    <View
+                        android:layout_width="match_parent"
+                        android:layout_height="1dp"
+                        android:layout_marginVertical="14dp"
+                        android:background="@color/border" />
+
+                    <!-- Verdict signals legend -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:background="@drawable/bg_pill"
+                            android:backgroundTint="@color/verdict_ok_bg"
+                            android:paddingHorizontal="8dp"
+                            android:paddingVertical="3dp"
+                            android:text="OK: Green"
+                            android:textColor="@color/verdict_ok"
+                            android:textSize="11sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="6dp"
+                            android:background="@drawable/bg_pill"
+                            android:backgroundTint="@color/verdict_duplicate_bg"
+                            android:paddingHorizontal="8dp"
+                            android:paddingVertical="3dp"
+                            android:text="Duplicate: Blue"
+                            android:textColor="@color/verdict_duplicate"
+                            android:textSize="11sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="6dp"
+                            android:background="@drawable/bg_pill"
+                            android:backgroundTint="@color/verdict_unverified_bg"
+                            android:paddingHorizontal="8dp"
+                            android:paddingVertical="3dp"
+                            android:text="Not Found: Purple"
+                            android:textColor="@color/verdict_unverified"
+                            android:textSize="11sp"
+                            android:textStyle="bold" />
+                    </LinearLayout>
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+
+        </LinearLayout>
+    </ScrollView>
+
+    <!-- Bottom Action Bar (64dp, thumb-friendly) -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="64dp"
+        android:background="@color/surface"
+        android:elevation="6dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingHorizontal="6dp">
+
+        <LinearLayout
+            android:id="@+id/btnTorch"
+            style="@style/ScannerAction">
+
+            <ImageView
+                android:id="@+id/ivTorch"
+                style="@style/ScannerActionIcon"
+                android:src="@drawable/ic_torch" />
+
+            <TextView
+                android:id="@+id/tvTorchLabel"
+                style="@style/ScannerActionLabel"
+                android:text="@string/torch_off" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/btnManual"
+            style="@style/ScannerAction">
+
+            <ImageView
+                style="@style/ScannerActionIcon"
+                android:src="@drawable/ic_keyboard" />
+
+            <TextView
+                style="@style/ScannerActionLabel"
+                android:text="@string/manual_entry" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/btnRecent"
+            style="@style/ScannerAction">
+
+            <ImageView
+                style="@style/ScannerActionIcon"
+                android:src="@drawable/ic_history" />
+
+            <TextView
+                style="@style/ScannerActionLabel"
+                android:text="@string/recent_short" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/btnSettings"
+            style="@style/ScannerAction">
+
+            <ImageView
+                style="@style/ScannerActionIcon"
+                android:src="@drawable/ic_settings" />
+
+            <TextView
+                style="@style/ScannerActionLabel"
+                android:text="@string/settings" />
+        </LinearLayout>
+    </LinearLayout>
+
+</LinearLayout>

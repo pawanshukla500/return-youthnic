@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f6b56"/>
+      <stop offset="45%" stop-color="#0d5948"/>
+      <stop offset="100%" stop-color="#063b2f"/>
+    </linearGradient>
+    <linearGradient id="boxTop" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#4ade80"/>
+      <stop offset="100%" stop-color="#10b981"/>
+    </linearGradient>
+    <linearGradient id="boxLeft" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#e6f4f0"/>
+      <stop offset="100%" stop-color="#bfe4d8"/>
+    </linearGradient>
+    <linearGradient id="boxRight" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#d9ede7"/>
+    </linearGradient>
+    <linearGradient id="arrowGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#a7f3d0"/>
+      <stop offset="50%" stop-color="#34d399"/>
+      <stop offset="100%" stop-color="#059669"/>
+    </linearGradient>
+    <filter id="subtleShadow" x="-10%" y="-10%" width="125%" height="125%">
+      <feDropShadow dx="0" dy="2" stdDeviation="2" flood-color="#021c16" flood-opacity="0.35"/>
+    </filter>
+  </defs>
+
+  <!-- Squircle Base -->
+  <rect x="2" y="2" width="60" height="60" rx="16" fill="url(#bgGrad)"/>
+  <rect x="2.5" y="2.5" width="59" height="59" rx="15.5" fill="none" stroke="rgba(255,255,255,0.2)" stroke-width="1"/>
+
+  <!-- Logo Emblem Group -->
+  <g filter="url(#subtleShadow)">
+    <!-- Isometric Parcel Box -->
+    <!-- Box Right Face -->
+    <polygon points="43,26 55,20 55,36 43,42" fill="url(#boxRight)"/>
+    <!-- Box Left Face -->
+    <polygon points="33,21 43,26 43,42 33,37" fill="url(#boxLeft)"/>
+    <!-- Box Top Face -->
+    <polygon points="43,15 55,20 43,26 33,21" fill="url(#boxTop)"/>
+    <!-- Box Tape (Mint accent over top & down right side) -->
+    <polygon points="41,16 45,14 47,24 43,26" fill="#34d399" opacity="0.9"/>
+    <polygon points="47,24 50,22.5 50,38.5 47,40" fill="#10b981" opacity="0.85"/>
+
+    <!-- Dynamic Return Loop Arrow -->
+    <!-- Loop path swooping out from under the box, curving wide to the left, and looping into an arrowhead pointing back into the parcel -->
+    <path d="M 40,36 C 40,43 32,49 23,49 C 14,49 8,43 8,33 C 8,23 15,18 24,18 C 29,18 33,20 36,23"
+          fill="none"
+          stroke="#ffffff"
+          stroke-width="5"
+          stroke-linecap="round"
+          stroke-linejoin="round"/>
+    
+    <path d="M 40,36 C 40,43 32,49 23,49 C 14,49 8,43 8,33 C 8,23 15,18 24,18 C 29,18 33,20 36,23"
+          fill="none"
+          stroke="url(#arrowGrad)"
+          stroke-width="3"
+          stroke-linecap="round"
+          stroke-linejoin="round"/>
+
+    <!-- Arrow Head pointing toward the parcel -->
+    <polygon points="34,17 41,23 32,27" fill="#ffffff"/>
+    <polygon points="34.5,19 39.5,23 33.5,25.5" fill="#10b981"/>
+  </g>
+</svg>

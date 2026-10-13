@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#000000">
+
+    <!-- Interactive Pinch-to-Zoom ImageView -->
+    <ImageView
+        android:id="@+id/ivZoomableImage"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:contentDescription="Full size product image"
+        android:scaleType="matrix" />
+
+    <ProgressBar
+        android:id="@+id/progressImageLoading"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:layout_gravity="center"
+        android:indeterminateTint="@color/brand_mint" />
+
+    <TextView
+        android:id="@+id/tvImageError"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:drawablePadding="8dp"
+        android:gravity="center"
+        android:padding="24dp"
+        android:text="Image preview not available for this SKU"
+        android:textColor="#A0FFFFFF"
+        android:textSize="14sp"
+        android:visibility="gone" />
+
+    <!-- Top Overlay Bar -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="64dp"
+        android:background="#99000000"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingHorizontal="16dp">
+
+        <TextView
+            android:id="@+id/tvImageTitle"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:textColor="#FFFFFF"
+            android:textSize="15sp"
+            android:textStyle="bold"
+            tools:text="Women Embroidered Kurta · BT218-Cat_M" />
+
+        <ImageButton
+            android:id="@+id/btnCloseViewer"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Close image viewer"
+            android:padding="10dp"
+            android:src="@drawable/ic_close"
+            app:tint="#FFFFFF" />
+    </LinearLayout>
+</FrameLayout>

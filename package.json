@@ -1,0 +1,51 @@
+{
+  "name": "return-scanning-app",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -n web,api -c green,blue \"vite\" \"tsx watch server/index.ts\"",
+    "dev:web": "vite",
+    "dev:api": "tsx watch server/index.ts",
+    "build": "vite build",
+    "start": "tsx server/index.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.server.json",
+    "test": "node --import tsx --test server/tests/import.test.ts server/tests/spreadsheet-numbers.test.ts server/tests/marketplace-rules.test.ts server/tests/marketplace-ingestion.test.ts server/tests/oms.test.ts server/tests/oms-orders.test.ts server/tests/data-capture.test.ts server/tests/database-ssl.test.ts server/tests/register-rules.test.ts server/tests/register-db.test.ts server/tests/access.test.ts server/tests/upload-policy.test.ts server/tests/access-db.test.ts server/tests/scanner-list.test.ts server/tests/device-sessions.test.ts server/tests/email-reports.test.ts server/tests/continuous-scanning.test.ts server/tests/security-operations.test.ts server/tests/auth-persistent.test.ts server/tests/mobile-app.test.ts server/tests/shopify-sync.test.ts",
+    "user:create": "tsx server/scripts/create-user.ts",
+    "load:master": "tsx server/scripts/load-product-master.ts",
+    "layout:inspect": "tsx server/scripts/inspect-layout.ts",
+    "sync:oms": "tsx server/scripts/sync-oms-catalog.ts",
+    "oms:orders": "tsx server/scripts/fetch-oms-orders.ts",
+    "oms:daily": "tsx server/scripts/sync-oms-daily.ts",
+    "report:returns": "tsx server/scripts/report-returns.ts",
+    "sync:shopify": "tsx server/scripts/sync-shopify.ts"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.6.1",
+    "express": "^4.21.2",
+    "multer": "^1.4.5-lts.2",
+    "pg": "^8.16.3",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.12",
+    "@types/bcryptjs": "^2.4.6",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^4.17.23",
+    "@types/multer": "^1.4.12",
+    "@types/node": "^22.17.2",
+    "@types/pg": "^8.15.5",
+    "@types/react": "^19.1.12",
+    "@types/react-dom": "^19.1.9",
+    "@vitejs/plugin-react": "^4.7.0",
+    "concurrently": "^9.2.1",
+    "tailwindcss": "^4.1.12",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2",
+    "vite": "^6.3.5"
+  }
+}

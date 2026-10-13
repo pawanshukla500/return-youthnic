@@ -1,0 +1,57 @@
+// Display formatting shared by the API routes and the return register. Times are Indian Standard Time (IST).
+
+export function formatCount(value: number): string {
+  return Number(value).toLocaleString("en-US")
+}
+
+export function formatRowCount(value: number): string {
+  return `${formatCount(value)} rows`
+}
+
+// A share of a total with one decimal place. A zero total has no share yet, so it shows a dash.
+export function percentOf(part: number, whole: number): string {
+  return whole ? `${((part / whole) * 100).toFixed(1)}%` : "—"
+}
+
+export function formatScanTime(date = new Date()): string {
+  return new Intl.DateTimeFormat("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+    timeZone: "Asia/Kolkata",
+  }).format(date)
+}
+
+export function formatUploadLabel(date = new Date()): string {
+  const day = new Intl.DateTimeFormat("en-GB", {
+    day: "numeric",
+    month: "short",
+    timeZone: "Asia/Kolkata",
+  }).format(date)
+  return `${day}, ${formatScanTime(date)}`
+}
+
+// For example "9 Oct 2026".
+export function formatDay(value: Date): string {
+  return new Intl.DateTimeFormat("en-GB", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    timeZone: "Asia/Kolkata",
+  }).format(value)
+}
+
+// For example "Today, 9 October".
+export function headerDateLabel(date = new Date()): string {
+  const day = new Intl.DateTimeFormat("en-GB", {
+    day: "numeric",
+    month: "long",
+    timeZone: "Asia/Kolkata",
+  }).format(date)
+  return `Today, ${day}`
+}
+
+// Last sign-in that still has an open session. Signing out removes the session, so this can be empty.
+export function lastSignInLabel(value: Date | null): string {
+  return value ? formatUploadLabel(value) : "—"
+}

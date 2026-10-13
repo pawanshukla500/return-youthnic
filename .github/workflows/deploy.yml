@@ -1,0 +1,172 @@
+name: Deploy Return APP to Production VPS
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - "android/**"
+      - "docs/**"
+      - "*.md"
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  test-and-build:
+    name: Test and Build Web & Server
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build Frontend Bundle
+        run: npm run build
+
+      - name: Run Node Test Suite
+        run: npm test
+
+  deploy:
+    name: Deploy to Production VPS
+    needs: test-and-build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Check Deployment Secrets
+        env:
+          HOSTINGER_SSH_KEY: ${{ secrets.HOSTINGER_SSH_KEY }}
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST || vars.HOSTINGER_HOST }}
+        run: |
+          if [ -z "$HOSTINGER_SSH_KEY" ] || [ -z "$HOSTINGER_HOST" ]; then
+            echo "::warning::HOSTINGER_SSH_KEY or HOSTINGER_HOST secret is not configured in repository secrets."
+            echo "::warning::Skipping remote VPS push. Please configure repository secrets to enable automatic deployments."
+            exit 0
+          fi
+          echo "DEPLOY_ENABLED=true" >> "$GITHUB_ENV"
+
+      - name: Configure SSH Key
+        if: env.DEPLOY_ENABLED == 'true'
+        env:
+          HOSTINGER_SSH_KEY: ${{ secrets.HOSTINGER_SSH_KEY }}
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST || vars.HOSTINGER_HOST }}
+          HOSTINGER_PORT: ${{ secrets.HOSTINGER_SSH_PORT || vars.HOSTINGER_SSH_PORT || 22 }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$HOSTINGER_SSH_KEY" | tr -d '\r' > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          for i in {1..5}; do
+            ssh-keyscan -p "$HOSTINGER_PORT" "$HOSTINGER_HOST" >> ~/.ssh/known_hosts 2>/dev/null && break || sleep 2
+          done
+
+      - name: Package Source Code and Prepare Environment
+        if: env.DEPLOY_ENABLED == 'true'
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DATABASE_SSL_CA_FILE: ${{ secrets.DATABASE_SSL_CA_FILE || '' }}
+          DATABASE_SSL_CA: ${{ secrets.DATABASE_SSL_CA || '' }}
+          SHOPIFY_DATABASE_URL: ${{ secrets.SHOPIFY_DATABASE_URL || '' }}
+          SHOPIFY_SSL_CA: ${{ secrets.SHOPIFY_SSL_CA || '' }}
+          CORS_ORIGIN: ${{ vars.CORS_ORIGIN || 'https://return.youthnic.shop' }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY || '' }}
+          BRANDFETCH_CLIENT_ID: ${{ secrets.BRANDFETCH_CLIENT_ID || '' }}
+          OMSGURU_CLIENT_ID: ${{ secrets.OMSGURU_CLIENT_ID || '' }}
+          OMSGURU_CLIENT_SECRET: ${{ secrets.OMSGURU_CLIENT_SECRET || '' }}
+          OMSGURU_TOKEN: ${{ secrets.OMSGURU_TOKEN || secrets.OMSGURU_API_TOKEN || '' }}
+          OMSGURU_API_TOKEN: ${{ secrets.OMSGURU_API_TOKEN || secrets.OMSGURU_TOKEN || '' }}
+          PORT: ${{ vars.PORT || '3001' }}
+          NODE_ENV: 'production'
+        run: |
+          cat <<EOF > /tmp/return-app.env
+          NODE_ENV=${NODE_ENV}
+          PORT=${PORT}
+          DATABASE_URL=${DATABASE_URL}
+          DATABASE_SSL_CA_FILE=${DATABASE_SSL_CA_FILE}
+          DATABASE_SSL_CA=${DATABASE_SSL_CA}
+          SHOPIFY_DATABASE_URL=${SHOPIFY_DATABASE_URL}
+          SHOPIFY_SSL_CA=${SHOPIFY_SSL_CA}
+          CORS_ORIGIN=${CORS_ORIGIN}
+          RESEND_API_KEY=${RESEND_API_KEY}
+          BRANDFETCH_CLIENT_ID=${BRANDFETCH_CLIENT_ID}
+          OMSGURU_CLIENT_ID=${OMSGURU_CLIENT_ID}
+          OMSGURU_CLIENT_SECRET=${OMSGURU_CLIENT_SECRET}
+          OMSGURU_TOKEN=${OMSGURU_TOKEN}
+          OMSGURU_API_TOKEN=${OMSGURU_API_TOKEN}
+          EOF
+
+          tar --warning=no-file-changed \
+              --exclude='./.git' \
+              --exclude='./node_modules' \
+              --exclude='./android' \
+              --exclude='./dist' \
+              --exclude='./.env*' \
+              --exclude='./certs' \
+              -czf /tmp/return-app-source.tar.gz .
+
+      - name: Upload to VPS and Restart Application
+        if: env.DEPLOY_ENABLED == 'true'
+        env:
+          HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST || vars.HOSTINGER_HOST }}
+          HOSTINGER_USER: ${{ secrets.HOSTINGER_USER || vars.HOSTINGER_USER || 'root' }}
+          HOSTINGER_PORT: ${{ secrets.HOSTINGER_SSH_PORT || vars.HOSTINGER_SSH_PORT || 22 }}
+          APP_DIR: ${{ vars.APP_DIR || '/opt/return-app' }}
+        run: |
+          SSH="ssh -p $HOSTINGER_PORT -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=accept-new"
+          SCP="scp -P $HOSTINGER_PORT -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=accept-new"
+
+          $SSH "${HOSTINGER_USER}@${HOSTINGER_HOST}" "mkdir -p ${APP_DIR} ${APP_DIR}/data"
+          $SCP /tmp/return-app.env "${HOSTINGER_USER}@${HOSTINGER_HOST}:${APP_DIR}/.env"
+          $SCP /tmp/return-app-source.tar.gz "${HOSTINGER_USER}@${HOSTINGER_HOST}:/tmp/return-app-source.tar.gz"
+
+          $SSH "${HOSTINGER_USER}@${HOSTINGER_HOST}" "bash -s" <<'EOF'
+          set -euo pipefail
+          APP_DIR="/opt/return-app"
+          echo ">>> [1/5] Extracting source code to $APP_DIR..."
+          cd "$APP_DIR"
+          tar -xzf /tmp/return-app-source.tar.gz -C "$APP_DIR"
+          rm -f /tmp/return-app-source.tar.gz
+          chmod 600 .env
+
+          echo ">>> [2/5] Installing dependencies and building production Vite bundle..."
+          npm ci
+          npm run build
+
+          echo ">>> [3/5] Restarting return-app service (PM2 or systemd)..."
+          if command -v pm2 >/dev/null 2>&1; then
+            pm2 restart return-app || pm2 start npm --name "return-app" -- run start
+            pm2 save
+          elif systemctl list-unit-files | grep -q "return-app.service"; then
+            systemctl restart return-app
+          else
+            echo "Notice: PM2 or systemd unit 'return-app' not detected. Starting in background..."
+            nohup npm run start > app.log 2>&1 &
+          fi
+
+          echo ">>> [4/5] Verifying API health check..."
+          sleep 4
+          for i in {1..10}; do
+            if curl -fsS http://127.0.0.1:3001/api/health >/dev/null 2>&1; then
+              echo ">>> Health check PASSED at http://127.0.0.1:3001/api/health"
+              exit 0
+            fi
+            echo "Waiting for service to become healthy ($i/10)..."
+            sleep 2
+          done
+
+          echo "Warning: Service started; please verify reverse-proxy (Nginx/Traefik) routing."
+          EOF

@@ -1,0 +1,114 @@
+name: Build Return Scan Android APK
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish GitHub Release artifact"
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  build-apk:
+    name: Build Native Android Return Scanner APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "21"
+
+      - name: Install Android Packages
+        run: |
+          TOOLS="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin"
+          [ -d "$TOOLS" ] || TOOLS=$(ls -d "$ANDROID_SDK_ROOT"/cmdline-tools/*/bin | head -1)
+          export PATH="$TOOLS:$PATH"
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+
+      - name: Set Executable Permissions
+        run: chmod +x gradlew
+
+      - name: Run Native Unit Tests
+        run: ./gradlew testDebugUnitTest --no-daemon
+
+      - name: Run Android Lint
+        run: ./gradlew lintDebug --no-daemon
+
+      - name: Assemble Release APK (R8 & Resource Shrink)
+        run: ./gradlew assembleRelease --no-daemon
+
+      - name: Find Release APK
+        run: |
+          APK=$(find app/build/outputs/apk/release/ -name "*.apk" | head -1)
+          echo "RELEASE_APK=$APK" >> "$GITHUB_ENV"
+          echo "Found release APK: $APK"
+
+      - name: Verify Package ID and Version Code
+        run: |
+          AAPT="$ANDROID_SDK_ROOT/build-tools/34.0.0/aapt"
+          "$AAPT" dump badging "$RELEASE_APK" > /tmp/badging.txt
+          cat /tmp/badging.txt | grep -E "package: name="
+
+          PKG=$(grep -o "name='[^']*'" /tmp/badging.txt | head -1 | cut -d"'" -f2)
+          if [ "$PKG" != "shop.youthnic.returnscan" ]; then
+            echo "::error::Package ID mismatch! Expected 'shop.youthnic.returnscan', got '$PKG'"
+            exit 1
+          fi
+          echo "Package ID verified: $PKG"
+
+          VCODE=$(grep -o "versionCode='[^']*'" /tmp/badging.txt | head -1 | cut -d"'" -f2)
+          echo "versionCode is: $VCODE"
+          if [ "$VCODE" -lt 10000 ]; then
+            echo "::error::versionCode ($VCODE) must be >= 10000"
+            exit 1
+          fi
+          echo "APP_VCODE=$VCODE" >> "$GITHUB_ENV"
+
+      - name: Verify Camera Permission
+        run: |
+          grep -q "uses-permission: name='android.permission.CAMERA'" /tmp/badging.txt || {
+            echo "::error::android.permission.CAMERA is missing from APK!"
+            exit 1
+          }
+          echo "Camera permission verified in APK."
+
+      - name: Measure APK Byte and MB Size (Target < 5 MB)
+        run: |
+          SIZE_BYTES=$(wc -c < "$RELEASE_APK")
+          SIZE_MB=$(echo "scale=2; $SIZE_BYTES / 1048576" | bc)
+          SHA256=$(sha256sum "$RELEASE_APK" | cut -d' ' -f1)
+          echo "=============================================="
+          echo "Final Native Android Release APK Size:"
+          echo "$SIZE_BYTES bytes ($SIZE_MB MB)"
+          echo "SHA-256: $SHA256"
+          echo "Target budget: <= 5.0 MB"
+          echo "Hard limit:    <= 10.0 MB"
+          echo "=============================================="
+
+          if [ "$SIZE_BYTES" -gt 10485760 ]; then
+            echo "::error::APK size ($SIZE_MB MB) exceeds hard ceiling of 10 MB!"
+            exit 1
+          fi
+          echo "APK size budget check PASSED."
+
+      - name: Upload Workflow Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: return-scan-app
+          path: ${{ env.RELEASE_APK }}
+          if-no-files-found: error

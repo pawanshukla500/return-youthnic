@@ -1,0 +1,10 @@
+{
+  "versionCode": 10001,
+  "versionName": "1.0.1",
+  "minRequiredVersionCode": 10001,
+  "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "sizeBytes": 4194304,
+  "notes": "Youthnic Native Android Return Scanner · Production Release 1.0.1\n- Real-time continuous CameraX barcode scanner with unbundled ML Kit (< 5 MB)\n- Instant AWB lookup with return leg verification\n- Full return verification bottom sheet with product image zoom\n- Missing component selection (Dupatta, Bottom, Top, Inner, Accessories)\n- Synchronized audio, vibration, and screen-flash signals\n- Idempotent PostgreSQL commit with automatic camera resume",
+  "publishedAt": "2026-10-12T12:00:00Z",
+  "pageUrl": "https://github.com/youthnic/return-scan/releases"
+}

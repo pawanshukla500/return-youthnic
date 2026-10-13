@@ -1,0 +1,16 @@
+{
+  "goal": "Return App: scan-data layout, Myntra EJ/VB import, OMSGuru product join, Meesho number-format fix, database check, compile and run",
+  "status": "BLOCKED",
+  "updated_at": "2026-10-08",
+  "blockers": [
+    "Report Layout And Struture.xlsx must be saved as CSV (one per sheet) into docs/layouts/. The workbook is binary and cannot be read here. Searched docs/ and the Desktop: not present.",
+    "Meesho returns CSV (or its header row and one sample) to verify the number-format fix. Searched the repo, Desktop, Downloads and Documents: not present.",
+    "Myntra EJ (seller 45833) sample file to confirm the EJ layout. Searched: not present. The provided file is seller 10708 (VB).",
+    "OMSGuru product listing: API credentials for the app's own .env, or an export of the channel listing data. Searched the repo and Forward Scan project: no export present. Credentials are not read or stored here.",
+    "Database check is a user step: run RUN.bat, then open http://localhost:3001/api/health. The agent does not read .env.",
+    "Compile and run verification: npm run typecheck (and npm run dev) must be run by the user. The agent has no shell in this environment."
+  ],
+  "next_action": "",
+  "repeat_signature": "",
+  "repeat_count": 0
+}

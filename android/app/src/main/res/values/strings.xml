@@ -1,0 +1,101 @@
+<resources>
+    <string name="app_name">Return Scanner</string>
+    <string name="app_full_name">Youthnic Return Scanner</string>
+
+    <!-- Login -->
+    <string name="login_title">Warehouse Access</string>
+    <string name="login_subtitle">Sign in to your return scanning workspace</string>
+    <string name="email_hint">Email address</string>
+    <string name="password_hint">Password</string>
+    <string name="remember_device">Remember this warehouse terminal (30 days)</string>
+    <string name="server_url_label">Server Address</string>
+    <string name="login_btn">Sign in</string>
+    <string name="logging_in">Signing in…</string>
+    <string name="invalid_credentials">Incorrect email or password.</string>
+    <string name="connection_error">Could not connect to warehouse server.</string>
+
+    <!-- Marketplace Selection -->
+    <string name="select_marketplace">Select Marketplace</string>
+    <string name="continue_last_title">Continue Last Marketplace</string>
+    <string name="all_marketplaces">All Marketplace Accounts</string>
+    <string name="scannable_count">%1$s scannable returns</string>
+    <string name="refresh">Refresh</string>
+    <string name="settings">Settings</string>
+
+    <!-- Scanner Screen -->
+    <string name="change_marketplace">Change Marketplace</string>
+    <string name="connection_online">ONLINE</string>
+    <string name="connection_offline">OFFLINE</string>
+    <string name="scanned_today">%1$d scanned today</string>
+    <string name="pending_scans">%1$d pending</string>
+    <string name="aim_at_awb">Aim at return parcel AWB / tracking barcode</string>
+    <string name="torch_on">Torch On</string>
+    <string name="torch_off">Torch Off</string>
+    <string name="manual_entry">Manual AWB</string>
+    <string name="recent_scans">Recent Scans</string>
+    <string name="recent_short">Recent</string>
+    <string name="ready_to_scan">Ready for Next Return</string>
+    <string name="ready_to_scan_hint">Align tracking barcode in the green viewfinder</string>
+    <string name="camera_paused_title">Scanner Paused</string>
+    <string name="camera_paused_sub">Idle for 2 minutes</string>
+    <string name="camera_paused_action">Tap screen to wake camera</string>
+
+    <!-- Return Verification Form -->
+    <string name="verification_title">Physical Return Verification</string>
+    <string name="tracking_awb_label">AWB / TRACKING</string>
+    <string name="order_id_label">Order ID</string>
+    <string name="shipment_id_label">Shipment</string>
+    <string name="carrier_label">Carrier</string>
+    <string name="return_type_label">Return Type</string>
+    <string name="return_reason_label">Return Reason</string>
+    <string name="sku_master_label">Product SKU</string>
+    <string name="marketplace_sku_label">Marketplace SKU</string>
+    <string name="expected_units_label">Expected: %1$d</string>
+    <string name="received_units_label">Received:</string>
+    <string name="physical_check_label">Physical condition inspected &amp; verified</string>
+    <string name="btn_save_return">Save Return (Commit)</string>
+    <string name="btn_cancel">Cancel</string>
+    <string name="btn_retry_save">Retry Save</string>
+    <string name="saving_return">Saving return to PostgreSQL…</string>
+    <string name="tap_to_view_image">Tap photo to enlarge &amp; zoom</string>
+
+    <!-- Issue Categories -->
+    <string name="issue_clear">Clear Return</string>
+    <string name="issue_missing">Missing Component</string>
+    <string name="issue_wrong">Wrong Product</string>
+    <string name="issue_damaged">Damaged Product</string>
+    <string name="issue_sku_change">SKU Change</string>
+    <string name="issue_size_change">Size Change</string>
+    <string name="issue_other">Other Issue</string>
+    <string name="notes_hint">Notes for claim team (optional)</string>
+    <string name="select_missing_component">Select missing part:</string>
+
+    <!-- Verdict Signals -->
+    <string name="verdict_ok_title">SAVED</string>
+    <string name="verdict_duplicate_title">DUPLICATE</string>
+    <string name="verdict_not_found_title">NOT FOUND</string>
+    <string name="verdict_check_title">CHECK</string>
+    <string name="verdict_stop_title">STOP</string>
+
+    <!-- Settings -->
+    <string name="settings_title">Scanner Settings</string>
+    <string name="feedback_header">Audio &amp; Visual Feedback</string>
+    <string name="audio_beep_title">Sound Beeper</string>
+    <string name="audio_beep_summary">Play distinctive audio tones on scan verdicts</string>
+    <string name="vibration_title">Haptic Vibration</string>
+    <string name="vibration_summary">Vibrate terminal on scan results</string>
+    <string name="screen_flash_title">Screen Flash</string>
+    <string name="screen_flash_summary">Brief color flashes for high-visibility warehouse feedback</string>
+    <string name="server_config_header">Warehouse Server</string>
+    <string name="app_updates_header">Application Updates</string>
+    <string name="check_updates_btn">Check for updates now</string>
+    <string name="current_version">Current version: %1$s (code %2$d)</string>
+    <string name="logout_btn">Sign out</string>
+
+    <!-- Updates -->
+    <string name="update_available_title">Update Available: %1$s</string>
+    <string name="update_banner_title">New app version %1$s is available</string>
+    <string name="btn_update_now">Download &amp; Install</string>
+    <string name="btn_later">Later</string>
+    <string name="downloading_update">Downloading APK…</string>
+</resources>

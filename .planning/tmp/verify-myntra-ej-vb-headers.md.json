@@ -1,0 +1,38 @@
+{
+  "doc_path": "docs/notes/myntra-ej-vb-headers.md",
+  "claims_checked": 22,
+  "claims_passed": 17,
+  "claims_failed": 5,
+  "failures": [
+    {
+      "line": 135,
+      "claim": "Hardcoded demo data: reports pagination (\"425\")",
+      "expected": "literal \"425\" present in src/pages/Reports.tsx",
+      "actual": "pagination is computed from the filtered rows in src/pages/Reports.tsx; no literal \"425\" remains"
+    },
+    {
+      "line": 135,
+      "claim": "Hardcoded demo data: chart month labels (\"Jun\")",
+      "expected": "month label hard-coded in src/pages/Dashboard.tsx",
+      "actual": "the chart shows the day number only (src/pages/Dashboard.tsx)"
+    },
+    {
+      "line": 136,
+      "claim": "Dead buttons: overview \"Last 7 days\"",
+      "expected": "button with no action in src/pages/Dashboard.tsx",
+      "actual": "now a label; the chart always covers 7 days (src/pages/Dashboard.tsx)"
+    },
+    {
+      "line": 136,
+      "claim": "Dead buttons: reports date and marketplace filters",
+      "expected": "filters with no action in src/pages/Reports.tsx",
+      "actual": "date chips removed; marketplace and issue filters are working selects (src/pages/Reports.tsx)"
+    },
+    {
+      "line": 137,
+      "claim": "Claims \"Export\" downloads returns, not claims",
+      "expected": "claims export calls the returns endpoint in src/pages/Claims.tsx",
+      "actual": "exports the claims marketplace table as CSV (src/pages/Claims.tsx)"
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">
+  <defs>
+    <linearGradient id="shopifyGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#95BF47"/>
+      <stop offset="100%" stop-color="#5E8E3E"/>
+    </linearGradient>
+  </defs>
+  <rect width="100" height="100" rx="20" fill="url(#shopifyGrad)"/>
+  <!-- Bag handle -->
+  <path d="M50 18 C40 18 36 26 36 34 L42 34 C42 28 45 23 50 23 C55 23 58 28 58 34 L64 34 C64 26 60 18 50 18 Z" fill="#ffffff" fill-opacity="0.85"/>
+  <!-- Bag body -->
+  <path d="M25 35 L75 35 L69 82 C68.8 83.5 67.5 84.5 66 84.5 L34 84.5 C32.5 84.5 31.2 83.5 31 82 Z" fill="#ffffff"/>
+  <!-- 'S' Monogram -->
+  <path d="M50 43 C44.5 43 41.5 46.2 41.5 50.2 C41.5 55.8 49 56.5 49 60.5 C49 62.8 47 64 44.5 64 C41.2 64 38.5 62 38 59 L33 60 C34 65.5 38.5 68.5 44.5 68.5 C50.5 68.5 54.5 65.2 54.5 60.5 C54.5 54.5 47 53.8 47 50 C47 48 48.8 47 51 47 C53.8 47 56 48.5 56.5 51 L61.5 50 C60.5 45.5 56.2 43 50 43 Z" fill="#5E8E3E"/>
+</svg>

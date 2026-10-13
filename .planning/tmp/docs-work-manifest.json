@@ -1,0 +1,40 @@
+{
+  "project_root": "D:\\Return APP - New",
+  "classification": {
+    "primary_type": "saas",
+    "signals": {
+      "has_package_json": true,
+      "has_api_routes": true,
+      "has_cli_bin": false,
+      "is_open_source": false,
+      "has_deploy_config": false,
+      "is_monorepo": false,
+      "has_tests": true
+    },
+    "note": "No LICENSE file, so CONTRIBUTING.md is not queued. No deploy config, so DEPLOYMENT.md is not queued. Classification was derived by hand because gsd-tools was not available in this session."
+  },
+  "canonical_queue": [
+    { "type": "readme", "resolved_path": "README.md", "mode": "create", "preservation_mode": null, "wave": 1, "status": "verified", "claims_failed": 0 },
+    { "type": "architecture", "resolved_path": "docs/ARCHITECTURE.md", "mode": "create", "preservation_mode": null, "wave": 1, "status": "verified", "claims_failed": 0, "note": "3 statements were wrong on the first pass (summarizeLifecycle usage, the API-to-OMS edge, the upload preview wording). The file was rewritten and re-verified." },
+    { "type": "configuration", "resolved_path": "docs/CONFIGURATION.md", "mode": "create", "preservation_mode": null, "wave": 1, "status": "verified", "claims_failed": 0 },
+    { "type": "getting_started", "resolved_path": "docs/GETTING-STARTED.md", "mode": "create", "preservation_mode": null, "wave": 2, "status": "verified", "claims_failed": 0 },
+    { "type": "development", "resolved_path": "docs/DEVELOPMENT.md", "mode": "create", "preservation_mode": null, "wave": 2, "status": "verified", "claims_failed": 0 },
+    { "type": "testing", "resolved_path": "docs/TESTING.md", "mode": "create", "preservation_mode": null, "wave": 2, "status": "verified", "claims_failed": 0 },
+    { "type": "api", "resolved_path": "docs/API.md", "mode": "create", "preservation_mode": null, "wave": 2, "status": "verified", "claims_failed": 0 }
+  ],
+  "review_queue": [
+    { "path": "docs/notes/agent-roster.md", "type": "hand-written", "status": "verified", "claims_failed": 0, "note": "Table file names were resolved against .claude/agents/, the folder the table names." },
+    { "path": "docs/notes/marketplace-layouts.md", "type": "hand-written", "status": "verified", "claims_failed": 0, "note": "Desktop file paths are outside the project and were not counted." },
+    { "path": "docs/notes/myntra-ej-vb-headers.md", "type": "hand-written", "status": "verified", "claims_failed": 5, "note": "Five statements about the reports and claims pages (lines 135 to 137) describe fixes made after this note was written. Not corrected: the fix loop needs an edit tool, and this session has none." },
+    { "path": "docs/notes/oms-order-snapshots.md", "type": "hand-written", "status": "verified", "claims_failed": 0, "note": "Three behaviour claims (--sample output, throttling, skipping scientific-notation order numbers) are unverified and were not counted." },
+    { "path": "docs/notes/omsguru-api.md", "type": "hand-written", "status": "verified", "claims_failed": 1, "note": "Line 100 asks the user to save the spec to docs/layouts/omsguru-openapi.yaml. The file is a pending user action, not a codebase claim." },
+    { "path": "docs/notes/ui-controls-audit.md", "type": "hand-written", "status": "verified", "claims_failed": 0 }
+  ],
+  "gap_queue": [
+    { "description": "Frontend pages in src/pages/ (partly covered by docs/notes/ui-controls-audit.md)", "output_path": "docs/frontend/pages.md", "status": "not_generated: needs a user decision" },
+    { "description": "OMSGuru integration in server/oms/ (partly covered by docs/notes/omsguru-api.md)", "output_path": "docs/oms/overview.md", "status": "not_generated: needs a user decision" }
+  ],
+  "commit": "not run: the project folder is not a git repository in this session, and gsd-tools was not available",
+  "created_at": "2026-10-08T00:00:00+05:30",
+  "updated_at": "2026-10-08T00:00:00+05:30"
+}

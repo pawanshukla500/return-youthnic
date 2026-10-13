@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Brand colors (Youthnic Emerald & Mint) -->
+    <color name="colorPrimary">#0E5847</color>
+    <color name="colorPrimaryDark">#063B2F</color>
+    <color name="colorAccent">#10B981</color>
+    <color name="brand_mint">#34D399</color>
+    <color name="brand_soft">#E6F4F0</color>
+
+    <!-- Scan Verdicts & Signals (OK = Green, DUPLICATE = Blue, NOT FOUND = Purple, CHECK = Amber, STOP = Red) -->
+    <color name="verdict_ok">#059669</color>
+    <color name="verdict_ok_bg">#F0FDF4</color>
+    <color name="verdict_ok_border">#A7F3D0</color>
+
+    <color name="verdict_duplicate">#2563EB</color>
+    <color name="verdict_duplicate_bg">#EFF6FF</color>
+    <color name="verdict_duplicate_border">#BFDBFE</color>
+
+    <color name="verdict_unverified">#7C3AED</color>
+    <color name="verdict_unverified_bg">#F5F3FF</color>
+    <color name="verdict_unverified_border">#DDD6FE</color>
+
+    <color name="verdict_check">#D97706</color>
+    <color name="verdict_check_bg">#FFFBEB</color>
+    <color name="verdict_check_border">#FDE68A</color>
+
+    <color name="verdict_stop">#DC2626</color>
+    <color name="verdict_stop_bg">#FEF2F2</color>
+    <color name="verdict_stop_border">#FECACA</color>
+
+    <!-- UI Neutrals -->
+    <color name="background">#F8FAF9</color>
+    <color name="surface">#FFFFFF</color>
+    <color name="surface_card">#FFFFFF</color>
+    <color name="surface_muted">#F1F5F9</color>
+    <color name="text_primary">#111827</color>
+    <color name="text_secondary">#4B5563</color>
+    <color name="text_muted">#9CA3AF</color>
+    <color name="text_on_primary">#FFFFFF</color>
+    <color name="border">#E5E7EB</color>
+    <color name="scanner_overlay">#77000000</color>
+    <color name="viewfinder_reticle">#10B981</color>
+    <color name="progress_track">#E2E8F0</color>
+
+    <!-- Channel Accent Colors -->
+    <color name="channel_meesho">#E01A59</color>
+    <color name="channel_flipkart">#2874F0</color>
+    <color name="channel_amazon">#FF9900</color>
+    <color name="channel_myntra">#F13AB1</color>
+    <color name="channel_ajio">#2C4152</color>
+</resources>
