@@ -1228,6 +1228,17 @@ Append new entries at the end. Do not edit earlier entries, except to correct a 
 - **The next agent must not:** send `CLEAR`/uppercase category codes or an issue on a clear line; put the scan key back to embedding the raw AWB; show a made-up scannable count; close the scanner when the camera is refused; count dialogs in more than one place; remove the `%s` in the count strings (`StringFormatsTest` guards it).
 - **Open for the user:** hand-test the PR build on a phone (permission prompt at sign-in, tap a marketplace, scan a SYN- test AWB, save a clear return and a missing-item return). Say if `GET /api/accounts` should return a scannable count so the marketplace list can show one.
 
+### 2026-10-13, Claude Code, Mobile app: merge of #1 and release manifest sync to v1.0.20
+
+- **Merged:** pull request #1 (squash, commit `11ff9aa`) after the web CI and the Android build passed on its final commit `1b6076d`. Review comments on #1 (a bot reviewer) were answered and resolved: the format-string test now catches every numeric placeholder; a late save reply can only close its own sheet; the workflow is read-only except a separate publish job; a Units affected stepper; the item states are copied at the Save tap; the camera explanation is shown once per device; a manual workflow run publishes only when its `publish` box is ticked.
+- **Workflows on `main` for `11ff9aa` (read from the run pages):** `CI - Typecheck, Build & Test` -> pass. `Deploy Return APP to Production VPS` -> pass (test-and-build and deploy jobs both succeeded; the deploy step ran with `DEPLOY_ENABLED: true`). `Build Return Scan Android APK` -> pass: the build job and the new `Publish GitHub Release` job both succeeded, so the new two-job publish path works.
+- **Release published:** `v1.0.20` (version code 10020, tag points at `11ff9aa`), assets `ReturnScan-v1.0.20.apk` and `ReturnScan-latest.apk`, 3,254,965 bytes, SHA-256 `354f9ff8...a46e`, published 2026-10-13T10:49:55Z.
+- **Changed (Rule 12 sync):** `data/return-scan-release.json` and `DEFAULT_RELEASE` in `server/mobile-release.ts` now name v1.0.20 with that size and SHA-256 and the release URLs; `server/tests/mobile-app.test.ts` expects a version code of at least 10020. `android/CHANGELOG.md` still says "Unreleased" for this work; it shipped in v1.0.20. It was left alone on purpose, because any change under `android/` makes the next push to `main` publish another release.
+- **Ran (local):** `npx tsx --test server/tests/mobile-app.test.ts` -> 6 tests, 6 pass, 0 fail; `npm run typecheck` -> no errors; the manifest JSON parses. The pull request checks run the full suite.
+- **Not verified:** that a phone on an older build shows the update notice and installs v1.0.20; that the camera prompt, a real lookup and a real save work on a device. The server finds the newest GitHub release by itself (cached for 10 minutes), so the notice depends on the deployed server and on the phone's own update check; neither was exercised from a phone.
+- **The next agent must not:** touch `android/` only to change a version label or a note (it publishes a new release); lower the version code in the manifest.
+- **Open for the user:** hand-test v1.0.20 on a warehouse phone (see the earlier entry), and say whether `GET /api/accounts` should return a scannable count.
+
 ## STOP — needs the user to resume
 
 **This is the exact point at which the agent stopped.** Everything that can be verified without external input has been verified. The following items require the user to act before any agent can resume:
