@@ -1,0 +1,93 @@
+name: return-app
+
+services:
+  return-app:
+    container_name: Return-App
+    image: return-app:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    expose:
+      - "3001"
+    ports:
+      - "127.0.0.1:3001:3001"
+    env_file:
+      - ./.env
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      TZ: Asia/Kolkata
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+      - "srv1845788.hstgr.cloud:host-gateway"
+    networks:
+      - shared_infra
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=shared_infra"
+
+      # Custom Domain Router: return.youthnic.shop
+      - "traefik.http.routers.return-app.rule=Host(`return.youthnic.shop`)"
+      - "traefik.http.routers.return-app.entrypoints=websecure"
+      - "traefik.http.routers.return-app.tls=true"
+      - "traefik.http.routers.return-app.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.return-app.middlewares=return-app-headers"
+      - "traefik.http.routers.return-app.service=return-app"
+
+      # Fallback Domain Router: return.srv1845788.hstgr.cloud
+      - "traefik.http.routers.return-app-fallback.rule=Host(`return.srv1845788.hstgr.cloud`)"
+      - "traefik.http.routers.return-app-fallback.entrypoints=websecure"
+      - "traefik.http.routers.return-app-fallback.tls=true"
+      - "traefik.http.routers.return-app-fallback.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.return-app-fallback.middlewares=return-app-headers"
+      - "traefik.http.routers.return-app-fallback.service=return-app"
+
+      # HTTP -> HTTPS Automatic 301 Redirect for return.youthnic.shop
+      - "traefik.http.routers.return-app-http.rule=Host(`return.youthnic.shop`)"
+      - "traefik.http.routers.return-app-http.entrypoints=web"
+      - "traefik.http.routers.return-app-http.middlewares=return-app-redirect-https"
+
+      # HTTP -> HTTPS Automatic 301 Redirect for fallback domain
+      - "traefik.http.routers.return-app-fallback-http.rule=Host(`return.srv1845788.hstgr.cloud`)"
+      - "traefik.http.routers.return-app-fallback-http.entrypoints=web"
+      - "traefik.http.routers.return-app-fallback-http.middlewares=return-app-redirect-https"
+
+      - "traefik.http.middlewares.return-app-redirect-https.redirectscheme.scheme=https"
+      - "traefik.http.middlewares.return-app-redirect-https.redirectscheme.permanent=true"
+
+      # Security & HSTS Headers
+      - "traefik.http.middlewares.return-app-headers.headers.sslredirect=true"
+      - "traefik.http.middlewares.return-app-headers.headers.stsseconds=31536000"
+      - "traefik.http.middlewares.return-app-headers.headers.stsincludesubdomains=true"
+      - "traefik.http.middlewares.return-app-headers.headers.stspreload=true"
+
+      # Traefik load balancer backend port
+      - "traefik.http.services.return-app.loadbalancer.server.port=3001"
+
+      # Hostinger hPanel Docker Manager metadata
+      - "com.docker.compose.project=return-app"
+      - "com.docker.compose.service=Return-App"
+
+    volumes:
+      - ./data:/app/data
+      - ./certs:/app/certs:ro
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3001/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 25s
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
+networks:
+  shared_infra:
+    external: true

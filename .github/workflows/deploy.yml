@@ -85,6 +85,7 @@ jobs:
           DATABASE_SSL_CA: ${{ secrets.DATABASE_SSL_CA || '' }}
           SHOPIFY_DATABASE_URL: ${{ secrets.SHOPIFY_DATABASE_URL || '' }}
           SHOPIFY_SSL_CA: ${{ secrets.SHOPIFY_SSL_CA || '' }}
+          SESSION_SECRET: ${{ secrets.SESSION_SECRET || '' }}
           CORS_ORIGIN: ${{ vars.CORS_ORIGIN || 'https://return.youthnic.shop' }}
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY || '' }}
           BRANDFETCH_CLIENT_ID: ${{ secrets.BRANDFETCH_CLIENT_ID || '' }}
@@ -99,10 +100,9 @@ jobs:
           NODE_ENV=${NODE_ENV}
           PORT=${PORT}
           DATABASE_URL=${DATABASE_URL}
-          DATABASE_SSL_CA_FILE=${DATABASE_SSL_CA_FILE}
-          DATABASE_SSL_CA=${DATABASE_SSL_CA}
+          DATABASE_SSL_CA_FILE=certs/db-ca.pem
           SHOPIFY_DATABASE_URL=${SHOPIFY_DATABASE_URL}
-          SHOPIFY_SSL_CA=${SHOPIFY_SSL_CA}
+          SESSION_SECRET=${SESSION_SECRET}
           CORS_ORIGIN=${CORS_ORIGIN}
           RESEND_API_KEY=${RESEND_API_KEY}
           BRANDFETCH_CLIENT_ID=${BRANDFETCH_CLIENT_ID}
@@ -111,6 +111,14 @@ jobs:
           OMSGURU_TOKEN=${OMSGURU_TOKEN}
           OMSGURU_API_TOKEN=${OMSGURU_API_TOKEN}
           EOF
+
+          mkdir -p /tmp/certs
+          if [ -n "$DATABASE_SSL_CA" ]; then
+            printf '%s\n' "$DATABASE_SSL_CA" > /tmp/certs/db-ca.pem
+          fi
+          if [ -n "$SHOPIFY_SSL_CA" ]; then
+            printf '%s\n' "$SHOPIFY_SSL_CA" > /tmp/certs/shopify-ca.pem
+          fi
 
           tar --warning=no-file-changed \
               --exclude='./.git' \
@@ -128,67 +136,93 @@ jobs:
           HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST || vars.HOSTINGER_HOST }}
           HOSTINGER_USER: ${{ secrets.HOSTINGER_USER || vars.HOSTINGER_USER || 'root' }}
           HOSTINGER_PORT: ${{ secrets.HOSTINGER_SSH_PORT || vars.HOSTINGER_SSH_PORT || 22 }}
-          APP_DIR: ${{ vars.APP_DIR || '/opt/return-app' }}
+          APP_ROOT: '/opt/return-app'
+          APP_DIR: '/opt/return-app/Return-App'
+          HPANEL_LINK: '/docker/return-app'
         run: |
           SSH="ssh -p $HOSTINGER_PORT -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=accept-new"
           SCP="scp -P $HOSTINGER_PORT -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=accept-new"
 
-          $SSH "${HOSTINGER_USER}@${HOSTINGER_HOST}" "mkdir -p ${APP_DIR} ${APP_DIR}/data"
-          $SCP /tmp/return-app.env "${HOSTINGER_USER}@${HOSTINGER_HOST}:${APP_DIR}/.env"
-          $SCP /tmp/return-app-source.tar.gz "${HOSTINGER_USER}@${HOSTINGER_HOST}:/tmp/return-app-source.tar.gz"
+          $SSH "${HOSTINGER_USER}@${HOSTINGER_HOST}" "mkdir -p ${APP_ROOT} ${APP_DIR} ${APP_DIR}/certs ${APP_DIR}/data"
+          $SCP /tmp/return-app.env "${HOSTINGER_USER}@${HOSTINGER_HOST}:${APP_ROOT}/uploaded.env"
+          if [ -d /tmp/certs ] && [ "$(ls -A /tmp/certs)" ]; then
+            $SCP /tmp/certs/* "${HOSTINGER_USER}@${HOSTINGER_HOST}:${APP_DIR}/certs/" || true
+          fi
+          $SCP /tmp/return-app-source.tar.gz "${HOSTINGER_USER}@${HOSTINGER_HOST}:${APP_ROOT}/return-app-source.tar.gz"
 
           $SSH "${HOSTINGER_USER}@${HOSTINGER_HOST}" "bash -s" <<'EOF'
           set -euo pipefail
-          APP_DIR="/opt/return-app"
-          echo ">>> [1/5] Extracting source code into $APP_DIR..."
+          APP_ROOT="/opt/return-app"
+          APP_DIR="/opt/return-app/Return-App"
+          HPANEL_LINK="/docker/return-app"
+
+          echo ">>> [1/7] Extracting source code into $APP_DIR..."
+          tar -xzf "${APP_ROOT}/return-app-source.tar.gz" -C "$APP_DIR"
+          rm -f "${APP_ROOT}/return-app-source.tar.gz"
+
+          echo ">>> [2/7] Configuring environment and certificates..."
           cd "$APP_DIR"
-          tar -xzf /tmp/return-app-source.tar.gz -C "$APP_DIR"
-          rm -f /tmp/return-app-source.tar.gz
+          if [ -f "${APP_ROOT}/uploaded.env" ]; then
+            if [ -f .env ]; then
+              while IFS='=' read -r key val || [ -n "$key" ]; do
+                [[ "$key" =~ ^#.*$ ]] && continue
+                [ -z "$key" ] && continue
+                if [ -n "$val" ]; then
+                  if grep -q "^${key}=" .env; then
+                    sed -i "s|^${key}=.*|${key}=${val}|" .env
+                  else
+                    printf '%s=%s\n' "$key" "$val" >> .env
+                  fi
+                fi
+              done < "${APP_ROOT}/uploaded.env"
+            else
+              cp "${APP_ROOT}/uploaded.env" .env
+            fi
+            rm -f "${APP_ROOT}/uploaded.env"
+          fi
           chmod 600 .env
 
-          echo ">>> [2/5] Deploying Docker container via Docker Compose..."
-          if docker compose version >/dev/null 2>&1; then
-            docker compose down --remove-orphans || true
-            docker compose up -d --build
-          elif command -v docker-compose >/dev/null 2>&1; then
-            docker-compose down --remove-orphans || true
-            docker-compose up -d --build
-          elif command -v docker >/dev/null 2>&1; then
-            echo "Notice: docker compose command not found. Building with standalone docker..."
-            docker build -t return-scan-app:latest .
-            docker stop return-scan-app 2>/dev/null || true
-            docker rm return-scan-app 2>/dev/null || true
-            docker run -d --name return-scan-app --restart unless-stopped -p 127.0.0.1:3001:3001 --env-file .env return-scan-app:latest
-          else
-            echo "Notice: Docker is not installed on VPS. Falling back to native Node.js runtime..."
-            npm ci
-            npm run build
-            if command -v pm2 >/dev/null 2>&1; then
-              pm2 restart return-app || pm2 start npm --name "return-app" -- run start
-              pm2 save
-            else
-              nohup npm run start > app.log 2>&1 &
-            fi
-          fi
+          ln -sf docker-compose.production.yml docker-compose.yml
 
-          echo ">>> [3/5] Cleaning up old unused Docker images..."
-          if command -v docker >/dev/null 2>&1; then
-            docker image prune -f || true
-          fi
+          echo ">>> [3/7] Registering Hostinger hPanel Docker Manager symlink ($HPANEL_LINK)..."
+          mkdir -p "$(dirname "$HPANEL_LINK")"
+          ln -sfn "$APP_DIR" "$HPANEL_LINK"
 
-          echo ">>> [4/5] Verifying API container health check..."
-          sleep 5
-          for i in {1..15}; do
+          echo ">>> [4/7] Deploying Docker container via Docker Compose under project 'return-app'..."
+          docker compose -p return-app -f docker-compose.production.yml --env-file .env up -d --build --remove-orphans
+
+          echo ">>> [5/7] Cleaning up dangling Docker build images..."
+          docker image prune -f || true
+
+          echo ">>> [6/7] Verifying container status and internal health..."
+          docker ps --filter "name=Return-App"
+          healthy=0
+          for i in {1..20}; do
             if curl -fsS http://127.0.0.1:3001/api/health >/dev/null 2>&1; then
               echo ">>> Health check PASSED at http://127.0.0.1:3001/api/health"
-              if command -v docker >/dev/null 2>&1; then
-                docker ps --filter "name=return-scan-app" || true
-              fi
-              exit 0
+              healthy=1
+              break
             fi
-            echo "Waiting for container service to become healthy ($i/15)..."
-            sleep 2
+            echo "Waiting for container service to become healthy ($i/20)..."
+            sleep 3
           done
 
-          echo "Warning: Health check did not return HTTP 200 within 35 seconds. Please inspect container logs: docker logs return-scan-app"
+          if [ "$healthy" -ne 1 ]; then
+            echo "❌ Container failed internal health check. Displaying logs:"
+            docker logs Return-App --tail=100 || true
+            exit 1
+          fi
+
+          echo ">>> [7/7] Verifying Traefik reverse proxy routing..."
+          for domain in "return.youthnic.shop" "return.srv1845788.hstgr.cloud"; do
+            echo "Testing routing for https://$domain/api/health..."
+            curl -k -fsS "https://$domain/api/health" || echo "Note: DNS or cert for $domain might take a moment."
+          done
+
+          echo "=========================================================================="
+          echo "🎉 Return APP is LIVE on Hostinger VPS!"
+          echo "Container: Return-App"
+          echo "Hostinger hPanel: $HPANEL_LINK"
+          echo "URLs: https://return.youthnic.shop | https://return.srv1845788.hstgr.cloud"
+          echo "=========================================================================="
           EOF

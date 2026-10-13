@@ -1,19 +1,27 @@
+name: return-app
+
 services:
   return-app:
     build:
       context: .
       dockerfile: Dockerfile
-    image: return-scan-app:latest
-    container_name: return-scan-app
+    image: return-app:latest
+    container_name: Return-App
     restart: unless-stopped
     ports:
-      # Expose port 3001 on localhost for Nginx reverse-proxy
+      # Expose port 3001 on localhost for reverse-proxy
       - "127.0.0.1:3001:3001"
     env_file:
       - .env
     environment:
       - NODE_ENV=production
       - PORT=3001
+      - TZ=Asia/Kolkata
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    labels:
+      - "com.docker.compose.project=return-app"
+      - "com.docker.compose.service=Return-App"
     volumes:
       - ./data:/app/data
       - ./certs:/app/certs:ro
