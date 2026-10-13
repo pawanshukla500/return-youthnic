@@ -129,7 +129,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG_NAME="v1.0.${{ env.APP_VCODE }}"
+          TAG_NAME="v1.0.${GITHUB_RUN_NUMBER}"
           DIST_DIR="$GITHUB_WORKSPACE/release-dist"
           mkdir -p "$DIST_DIR"
           cp "$RELEASE_APK" "$DIST_DIR/ReturnScan-${TAG_NAME}.apk"
@@ -139,8 +139,7 @@ jobs:
             "$DIST_DIR/ReturnScan-${TAG_NAME}.apk" \
             "$DIST_DIR/ReturnScan-latest.apk" \
             --title "Return Scan App $TAG_NAME" \
-            --notes "Official Android Release APK for Return Scanning App ($TAG_NAME). Built from commit ${{ github.sha }}." \
-            --clobber || \
+            --notes "Official Android Release APK for Return Scanning App ($TAG_NAME). Built from commit ${{ github.sha }}." || \
           gh release upload "$TAG_NAME" \
             "$DIST_DIR/ReturnScan-${TAG_NAME}.apk" \
             "$DIST_DIR/ReturnScan-latest.apk" \
