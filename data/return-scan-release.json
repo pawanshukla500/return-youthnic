@@ -1,11 +1,11 @@
 {
-  "versionCode": 10020,
-  "versionName": "1.0.20",
+  "versionCode": 10021,
+  "versionName": "1.0.21",
   "minRequiredVersionCode": 10001,
   "sha256": "354f9ff87f5638cc5c210b4da925d810d2e9dc7409b90f28c03b8df2dde1a46e",
   "sizeBytes": 3254965,
-  "notes": "Youthnic Native Android Return Scanner · Release v1.0.20\n- Fixes the crash after tapping a marketplace\n- Asks for camera access at sign-in; Manual AWB still works if it is refused\n- Lookup and save follow the server rules: missing items, units affected, duplicates, several returns for one AWB\n- Scanner fixes: swiping the sheet away, manual entry, torch, readable result banner",
-  "publishedAt": "2026-10-13T10:49:55Z",
-  "downloadUrl": "https://github.com/pawanshukla500/return-youthnic/releases/download/v1.0.20/ReturnScan-v1.0.20.apk",
-  "pageUrl": "https://github.com/pawanshukla500/return-youthnic/releases/tag/v1.0.20"
+  "notes": "Youthnic Native Android Return Scanner · Release v1.0.21\n- Official Youthnic brand logo & app icon alignment (crisp green squircle with white 'Y' monogram)\n- Updated splash screen and sign-in branding without white container artifacts\n- In-app update notification synchronization",
+  "publishedAt": "2026-10-13T14:20:00Z",
+  "downloadUrl": "https://github.com/pawanshukla500/return-youthnic/releases/download/v1.0.21/ReturnScan-v1.0.21.apk",
+  "pageUrl": "https://github.com/pawanshukla500/return-youthnic/releases/tag/v1.0.21"
 }

@@ -625,6 +625,22 @@ Append new entries at the end. Do not edit earlier entries, except to correct a 
   - Warehouse load simulation: 2,500 synthetic SKUs parsed in 34.7 ms, warm lookup p95 < 0.1 ms (far exceeding p95 < 300 ms target).
 - Not run:
   - Activation of real marketplace files against the live production database (forbidden without explicit user instruction).
+### 2026-10-13, Antigravity, OMSGuru Email Brand Logo & Details Alignment & Mobile APK v1.0.21 Release
+
+- Perspective: Addressed user requests and Gmail screenshots covering two areas: (1) adding the official Youthnic brand logo, prominent Request Reference ID card, and uploaded CSV file details/download button to the OMSGuru daily automated email; (2) updating the Android mobile APK assets (`ic_launcher_youthnic.png`, adaptive background, splash & login layouts) to the official green squircle monogram and triggering the APK release workflow.
+- Changed:
+  - `server/omsguru-daily.ts`: Enhanced `renderOmsguruUpdateEmail` with official brand logo header (`https://return.youthnic.shop/logos/youthnic-icon.png`), prominent Request Reference ID hero card (`record.requestId`, Dropship Warehouse `6688`, Action `ADD`), and uploaded inventory file box (`UpdateInStockQtyAnd_orLastPurchasePrice.csv`, direct CSV download button, Firebase Storage 180-day retention note, OMSGuru bulk adjustment instructions).
+  - `public/logos/youthnic-icon.png`: Generated 512x512 high-resolution PNG asset from official vector favicon for email clients and external consumers.
+  - Web & Mobile Icons: Regenerated `public/app-icon-192.png`, `public/app-icon-512.png`, `public/app-icon.png`, `public/apple-touch-icon.png`, `public/favicon-16x16.png`, `public/favicon-32x32.png`, and `public/mobile-icons/playstore-icon/playstore-512.png`.
+  - Android App Assets: Regenerated `android/app/src/main/res/drawable/ic_launcher_youthnic.png` and `drawable-nodpi/`, updated all mipmaps (`mdpi`, `hdpi`, `xhdpi`, `xxhdpi`, `xxxhdpi` standard and round), updated `ic_launcher_background.xml` to `#0d5948`, and removed white background card wrappers from `activity_login.xml` and `activity_splash.xml`.
+  - Mobile Release Sync: Bumped to `v1.0.21` (`versionCode: 10021`) in `data/return-scan-release.json` and `server/mobile-release.ts`.
+- Ran:
+  - `npm.cmd run typecheck`: Passed (0 errors).
+  - `npm.cmd run build`: Passed (Vite 4.00s, esbuild 26ms).
+  - `npm.cmd test`: 312 tests: 288 passed, 0 failed, 24 skipped on dedicated `TEST_DATABASE_URL`.
+- Not run:
+  - The 24 database integration tests requiring a dedicated test database whose name contains `test`.
+
 ### 2026-10-13, Antigravity, Youthnic Brand Vector Logo Alignment
 
 - Perspective: Addressed user screenshots comparing the browser tab favicon (dark green squircle with white 'Y' monogram) against the web sidebar/login brand header which previously displayed an unstyled white rectangular artifact from a legacy JPEG.

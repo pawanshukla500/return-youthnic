@@ -429,41 +429,110 @@ Generated automatically by Return App: https://return.youthnic.shop
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background: #f8fafc; color: #0f172a; margin: 0; padding: 24px 12px; }
     .container { max-width: 680px; margin: 0 auto; background: #ffffff; border-radius: 12px; border: 1px solid #e2e8f0; overflow: hidden; box-shadow: 0 4px 16px rgba(0,0,0,0.06); }
-    .header { background: linear-gradient(135deg, #093c31 0%, #136c57 100%); color: #ffffff; padding: 26px 28px; text-align: left; }
-    .header h1 { margin: 0 0 6px; font-size: 21px; font-weight: 700; color: #ffffff; letter-spacing: -0.2px; }
-    .header p { margin: 0; font-size: 13px; color: #a7f3d0; }
+    .header-table { width: 100%; border-collapse: collapse; background: linear-gradient(135deg, #063b2f 0%, #0d5948 50%, #0f6b56 100%); color: #ffffff; padding: 22px 26px; }
+    .header-table td { padding: 20px 24px; vertical-align: middle; }
     .content { padding: 24px; }
-    .notice-card { background: #f0fdf4; border: 1px solid #bbf7d0; border-left: 4px solid #16a34a; padding: 14px 18px; border-radius: 6px; margin-bottom: 22px; font-size: 13px; color: #166534; line-height: 1.5; }
+    .hero-card { background: #f0fdf4; border: 1.5px solid #86efac; border-radius: 10px; padding: 20px 22px; margin-bottom: 24px; box-shadow: 0 2px 8px rgba(16,185,129,0.06); }
+    .ref-badge { display: inline-block; padding: 4px 10px; border-radius: 6px; font-size: 11px; font-weight: 700; background: #dcfce7; color: #166534; border: 1px solid #86efac; }
     .stats-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-bottom: 24px; }
     .stat-card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; }
     .stat-label { font-size: 11px; font-weight: 600; text-transform: uppercase; color: #64748b; letter-spacing: 0.5px; }
     .stat-value { font-size: 24px; font-weight: 700; color: #0f172a; margin: 4px 0 2px; }
     .stat-sub { font-size: 12px; color: #16a34a; font-weight: 500; }
     .section-title { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: #334155; margin: 24px 0 12px; border-bottom: 1px solid #e2e8f0; padding-bottom: 6px; }
-    table { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 20px; }
-    th { text-align: left; padding: 8px 10px; background: #f1f5f9; color: #475569; font-weight: 600; font-size: 11px; text-transform: uppercase; }
-    td { padding: 10px; border-bottom: 1px solid #f1f5f9; }
+    table.data-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 20px; }
+    table.data-table th { text-align: left; padding: 8px 10px; background: #f1f5f9; color: #475569; font-weight: 600; font-size: 11px; text-transform: uppercase; }
+    table.data-table td { padding: 10px; border-bottom: 1px solid #f1f5f9; }
     .badge-mp { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 500; background: #e0f2fe; color: #0369a1; margin-right: 4px; margin-bottom: 2px; }
-    .btn { display: inline-block; padding: 10px 18px; border-radius: 6px; font-size: 13px; font-weight: 600; background: #136c57; color: #ffffff; text-decoration: none; margin-top: 6px; }
+    .download-btn { display: inline-block; padding: 10px 18px; border-radius: 6px; font-size: 13px; font-weight: 700; background: #0f6b56; color: #ffffff !important; text-decoration: none; box-shadow: 0 2px 6px rgba(15,107,86,0.3); }
     .footer { background: #f8fafc; border-top: 1px solid #e2e8f0; padding: 18px 24px; font-size: 12px; color: #64748b; text-align: center; }
   </style>
 </head>
 <body>
   <div class="container">
-    <div class="header">
-      <h1>Youthnic · OMSGuru Daily Inventory Update</h1>
-      <p>Dropship Warehouse ID: <strong>${record.dropshipWarehouseId}</strong> · Date: <strong>${record.updateDate}</strong> (IST)</p>
-    </div>
+    <table class="header-table" role="presentation" border="0" cellpadding="0" cellspacing="0">
+      <tr>
+        <td style="width: 52px; padding-right: 0;">
+          <img src="https://return.youthnic.shop/logos/youthnic-icon.png" width="48" height="48" alt="Youthnic" style="border-radius: 12px; display: block; border: 1.5px solid rgba(255,255,255,0.3); box-shadow: 0 4px 10px rgba(0,0,0,0.25);" />
+        </td>
+        <td style="padding-left: 14px;">
+          <div style="font-size: 10.5px; font-weight: 800; letter-spacing: 1.5px; color: #a7f3d0; text-transform: uppercase;">YOUTHNIC WAREHOUSE OPERATIONS</div>
+          <h1 style="margin: 2px 0 0; font-size: 21px; font-weight: 800; color: #ffffff; letter-spacing: -0.3px;">OMSGuru Daily Inventory Update</h1>
+          <p style="margin: 4px 0 0; font-size: 13px; color: #d1fae5;">Dropship Warehouse ID: <strong style="color: #ffffff;">${record.dropshipWarehouseId}</strong> · Date: <strong style="color: #ffffff;">${record.updateDate}</strong> (IST)</p>
+        </td>
+        <td style="text-align: right;">
+          <span style="display: inline-block; padding: 6px 12px; background: rgba(255,255,255,0.18); border: 1px solid rgba(255,255,255,0.3); border-radius: 20px; font-size: 11.5px; font-weight: 700; color: #ffffff; letter-spacing: 0.5px;">
+            ✅ UPLOAD READY
+          </span>
+        </td>
+      </tr>
+    </table>
+
     <div class="content">
-      <div class="notice-card">
-        <strong>📦 OMSGuru Bulk Inventory Upload Ready:</strong><br />
-        This file contains the combined sum of all physical return items received in <strong>good condition</strong> today across all marketplaces (Myntra, Flipkart, Amazon, Meesho, Ajio, Shopify). Items with reported discrepancies or damage are excluded. The attached CSV file <code>UpdateInStockQtyAnd_orLastPurchasePrice.csv</code> can be directly uploaded to OMSGuru.
+      <!-- Prominent Request Reference & Upload File Hero Card -->
+      <div class="hero-card">
+        <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
+          <tr>
+            <td style="vertical-align: top;">
+              <div style="font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; color: #166534; margin-bottom: 4px;">
+                OFFICIAL REQUEST REFERENCE ID
+              </div>
+              <div style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 19px; font-weight: 800; color: #064e3b; letter-spacing: 0.5px;">
+                ${record.requestId}
+              </div>
+              <div style="font-size: 12.5px; color: #15803d; margin-top: 3px;">
+                Dropship Warehouse Node: <strong>${record.dropshipWarehouseId}</strong> · Action: <strong>ADD</strong> (Increment Stock)
+              </div>
+            </td>
+            <td style="vertical-align: top; text-align: right;">
+              <span class="ref-badge">
+                100% Verified Physical Returns
+              </span>
+            </td>
+          </tr>
+        </table>
+
+        <hr style="border: 0; border-top: 1px dashed #86efac; margin: 16px 0;" />
+
+        <!-- Uploaded File Details -->
+        <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
+          <tr>
+            <td style="vertical-align: middle; width: 44px;">
+              <div style="width: 42px; height: 42px; background: #16a34a; border-radius: 9px; display: table-cell; vertical-align: middle; text-align: center; color: #ffffff; font-size: 22px; line-height: 42px;">
+                📄
+              </div>
+            </td>
+            <td style="vertical-align: middle; padding-left: 12px;">
+              <div style="font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: #166534;">UPLOADED INVENTORY FILE (ATTACHED &amp; ARCHIVED)</div>
+              <div style="font-size: 15px; font-weight: 700; color: #0f172a; margin-top: 2px;">
+                <code>UpdateInStockQtyAnd_orLastPurchasePrice.csv</code>
+              </div>
+              <div style="font-size: 12px; color: #475569; margin-top: 2px;">
+                Aggregated sum of good returns today across all marketplaces · <strong>${fmt(record.totalQty)}</strong> units across <strong>${fmt(record.totalSkus)}</strong> unique SKUs
+              </div>
+            </td>
+            <td style="vertical-align: middle; text-align: right;">
+              ${record.storageUrl ? `
+              <a href="${record.storageUrl}" target="_blank" rel="noopener noreferrer" class="download-btn">
+                ⬇ Download CSV
+              </a>` : `
+              <span style="font-size: 12px; font-weight: 700; color: #166534;">📎 File Attached</span>
+              `}
+            </td>
+          </tr>
+        </table>
+
+        <!-- Storage Archive & Upload instructions -->
+        <div style="margin-top: 14px; padding: 10px 14px; background: rgba(255,255,255,0.75); border-radius: 6px; font-size: 12px; color: #166534; line-height: 1.5;">
+          <strong>ℹ️ Direct OMSGuru Upload Steps:</strong> Login to OMSGuru &gt; Inventory &gt; <strong>Bulk Inventory Adjustment</strong> &gt; Upload the attached CSV file (<code>UpdateInStockQtyAnd_orLastPurchasePrice.csv</code>) to apply today's stock to Dropship Warehouse <strong>${record.dropshipWarehouseId}</strong>.
+          ${record.storageUrl ? `<br /><span style="color: #475569; font-size: 11.5px;">Cloud Storage: <a href="${record.storageUrl}" style="color: #0f6b56; font-weight: 600;">Download directly from Firebase Storage</a> (stored for 180 days).</span>` : ""}
+        </div>
       </div>
 
       <div class="stats-grid">
         <div class="stat-card">
           <div class="stat-label">Total Good Units (ADD)</div>
-          <div class="stat-value" style="color: #136c57;">${fmt(record.totalQty)}</div>
+          <div class="stat-value" style="color: #0f6b56;">${fmt(record.totalQty)}</div>
           <div class="stat-sub">100% verified physical stock</div>
         </div>
         <div class="stat-card">
@@ -484,7 +553,7 @@ Generated automatically by Return App: https://return.youthnic.shop
       </div>
 
       <div class="section-title">Master Product SKUs Breakdown (${record.totalSkus} Total)</div>
-      <table>
+      <table class="data-table">
         <thead>
           <tr>
             <th>Master SKU Code</th>
@@ -499,7 +568,7 @@ Generated automatically by Return App: https://return.youthnic.shop
               (item) => `
             <tr>
               <td><strong>${item.sku}</strong></td>
-              <td style="text-align: right; font-weight: 700; color: #136c57;">${fmt(item.qty)}</td>
+              <td style="text-align: right; font-weight: 700; color: #0f6b56;">${fmt(item.qty)}</td>
               <td>
                 ${Object.entries(item.marketplaces)
                   .map(([mp, q]) => `<span class="badge-mp">${mp}: ${q}</span>`)
@@ -514,15 +583,15 @@ Generated automatically by Return App: https://return.youthnic.shop
       ${record.skuBreakdown.length > 30 ? `<p style="font-size: 12px; color: #64748b;">...and ${record.skuBreakdown.length - 30} more SKUs in the attached CSV.</p>` : ""}
 
       <div style="background: #f8fafc; border: 1px dashed #cbd5e1; border-radius: 8px; padding: 14px 18px; margin-top: 20px;">
-        <span style="font-size: 12px; font-weight: 600; color: #475569;">📎 Attachment Included:</span><br />
+        <span style="font-size: 12px; font-weight: 600; color: #475569;">📎 Attachment Included in this Email:</span><br />
         <code style="font-size: 13px; font-weight: 700; color: #0f172a;">UpdateInStockQtyAnd_orLastPurchasePrice.csv</code>
         <br />
-        ${record.storageUrl ? `<small style="color: #64748b;">Archived in Firebase Storage for 180 days: <a href="${record.storageUrl}" style="color: #136c57;">Download Archive</a></small>` : ""}
+        ${record.storageUrl ? `<small style="color: #64748b;">Archived in Firebase Storage for 180 days: <a href="${record.storageUrl}" style="color: #0f6b56; font-weight: 600;">Download Archive</a></small>` : ""}
       </div>
     </div>
     <div class="footer">
       Generated automatically by Youthnic Return Management App · Scheduled daily at 7:45 PM IST<br />
-      Portal: <a href="https://return.youthnic.shop/register" style="color: #136c57; font-weight: 500;">return.youthnic.shop/register</a>
+      Portal: <a href="https://return.youthnic.shop/register" style="color: #0f6b56; font-weight: 600;">return.youthnic.shop/register</a>
     </div>
   </div>
 </body>
