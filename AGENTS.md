@@ -41,6 +41,7 @@ Each rule has a check. The handoff lists the checks under [Invariants](docs/note
 9. **No demo data.** Test data is synthetic, and every value starts with `SYN-`.
 10. **Every screen control works, or is disabled with a title that says why.**
 11. **Report only what you ran.** Do not write that something passes, works or is verified unless you ran it and read the output.
+12. **Mobile APK release and in-app update synchronization.** Any change that applies to the mobile app or scanning behavior must be reflected in the release manifest (`data/return-scan-release.json` and `server/mobile-release.ts`) and published through the GitHub Actions APK workflow (`.github/workflows/return-scan-apk.yml`). The version code and download URL must always match the published release so installed warehouse Android devices receive the in-app update notification and can update smoothly.
 
 ## Commands
 

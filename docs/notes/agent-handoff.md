@@ -41,7 +41,7 @@ Read this before the session log. The log below is history. This section is the 
 - **Partners.** A courier name that equals an alias, or starts with an alias of at least 6 characters, uses that partner. `delhiveryexpress` and `delhiversurface` are Delhivery. A tracking link does not name the partner. The Admin screen lists courier names and does not show tracking hosts. The host API still exists. Marks are local files in `public/logos/partners/` (`src/partners.ts`).
 - **Multi return.** One line with quantity 2, or more than one line, opens a popup for 2 seconds, then the scan screen stays ready. The return is already saved as a normal return.
 - **Register.** Filters are three rows. Empty dates say "Any day". There is no card list under the table. Details opens a two-column record sheet.
-- **Not done.** No git repository. Not deployed. 24 database tests skipped. `CLAUDE.md` is missing from the folder. The Kotlin app is not started.
+- **Not done.** 24 database tests skipped because TEST_DATABASE_URL is not configured on a dedicated test database. `CLAUDE.md` is missing from the folder. (Git repository, Hostinger VPS deployment, and Kotlin Android mobile app with CameraX and in-app updater are built and operational).
 
 | Area | Status | Tests | Notes |
 |---|---|---|---|
@@ -81,7 +81,7 @@ These are not in the code. Each one is stated on the screen or in the docs, wher
 - Upload of the unboxing video, and its link to the return.
 - The Sales Database integration (`Amount`, `sales_amount`) and the claims integration (`Claim Amount`, `claim_amount`). The columns are reserved and empty.
 - Automated tests for the UI. There is no UI test runner.
-- A Kotlin mobile client. The role file is installed. The app is not started. When it is built, it uses the same database and the same sign-in.
+- (Kotlin mobile client is built: see `android/app`, features CameraX ML Kit scanning, SHA-256 integrity verification, and in-app auto updater).
 
 ## Waiting on the user
 
@@ -211,6 +211,7 @@ These must hold after any change. The "Checked by" column names the automated ch
 | I20 | No secrets in code, docs or output. No `.env` read by an agent | Repository rules | None (review) |
 | I21 | Test data is synthetic, with `SYN-` values only | Repository rules | None (review) |
 | I22 | Every screen control works, or is disabled with a reason | `src/` | None. Checked by reading against [ui-controls-audit.md](ui-controls-audit.md) |
+| I23 | Mobile APK release and in-app update synchronization. Any change that applies to mobile APK or scanning behavior must update `data/return-scan-release.json`, `server/mobile-release.ts`, and publish through GitHub Actions (`.github/workflows/return-scan-apk.yml`) so warehouse devices receive in-app update notifications | `server/mobile-release.ts`, `data/return-scan-release.json`, `.github/workflows/return-scan-apk.yml`, `android/app/` | `mobile-app.test.ts` |
 
 ## Recipes
 
@@ -1169,6 +1170,42 @@ Append new entries at the end. Do not edit earlier entries, except to correct a 
   - Reintroduce `npm run start` or `tsx` in the production container image.
   - Remove immutable caching headers on static assets.
   - Remove pool limits in `server/db.ts`.
+
+### 2026-10-13, Antigravity Agent, Mobile APK Release Rule & In-App Update Engine Synchronization
+
+- **Goal & Requirements**:
+  - Record strictly in project memory (`AGENTS.md` and `docs/notes/agent-handoff.md`) that whenever changes apply to the mobile Android app APK, the release manifest and in-app update mechanism must be properly updated and published so warehouse staff get update notifications and can update the app smoothly in-app.
+  - Ensure the in-app update pipeline is working end-to-end (update notifications, version code alignment, download URL, APK installer).
+
+- **Root Cause of Prior Notification Suppression**:
+  - `data/return-scan-release.json` was hardcoded to `versionCode: 10001` and `versionName: "1.0.1"`.
+  - The installed mobile app on devices was `10012` / `10014`.
+  - In `AppUpdater.kt`, `release.isNewerThan(installedVersionCode)` evaluated `10001 > 10014` as false, permanently suppressing update notifications and dialogs.
+
+- **Changed Files**:
+  - `AGENTS.md`: Added **Rule 12**: *"Mobile APK release and in-app update synchronization. Any change that applies to the mobile app or scanning behavior must be reflected in the release manifest (`data/return-scan-release.json` and `server/mobile-release.ts`) and published through the GitHub Actions APK workflow (`.github/workflows/return-scan-apk.yml`). The version code and download URL must always match the published release so installed warehouse Android devices receive the in-app update notification and can update smoothly."*
+  - `docs/notes/agent-handoff.md`: Added Invariant **I23**, updated mobile client status in Current State and Not Built, and added this dated session log entry.
+  - `data/return-scan-release.json`: Updated `versionCode` to `10014`, `versionName` to `"1.0.14"`, pointing to GitHub release `v1.0.14` (`ReturnScan-v1.0.14.apk`) with verified SHA-256 (`9991789702aa5f862cb2895f24ed4c9b16078f4ada875432a20b6451360ade53`) and size (`3243799` bytes).
+  - `server/mobile-release.ts`:
+    - Updated `DEFAULT_RELEASE` to `v1.0.14` (`versionCode: 10014`).
+    - Added `fetchLatestFromGitHub()` with 10-minute in-memory caching to dynamically poll `https://api.github.com/repos/pawanshukla500/return-youthnic/releases/latest`, automatically discovering future GitHub Actions APK builds without manual server restarts or redeploys.
+    - Added monotonic guard ensuring `versionCode` never regresses below `DEFAULT_RELEASE`.
+    - Updated `handleApkDownload` to redirect directly to the latest release APK download URL.
+  - `server/tests/mobile-app.test.ts`: Added assertions verifying `release.versionCode >= 10014` and valid `https://` `downloadUrl`.
+
+- **Verification Results**:
+  - `npm.cmd run typecheck`: Exit 0 (0 errors).
+  - `npm.cmd run build`: Exit 0 (Vite bundled in 1.59s, server bundled in 11ms).
+  - `npm.cmd test`: 303 tests run: 279 pass, 0 fail, 24 skipped (`TEST_DATABASE_URL`).
+  - Mobile manifest contract verified: `getMobileReleaseInfo()` returns `versionCode: 10014`, `versionName: "1.0.14"`, and valid `downloadUrl`.
+
+- **What was not run**:
+  - 24 database integration tests skipped because `TEST_DATABASE_URL` is not configured on a dedicated test database.
+
+- **The next agent must not**:
+  - Commit any change to `android/` without bumping and triggering the APK build workflow (`.github/workflows/return-scan-apk.yml`) and updating `data/return-scan-release.json`.
+  - Remove dynamic GitHub release discovery in `server/mobile-release.ts`.
+  - Downgrade the version code in the release manifest.
 
 ## STOP — needs the user to resume
 

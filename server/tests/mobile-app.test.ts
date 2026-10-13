@@ -9,11 +9,12 @@ const SYN_CLIENT_SCAN_KEY = "SYN-MOBILE-1-1728734000000-abcd1234"
 
 test("mobile release manifest returns valid release configuration", () => {
   const release = getMobileReleaseInfo()
-  assert.ok(release.versionCode >= 10001, "versionCode must be >= 10001")
+  assert.ok(release.versionCode >= 10014, "versionCode must be >= 10014")
   assert.ok(typeof release.versionName === "string" && release.versionName.length > 0, "versionName must be string")
   assert.ok(typeof release.sha256 === "string" && release.sha256.length > 0, "sha256 must be string")
   assert.ok(release.sizeBytes > 0, "sizeBytes must be positive integer")
   assert.ok(release.notes.length > 0, "release notes must be present")
+  assert.ok(typeof release.downloadUrl === "string" && release.downloadUrl.startsWith("https://"), "downloadUrl must be valid https URL")
 })
 
 test("mobile submission parser preserves exact tracking string without scientific truncation", () => {

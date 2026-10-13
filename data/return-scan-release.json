@@ -1,10 +1,11 @@
 {
-  "versionCode": 10001,
-  "versionName": "1.0.1",
+  "versionCode": 10014,
+  "versionName": "1.0.14",
   "minRequiredVersionCode": 10001,
-  "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-  "sizeBytes": 4194304,
-  "notes": "Youthnic Native Android Return Scanner · Production Release 1.0.1\n- Real-time continuous CameraX barcode scanner with unbundled ML Kit (< 5 MB)\n- Instant AWB lookup with return leg verification\n- Full return verification bottom sheet with product image zoom\n- Missing component selection (Dupatta, Bottom, Top, Inner, Accessories)\n- Synchronized audio, vibration, and screen-flash signals\n- Idempotent PostgreSQL commit with automatic camera resume",
-  "publishedAt": "2026-10-12T12:00:00Z",
-  "pageUrl": "https://github.com/youthnic/return-scan/releases"
+  "sha256": "9991789702aa5f862cb2895f24ed4c9b16078f4ada875432a20b6451360ade53",
+  "sizeBytes": 3243799,
+  "notes": "Youthnic Native Android Return Scanner · Production Release v1.0.14\n- Continuous CameraX barcode scanner with unbundled ML Kit (< 4 MB)\n- Real-time AWB lookup with return leg verification\n- Physical verification bottom sheet with instant product image zoom\n- In-app update notifications and automatic download installer\n- Low-latency audio and haptic feedback",
+  "publishedAt": "2026-10-13T08:39:03Z",
+  "downloadUrl": "https://github.com/pawanshukla500/return-youthnic/releases/download/v1.0.14/ReturnScan-v1.0.14.apk",
+  "pageUrl": "https://github.com/pawanshukla500/return-youthnic/releases/tag/v1.0.14"
 }
