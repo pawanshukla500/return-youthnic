@@ -1421,13 +1421,16 @@ Append new entries at the end. Do not edit earlier entries, except to correct a 
   - **Mobile App Launcher Icon Fix ("Y" Monogram):**
     - Created native Android VectorDrawable in `android/app/src/main/res/drawable/ic_launcher_foreground.xml` rendering the official Youthnic white cursive 'Y' monogram centered in the safe zone at `(54, 54)` on `108x108`.
     - Generated raster icons across all mipmap densities: `mipmap-mdpi`, `mipmap-hdpi`, `mipmap-xhdpi`, `mipmap-xxhdpi`, `mipmap-xxxhdpi` (`ic_launcher.png`, `ic_launcher_round.png`), `drawable-nodpi/ic_launcher_youthnic.png`, and `public/app-icon-*.png`.
-  - **Mobile Release v1.0.23 (`versionCode: 10023`):**
-    - Bumped release manifest in `data/return-scan-release.json` and `server/mobile-release.ts`.
-    - Added tests in `server/tests/mobile-app.test.ts` and `server/tests/unmapped-skus.test.ts`.
+  - **Mobile Release v1.0.25 (`versionCode: 10025`):**
+    - Published official release `v1.0.25` via GitHub Actions workflow run 38429075305 (`ReturnScan-v1.0.25.apk` / `ReturnScan-latest.apk`), size 3,305,191 bytes (3.15 MB, well below the 5.0 MB target limit), SHA-256 `c8e7d16bb2daa57dc25135e0c34cdeacf962e6e8f7a6ee081f8b884b91f06b09`.
+    - Synced release manifest in `data/return-scan-release.json` and `server/mobile-release.ts`.
+    - Pull Request #3 merged into `main`.
 - **Ran:**
   - `npm.cmd run typecheck` -> Passed (0 errors).
   - `npm.cmd run build` -> Passed (Vite in 1.94s, server bundled in 13ms).
   - `npm.cmd test` -> 319 tests: 295 passed, 0 failed, 24 skipped (`TEST_DATABASE_URL`).
+  - GitHub Actions `Build Return Scan Android APK` (run 38429075305) -> Passed (tests, lint, assembleRelease, APK budget, release publish).
+  - GitHub Actions `CI - Typecheck, Build & Test` (run 38429074814) -> Passed (55s).
 - **Invariants preserved:**
   - Rule 1 & Rule 2: Account scope and Admin role strictly enforced.
   - Rule 6: Schema change strictly additive (`schema-unmapped-skus.sql`).
@@ -1435,7 +1438,7 @@ Append new entries at the end. Do not edit earlier entries, except to correct a 
   - Rule 8: Zero secrets printed or committed.
   - Rule 10: Every screen control works or is disabled with explanation.
   - Rule 11: Reported only tests that were executed and passed.
-  - Rule 12: Mobile APK version and manifest synchronized (`v1.0.23` / `10023`).
+  - Rule 12: Mobile APK version and manifest synchronized (`v1.0.25` / `10025`).
 
 ## STOP — needs the user to resume
 
