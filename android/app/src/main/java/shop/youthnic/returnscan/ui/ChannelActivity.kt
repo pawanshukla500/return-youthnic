@@ -173,11 +173,11 @@ class ChannelActivity : AppCompatActivity() {
 
             item.root.setOnClickListener {
                 val sm = (application as ReturnScanApp).sessionManager
-                sm.lastAccountId = account.id
+                sm.lastAccountId = account.id.toString()
                 sm.lastAccountName = account.name
                 sm.lastMarketplace = account.marketplace
                 sm.lastColor = account.color ?: ""
-                openScanner(account.id, account.name, account.marketplace, account.color ?: "")
+                openScanner(account.id.toString(), account.name, account.marketplace, account.color ?: "")
             }
 
             binding.layoutChannelsList.addView(item.root)

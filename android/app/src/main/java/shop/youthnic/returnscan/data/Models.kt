@@ -48,11 +48,16 @@ data class MarketplaceAccount(
     val name: String,
     val color: String,
     val activeRows: Int,
-    val status: String
+    val status: String,
+    val marketplace: String = ""
 ) {
+    val scannableCount: Int get() = activeRows
+    val accountIdStr: String get() = id.toString()
+
     companion object {
         fun fromJson(json: JSONObject): MarketplaceAccount {
             val name = json.optString("name", "")
+            val marketplace = json.optString("marketplace", name)
             val color = when {
                 name.contains("meesho", ignoreCase = true) -> "#E01A59"
                 name.contains("flipkart", ignoreCase = true) -> "#2874F0"
@@ -66,7 +71,8 @@ data class MarketplaceAccount(
                 name = name,
                 color = json.optString("color", color),
                 activeRows = json.optInt("activeRows", json.optInt("active_rows", 0)),
-                status = json.optString("status", "Active lookup available")
+                status = json.optString("status", "Active lookup available"),
+                marketplace = marketplace
             )
         }
     }
@@ -123,11 +129,14 @@ data class SubIssue(
 }
 
 data class ScanSessionData(
-    val shift: ShiftProgress,
-    val accounts: List<MarketplaceAccount>,
-    val categories: List<IssueCategory>,
-    val subIssues: List<SubIssue>
+    val shift: ShiftProgress = ShiftProgress(0, 0, "100%"),
+    val accounts: List<MarketplaceAccount> = emptyList(),
+    val categories: List<IssueCategory> = emptyList(),
+    val subIssues: List<SubIssue> = emptyList()
 ) {
+    constructor(accounts: List<MarketplaceAccount>, categories: List<IssueCategory>, subIssues: List<SubIssue>) :
+        this(ShiftProgress(0, 0, "100%"), accounts, categories, subIssues)
+
     val shiftProgress: ShiftProgress get() = shift
     val missingComponents: List<SubIssue> get() = subIssues.filter { it.categoryCode.contains("MISSING", ignoreCase = true) || it.categoryCode.isEmpty() }
 }

@@ -91,7 +91,7 @@ class ScannerActivity : AppCompatActivity() {
 
     private lateinit var flashView: View
     private var activeVerificationSheet: ReturnVerificationBottomSheet? = null
-    private var sessionData = ScanSessionData(emptyList(), emptyList(), emptyList())
+    private var sessionData = ScanSessionData()
     private val recentScansList = mutableListOf<RecentScan>()
     private var scannedCountToday = 0
 

@@ -69,6 +69,7 @@
     <style name="ThemeOverlay.ReturnScan.BottomSheet" parent="ThemeOverlay.MaterialComponents.BottomSheetDialog">
         <item name="bottomSheetStyle">@style/Widget.ReturnScan.BottomSheet</item>
     </style>
+    <style name="ThemeOverlay.Youthnic.BottomSheetDialog" parent="ThemeOverlay.ReturnScan.BottomSheet" />
 
     <style name="Widget.ReturnScan.BottomSheet" parent="Widget.MaterialComponents.BottomSheet.Modal">
         <item name="shapeAppearanceOverlay">@style/ShapeAppearance.ReturnScan.SheetTop</item>

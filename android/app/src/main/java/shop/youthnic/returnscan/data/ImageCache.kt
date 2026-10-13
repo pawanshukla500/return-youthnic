@@ -12,9 +12,20 @@ import okhttp3.Request
 import java.io.File
 import java.io.FileOutputStream
 import java.security.MessageDigest
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.util.concurrent.Executors
 
-class ImageCache(context: Context, private val okHttpClient: OkHttpClient) {
+class ImageCache(context: Context, private val okHttpClient: OkHttpClient = OkHttpClient()) {
+
+    suspend fun getOrFetch(url: String?, maxDim: Int = 400): Bitmap? = withContext(Dispatchers.IO) {
+        if (url.isNullOrBlank()) return@withContext null
+        val cached = memoryCache.get(url)
+        if (cached != null) return@withContext cached
+        val bmp = getFromDiskOrDownload(url, maxDim)
+        if (bmp != null) memoryCache.put(url, bmp)
+        bmp
+    }
 
     private val cacheDir = File(context.cacheDir, "catalog_images").apply { mkdirs() }
     private val mainHandler = Handler(Looper.getMainLooper())

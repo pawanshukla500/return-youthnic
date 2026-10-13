@@ -45,7 +45,7 @@ class ReturnVerificationBottomSheet(
     private val sessionData: ScanSessionData,
     private val onSave: (VerificationSubmitData) -> Unit,
     private val onCancel: () -> Unit
-) : BottomSheetDialog(activity, R.style.ThemeOverlay_Youthnic_BottomSheetDialog) {
+) : BottomSheetDialog(activity, R.style.ThemeOverlay_ReturnScan_BottomSheet) {
 
     private val binding = SheetReturnVerificationBinding.inflate(LayoutInflater.from(activity))
     private val itemStates = mutableListOf<ItemVerificationState>()
@@ -259,18 +259,13 @@ class ReturnVerificationBottomSheet(
             )
         }
 
-        val inflater = LayoutInflater.from(activity)
         for (sub in missingOptions) {
-            val chip = inflater.inflate(
-                com.google.android.material.R.layout.mtrl_chip_input_layout,
-                pBinding.chipGroupSubIssues,
-                false
-            ) as? Chip ?: Chip(activity).apply {
+            val chip = Chip(activity).apply {
                 isCheckable = true
                 isClickable = true
+                text = sub.name
+                id = View.generateViewId()
             }
-            chip.text = sub.name
-            chip.id = View.generateViewId()
             chip.setOnCheckedChangeListener { _, isChecked ->
                 if (isChecked) {
                     state.subIssueId = sub.id
