@@ -23,6 +23,7 @@ The version number is the CI run number (`1.0.<run>`, version code `10000 + run`
 - **Camera permission at sign-in.** After a successful sign-in the app explains why the camera is needed and asks for it. People who stay signed in across an update get the same prompt once on the marketplace screen. A refusal no longer closes the scanner: it shows *Allow camera*, or *Open Settings* when Android has blocked the dialog, and Manual AWB keeps working.
 - A picker when one AWB matches several returns, instead of a silent guess.
 - A ticket ID field, shown only when an administrator makes an issue category require one.
+- A **Units affected** stepper for an issue on a line with more than one unit, so one damaged unit of two is saved as one, not two. It starts at all units, as the web screen does.
 - Online/offline indicator that follows the last request; the idle overlay can be tapped anywhere to wake the camera.
 - Colour and key detail (size) under the SKU in the verification sheet; the matched leg (return or forward) as the server reports it.
 

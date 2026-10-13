@@ -82,6 +82,20 @@ class ScanPayloadTest {
     }
 
     @Test
+    fun anIssueOnSomeUnitsOnlyCountsThoseUnits() {
+        // 2 units arrived and 1 is damaged: the issue covers 1 unit, not both.
+        val some = line(damaged).also { it.affectedUnits = 1 }
+        val body = ScanPayload.build(501, "SYN-MOBILE-1", "A", listOf(some))
+        assertEquals(1, firstIssue(body).getInt("qty"))
+        assertEquals(2, body.getJSONArray("items").getJSONObject(0).getInt("receivedQty"))
+        assertNull(ScanPayload.problemWith(some, "item #1"))
+
+        // The number of units affected cannot be 0 or more than the units received.
+        assertNotNull(ScanPayload.problemWith(line(damaged).also { it.affectedUnits = 0 }, "item #1"))
+        assertNotNull(ScanPayload.problemWith(line(damaged).also { it.affectedUnits = 3 }, "item #1"))
+    }
+
+    @Test
     fun ticketIsSentOnlyWhenTheCategoryRequiresIt() {
         val ticketed = damaged.copy(requiresTicket = true)
         val body = ScanPayload.build(501, "SYN-MOBILE-1", "A", listOf(line(ticketed, ticket = " SYN-T-1 ")))

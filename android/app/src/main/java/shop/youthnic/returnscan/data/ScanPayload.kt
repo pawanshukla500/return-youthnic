@@ -15,15 +15,17 @@ data class ItemVerificationState(
     var category: IssueCategory,
     var subIssueId: String?,
     var ticketCode: String,
-    var notes: String
+    var notes: String,
+    /** For an issue that is not a missing item: how many of the received units it affects. One tap starts at all of them. */
+    var affectedUnits: Int = expectedQty
 ) {
     val hasIssue: Boolean get() = !category.isClear
 
     /**
-     * The units an issue covers, as the server counts them: the units not received for a missing-item issue,
-     * otherwise the units received (the same rule the web scan screen follows).
+     * The units an issue covers, as the server counts them: the units not received for a missing-item issue, otherwise
+     * the units the scanner marked as affected (all of them unless the scanner lowered it).
      */
-    val issueQty: Int get() = if (category.isMissing) expectedQty - receivedQty else receivedQty
+    val issueQty: Int get() = if (category.isMissing) expectedQty - receivedQty else affectedUnits
 }
 
 data class VerificationSubmitData(
@@ -51,6 +53,9 @@ object ScanPayload {
             }
         } else if (item.receivedQty != item.expectedQty) {
             return "$label: ${item.expectedQty - item.receivedQty} unit(s) not received. Choose Missing Component to report them"
+        }
+        if (!category.isMissing && !category.isClear && (item.affectedUnits < 1 || item.affectedUnits > item.receivedQty)) {
+            return "$label: units affected must be from 1 to ${item.receivedQty}"
         }
         if (category.requiresSubIssue && item.subIssueId.isNullOrBlank()) {
             return "Please select which component is missing for $label"

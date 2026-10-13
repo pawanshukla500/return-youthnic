@@ -173,6 +173,20 @@ class ReturnVerificationBottomSheet(
                 }
             }
 
+            // Units affected (a line with more than one unit, for an issue that is not a missing item)
+            pBinding.btnAffectedMinus.setOnClickListener {
+                if (state.affectedUnits > 1) {
+                    state.affectedUnits--
+                    pBinding.tvAffectedQty.text = state.affectedUnits.toString()
+                }
+            }
+            pBinding.btnAffectedPlus.setOnClickListener {
+                if (state.affectedUnits < state.receivedQty) {
+                    state.affectedUnits++
+                    pBinding.tvAffectedQty.text = state.affectedUnits.toString()
+                }
+            }
+
             // Physical check checkbox
             pBinding.cbPhysicalChecked.setOnCheckedChangeListener { _, isChecked ->
                 state.physicalChecked = isChecked
@@ -201,6 +215,7 @@ class ReturnVerificationBottomSheet(
         pBinding.layoutSubIssues.visibility = View.GONE
         pBinding.chipGroupSubIssues.removeAllViews()
         pBinding.tilTicketCode.visibility = View.GONE
+        pBinding.layoutAffectedUnits.visibility = View.GONE
 
         // An administrator can switch a category off. A chip for a category the server no longer offers is hidden.
         val chips = listOf(
@@ -229,6 +244,12 @@ class ReturnVerificationBottomSheet(
         // every unit arrived. The stepper can still be changed afterwards.
         state.receivedQty = if (category.isMissing) 0 else state.expectedQty
         pBinding.tvReceivedQty.text = state.receivedQty.toString()
+
+        // A one-tap issue starts as all units affected. The scanner can lower it when only some units have the problem.
+        state.affectedUnits = state.expectedQty
+        pBinding.tvAffectedQty.text = state.affectedUnits.toString()
+        val showAffected = !category.isClear && !category.isMissing && state.expectedQty > 1
+        pBinding.layoutAffectedUnits.visibility = if (showAffected) View.VISIBLE else View.GONE
 
         if (category.allowsSubIssue) {
             pBinding.layoutSubIssues.visibility = View.VISIBLE

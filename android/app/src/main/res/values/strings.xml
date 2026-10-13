@@ -156,6 +156,7 @@
     <string name="scanner_engine_error">The barcode reader is not available. Use Manual AWB, or update Google Play services.</string>
     <string name="no_missing_options">No missing-item options are set up. Ask an administrator to add them in Admin.</string>
     <string name="ticket_hint">Ticket ID</string>
+    <string name="affected_units_label">Units affected:</string>
     <string name="banner_just_now">Just now</string>
     <string name="torch_needs_camera">The camera is not running, so the torch is not available.</string>
     <string name="torch_unavailable">This device has no torch.</string>

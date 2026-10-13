@@ -27,8 +27,10 @@ on:
         required: false
         default: false
 
+# The build job runs the project's own Gradle code, which a pull request can change, so the workflow is read-only by
+# default. Only the publish job below gets write access, and it never runs for a pull request.
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: return-scan-apk-${{ github.ref }}
@@ -44,6 +46,8 @@ jobs:
     steps:
       - name: Checkout Source Code
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Set up Java 21
         uses: actions/setup-java@v4
@@ -133,11 +137,30 @@ jobs:
           path: android/${{ env.RELEASE_APK }}
           if-no-files-found: error
 
+  publish-release:
+    name: Publish GitHub Release
+    needs: build-apk
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download Release APK
+        uses: actions/download-artifact@v4
+        with:
+          name: return-scan-app
+          path: release-input
+
       - name: Publish Official GitHub Release
-        if: github.event_name != 'pull_request'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
         run: |
+          RELEASE_APK=$(find release-input -name "*.apk" | head -1)
+          if [ -z "$RELEASE_APK" ]; then
+            echo "::error::No APK found in the downloaded artifact."
+            exit 1
+          fi
           TAG_NAME="v1.0.${GITHUB_RUN_NUMBER}"
           DIST_DIR="$GITHUB_WORKSPACE/release-dist"
           mkdir -p "$DIST_DIR"
@@ -147,6 +170,7 @@ jobs:
           gh release create "$TAG_NAME" \
             "$DIST_DIR/ReturnScan-${TAG_NAME}.apk" \
             "$DIST_DIR/ReturnScan-latest.apk" \
+            --target "${{ github.sha }}" \
             --title "Return Scan App $TAG_NAME" \
             --notes "Official Android Release APK for Return Scanning App ($TAG_NAME). Built from commit ${{ github.sha }}." || \
           gh release upload "$TAG_NAME" \
