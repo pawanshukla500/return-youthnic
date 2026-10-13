@@ -1,6 +1,7 @@
 package shop.youthnic.returnscan
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -14,6 +15,14 @@ class StringFormatsTest {
 
     private val appDir: File = listOf(File("."), File("app"), File("android/app"))
         .first { File(it, "src/main/res/values/strings.xml").isFile }
+
+    // Every java.util.Formatter conversion that needs a number: d o x X e E f g G a A, with an optional argument index,
+    // flags (such as , 0 + -), width and precision. So %d, %,d, %1$08d, %o, %a and %.2f are all caught.
+    private val numericConversion = Regex("""%(\d+\$)?[-#+ 0,(]*\d*(\.\d+)?[doxXeEfgGaA]""")
+
+    /** True when the format has a placeholder that only a number can fill. A literal percent sign (%%) is not one. */
+    private fun hasNumericPlaceholder(format: String): Boolean =
+        numericConversion.containsMatchIn(format.replace("%%", ""))
 
     private fun stringsXml(): String = File(appDir, "src/main/res/values/strings.xml").readText()
 
@@ -31,16 +40,25 @@ class StringFormatsTest {
 
     @Test
     fun noStringFedWithUiCountUsesANumericPlaceholder() {
-        val numeric = Regex("""%(\d+\$)?[dxXfeEgG]""")
         val feeds = Regex("""getString\(\s*R\.string\.(\w+)\s*,\s*Ui\.count\(""")
         val offenders = mutableListOf<String>()
         File(appDir, "src/main/java").walkTopDown().filter { it.isFile && it.extension == "kt" }.forEach { file ->
             for (hit in feeds.findAll(file.readText())) {
                 val name = hit.groupValues[1]
-                if (numeric.containsMatchIn(valueOf(name))) offenders.add("${file.name}: $name")
+                if (hasNumericPlaceholder(valueOf(name))) offenders.add("${file.name}: $name")
             }
         }
         assertTrue("Ui.count returns text, so these strings need %s: $offenders", offenders.isEmpty())
+    }
+
+    @Test
+    fun numericPlaceholderPatternCatchesEveryNumericConversion() {
+        for (bad in listOf("%d", "%1\$d", "%,d", "%1\$08d", "%+d", "%o", "%x", "%X", "%a", "%.2f", "%5.1f", "%e")) {
+            assertTrue("$bad should be seen as numeric", hasNumericPlaceholder("n: $bad items"))
+        }
+        for (fine in listOf("%s", "%1\$s", "%2\$s of %3\$s", "100%% of them", "%-10s")) {
+            assertFalse("$fine should not be seen as numeric", hasNumericPlaceholder("n: $fine items"))
+        }
     }
 
     @Test

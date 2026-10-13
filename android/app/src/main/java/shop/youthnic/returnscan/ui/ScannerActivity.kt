@@ -83,7 +83,8 @@ class ScannerActivity : AppCompatActivity() {
 
     private lateinit var flashView: View
     private var activeVerificationSheet: ReturnVerificationBottomSheet? = null
-    private var sheetSaved = false
+    // The sheet whose return was just saved. Compared by identity, so a late reply can only ever close its own sheet.
+    private var savedSheet: ReturnVerificationBottomSheet? = null
     private var sessionData = ScanSessionData()
     private val recentScansList = mutableListOf<RecentScan>()
     private var scannedCountToday = 0
@@ -534,37 +535,45 @@ class ScannerActivity : AppCompatActivity() {
 
     private fun showVerificationSheet(lookup: LookupResult) {
         val idempotencyKey = BarcodeRules.generateClientScanKey(accountId, lookup.trackingNumber)
-        sheetSaved = false
 
         val sheet = ReturnVerificationBottomSheet(
             activity = this,
             lookup = lookup,
             sessionData = sessionData,
             onSave = { submitData ->
-                commitVerificationSave(idempotencyKey, lookup, submitData)
+                // Save is tapped on the sheet that is showing, so that sheet owns this save and its reply.
+                commitVerificationSave(activeVerificationSheet, idempotencyKey, lookup, submitData)
             }
         )
         // Every way out of the sheet ends here: Cancel, the close button, a swipe down, the back key, or a tap outside.
         // Counting it in one place is what keeps the scanner from staying blocked after a swipe.
-        sheet.setOnDismissListener { onVerificationSheetClosed(lookup.trackingNumber) }
+        sheet.setOnDismissListener { onVerificationSheetClosed(sheet, lookup.trackingNumber) }
 
         activeVerificationSheet = sheet
         openDialogs.incrementAndGet()
         sheet.show()
     }
 
-    private fun onVerificationSheetClosed(awb: String) {
-        activeVerificationSheet = null
+    private fun onVerificationSheetClosed(sheet: ReturnVerificationBottomSheet, awb: String) {
+        if (activeVerificationSheet === sheet) activeVerificationSheet = null
         openDialogs.decrementAndGet()
-        if (!sheetSaved) {
-            // Left without saving: free the AWB so it can be scanned again at once.
-            isRequestInFlight.set(false)
-            duplicateGuard.forget(awb)
-            resumeCamera()
+        if (savedSheet === sheet) {
+            // Saved: the delayed resume in onSaveSuccess brings the camera back.
+            savedSheet = null
+            return
         }
+        // Left without saving: free the AWB so it can be scanned again at once.
+        isRequestInFlight.set(false)
+        duplicateGuard.forget(awb)
+        resumeCamera()
     }
 
+    /**
+     * [owner] is the sheet the save was started from. The reply may arrive after that sheet was swiped away and after
+     * the scanner opened a newer sheet, so the reply only ever touches [owner], never whichever sheet is showing now.
+     */
     private fun commitVerificationSave(
+        owner: ReturnVerificationBottomSheet?,
         clientScanKey: String,
         lookup: LookupResult,
         data: VerificationSubmitData
@@ -582,7 +591,7 @@ class ScannerActivity : AppCompatActivity() {
             val receipt = result.getOrNull()
             if (receipt != null) {
                 setOnline(true)
-                onSaveSuccess(lookup, receipt, data)
+                onSaveSuccess(owner, lookup, receipt, data)
             } else {
                 val err = result.exceptionOrNull()
                 if (err is AuthExpiredException) {
@@ -593,13 +602,17 @@ class ScannerActivity : AppCompatActivity() {
                 val message = err?.message ?: "Failed to save return scan"
                 signal(Cue.STOP)
                 // The same clientScanKey is reused by the next Save tap, so a retry can never save the return twice.
-                val sheet = activeVerificationSheet
-                if (sheet != null) sheet.showSaveError(message) else showBannerError(lookup.trackingNumber, message)
+                if (owner != null && owner === activeVerificationSheet) {
+                    owner.showSaveError(message)
+                } else {
+                    showBannerError(lookup.trackingNumber, message)
+                }
             }
         }
     }
 
     private fun onSaveSuccess(
+        owner: ReturnVerificationBottomSheet?,
         lookup: LookupResult,
         receipt: ScanReceipt,
         data: VerificationSubmitData
@@ -607,9 +620,11 @@ class ScannerActivity : AppCompatActivity() {
         // Successful PostgreSQL commit confirmed: OK signal!
         signal(Cue.OK)
 
-        // Close verification sheet; the dismiss listener sees sheetSaved and leaves the camera to the delayed resume below.
-        sheetSaved = true
-        activeVerificationSheet?.dismiss()
+        // Close the sheet this save came from, if it is still the one showing. A newer sheet is never touched.
+        if (owner != null && owner === activeVerificationSheet) {
+            savedSheet = owner
+            owner.dismiss()
+        }
 
         // The server counts the shift. A replayed save (a retry of one that already went through) is not a new scan.
         scannedCountToday = when {
@@ -638,7 +653,8 @@ class ScannerActivity : AppCompatActivity() {
         // Seamless auto-resume for the next return: no "Scan Again" button needed!
         lifecycleScope.launch {
             delay(500)
-            isRequestInFlight.set(false)
+            // A newer return may have been opened in the meantime; its sheet keeps the scanner busy until it closes.
+            if (activeVerificationSheet == null) isRequestInFlight.set(false)
             resumeCamera()
         }
     }
