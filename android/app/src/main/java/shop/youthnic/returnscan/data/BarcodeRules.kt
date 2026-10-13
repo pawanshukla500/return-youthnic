@@ -23,6 +23,8 @@ object BarcodeRules {
         val rand = UUID.randomUUID().toString().replace("-", "").take(8).uppercase()
         return "SYN-MOBILE-$ts-$rand"
     }
+
+    fun generateClientScanKey(accountId: Int, tracking: String): String = generateClientScanKey()
 }
 
 /**
@@ -49,6 +51,15 @@ class DuplicateGuard(
         lastCodeTimestamp = now
         anyCodeTimestamp = now
         return true
+    }
+
+    @Synchronized
+    fun forget(code: String) {
+        if (lastCode == code) {
+            lastCode = ""
+            lastCodeTimestamp = 0L
+        }
+        anyCodeTimestamp = 0L
     }
 
     @Synchronized

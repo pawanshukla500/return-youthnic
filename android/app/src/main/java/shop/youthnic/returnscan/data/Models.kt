@@ -183,6 +183,16 @@ data class LookupResult(
     val duplicate: Boolean,
     val duplicateDetails: DuplicateDetails?
 ) {
+    val status: String
+        get() = when {
+            duplicate -> "DUPLICATE"
+            matched -> "FOUND"
+            else -> "NOT_FOUND"
+        }
+
+    val trackingNumber: String
+        get() = tracking
+
     companion object {
         fun fromJson(json: JSONObject, fallbackTracking: String): LookupResult {
             val itemsArray = json.optJSONArray("items") ?: JSONArray()
@@ -244,13 +254,15 @@ data class ScanReceipt(
 }
 
 data class RecentScan(
-    val id: Int,
+    val id: Int = 0,
     val awb: String,
     val marketplace: String,
-    val carrier: String,
-    val outcome: String,
-    val timestamp: String,
-    val units: Int
+    val carrier: String = "",
+    val outcome: String = "clear",
+    val timestamp: String = "",
+    val units: Int = 1,
+    val courier: String = carrier,
+    val itemsSummary: String = ""
 )
 
 data class AppRelease(

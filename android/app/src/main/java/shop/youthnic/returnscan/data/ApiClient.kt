@@ -203,6 +203,62 @@ class ApiClient(private val sessionManager: SessionManager) {
         }
     }
 
+    suspend fun completeScan(
+        accountId: Int,
+        shipmentId: String,
+        clientScanKey: String,
+        scannedTracking: String,
+        items: List<shop.youthnic.returnscan.ui.ItemVerificationState>
+    ): Result<ScanReceipt> = withContext(Dispatchers.IO) {
+        try {
+            val submission = JSONObject().apply {
+                put("accountId", accountId)
+                put("shipmentId", shipmentId.toIntOrNull() ?: 0)
+                put("clientScanKey", clientScanKey)
+                put("scannedTracking", scannedTracking)
+                put("notes", "")
+                put("photoCount", 0)
+                put("hasVideo", false)
+
+                val itemsArr = JSONArray()
+                for (item in items) {
+                    val itemObj = JSONObject().apply {
+                        put("itemId", item.item.itemId)
+                        put("receivedQty", item.receivedQty)
+                        put("verified", item.physicalChecked)
+
+                        val issuesArr = JSONArray()
+                        if (item.categoryCode != "clear") {
+                            val issueObj = JSONObject().apply {
+                                put("categoryCode", item.categoryCode)
+                                if (!item.subIssueId.isNullOrBlank()) {
+                                    put("subIssueId", item.subIssueId?.toIntOrNull())
+                                }
+                                put("qty", item.receivedQty)
+                                put("ticketCode", "")
+                                put("notes", item.notes)
+                            }
+                            issuesArr.put(issueObj)
+                        }
+                        put("issues", issuesArr)
+                    }
+                    itemsArr.put(itemObj)
+                }
+                put("items", itemsArr)
+            }
+
+            val req = authorizedRequestBuilder("/api/scan/complete")
+                .post(submission.toString().toRequestBody(jsonMediaType))
+                .build()
+
+            execute(req) { resJson ->
+                ScanReceipt.fromJson(resJson)
+            }
+        } catch (e: Exception) {
+            Result.failure(mapException(e))
+        }
+    }
+
     suspend fun getRecentScans(): Result<List<RecentScan>> = withContext(Dispatchers.IO) {
         try {
             val req = authorizedRequestBuilder("/api/register?pageSize=20").get().build()

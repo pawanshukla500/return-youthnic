@@ -468,7 +468,7 @@ class ScannerActivity : AppCompatActivity() {
                 courier = lookup.carrier,
                 itemsSummary = "${data.items.sumOf { it.receivedQty }} unit(s)",
                 outcome = outcome,
-                timestamp = System.currentTimeMillis()
+                timestamp = System.currentTimeMillis().toString()
             )
         )
 
@@ -537,7 +537,7 @@ class ScannerActivity : AppCompatActivity() {
         binding.tvBannerStatus.text = "DUPLICATE SCAN"
         Ui.pillRes(binding.tvBannerStatus, R.color.verdict_duplicate, R.color.verdict_duplicate_bg)
         binding.tvBannerAwb.text = awb
-        val dup = lookup.duplicate
+        val dup = lookup.duplicateDetails
         if (dup != null) {
             binding.tvBannerOrder.text = "Previously scanned by ${dup.scannedBy}"
             binding.tvBannerDetails.text = "At ${dup.scannedAt} · AWB already in register"
