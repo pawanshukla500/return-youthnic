@@ -90,6 +90,19 @@ class BarcodeRulesTest {
     }
 
     @Test
+    fun testClientScanKeyAlwaysFitsTheServerRule() {
+        // The server accepts only [A-Za-z0-9_-], 8 to 100 characters (isValidClientKey).
+        val rule = Regex("^[A-Za-z0-9_-]{8,100}$")
+        val longAwb = "SYN-" + "A1/".repeat(40)
+        val key = BarcodeRules.generateClientScanKey(12, longAwb)
+        assertTrue(key, rule.matches(key))
+        assertTrue(key.startsWith("SYN-MOBILE-12-"))
+
+        val plain = BarcodeRules.generateClientScanKey()
+        assertTrue(plain, rule.matches(plain))
+    }
+
+    @Test
     fun testGenerateClientScanKeyFormat() {
         val key = BarcodeRules.generateClientScanKey("meesho", "1490711818486605")
         assertTrue(key.startsWith("SYN-MOBILE-meesho-"))

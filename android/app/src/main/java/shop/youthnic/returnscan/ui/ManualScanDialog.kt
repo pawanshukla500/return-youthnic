@@ -5,6 +5,7 @@ import android.content.Context
 import android.os.Bundle
 import android.view.ViewGroup
 import android.view.Window
+import shop.youthnic.returnscan.data.BarcodeRules
 import shop.youthnic.returnscan.databinding.DialogManualScanBinding
 
 class ManualScanDialog(
@@ -27,10 +28,11 @@ class ManualScanDialog(
         binding.btnCancelManual.setOnClickListener { dismiss() }
 
         binding.btnSubmitManual.setOnClickListener {
-            val text = binding.etManualAwb.text?.toString()?.trim().orEmpty()
+            val text = BarcodeRules.normalize(binding.etManualAwb.text?.toString())
             if (text.isNotBlank()) {
-                dismiss()
+                // Hand the AWB over first: the caller looks it up from the dismiss listener, which runs after dismiss().
                 onAwbEntered(text)
+                dismiss()
             } else {
                 binding.tilManualAwb.error = "Please enter tracking number"
             }

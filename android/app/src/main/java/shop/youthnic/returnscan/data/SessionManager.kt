@@ -82,6 +82,16 @@ class SessionManager(private val context: Context) {
         get() = prefs.getBoolean("asked_notification_permission", false)
         set(value) = prefs.edit().putBoolean("asked_notification_permission", value).apply()
 
+    /** True once our own explanation of the camera permission has been shown, so it is never repeated at every start. */
+    var cameraRationaleShown: Boolean
+        get() = prefs.getBoolean("camera_rationale_shown", false)
+        set(value) = prefs.edit().putBoolean("camera_rationale_shown", value).apply()
+
+    /** True once the camera permission dialog has been shown at least once. Used to tell "never asked" from "blocked". */
+    var askedCameraPermission: Boolean
+        get() = prefs.getBoolean("asked_camera_permission", false)
+        set(value) = prefs.edit().putBoolean("asked_camera_permission", value).apply()
+
     fun getUser(): User? {
         if (!isLoggedIn) return null
         return User(

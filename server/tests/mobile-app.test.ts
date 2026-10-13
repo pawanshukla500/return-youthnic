@@ -2,6 +2,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { getMobileReleaseInfo } from "../mobile-release.js"
 import { submissionFrom } from "../register-routes.js"
+import { validateScanSubmission, type CategoryRule, type SubIssueRule } from "../register-rules.js"
 
 // Invariant 9: Test data is synthetic, and every value starts with SYN-.
 const SYN_AWB_EXACT = "SYN-1490711818486605"
@@ -94,4 +95,73 @@ test("mobile multi-product return parcel maps each item separately", () => {
   assert.equal(submission.items.length, 2)
   assert.equal(submission.items[0].issues[0].subIssueId, 501)
   assert.equal(submission.items[1].receivedQty, 2)
+})
+
+// The categories the server seeds (server/schema-import.sql) with the scan-bench rule that no ticket ID is typed.
+const SEEDED_CATEGORIES: CategoryRule[] = [
+  { code: "no_issue", label: "No issue", isClear: true, isMissing: false, requiresTicket: false, allowsSubIssue: false, requiresSubIssue: false, active: true },
+  { code: "missing_component", label: "Missing product or component", isClear: false, isMissing: true, requiresTicket: false, allowsSubIssue: true, requiresSubIssue: true, active: true },
+  { code: "wrong_product", label: "Wrong product", isClear: false, isMissing: false, requiresTicket: false, allowsSubIssue: false, requiresSubIssue: false, active: true },
+  { code: "damaged_product", label: "Damaged product", isClear: false, isMissing: false, requiresTicket: false, allowsSubIssue: false, requiresSubIssue: false, active: true },
+]
+const SEEDED_SUB_ISSUES: SubIssueRule[] = [{ id: 501, label: "SYN Dupatta", categoryCode: "missing_component", active: true }]
+
+function mobileBody(issueFor: Record<number, Record<string, unknown> | null>, received: Record<number, number>) {
+  return {
+    shipmentId: 101,
+    clientScanKey: SYN_CLIENT_SCAN_KEY,
+    scannedTracking: SYN_AWB_EXACT,
+    notes: "",
+    items: Object.keys(received).map((id) => ({
+      itemId: Number(id),
+      receivedQty: received[Number(id)],
+      verified: true,
+      issues: issueFor[Number(id)] ? [issueFor[Number(id)]] : [],
+    })),
+  }
+}
+
+// This is the body the Android app builds (android/.../data/ScanPayload.kt). Its unit tests build the same shape.
+test("mobile scan body: a clear line sends no issue and a missing or damaged line follows the server's category rules", () => {
+  const items = [
+    { id: 201, expectedQty: 1 },
+    { id: 202, expectedQty: 2 },
+    { id: 203, expectedQty: 1 },
+  ]
+  const body = mobileBody(
+    {
+      201: null,
+      202: { categoryCode: "missing_component", subIssueId: 501, qty: 2, ticketCode: "", notes: "" },
+      203: { categoryCode: "damaged_product", subIssueId: null, qty: 1, ticketCode: "", notes: "SYN torn" },
+    },
+    { 201: 1, 202: 0, 203: 1 },
+  )
+  const verdict = validateScanSubmission(items, submissionFrom(body), SEEDED_CATEGORIES, SEEDED_SUB_ISSUES)
+  assert.deepEqual(verdict, { ok: true })
+})
+
+test("mobile scan body: the uppercase codes the old app sent are refused, and a clear line must not carry an issue", () => {
+  const items = [{ id: 201, expectedQty: 1 }]
+  const old = mobileBody({ 201: { categoryCode: "CLEAR", subIssueId: null, qty: 1, ticketCode: "", notes: "" } }, { 201: 1 })
+  const refused = validateScanSubmission(items, submissionFrom(old), SEEDED_CATEGORIES, SEEDED_SUB_ISSUES)
+  assert.equal(refused.ok, false)
+
+  const asIssue = mobileBody({ 201: { categoryCode: "no_issue", subIssueId: null, qty: 1, ticketCode: "", notes: "" } }, { 201: 1 })
+  const alsoRefused = validateScanSubmission(items, submissionFrom(asIssue), SEEDED_CATEGORIES, SEEDED_SUB_ISSUES)
+  assert.equal(alsoRefused.ok, false)
+})
+
+test("mobile scan body: a missing item must cover exactly the units not received", () => {
+  const items = [{ id: 202, expectedQty: 2 }]
+  const wrongQty = mobileBody(
+    { 202: { categoryCode: "missing_component", subIssueId: 501, qty: 1, ticketCode: "", notes: "" } },
+    { 202: 0 },
+  )
+  assert.equal(validateScanSubmission(items, submissionFrom(wrongQty), SEEDED_CATEGORIES, SEEDED_SUB_ISSUES).ok, false)
+
+  const partial = mobileBody(
+    { 202: { categoryCode: "missing_component", subIssueId: 501, qty: 1, ticketCode: "", notes: "" } },
+    { 202: 1 },
+  )
+  assert.deepEqual(validateScanSubmission(items, submissionFrom(partial), SEEDED_CATEGORIES, SEEDED_SUB_ISSUES), { ok: true })
 })
