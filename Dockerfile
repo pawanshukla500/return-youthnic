@@ -40,16 +40,18 @@ RUN apk add --no-cache curl ca-certificates
 # Environment variables
 ENV NODE_ENV=production
 ENV PORT=3001
+ENV NODE_OPTIONS="--max-old-space-size=384"
 
 # Copy dependency manifests and install production-only dependencies
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 
-# Copy compiled frontend from builder stage
+# Copy compiled frontend and server bundle from builder stage
 COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/server/dist.js ./server/dist.js
 
-# Copy server code and database schemas
-COPY server/ ./server/
+# Copy database schema definitions for runtime integrity check
+COPY server/*.sql ./server/
 COPY public/ ./public/
 
 # Prepare persistent data and certificates directories
@@ -66,5 +68,5 @@ EXPOSE 3001
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
   CMD curl -fsS http://127.0.0.1:3001/api/health || exit 1
 
-# Start production server
-CMD ["npm", "run", "start"]
+# Start production server directly with node for minimal RAM and zero tsx overhead
+CMD ["node", "server/dist.js"]

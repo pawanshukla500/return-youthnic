@@ -129,6 +129,9 @@ export function getPool() {
       connectionString: connection.connectionString,
       ssl: connection.ssl,
       connectionTimeoutMillis: 8000,
+      max: 10,
+      min: 2,
+      idleTimeoutMillis: 30000,
     })
   }
   return pool

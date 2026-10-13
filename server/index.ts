@@ -972,9 +972,25 @@ app.get("/api/admin/system", requireUser, requireAdmin, async (_req, res, next) 
 
 const dist = path.join(root, "dist")
 if (fs.existsSync(dist)) {
-  app.use(express.static(dist))
+  const assetsDir = path.join(dist, "assets")
+  if (fs.existsSync(assetsDir)) {
+    app.use(
+      "/assets",
+      express.static(assetsDir, {
+        maxAge: "1y",
+        immutable: true,
+      }),
+    )
+  }
+  app.use(
+    express.static(dist, {
+      maxAge: "1h",
+      etag: true,
+    }),
+  )
   app.get("*", (req, res, next) => {
     if (req.path.startsWith("/api")) return next()
+    res.setHeader("Cache-Control", "no-cache")
     res.sendFile(path.join(dist, "index.html"))
   })
 }

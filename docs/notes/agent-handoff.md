@@ -1140,6 +1140,36 @@ Append new entries at the end. Do not edit earlier entries, except to correct a 
   - Remove `shared_infra` network or Traefik labels from `docker-compose.production.yml`.
   - Disconnect `extra_hosts` host-gateway mapping needed for PostgreSQL access on the VPS.
 
+### 2026-10-13, Antigravity Agent, Production Resource Optimization & Let's Encrypt SSL Verification
+
+- **Changed Files**:
+  - `package.json`: Added `build:server` to compile `server/index.ts` to `server/dist.js` with `esbuild`, updated `build` to bundle both client and server, and optimized `start` command to run direct Node with `--max-old-space-size=384`.
+  - `Dockerfile`: Stage 1 now bundles server to `server/dist.js`. Stage 2 copies `server/dist.js` and runs `CMD ["node", "server/dist.js"]` as PID 1 directly with `NODE_OPTIONS="--max-old-space-size=384"`. Eliminates npm wrapper, tsx runtime transpilation, and esbuild service overhead in memory.
+  - `docker-compose.production.yml` & `docker-compose.yml`: Set `NODE_OPTIONS="--max-old-space-size=384"`, memory limits (512M limit, 128M reservation, 1.0 CPU limit), and log file rotation (20m x 3).
+  - `server/db.ts`: Added pool connection management: `max: 10`, `min: 2`, `idleTimeoutMillis: 30000` to prevent idle connection leaks and keep PostgreSQL RAM usage lean.
+  - `server/index.ts`: Added immutable HTTP asset caching (`Cache-Control: public, max-age=31536000, immutable`) for content-hashed files in `/assets/`, and `Cache-Control: no-cache` for `index.html`.
+  - `.gitignore`: Added `server/dist.js`.
+  - `docs/notes/agent-handoff.md`: Updated session log.
+
+- **Verification Results**:
+  - **Live Let's Encrypt SSL**:
+    - Cloudflare DNS `return.youthnic.shop -> 200.141.1.119` (DNS only) resolved cleanly with no conflicting AAAA record.
+    - Let's Encrypt certificate issued by ACME CA and stored in Traefik `acme.json`.
+    - Local client verification: `curl.exe -I https://return.youthnic.shop` verified HTTP/1.1 200 OK with zero SSL warnings or errors.
+    - Public health API: `curl.exe -fsS https://return.youthnic.shop/api/health` returned HTTP 200 `{"ok":true,"database":"connected","name":"return-scan_youthnic"}`.
+  - **Local Checks**:
+    - `npm.cmd run typecheck`: Exit 0 (0 errors).
+    - `npm.cmd run build`: Exit 0 (Vite in 1.70s, server in 12ms).
+    - `npm.cmd test`: 303 tests run: 279 pass, 0 fail, 24 skipped (`TEST_DATABASE_URL`).
+
+- **What was not run**:
+  - 24 database integration tests skipped because `TEST_DATABASE_URL` is not configured on a dedicated test database.
+
+- **The next agent must not**:
+  - Reintroduce `npm run start` or `tsx` in the production container image.
+  - Remove immutable caching headers on static assets.
+  - Remove pool limits in `server/db.ts`.
+
 ## STOP — needs the user to resume
 
 **This is the exact point at which the agent stopped.** Everything that can be verified without external input has been verified. The following items require the user to act before any agent can resume:
