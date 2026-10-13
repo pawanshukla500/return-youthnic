@@ -1,11 +1,7 @@
 package shop.youthnic.returnscan.ui
 
-import android.Manifest
 import android.annotation.SuppressLint
-import android.app.Dialog
 import android.content.Intent
-import android.content.pm.PackageManager
-import android.hardware.camera2.CameraCharacteristics
 import android.os.Bundle
 import android.os.SystemClock
 import android.view.View
@@ -15,13 +11,9 @@ import android.widget.FrameLayout
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.ColorRes
-import androidx.annotation.OptIn
 import androidx.appcompat.app.AppCompatActivity
-import androidx.camera.camera2.interop.Camera2CameraInfo
-import androidx.camera.camera2.interop.ExperimentalCamera2Interop
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
-import androidx.camera.core.CameraState
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
@@ -30,20 +22,18 @@ import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.mlkit.vision.barcode.BarcodeScanner
 import com.google.mlkit.vision.barcode.BarcodeScannerOptions
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import shop.youthnic.returnscan.R
 import shop.youthnic.returnscan.ReturnScanApp
-import shop.youthnic.returnscan.data.AppRelease
 import shop.youthnic.returnscan.data.AuthExpiredException
 import shop.youthnic.returnscan.data.BarcodeRules
 import shop.youthnic.returnscan.data.DuplicateGuard
@@ -52,18 +42,18 @@ import shop.youthnic.returnscan.data.NetworkException
 import shop.youthnic.returnscan.data.RecentScan
 import shop.youthnic.returnscan.data.ScanReceipt
 import shop.youthnic.returnscan.data.ScanSessionData
+import shop.youthnic.returnscan.data.VerificationSubmitData
 import shop.youthnic.returnscan.databinding.ActivityScannerBinding
 import shop.youthnic.returnscan.update.AppUpdater
+import shop.youthnic.returnscan.util.CameraPermission
 import shop.youthnic.returnscan.util.CameraTuning
 import shop.youthnic.returnscan.util.Cue
 import shop.youthnic.returnscan.util.ScanSignals
 import shop.youthnic.returnscan.util.Ui
-import java.util.UUID
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
-import kotlin.math.abs
 
 class ScannerActivity : AppCompatActivity() {
 
@@ -76,7 +66,7 @@ class ScannerActivity : AppCompatActivity() {
     private var cameraProvider: ProcessCameraProvider? = null
     private var camera: Camera? = null
     private var isTorchOn = false
-    private lateinit var cameraExecutor: ExecutorService
+    private val cameraExecutor: ExecutorService by lazy { Executors.newSingleThreadExecutor() }
     private var barcodeScanner: BarcodeScanner? = null
 
     private val duplicateGuard = DuplicateGuard(sameCodeSuppressMs = 8000L, anyCodeCooldownMs = 1500L)
@@ -84,6 +74,8 @@ class ScannerActivity : AppCompatActivity() {
     private val openDialogs = AtomicInteger(0)
 
     private var cameraRunning = false
+    private var cameraStarting = false
+    private var scannerEngineFailed = false
     private var lastAnalyzedAt = 0L
     private var lastActivityAt = 0L
     private var idleJob: Job? = null
@@ -91,16 +83,21 @@ class ScannerActivity : AppCompatActivity() {
 
     private lateinit var flashView: View
     private var activeVerificationSheet: ReturnVerificationBottomSheet? = null
+    private var sheetSaved = false
     private var sessionData = ScanSessionData()
     private val recentScansList = mutableListOf<RecentScan>()
     private var scannedCountToday = 0
 
+    private val sessionManager get() = (application as ReturnScanApp).sessionManager
+
+    // The answer to Android's own camera dialog. A refusal does not close the scanner: Manual AWB still works, and
+    // the overlay says how to allow the camera.
     private val requestCameraPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) {
-            startCamera()
+            resumeCamera()
         } else {
-            Toast.makeText(this, "Camera permission is required to scan return barcodes", Toast.LENGTH_LONG).show()
-            finish()
+            showCameraNeeded()
+            Toast.makeText(this, R.string.camera_denied_toast, Toast.LENGTH_LONG).show()
         }
     }
 
@@ -114,23 +111,21 @@ class ScannerActivity : AppCompatActivity() {
         marketplace = intent.getStringExtra(EXTRA_MARKETPLACE).orEmpty()
         channelColor = intent.getStringExtra(EXTRA_COLOR).orEmpty()
 
-        cameraExecutor = Executors.newSingleThreadExecutor()
         initFlashOverlay()
         initUi()
         initBarcodeScanner()
         loadSessionData()
 
-        if (hasCameraPermission()) {
-            startCamera()
-        } else {
-            requestCameraPermission.launch(Manifest.permission.CAMERA)
-        }
+        // Build the beep tones once the first frame is up, so the first scan result is not late.
+        binding.root.post { (application as ReturnScanApp).soundManager.prepare() }
+
+        if (!CameraPermission.isGranted(this)) requestCameraAccess()
     }
 
     override fun onResume() {
         super.onResume()
         noteActivity()
-        resumeCamera()
+        if (CameraPermission.isGranted(this)) resumeCamera() else showCameraNeeded()
         startIdleWatch()
         checkForUpdates()
     }
@@ -138,7 +133,7 @@ class ScannerActivity : AppCompatActivity() {
     override fun onPause() {
         super.onPause()
         idleJob?.cancel()
-        pauseCamera()
+        pauseCamera(showOverlay = false)
     }
 
     override fun onDestroy() {
@@ -146,9 +141,6 @@ class ScannerActivity : AppCompatActivity() {
         cameraExecutor.shutdown()
         barcodeScanner?.close()
     }
-
-    private fun hasCameraPermission(): Boolean =
-        ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
 
     private fun initFlashOverlay() {
         flashView = View(this).apply {
@@ -162,37 +154,68 @@ class ScannerActivity : AppCompatActivity() {
     }
 
     private fun initUi() {
-        binding.tvActiveMarketplace.text = if (marketplace.isNotBlank()) "$accountName ($marketplace)" else accountName
+        binding.tvActiveMarketplace.text = if (marketplace.isNotBlank() && marketplace != accountName) {
+            "$accountName ($marketplace)"
+        } else {
+            accountName
+        }
         if (channelColor.isNotBlank()) {
             val color = Ui.parseColor(channelColor, ContextCompat.getColor(this, R.color.colorPrimary))
-            Ui.tint(binding.btnTorch, color)
+            Ui.tint(binding.viewChannelColor, color)
         }
 
+        binding.btnBack.setOnClickListener { finish() }
+        binding.btnSettings.setOnClickListener { startActivity(Intent(this, SettingsActivity::class.java)) }
         binding.btnTorch.setOnClickListener { toggleTorch() }
         binding.btnManualEntry.setOnClickListener { showManualEntryDialog() }
         binding.btnRecentScans.setOnClickListener { showRecentScansDialog() }
-        binding.btnResumeCamera.setOnClickListener { resumeCamera() }
+        // The whole overlay is the wake target ("Tap screen to wake camera"), not only the small button.
+        binding.btnResumeCamera.setOnClickListener { onOverlayAction() }
+        binding.layoutCameraPaused.setOnClickListener { onOverlayAction() }
 
+        updateTorchUi()
         updateCountsUi()
     }
 
     private fun loadSessionData() {
         lifecycleScope.launch {
             val app = application as ReturnScanApp
-            val result = withContext(Dispatchers.IO) { app.apiClient.getSessionData(accountId) }
-            if (result.isSuccess) {
-                result.getOrNull()?.let {
-                    sessionData = it
-                    scannedCountToday = it.shiftProgress.scannedToday
-                    updateCountsUi()
-                }
+            val result = app.apiClient.getSessionData(accountId)
+            val data = result.getOrNull()
+            if (data != null) {
+                applySessionData(data)
+                setOnline(true)
+            } else if (result.exceptionOrNull() is NetworkException) {
+                setOnline(false)
             }
         }
+    }
+
+    /** The issue rules are needed to verify a return. A scanner that opened offline loads them again at the first lookup. */
+    private suspend fun ensureSessionData() {
+        if (sessionData.categories.isNotEmpty()) return
+        val app = application as ReturnScanApp
+        app.apiClient.getSessionData(accountId).getOrNull()?.let { applySessionData(it) }
+    }
+
+    private fun applySessionData(data: ScanSessionData) {
+        sessionData = data
+        scannedCountToday = data.shiftProgress.scannedToday
+        updateCountsUi()
     }
 
     private fun updateCountsUi() {
         binding.tvProgressScanned.text = getString(R.string.scanned_today_format, Ui.count(scannedCountToday))
         binding.progressBarScans.progress = (scannedCountToday % 100)
+    }
+
+    private fun setOnline(online: Boolean) {
+        binding.tvConnectionStatus.setText(if (online) R.string.connection_online else R.string.connection_offline)
+        if (online) {
+            Ui.pillRes(binding.tvConnectionStatus, R.color.verdict_ok, R.color.verdict_ok_bg)
+        } else {
+            Ui.pillRes(binding.tvConnectionStatus, R.color.verdict_stop, R.color.verdict_stop_bg)
+        }
     }
 
     private fun checkForUpdates() {
@@ -208,6 +231,47 @@ class ScannerActivity : AppCompatActivity() {
                 binding.tvUpdateBanner.visibility = View.GONE
             }
         }
+    }
+
+    // ---- Camera permission --------------------------------------------------------------------------
+
+    /** Asks for the camera, or says where to allow it when Android no longer shows the dialog. */
+    private fun requestCameraAccess() {
+        if (CameraPermission.isGranted(this)) {
+            resumeCamera()
+            return
+        }
+        if (CameraPermission.isBlocked(this, sessionManager)) {
+            showCameraNeeded()
+            return
+        }
+        sessionManager.askedCameraPermission = true
+        requestCameraPermission.launch(CameraPermission.PERMISSION)
+    }
+
+    private fun onOverlayAction() {
+        if (CameraPermission.isGranted(this)) {
+            resumeCamera()
+        } else if (CameraPermission.isBlocked(this, sessionManager)) {
+            CameraPermission.openAppSettings(this)
+        } else {
+            requestCameraAccess()
+        }
+    }
+
+    private fun showCameraNeeded() {
+        val blocked = CameraPermission.isBlocked(this, sessionManager)
+        binding.tvCameraPausedTitle.setText(R.string.camera_needed_title)
+        binding.tvCameraPausedSub.setText(if (blocked) R.string.camera_needed_settings_sub else R.string.camera_needed_sub)
+        binding.btnResumeCamera.setText(if (blocked) R.string.camera_needed_settings_action else R.string.camera_needed_action)
+        binding.layoutCameraPaused.visibility = View.VISIBLE
+    }
+
+    private fun showIdleOverlay() {
+        binding.tvCameraPausedTitle.setText(R.string.camera_paused_title)
+        binding.tvCameraPausedSub.setText(R.string.camera_paused_sub)
+        binding.btnResumeCamera.setText(R.string.camera_paused_action)
+        binding.layoutCameraPaused.visibility = View.VISIBLE
     }
 
     // ---- Camera & Barcode Scanner -------------------------------------------------------------------
@@ -230,9 +294,13 @@ class ScannerActivity : AppCompatActivity() {
     }
 
     private fun startCamera() {
+        if (cameraStarting) return
+        cameraStarting = true
         binding.tvScannerHint.text = getString(R.string.preparing_scanner)
         val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
         cameraProviderFuture.addListener({
+            cameraStarting = false
+            if (isFinishing || isDestroyed) return@addListener
             try {
                 cameraProvider = cameraProviderFuture.get()
                 bindCameraUseCases()
@@ -270,15 +338,18 @@ class ScannerActivity : AppCompatActivity() {
         }
 
         try {
-            camera = provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, imageAnalysis)
+            val bound = provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, imageAnalysis)
+            camera = bound
             cameraRunning = true
             binding.layoutCameraPaused.visibility = View.GONE
             binding.tvScannerHint.text = getString(R.string.aim_at_awb)
+            // A rebind (after a pause or a dialog) turns the torch off, so bring it back if it was on.
+            if (isTorchOn) bound.cameraControl.enableTorch(true)
             updateKeepScreenOn()
         } catch (e: Exception) {
             cameraRunning = false
             binding.tvScannerHint.text = "Camera bind error: ${e.message}"
-            binding.layoutCameraPaused.visibility = View.VISIBLE
+            showIdleOverlay()
         }
     }
 
@@ -303,7 +374,18 @@ class ScannerActivity : AppCompatActivity() {
 
         scanner.process(image)
             .addOnSuccessListener { barcodes ->
+                if (scannerEngineFailed) {
+                    scannerEngineFailed = false
+                    binding.tvScannerHint.text = getString(R.string.aim_at_awb)
+                }
                 onBarcodesDetected(barcodes)
+            }
+            .addOnFailureListener {
+                // Google Play services may still be fetching the barcode model, or be missing. Say so once.
+                if (!scannerEngineFailed) {
+                    scannerEngineFailed = true
+                    binding.tvScannerHint.text = getString(R.string.scanner_engine_error)
+                }
             }
             .addOnCompleteListener {
                 imageProxy.close()
@@ -333,7 +415,11 @@ class ScannerActivity : AppCompatActivity() {
 
     // ---- Lookup & Verification Workflow ------------------------------------------------------------
 
-    private fun executeLookup(rawAwb: String) {
+    /**
+     * Looks the AWB up in the chosen marketplace account. [shipmentId] is set only when the server found several
+     * returns for the AWB and the scanner picked one.
+     */
+    private fun executeLookup(rawAwb: String, shipmentId: Int? = null) {
         if (!isRequestInFlight.compareAndSet(false, true)) return
         noteActivity()
 
@@ -342,58 +428,113 @@ class ScannerActivity : AppCompatActivity() {
 
         val app = application as ReturnScanApp
         lifecycleScope.launch {
-            val result = withContext(Dispatchers.IO) {
-                app.apiClient.lookup(accountId, rawAwb)
-            }
+            val result = app.apiClient.lookupAwb(rawAwb, accountName, shipmentId)
 
             binding.progressSubmitting.visibility = View.GONE
             binding.tvScannerHint.text = getString(R.string.aim_at_awb)
 
-            if (result.isSuccess) {
-                val lookup = result.getOrThrow()
+            val lookup = result.getOrNull()
+            if (lookup != null) {
+                setOnline(true)
                 handleLookupResponse(rawAwb, lookup)
             } else {
-                isRequestInFlight.set(false)
                 val ex = result.exceptionOrNull()
                 if (ex is AuthExpiredException) {
+                    isRequestInFlight.set(false)
                     goToLogin()
                     return@launch
                 }
-                duplicateGuard.forget(rawAwb)
-                signal(Cue.STOP)
-                showBannerError(rawAwb, ex?.message ?: "Lookup request failed")
+                if (ex is NetworkException) setOnline(false)
+                failLookup(rawAwb, ex?.message ?: "Lookup request failed")
             }
         }
     }
 
-    private fun handleLookupResponse(rawAwb: String, lookup: LookupResult) {
-        when (lookup.status.uppercase()) {
-            "FOUND" -> {
+    /** Ends a lookup that cannot go on, and lets the same AWB be scanned again as soon as the problem is fixed. */
+    private fun failLookup(awb: String, message: String) {
+        isRequestInFlight.set(false)
+        duplicateGuard.forget(awb)
+        signal(Cue.STOP)
+        showBannerError(awb, message)
+    }
+
+    private suspend fun handleLookupResponse(rawAwb: String, lookup: LookupResult) {
+        when (lookup.status) {
+            LookupResult.STATUS_FOUND -> {
+                if (lookup.items.isEmpty()) {
+                    failLookup(rawAwb, getString(R.string.no_items_error))
+                    return
+                }
+                ensureSessionData()
+                if (sessionData.categories.isEmpty()) {
+                    failLookup(rawAwb, getString(R.string.session_rules_error))
+                    return
+                }
                 // Attention / inspection needed - NOT OK yet!
                 signal(Cue.CHECK)
                 showVerificationSheet(lookup)
             }
-            "DUPLICATE" -> {
+            LookupResult.STATUS_DUPLICATE -> {
                 isRequestInFlight.set(false)
                 signal(Cue.DUPLICATE)
                 showBannerDuplicate(rawAwb, lookup)
             }
-            "NOT_FOUND" -> {
+            LookupResult.STATUS_CHOOSE -> {
+                signal(Cue.CHECK)
+                showChooseReturnDialog(rawAwb, lookup)
+            }
+            LookupResult.STATUS_NOT_FOUND -> {
                 isRequestInFlight.set(false)
                 signal(Cue.NOT_FOUND)
                 showBannerNotFound(rawAwb)
             }
-            else -> {
-                isRequestInFlight.set(false)
-                signal(Cue.STOP)
-                showBannerError(rawAwb, "Unexpected status: ${lookup.status}")
-            }
+            else -> failLookup(rawAwb, "Unexpected status: ${lookup.status}")
         }
     }
 
-    private fun showVerificationSheet(lookup: LookupResult) {
+    /** Several returns share this AWB (for example two orders in one parcel). The scanner picks one; nothing is guessed. */
+    private fun showChooseReturnDialog(rawAwb: String, lookup: LookupResult) {
+        val candidates = lookup.candidates.filter { it.shipmentId > 0 }
+        if (candidates.isEmpty()) {
+            isRequestInFlight.set(false)
+            signal(Cue.NOT_FOUND)
+            showBannerNotFound(rawAwb)
+            return
+        }
+        val labels = candidates.map { candidate ->
+            val parts = ArrayList<String>()
+            parts.add(candidate.accountName)
+            if (candidate.orderId.isNotBlank()) parts.add("Order ${candidate.orderId}")
+            parts.add("${candidate.itemCount} item(s)")
+            if (candidate.alreadyReceived) parts.add(getString(R.string.choose_return_received) + " " + candidate.receivedAt)
+            parts.joinToString(" · ")
+        }
+
+        var picked = false
+        val dialog = MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.choose_return_title)
+            .setItems(labels.toTypedArray()) { _, which ->
+                picked = true
+                isRequestInFlight.set(false)
+                executeLookup(rawAwb, candidates[which].shipmentId)
+            }
+            .setNegativeButton(R.string.btn_cancel, null)
+            .create()
+        dialog.setOnDismissListener {
+            openDialogs.decrementAndGet()
+            if (!picked) {
+                isRequestInFlight.set(false)
+                duplicateGuard.forget(rawAwb)
+            }
+            resumeCamera()
+        }
         openDialogs.incrementAndGet()
+        dialog.show()
+    }
+
+    private fun showVerificationSheet(lookup: LookupResult) {
         val idempotencyKey = BarcodeRules.generateClientScanKey(accountId, lookup.trackingNumber)
+        sheetSaved = false
 
         val sheet = ReturnVerificationBottomSheet(
             activity = this,
@@ -401,17 +542,26 @@ class ScannerActivity : AppCompatActivity() {
             sessionData = sessionData,
             onSave = { submitData ->
                 commitVerificationSave(idempotencyKey, lookup, submitData)
-            },
-            onCancel = {
-                openDialogs.decrementAndGet()
-                isRequestInFlight.set(false)
-                activeVerificationSheet = null
-                resumeCamera()
             }
         )
+        // Every way out of the sheet ends here: Cancel, the close button, a swipe down, the back key, or a tap outside.
+        // Counting it in one place is what keeps the scanner from staying blocked after a swipe.
+        sheet.setOnDismissListener { onVerificationSheetClosed(lookup.trackingNumber) }
 
         activeVerificationSheet = sheet
+        openDialogs.incrementAndGet()
         sheet.show()
+    }
+
+    private fun onVerificationSheetClosed(awb: String) {
+        activeVerificationSheet = null
+        openDialogs.decrementAndGet()
+        if (!sheetSaved) {
+            // Left without saving: free the AWB so it can be scanned again at once.
+            isRequestInFlight.set(false)
+            duplicateGuard.forget(awb)
+            resumeCamera()
+        }
     }
 
     private fun commitVerificationSave(
@@ -420,24 +570,31 @@ class ScannerActivity : AppCompatActivity() {
         data: VerificationSubmitData
     ) {
         val app = application as ReturnScanApp
+        val shipmentId = data.shipmentId.toIntOrNull() ?: 0
         lifecycleScope.launch {
-            val result = withContext(Dispatchers.IO) {
-                app.apiClient.completeScan(
-                    accountId = accountId,
-                    shipmentId = data.shipmentId,
-                    clientScanKey = clientScanKey,
-                    scannedTracking = data.scannedTracking,
-                    items = data.items
-                )
-            }
+            val result = app.apiClient.completeScan(
+                shipmentId = shipmentId,
+                clientScanKey = clientScanKey,
+                scannedTracking = data.scannedTracking,
+                items = data.items
+            )
 
-            if (result.isSuccess) {
-                val receipt = result.getOrThrow()
+            val receipt = result.getOrNull()
+            if (receipt != null) {
+                setOnline(true)
                 onSaveSuccess(lookup, receipt, data)
             } else {
-                val err = result.exceptionOrNull()?.message ?: "Failed to save return scan"
+                val err = result.exceptionOrNull()
+                if (err is AuthExpiredException) {
+                    goToLogin()
+                    return@launch
+                }
+                if (err is NetworkException) setOnline(false)
+                val message = err?.message ?: "Failed to save return scan"
                 signal(Cue.STOP)
-                activeVerificationSheet?.showSaveError(err)
+                // The same clientScanKey is reused by the next Save tap, so a retry can never save the return twice.
+                val sheet = activeVerificationSheet
+                if (sheet != null) sheet.showSaveError(message) else showBannerError(lookup.trackingNumber, message)
             }
         }
     }
@@ -450,18 +607,21 @@ class ScannerActivity : AppCompatActivity() {
         // Successful PostgreSQL commit confirmed: OK signal!
         signal(Cue.OK)
 
-        // Close verification sheet
+        // Close verification sheet; the dismiss listener sees sheetSaved and leaves the camera to the delayed resume below.
+        sheetSaved = true
         activeVerificationSheet?.dismiss()
-        activeVerificationSheet = null
-        openDialogs.decrementAndGet()
 
-        // Update counts
-        scannedCountToday++
+        // The server counts the shift. A replayed save (a retry of one that already went through) is not a new scan.
+        scannedCountToday = when {
+            receipt.scannedToday >= 0 -> receipt.scannedToday
+            receipt.replayed -> scannedCountToday
+            else -> scannedCountToday + 1
+        }
         updateCountsUi()
 
         // Record recent scan
-        val primaryItem = data.items.firstOrNull()
-        val outcome = if (primaryItem?.categoryCode == "CLEAR") "CLEAR" else primaryItem?.categoryCode ?: "VERIFIED"
+        val issueLabels = data.items.filter { it.hasIssue }.map { it.category.label }.distinct()
+        val outcome = if (issueLabels.isEmpty()) "CLEAR" else issueLabels.joinToString(", ")
         recentScansList.add(
             RecentScan(
                 awb = lookup.trackingNumber,
@@ -524,66 +684,81 @@ class ScannerActivity : AppCompatActivity() {
         }
     }
 
-    private fun showBannerSuccess(awb: String, orderId: String, outcome: String) {
+    /**
+     * The last-scan card. The verdict colour is the header bar and the status text is white on it, so it reads at arm's
+     * length. (The status text used to take the verdict colour itself, which is invisible on a bar of that colour.)
+     */
+    private fun showBanner(status: String, @ColorRes colorRes: Int, awb: String, line1: String, line2: String) {
         binding.cardScanBanner.visibility = View.VISIBLE
-        binding.tvBannerStatus.text = "SAVED: $outcome"
-        Ui.pillRes(binding.tvBannerStatus, R.color.verdict_ok, R.color.verdict_ok_bg)
+        binding.bannerLastVerdict.setBackgroundColor(ContextCompat.getColor(this, colorRes))
+        binding.tvBannerStatus.text = status
+        binding.tvLastVerdictTime.setText(R.string.banner_just_now)
         binding.tvBannerAwb.text = awb
-        binding.tvBannerOrder.text = "Order: $orderId"
-        binding.tvBannerDetails.text = "Return scan committed to database"
+        binding.tvBannerOrder.text = line1
+        binding.tvBannerDetails.text = line2
+    }
+
+    private fun showBannerSuccess(awb: String, orderId: String, outcome: String) {
+        val orderLine = if (orderId.isNotBlank()) "Order: $orderId" else "Return scan saved"
+        showBanner("SAVED: $outcome", R.color.verdict_ok, awb, orderLine, "Return scan committed to database")
     }
 
     private fun showBannerDuplicate(awb: String, lookup: LookupResult) {
-        binding.cardScanBanner.visibility = View.VISIBLE
-        binding.tvBannerStatus.text = "DUPLICATE SCAN"
-        Ui.pillRes(binding.tvBannerStatus, R.color.verdict_duplicate, R.color.verdict_duplicate_bg)
-        binding.tvBannerAwb.text = awb
         val dup = lookup.duplicateDetails
-        if (dup != null) {
-            binding.tvBannerOrder.text = "Previously scanned by ${dup.scannedBy}"
-            binding.tvBannerDetails.text = "At ${dup.scannedAt} · AWB already in register"
+        if (dup != null && (dup.scannedBy.isNotBlank() || dup.scannedAt.isNotBlank())) {
+            showBanner(
+                "DUPLICATE SCAN", R.color.verdict_duplicate, awb,
+                "Previously scanned by ${dup.scannedBy.ifBlank { "another scanner" }}",
+                "At ${dup.scannedAt.ifBlank { "an earlier time" }} · AWB already in register"
+            )
         } else {
-            binding.tvBannerOrder.text = "AWB already scanned"
-            binding.tvBannerDetails.text = "Set packet aside"
+            showBanner("DUPLICATE SCAN", R.color.verdict_duplicate, awb, "AWB already scanned", "Set packet aside")
         }
     }
 
     private fun showBannerNotFound(awb: String) {
-        binding.cardScanBanner.visibility = View.VISIBLE
-        binding.tvBannerStatus.text = "NOT FOUND"
-        Ui.pillRes(binding.tvBannerStatus, R.color.verdict_unverified, R.color.verdict_unverified_bg)
-        binding.tvBannerAwb.text = awb
-        binding.tvBannerOrder.text = "Not in active return lookup"
-        binding.tvBannerDetails.text = "Verify marketplace report upload"
+        showBanner(
+            "NOT FOUND", R.color.verdict_unverified, awb,
+            "Not in active return lookup for $accountName",
+            "Verify marketplace report upload"
+        )
     }
 
     private fun showBannerError(awb: String, message: String) {
-        binding.cardScanBanner.visibility = View.VISIBLE
-        binding.tvBannerStatus.text = "ERROR"
-        Ui.pillRes(binding.tvBannerStatus, R.color.verdict_stop, R.color.verdict_stop_bg)
-        binding.tvBannerAwb.text = awb
-        binding.tvBannerOrder.text = message
-        binding.tvBannerDetails.text = "Check connection or retry"
+        showBanner("ERROR", R.color.verdict_stop, awb, message, "Check connection or retry")
     }
 
     // ---- Dialogs & Controls ------------------------------------------------------------------------
 
     private fun toggleTorch() {
-        val cam = camera ?: return
+        val cam = camera
+        if (cam == null) {
+            Toast.makeText(this, R.string.torch_needs_camera, Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (!cam.cameraInfo.hasFlashUnit()) {
+            Toast.makeText(this, R.string.torch_unavailable, Toast.LENGTH_SHORT).show()
+            return
+        }
         isTorchOn = !isTorchOn
         cam.cameraControl.enableTorch(isTorchOn)
+        updateTorchUi()
+    }
+
+    private fun updateTorchUi() {
+        binding.tvTorchLabel.setText(if (isTorchOn) R.string.torch_on else R.string.torch_off)
         binding.btnTorch.alpha = if (isTorchOn) 1.0f else 0.6f
     }
 
     private fun showManualEntryDialog() {
         openDialogs.incrementAndGet()
-        val dialog = ManualScanDialog(this) { manualAwb ->
-            openDialogs.decrementAndGet()
-            executeLookup(manualAwb)
-        }
+        var submitted: String? = null
+        val dialog = ManualScanDialog(this) { manualAwb -> submitted = manualAwb }
+        // One place counts the dialog out, however it closes. The AWB (if any) is looked up after that.
         dialog.setOnDismissListener {
             openDialogs.decrementAndGet()
-            resumeCamera()
+            val awb = submitted
+            if (awb != null) executeLookup(awb) else resumeCamera()
         }
         dialog.show()
     }
@@ -609,25 +784,29 @@ class ScannerActivity : AppCompatActivity() {
                 delay(5000)
                 val idleFor = SystemClock.elapsedRealtime() - lastActivityAt
                 if (cameraRunning && idleFor >= CameraTuning.IDLE_PAUSE_MS && !isRequestInFlight.get() && openDialogs.get() == 0) {
-                    pauseCamera()
+                    pauseCamera(showOverlay = true)
                 }
             }
         }
     }
 
-    private fun pauseCamera() {
+    private fun pauseCamera(showOverlay: Boolean) {
         if (!cameraRunning) return
         cameraRunning = false
         cameraProvider?.unbindAll()
         camera = null
-        binding.layoutCameraPaused.visibility = View.VISIBLE
+        if (showOverlay) showIdleOverlay()
         updateKeepScreenOn()
     }
 
     private fun resumeCamera() {
         noteActivity()
-        if (!hasCameraPermission()) return
+        if (!CameraPermission.isGranted(this)) {
+            showCameraNeeded()
+            return
+        }
         binding.layoutCameraPaused.visibility = View.GONE
+        if (cameraRunning || cameraStarting) return
         if (cameraProvider == null) startCamera() else bindCameraUseCases()
     }
 
@@ -640,6 +819,7 @@ class ScannerActivity : AppCompatActivity() {
     }
 
     private fun goToLogin() {
+        sessionManager.clearSession()
         startActivity(Intent(this, LoginActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
         })

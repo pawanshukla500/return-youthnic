@@ -22,6 +22,7 @@ import shop.youthnic.returnscan.data.MarketplaceAccount
 import shop.youthnic.returnscan.databinding.ActivityChannelBinding
 import shop.youthnic.returnscan.databinding.ItemChannelCardBinding
 import shop.youthnic.returnscan.update.AppUpdater
+import shop.youthnic.returnscan.util.CameraPermission
 import shop.youthnic.returnscan.util.Ui
 
 class ChannelActivity : AppCompatActivity() {
@@ -31,6 +32,10 @@ class ChannelActivity : AppCompatActivity() {
 
     private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) AppUpdater.available?.let { AppUpdater.notifyOnce(this, it) }
+    }
+
+    private val cameraPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { _ ->
+        askNotificationPermissionOnce()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -53,7 +58,7 @@ class ChannelActivity : AppCompatActivity() {
             }
         }
 
-        askNotificationPermissionOnce()
+        askPermissionsOnce()
     }
 
     override fun onResume() {
@@ -62,6 +67,27 @@ class ChannelActivity : AppCompatActivity() {
         loadAccounts()
         checkForUpdate()
         AppUpdater.resumePendingInstall(this)
+    }
+
+    /**
+     * People who stay signed in across an app update never see the sign-in screen, so the camera is also asked for
+     * here, once. The notification question follows it, because Android shows one permission dialog at a time.
+     */
+    private fun askPermissionsOnce() {
+        val sm = (application as ReturnScanApp).sessionManager
+        if (CameraPermission.isGranted(this) || sm.cameraRationaleShown) {
+            askNotificationPermissionOnce()
+            return
+        }
+        CameraPermission.showRationale(
+            activity = this,
+            sessionManager = sm,
+            onAllow = {
+                sm.askedCameraPermission = true
+                cameraPermission.launch(CameraPermission.PERMISSION)
+            },
+            onSkip = { askNotificationPermissionOnce() }
+        )
     }
 
     private fun askNotificationPermissionOnce() {
@@ -159,16 +185,22 @@ class ChannelActivity : AppCompatActivity() {
             val item = ItemChannelCardBinding.inflate(inflater, binding.layoutChannelsList, false)
 
             item.tvMarketplaceName.text = account.name
-            item.tvAccountSubtitle.text = account.marketplace
+            // The account name is the marketplace name on this server, so a second identical line adds nothing.
+            if (account.marketplace.isNotBlank() && account.marketplace != account.name) {
+                item.tvAccountSubtitle.text = account.marketplace
+                item.tvAccountSubtitle.visibility = View.VISIBLE
+            } else {
+                item.tvAccountSubtitle.visibility = View.GONE
+            }
             val color = Ui.parseColor(account.color, brand)
             Ui.tint(item.viewChannelMarker, color)
 
-            if (account.scannableCount > 0) {
+            // GET /api/accounts does not send a scannable count. Show one only when the server does, never a made-up 0.
+            if (account.hasScannableCount) {
                 item.tvScannableBadge.text = getString(R.string.scannable_badge_format, Ui.count(account.scannableCount))
                 item.tvScannableBadge.visibility = View.VISIBLE
             } else {
-                item.tvScannableBadge.text = "0 scannable"
-                item.tvScannableBadge.visibility = View.VISIBLE
+                item.tvScannableBadge.visibility = View.GONE
             }
 
             item.root.setOnClickListener {
@@ -195,6 +227,7 @@ class ChannelActivity : AppCompatActivity() {
     }
 
     private fun goToLogin() {
+        (application as ReturnScanApp).sessionManager.clearSession()
         startActivity(Intent(this, LoginActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
         })

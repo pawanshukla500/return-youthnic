@@ -7,6 +7,14 @@ on:
     paths:
       - "android/**"
       - ".github/workflows/return-scan-apk.yml"
+  # A pull request builds, tests and lints the app, and uploads the APK as a workflow artifact for testing.
+  # It never publishes a release: the publish step below is skipped for pull requests.
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "android/**"
+      - ".github/workflows/return-scan-apk.yml"
   workflow_dispatch:
     inputs:
       api_url:
@@ -126,6 +134,7 @@ jobs:
           if-no-files-found: error
 
       - name: Publish Official GitHub Release
+        if: github.event_name != 'pull_request'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |

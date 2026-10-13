@@ -25,11 +25,19 @@ object BarcodeRules {
         return "SYN-MOBILE-$ts-$rand"
     }
 
+    /**
+     * The server accepts only [A-Za-z0-9_-] and 8 to 100 characters (isValidClientKey in server/register-rules.ts). An AWB
+     * can be up to 80 characters and may hold other symbols, so the readable parts are cleaned and cut to fit.
+     */
     fun generateClientScanKey(account: Any, tracking: String): String {
         val ts = System.currentTimeMillis()
         val rand = UUID.randomUUID().toString().replace("-", "").take(8).uppercase()
-        return "SYN-MOBILE-$account-$tracking-$ts-$rand"
+        val accountPart = account.toString().filter { isKeyChar(it) }.take(10)
+        val trackingPart = tracking.filter { isKeyChar(it) }.take(40)
+        return "SYN-MOBILE-$accountPart-$trackingPart-$ts-$rand"
     }
+
+    private fun isKeyChar(c: Char): Boolean = c in 'A'..'Z' || c in 'a'..'z' || c in '0'..'9' || c == '_' || c == '-'
 
     fun looksLikeQr(raw: String?): Boolean {
         if (raw == null) return true

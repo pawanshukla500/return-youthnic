@@ -26,8 +26,8 @@
     <string name="change_marketplace">Change Marketplace</string>
     <string name="connection_online">ONLINE</string>
     <string name="connection_offline">OFFLINE</string>
-    <string name="scanned_today">%1$d scanned today</string>
-    <string name="pending_scans">%1$d pending</string>
+    <string name="scanned_today">%1$s scanned today</string>
+    <string name="pending_scans">%1$s pending</string>
     <string name="aim_at_awb">Aim at return parcel AWB / tracking barcode</string>
     <string name="torch_on">Torch On</string>
     <string name="torch_off">Torch Off</string>
@@ -99,12 +99,12 @@
     <string name="btn_update_now">Download &amp; Install</string>
     <!-- Channel, Login & Scanner Strings -->
     <string name="no_channels">No channels available</string>
-    <string name="scannable_badge_format">%1$d scannable</string>
+    <string name="scannable_badge_format">%1$s scannable</string>
     <string name="error_credentials_required">Email and password are required.</string>
     <string name="signing_in">Signing in…</string>
     <string name="login_failed">Login failed. Please check credentials.</string>
     <string name="preparing_scanner">Preparing scanner…</string>
-    <string name="scanned_today_format">%1$d scanned today</string>
+    <string name="scanned_today_format">%1$s scanned today</string>
     <string name="update_scanner_banner">Update available (%1$s)</string>
 
     <!-- In-App Updates Details -->
@@ -120,7 +120,7 @@
     <string name="update_download_title">Download Update</string>
     <string name="update_install">Install Now</string>
     <string name="update_downloading_title">Downloading Update</string>
-    <string name="update_progress_format">%1$d%%</string>
+    <string name="update_progress_format">%1$d%% · %2$s of %3$s</string>
     <string name="update_waiting">Waiting to start…</string>
     <string name="update_hide">Hide</string>
     <string name="update_permission_title">Install Permission Required</string>
@@ -135,4 +135,28 @@
     <string name="downloading_update">Downloading APK…</string>
     <string name="update_try_again">Try Again</string>
     <string name="update_open_browser">Open in Browser</string>
+
+    <!-- Camera permission (asked at sign-in; the scanner shows the same help if it is still missing) -->
+    <string name="camera_permission_title">Allow camera access</string>
+    <string name="camera_permission_message">Return Scanner uses the camera only to read the AWB barcode on a return parcel. It does not take or store photos or video. You can change this later in Android Settings.</string>
+    <string name="camera_permission_allow">Allow camera</string>
+    <string name="camera_permission_not_now">Not now</string>
+    <string name="camera_needed_title">Camera access is off</string>
+    <string name="camera_needed_sub">Allow the camera to scan AWB barcodes, or type the AWB with Manual AWB.</string>
+    <string name="camera_needed_action">Allow camera</string>
+    <string name="camera_needed_settings_sub">Camera access is blocked. Open Settings, choose Permissions, then allow Camera.</string>
+    <string name="camera_needed_settings_action">Open Settings</string>
+    <string name="camera_denied_toast">Camera is off. Use Manual AWB, or allow the camera to scan.</string>
+
+    <!-- Scanner extras -->
+    <string name="choose_return_title">More than one return has this AWB</string>
+    <string name="choose_return_received">received</string>
+    <string name="no_items_error">This return has no item lines, so it cannot be verified here. Tell an administrator.</string>
+    <string name="session_rules_error">Could not load the issue rules. Check the connection and scan again.</string>
+    <string name="scanner_engine_error">The barcode reader is not available. Use Manual AWB, or update Google Play services.</string>
+    <string name="no_missing_options">No missing-item options are set up. Ask an administrator to add them in Admin.</string>
+    <string name="ticket_hint">Ticket ID</string>
+    <string name="banner_just_now">Just now</string>
+    <string name="torch_needs_camera">The camera is not running, so the torch is not available.</string>
+    <string name="torch_unavailable">This device has no torch.</string>
 </resources>

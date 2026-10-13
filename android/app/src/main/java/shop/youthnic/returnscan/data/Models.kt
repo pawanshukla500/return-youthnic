@@ -2,6 +2,22 @@ package shop.youthnic.returnscan.data
 
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.Locale
+
+/**
+ * Reads a count the server may send as a number or as formatted text such as "1,234".
+ * The scan session sends its shift counts as text (see presentShift in server/register-service.ts).
+ */
+internal fun JSONObject.countOf(vararg keys: String): Int {
+    for (key in keys) {
+        if (!has(key) || isNull(key)) continue
+        val value = opt(key)
+        if (value is Number) return value.toInt()
+        val digits = value.toString().filter { it.isDigit() }
+        if (digits.isNotEmpty()) return digits.toIntOrNull() ?: 0
+    }
+    return 0
+}
 
 data class User(
     val id: Int,
@@ -51,7 +67,9 @@ data class MarketplaceAccount(
     val status: String,
     val marketplace: String = ""
 ) {
+    /** Scannable returns for the account, or -1 when the server does not report it (GET /api/accounts sends id and name only). */
     val scannableCount: Int get() = activeRows
+    val hasScannableCount: Boolean get() = activeRows >= 0
     val accountIdStr: String get() = id.toString()
 
     companion object {
@@ -70,7 +88,7 @@ data class MarketplaceAccount(
                 id = json.optInt("id", 0),
                 name = name,
                 color = json.optString("color", color),
-                activeRows = json.optInt("activeRows", json.optInt("active_rows", 0)),
+                activeRows = json.optInt("activeRows", json.optInt("active_rows", -1)),
                 status = json.optString("status", "Active lookup available"),
                 marketplace = marketplace
             )
@@ -84,6 +102,18 @@ data class ShiftProgress(
     val clearRate: String
 ) {
     val scannedToday: Int get() = scansToday
+
+    companion object {
+        /** Parses the `shift` object of GET /api/scan/session: scanned, correct, issues, accuracy (all text). */
+        fun fromJson(json: JSONObject?): ShiftProgress {
+            if (json == null) return ShiftProgress(0, 0, "100%")
+            return ShiftProgress(
+                scansToday = json.countOf("scanned", "scansToday"),
+                issuesToday = json.countOf("issues", "issuesToday"),
+                clearRate = json.optString("accuracy", json.optString("clearRate", "100%"))
+            )
+        }
+    }
 }
 
 data class IssueCategory(
@@ -96,6 +126,15 @@ data class IssueCategory(
     val requiresSubIssue: Boolean
 ) {
     companion object {
+        /** The category the server seeds as "no issue" (is_clear). It is never sent as an issue. */
+        const val CODE_NO_ISSUE = "no_issue"
+        const val CODE_MISSING = "missing_component"
+        const val CODE_WRONG = "wrong_product"
+        const val CODE_DAMAGED = "damaged_product"
+        const val CODE_SKU_CHANGE = "sku_change"
+        const val CODE_SIZE_CHANGE = "size_change"
+        const val CODE_OTHER = "other_issue"
+
         fun fromJson(json: JSONObject): IssueCategory {
             return IssueCategory(
                 code = json.optString("code", ""),
@@ -116,12 +155,12 @@ data class SubIssue(
     val categoryCode: String = ""
 ) {
     val label: String get() = name
-    constructor(id: Int, label: String, categoryCode: String) : this(id.toString(), label, categoryCode)
+
     companion object {
         fun fromJson(json: JSONObject): SubIssue {
             return SubIssue(
-                id = json.optString("id", json.optInt("id", 0).toString()),
-                name = json.optString("name", json.optString("label", "")),
+                id = json.optString("id", "0"),
+                name = json.optString("label", json.optString("name", "")),
                 categoryCode = json.optString("categoryCode", "")
             )
         }
@@ -134,11 +173,11 @@ data class ScanSessionData(
     val categories: List<IssueCategory> = emptyList(),
     val subIssues: List<SubIssue> = emptyList()
 ) {
-    constructor(accounts: List<MarketplaceAccount>, categories: List<IssueCategory>, subIssues: List<SubIssue>) :
-        this(ShiftProgress(0, 0, "100%"), accounts, categories, subIssues)
-
     val shiftProgress: ShiftProgress get() = shift
-    val missingComponents: List<SubIssue> get() = subIssues.filter { it.categoryCode.contains("MISSING", ignoreCase = true) || it.categoryCode.isEmpty() }
+
+    fun categoryOf(code: String): IssueCategory? = categories.firstOrNull { it.code == code }
+
+    fun subIssuesFor(categoryCode: String): List<SubIssue> = subIssues.filter { it.categoryCode == categoryCode }
 }
 
 data class LookupItem(
@@ -150,53 +189,28 @@ data class LookupItem(
     val title: String = "",
     val imageUrl: String = "",
     val expectedQty: Int = 1,
-    var receivedQty: Int = 1,
     val color: String = "",
-    val size: String = "",
-    var physicalChecked: Boolean = false,
-    var selectedCategoryCode: String = "clear",
-    var selectedSubIssueId: Int? = null,
-    var itemNotes: String = ""
+    val keyDetail: String = ""
 ) {
     val quantity: Int get() = expectedQty
     val masterSku: String get() = productSku
 
-    constructor(
-        itemId: String,
-        marketplaceSku: String,
-        masterSku: String,
-        title: String,
-        quantity: Int,
-        imageUrl: String
-    ) : this(
-        itemId = itemId,
-        orderItemId = "",
-        shipmentId = "",
-        marketplaceSku = marketplaceSku,
-        productSku = masterSku,
-        title = title,
-        imageUrl = imageUrl,
-        expectedQty = quantity,
-        receivedQty = quantity,
-        color = "",
-        size = ""
-    )
+    /** Colour and key detail (for example the size), for the line under the SKU. */
+    val detailLine: String get() = listOf(color, keyDetail).filter { it.isNotBlank() }.joinToString(" · ")
 
     companion object {
         fun fromJson(json: JSONObject): LookupItem {
-            val exp = json.optInt("expectedQty", json.optInt("expected_units", 1))
             return LookupItem(
                 itemId = json.optString("itemId", json.optString("id", "0")),
-                orderItemId = json.optString("orderItemId", json.optString("order_item_id", "")),
-                shipmentId = json.optString("shipmentId", json.optString("shipment_id", "")),
-                marketplaceSku = json.optString("marketplaceSku", json.optString("marketplace_sku", "")),
-                productSku = json.optString("productSku", json.optString("sku", "")),
-                title = json.optString("title", json.optString("name", "Product Item")),
-                imageUrl = json.optString("imageUrl", json.optString("image_url", "")),
-                expectedQty = exp,
-                receivedQty = exp,
-                color = json.optString("color", ""),
-                size = json.optString("size", "")
+                orderItemId = json.optString("orderItemId", ""),
+                shipmentId = json.optString("shipmentId", ""),
+                marketplaceSku = json.optString("marketplaceSku", ""),
+                productSku = json.optString("productSku", ""),
+                title = json.optString("productName", json.optString("title", "")),
+                imageUrl = json.optString("imageUrl", ""),
+                expectedQty = json.optInt("expectedQty", 1),
+                color = json.optString("colorName", ""),
+                keyDetail = json.optString("keyDetail", "")
             )
         }
     }
@@ -208,93 +222,134 @@ data class DuplicateDetails(
     val outcome: String
 )
 
-data class LookupResult(
-    val matched: Boolean,
-    val matchLeg: String,
-    val marketplace: String,
-    val account: String,
-    val shipmentId: String,
-    val tracking: String,
+/** One of several returns that share an AWB. The scanner picks one, and the lookup is repeated with its shipmentId. */
+data class LookupCandidate(
+    val shipmentId: Int,
+    val accountName: String,
     val orderId: String,
-    val shipmentCode: String,
-    val carrier: String,
-    val returnType: String,
-    val returnReason: String,
-    val items: List<LookupItem>,
-    val duplicate: Boolean,
-    val duplicateDetails: DuplicateDetails?
+    val itemCount: Int,
+    val alreadyReceived: Boolean,
+    val receivedAt: String,
+    val scannedBy: String
 ) {
-    val status: String
-        get() = when {
-            duplicate -> "DUPLICATE"
-            matched -> "FOUND"
-            else -> "NOT_FOUND"
-        }
-
-    val trackingNumber: String
-        get() = tracking
-
-    val sku: String get() = items.firstOrNull()?.marketplaceSku.orEmpty()
-    val masterSku: String get() = items.firstOrNull()?.productSku.orEmpty()
-    val productTitle: String get() = items.firstOrNull()?.title.orEmpty()
-    val expectedQty: Int get() = items.firstOrNull()?.expectedQty ?: 1
-    val imageUrl: String get() = items.firstOrNull()?.imageUrl.orEmpty()
-
     companion object {
-        fun fromJson(json: JSONObject, fallbackTracking: String): LookupResult {
-            val itemsArray = json.optJSONArray("items") ?: JSONArray()
-            val parsedItems = mutableListOf<LookupItem>()
-            for (i in 0 until itemsArray.length()) {
-                val itemObj = itemsArray.optJSONObject(i)
-                if (itemObj != null) {
-                    parsedItems.add(LookupItem.fromJson(itemObj))
-                }
-            }
-
-            val dupObj = json.optJSONObject("duplicateDetails")
-            val duplicateDetails = if (dupObj != null) {
-                DuplicateDetails(
-                    scannedAt = dupObj.optString("scannedAt", ""),
-                    scannedBy = dupObj.optString("scannedBy", ""),
-                    outcome = dupObj.optString("outcome", "")
-                )
-            } else null
-
-            return LookupResult(
-                matched = json.optBoolean("matched", false),
-                matchLeg = json.optString("matchLeg", "return"),
-                marketplace = json.optString("marketplace", ""),
-                account = json.optString("account", ""),
-                shipmentId = json.optString("shipmentId", json.optString("shipment_id", "0")),
-                tracking = json.optString("tracking", fallbackTracking),
-                orderId = json.optString("orderId", json.optString("order_id", "")),
-                shipmentCode = json.optString("shipmentCode", json.optString("shipment_id", "")),
-                carrier = json.optString("carrier", json.optString("courier_partner", "Standard Carrier")),
-                returnType = json.optString("returnType", json.optString("type_of_return", "Customer Return")),
-                returnReason = json.optString("returnReason", json.optString("reason", "Customer Return")),
-                items = parsedItems,
-                duplicate = json.optBoolean("duplicate", false),
-                duplicateDetails = duplicateDetails
+        fun fromJson(json: JSONObject): LookupCandidate {
+            return LookupCandidate(
+                shipmentId = json.optInt("shipmentId", 0),
+                accountName = json.optString("accountName", ""),
+                orderId = json.optString("orderId", ""),
+                itemCount = json.optInt("itemCount", 0),
+                alreadyReceived = json.optBoolean("alreadyReceived", false),
+                receivedAt = json.optString("receivedAt", ""),
+                scannedBy = json.optString("scannedBy", "")
             )
         }
     }
 }
 
+/**
+ * The answer of POST /api/scan/lookup. The server sends one of
+ *   {status: "found", trackingId, shipment: {...}}
+ *   {status: "duplicate", trackingId, marketplace, time, scannedBy}
+ *   {status: "choose", trackingId, candidates: [...]}
+ *   {status: "not_found", trackingId}
+ */
+data class LookupResult(
+    val status: String,
+    val tracking: String,
+    val shipmentId: String = "",
+    val marketplace: String = "",
+    val orderId: String = "",
+    val carrier: String = "",
+    val returnType: String = "",
+    val returnReason: String = "",
+    val matchLeg: String = "",
+    val items: List<LookupItem> = emptyList(),
+    val duplicateDetails: DuplicateDetails? = null,
+    val candidates: List<LookupCandidate> = emptyList()
+) {
+    val trackingNumber: String get() = tracking
+    val matched: Boolean get() = status == STATUS_FOUND
+    val duplicate: Boolean get() = status == STATUS_DUPLICATE
+
+    companion object {
+        const val STATUS_FOUND = "FOUND"
+        const val STATUS_DUPLICATE = "DUPLICATE"
+        const val STATUS_CHOOSE = "CHOOSE"
+        const val STATUS_NOT_FOUND = "NOT_FOUND"
+
+        fun fromJson(json: JSONObject, fallbackTracking: String): LookupResult {
+            val status = json.optString("status", "not_found").trim().uppercase(Locale.ROOT)
+            val tracking = json.optString("trackingId", fallbackTracking)
+            val shipment = json.optJSONObject("shipment") ?: JSONObject()
+
+            val items = ArrayList<LookupItem>()
+            val itemsArray = shipment.optJSONArray("items") ?: JSONArray()
+            for (i in 0 until itemsArray.length()) {
+                val itemObj = itemsArray.optJSONObject(i)
+                if (itemObj != null) items.add(LookupItem.fromJson(itemObj))
+            }
+
+            val candidates = ArrayList<LookupCandidate>()
+            val candidateArray = json.optJSONArray("candidates") ?: JSONArray()
+            for (i in 0 until candidateArray.length()) {
+                val candidateObj = candidateArray.optJSONObject(i)
+                if (candidateObj != null) candidates.add(LookupCandidate.fromJson(candidateObj))
+            }
+
+            val duplicateDetails = if (status == STATUS_DUPLICATE) {
+                DuplicateDetails(
+                    scannedAt = json.optString("time", ""),
+                    scannedBy = json.optString("scannedBy", ""),
+                    outcome = ""
+                )
+            } else {
+                null
+            }
+
+            return LookupResult(
+                status = status,
+                tracking = tracking,
+                shipmentId = shipment.optString("shipmentId", ""),
+                marketplace = shipment.optString("marketplace", json.optString("marketplace", "")),
+                orderId = shipment.optString("orderId", ""),
+                carrier = shipment.optString("courier", ""),
+                returnType = shipment.optString("returnType", ""),
+                returnReason = shipment.optString("returnReason", ""),
+                matchLeg = shipment.optString("matchedLeg", ""),
+                items = items,
+                duplicateDetails = duplicateDetails,
+                candidates = candidates
+            )
+        }
+    }
+}
+
+/** The answer of POST /api/scan/complete: {replayed, scan: {id, status, scannedAt, ...}, itemCount, issueCount, shift}. */
 data class ScanReceipt(
     val id: Int,
     val scanKey: String,
     val status: String,
     val outcome: String,
-    val scannedAt: String
+    val scannedAt: String,
+    val issueCount: Int = 0,
+    val replayed: Boolean = false,
+    val scannedToday: Int = -1
 ) {
     companion object {
         fun fromJson(json: JSONObject): ScanReceipt {
+            val scan = json.optJSONObject("scan") ?: json
+            val issues = json.optInt("issueCount", 0)
+            val shift = json.optJSONObject("shift")
             return ScanReceipt(
-                id = json.optInt("id", 0),
-                scanKey = json.optString("scanKey", json.optString("scan_key", "")),
-                status = json.optString("status", "Saved"),
-                outcome = json.optString("outcome", "clear"),
-                scannedAt = json.optString("scannedAt", json.optString("scanned_at", ""))
+                id = scan.optInt("id", 0),
+                scanKey = scan.optString("scanKey", scan.optString("scan_key", "")),
+                status = scan.optString("status", "Saved"),
+                outcome = if (issues > 0) "issue" else "clear",
+                scannedAt = scan.optString("scannedAt", scan.optString("scanned_at", "")),
+                issueCount = issues,
+                replayed = json.optBoolean("replayed", false),
+                scannedToday = shift?.countOf("scanned", "scansToday") ?: -1
             )
         }
     }
@@ -346,6 +401,6 @@ data class AppRelease(
     }
 }
 
-class ApiException(val code: Int, message: String) : Exception("HTTP $code: $message")
+class ApiException(val code: Int, message: String) : Exception(message)
 class AuthExpiredException(message: String = "Session expired. Sign in again.") : Exception(message)
 class NetworkException(message: String, cause: Throwable? = null) : Exception(message, cause)

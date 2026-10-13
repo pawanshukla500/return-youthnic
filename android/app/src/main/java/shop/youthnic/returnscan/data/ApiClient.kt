@@ -93,12 +93,7 @@ class ApiClient(private val sessionManager: SessionManager) {
         try {
             val req = authorizedRequestBuilder("/api/scan/session").get().build()
             execute(req) { json ->
-                val shiftObj = json.optJSONObject("shift") ?: JSONObject()
-                val shift = ShiftProgress(
-                    scansToday = shiftObj.optInt("scansToday", 0),
-                    issuesToday = shiftObj.optInt("issuesToday", 0),
-                    clearRate = shiftObj.optString("clearRate", "100%")
-                )
+                val shift = ShiftProgress.fromJson(json.optJSONObject("shift"))
 
                 val accountsArr = json.optJSONArray("accounts") ?: JSONArray()
                 val accounts = mutableListOf<MarketplaceAccount>()
@@ -128,12 +123,17 @@ class ApiClient(private val sessionManager: SessionManager) {
         }
     }
 
-    suspend fun lookupAwb(awb: String, marketplace: String): Result<LookupResult> =
+    /**
+     * Looks an AWB up in the active return data of one account. [marketplace] is the account name from GET /api/accounts
+     * (blank = every account the user may use). [shipmentId] picks one return when the server answered "choose".
+     */
+    suspend fun lookupAwb(awb: String, marketplace: String, shipmentId: Int? = null): Result<LookupResult> =
         withContext(Dispatchers.IO) {
             try {
                 val json = JSONObject().apply {
                     put("tracking", awb.trim())
                     put("marketplace", if (marketplace.isBlank()) "Auto detect" else marketplace)
+                    if (shipmentId != null) put("shipmentId", shipmentId)
                 }
                 val req = authorizedRequestBuilder("/api/scan/lookup")
                     .post(json.toString().toRequestBody(jsonMediaType))
@@ -147,108 +147,14 @@ class ApiClient(private val sessionManager: SessionManager) {
             }
         }
 
-    suspend fun lookup(accountId: Any?, awb: String): Result<LookupResult> = lookupAwb(awb, "")
-
-    suspend fun saveScan(
+    suspend fun completeScan(
         shipmentId: Int,
         clientScanKey: String,
-        tracking: String,
-        notes: String,
-        items: List<LookupItem>
-    ): Result<ScanReceipt> = withContext(Dispatchers.IO) {
-        try {
-            val submission = JSONObject().apply {
-                put("shipmentId", shipmentId)
-                put("clientScanKey", clientScanKey)
-                put("scannedTracking", tracking)
-                put("notes", notes)
-                put("photoCount", 0)
-                put("hasVideo", false)
-
-                val itemsArr = JSONArray()
-                for (item in items) {
-                    val itemObj = JSONObject().apply {
-                        put("itemId", item.itemId)
-                        put("receivedQty", item.receivedQty)
-                        put("verified", item.physicalChecked)
-
-                        val issuesArr = JSONArray()
-                        // Only add an issue if not clear
-                        if (item.selectedCategoryCode != "clear") {
-                            val issueObj = JSONObject().apply {
-                                put("categoryCode", item.selectedCategoryCode)
-                                if (item.selectedSubIssueId != null) {
-                                    put("subIssueId", item.selectedSubIssueId)
-                                }
-                                put("qty", item.receivedQty)
-                                put("ticketCode", "")
-                                put("notes", item.itemNotes)
-                            }
-                            issuesArr.put(issueObj)
-                        }
-                        put("issues", issuesArr)
-                    }
-                    itemsArr.put(itemObj)
-                }
-                put("items", itemsArr)
-            }
-
-            val req = authorizedRequestBuilder("/api/scan/complete")
-                .post(submission.toString().toRequestBody(jsonMediaType))
-                .build()
-
-            execute(req) { resJson ->
-                ScanReceipt.fromJson(resJson)
-            }
-        } catch (e: Exception) {
-            Result.failure(mapException(e))
-        }
-    }
-
-    suspend fun completeScan(
-        accountId: Any,
-        shipmentId: Any,
-        clientScanKey: String,
         scannedTracking: String,
-        items: List<shop.youthnic.returnscan.ui.ItemVerificationState>
+        items: List<ItemVerificationState>
     ): Result<ScanReceipt> = withContext(Dispatchers.IO) {
         try {
-            val submission = JSONObject().apply {
-                put("accountId", accountId.toString().toIntOrNull() ?: 0)
-                put("shipmentId", shipmentId.toString().toIntOrNull() ?: 0)
-                put("clientScanKey", clientScanKey)
-                put("scannedTracking", scannedTracking)
-                put("notes", "")
-                put("photoCount", 0)
-                put("hasVideo", false)
-
-                val itemsArr = JSONArray()
-                for (item in items) {
-                    val itemObj = JSONObject().apply {
-                        put("itemId", item.itemId.toIntOrNull() ?: 0)
-                        put("receivedQty", item.receivedQty)
-                        put("verified", item.physicalChecked)
-
-                        val issuesArr = JSONArray()
-                        if (item.categoryCode != "clear") {
-                            val issueObj = JSONObject().apply {
-                                put("categoryCode", item.categoryCode)
-                                if (!item.subIssueId.isNullOrBlank()) {
-                                    put("subIssueId", item.subIssueId?.toIntOrNull())
-                                }
-                                put("qty", item.receivedQty)
-                                put("ticketCode", "")
-                                put("notes", item.notes)
-                            }
-                            issuesArr.put(issueObj)
-                        }
-                        put("issues", issuesArr)
-                    }
-                    itemsArr.put(itemObj)
-                }
-                put("items", itemsArr)
-            }
-
+            val submission = ScanPayload.build(shipmentId, clientScanKey, scannedTracking, items)
             val req = authorizedRequestBuilder("/api/scan/complete")
                 .post(submission.toString().toRequestBody(jsonMediaType))
                 .build()
@@ -341,7 +247,16 @@ class ApiClient(private val sessionManager: SessionManager) {
         if (!response.isSuccessful) {
             val errorMsg = try {
                 val errObj = JSONObject(bodyStr)
-                errObj.optString("error", errObj.optString("message", "Request failed with HTTP ${response.code}"))
+                val base = errObj.optString("error", errObj.optString("message", "Request failed with HTTP ${response.code}"))
+                val details = errObj.optJSONArray("details")
+                val lines = ArrayList<String>()
+                if (details != null) {
+                    for (i in 0 until minOf(details.length(), 3)) {
+                        val line = details.optString(i, "")
+                        if (line.isNotBlank()) lines.add(line)
+                    }
+                }
+                if (lines.isEmpty()) base else base + "\n" + lines.joinToString("\n")
             } catch (_: Exception) {
                 "Request failed with HTTP ${response.code}"
             }
