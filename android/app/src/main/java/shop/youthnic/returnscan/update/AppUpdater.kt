@@ -172,8 +172,14 @@ object AppUpdater {
 
     fun startUpdate(activity: AppCompatActivity, release: AppRelease) {
         val dir = activity.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
-        val dm = activity.getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager
-        if (dir == null || dm == null) {
+            ?: activity.getExternalFilesDir(null)
+            ?: activity.cacheDir
+        val dm = try {
+            activity.getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager
+        } catch (_: Exception) {
+            null
+        }
+        if (dm == null) {
             openDownloadPage(activity, release)
             return
         }
@@ -198,15 +204,21 @@ object AppUpdater {
                 dm.remove(previousId)
             } catch (_: Exception) {}
         }
-        dir.listFiles()?.filter { it.name.startsWith("return-scan-") && it.name.endsWith(".apk") }?.forEach { it.delete() }
+        try {
+            dir.listFiles()?.filter { it.name.startsWith("return-scan-") && it.name.endsWith(".apk") }?.forEach { it.delete() }
+        } catch (_: Exception) {}
 
-        val request = DownloadManager.Request(Uri.parse(release.downloadUrl))
-            .setTitle(activity.getString(R.string.update_download_title, release.versionName))
-            .setDescription(activity.getString(R.string.app_name))
-            .setMimeType(APK_MIME)
-            .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE)
-            .setDestinationInExternalFilesDir(activity, Environment.DIRECTORY_DOWNLOADS, file.name)
         val id = try {
+            if (release.downloadUrl.isBlank() || !release.downloadUrl.startsWith("http")) {
+                openDownloadPage(activity, release)
+                return
+            }
+            val request = DownloadManager.Request(Uri.parse(release.downloadUrl))
+                .setTitle(activity.getString(R.string.update_download_title, release.versionName))
+                .setDescription(activity.getString(R.string.app_name))
+                .setMimeType(APK_MIME)
+                .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE)
+                .setDestinationInExternalFilesDir(activity, Environment.DIRECTORY_DOWNLOADS, file.name)
             dm.enqueue(request)
         } catch (_: Exception) {
             openDownloadPage(activity, release)
@@ -237,6 +249,7 @@ object AppUpdater {
     }
 
     private fun showProgress(activity: AppCompatActivity, dm: DownloadManager, id: Long, release: AppRelease, file: File) {
+        if (activity.isFinishing || activity.isDestroyed) return
         val view = DialogUpdateProgressBinding.inflate(activity.layoutInflater)
         val dialog = MaterialAlertDialogBuilder(activity)
             .setTitle(activity.getString(R.string.update_downloading_title, release.versionName))
@@ -245,19 +258,27 @@ object AppUpdater {
             .create()
         var job: Job? = null
         dialog.setOnDismissListener { job?.cancel() }
-        dialog.show()
+        try {
+            dialog.show()
+        } catch (_: Exception) {
+            return
+        }
         job = activity.lifecycleScope.launch {
             while (isActive) {
                 val state = withContext(Dispatchers.IO) { query(dm, id) }
                 if (state == null || state.status == DownloadManager.STATUS_FAILED) {
-                    dialog.setOnDismissListener(null)
-                    dialog.dismiss()
+                    try {
+                        dialog.setOnDismissListener(null)
+                        if (!activity.isFinishing && !activity.isDestroyed) dialog.dismiss()
+                    } catch (_: Exception) {}
                     showFailed(activity, release, damaged = false)
                     return@launch
                 }
                 if (state.status == DownloadManager.STATUS_SUCCESSFUL) {
-                    dialog.setOnDismissListener(null)
-                    dialog.dismiss()
+                    try {
+                        dialog.setOnDismissListener(null)
+                        if (!activity.isFinishing && !activity.isDestroyed) dialog.dismiss()
+                    } catch (_: Exception) {}
                     verifyAndInstall(activity, release, file)
                     return@launch
                 }
@@ -276,6 +297,7 @@ object AppUpdater {
     }
 
     private fun verifyAndInstall(activity: AppCompatActivity, release: AppRelease, file: File) {
+        if (activity.isFinishing || activity.isDestroyed) return
         activity.lifecycleScope.launch {
             val intact = withContext(Dispatchers.IO) {
                 file.isFile && (release.sha256.isBlank() || sha256(file).equals(release.sha256, ignoreCase = true))
@@ -286,7 +308,7 @@ object AppUpdater {
                 showFailed(activity, release, damaged = true)
                 return@launch
             }
-            install(activity, file)
+            install(activity, file, release)
         }
     }
 
@@ -303,32 +325,37 @@ object AppUpdater {
         return digest.digest().joinToString("") { "%02x".format(it) }
     }
 
-    private fun install(activity: Activity, file: File) {
+    private fun install(activity: Activity, file: File, release: AppRelease? = null) {
         if (activity.isFinishing || activity.isDestroyed) return
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !activity.packageManager.canRequestPackageInstalls()) {
             pendingInstall = file
-            MaterialAlertDialogBuilder(activity)
-                .setTitle(R.string.update_permission_title)
-                .setMessage(R.string.update_permission_message)
-                .setPositiveButton(R.string.update_open_settings) { _, _ -> openInstallPermission(activity) }
-                .setNegativeButton(R.string.later, null)
-                .show()
+            try {
+                MaterialAlertDialogBuilder(activity)
+                    .setTitle(R.string.update_permission_title)
+                    .setMessage(R.string.update_permission_message)
+                    .setPositiveButton(R.string.update_open_settings) { _, _ -> openInstallPermission(activity) }
+                    .setNegativeButton(R.string.later, null)
+                    .show()
+            } catch (_: Exception) {}
             return
         }
         pendingInstall = null
-        val uri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            FileProvider.getUriForFile(activity, "${activity.packageName}.updates", file)
-        } else {
-            Uri.fromFile(file)
-        }
-        val intent = Intent(Intent.ACTION_VIEW).apply {
-            setDataAndType(uri, APK_MIME)
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
         try {
+            val uri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                FileProvider.getUriForFile(activity, "${activity.packageName}.updates", file)
+            } else {
+                Uri.fromFile(file)
+            }
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, APK_MIME)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
             activity.startActivity(intent)
-        } catch (_: Exception) {
+        } catch (e: Exception) {
             Toast.makeText(activity, R.string.update_install_failed, Toast.LENGTH_LONG).show()
+            if (release != null) {
+                openDownloadPage(activity, release)
+            }
         }
     }
 
@@ -347,7 +374,7 @@ object AppUpdater {
         val file = pendingInstall ?: return
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !activity.packageManager.canRequestPackageInstalls()) return
         pendingInstall = null
-        if (file.isFile) install(activity, file)
+        if (file.isFile) install(activity, file, available)
     }
 
     private fun showFailed(activity: AppCompatActivity, release: AppRelease, damaged: Boolean) {
