@@ -98,7 +98,7 @@ jobs:
           }
           echo "Camera permission verified in APK."
 
-      - name: Measure APK Byte and MB Size (Budget: <= 5 MB target, <= 10 MB ceiling)
+      - name: "Measure APK Byte and MB Size (Budget: <= 5 MB target, <= 10 MB ceiling)"
         run: |
           SIZE_BYTES=$(wc -c < "$RELEASE_APK")
           SIZE_MB=$(echo "scale=2; $SIZE_BYTES / 1048576" | bc)
