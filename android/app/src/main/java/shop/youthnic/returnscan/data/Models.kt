@@ -257,17 +257,31 @@ data class AppRelease(
     val versionCode: Int,
     val versionName: String,
     val downloadUrl: String,
-    val notes: String,
-    val minSupportedVersionCode: Int
+    val notes: String = "",
+    val minRequiredVersionCode: Int = 10000,
+    val minSupportedVersionCode: Int = minRequiredVersionCode,
+    val sha256: String = "",
+    val sizeBytes: Long = 0L,
+    val publishedAt: String = "",
+    val pageUrl: String = ""
 ) {
+    fun isNewerThan(currentCode: Int): Boolean = versionCode > currentCode
+    fun isRequiredFor(currentCode: Int): Boolean = currentCode < minRequiredVersionCode
+
     companion object {
         fun fromJson(json: JSONObject): AppRelease {
+            val minReq = json.optInt("minRequiredVersionCode", json.optInt("minSupportedVersionCode", 10000))
             return AppRelease(
                 versionCode = json.optInt("versionCode", 10001),
                 versionName = json.optString("versionName", "1.0.1"),
                 downloadUrl = json.optString("downloadUrl", ""),
                 notes = json.optString("notes", ""),
-                minSupportedVersionCode = json.optInt("minSupportedVersionCode", 10000)
+                minRequiredVersionCode = minReq,
+                minSupportedVersionCode = minReq,
+                sha256 = json.optString("sha256", ""),
+                sizeBytes = json.optLong("sizeBytes", 0L),
+                publishedAt = json.optString("publishedAt", ""),
+                pageUrl = json.optString("pageUrl", "")
             )
         }
     }

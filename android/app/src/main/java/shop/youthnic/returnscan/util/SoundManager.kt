@@ -35,8 +35,8 @@ class SoundManager(
     }
 
     fun play(cue: Cue) {
-        if (sessionManager.isSoundEnabled) beep(cue)
-        if (sessionManager.isVibrationEnabled) vibratePattern(ScanSignals.vibration(cue))
+        if (sessionManager.soundEnabled) beep(cue)
+        if (sessionManager.vibrationEnabled) vibratePattern(ScanSignals.vibration(cue))
     }
 
     private fun beep(cue: Cue) {

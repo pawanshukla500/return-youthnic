@@ -97,6 +97,42 @@
     <string name="update_available_title">Update Available: %1$s</string>
     <string name="update_banner_title">New app version %1$s is available</string>
     <string name="btn_update_now">Download &amp; Install</string>
-    <string name="btn_later">Later</string>
+    <!-- Channel, Login & Scanner Strings -->
+    <string name="no_channels">No channels available</string>
+    <string name="scannable_badge_format">%1$d scannable</string>
+    <string name="error_credentials_required">Email and password are required.</string>
+    <string name="signing_in">Signing in…</string>
+    <string name="login_failed">Login failed. Please check credentials.</string>
+    <string name="preparing_scanner">Preparing scanner…</string>
+    <string name="scanned_today_format">%1$d scanned today</string>
+    <string name="update_scanner_banner">Update available (%1$s)</string>
+
+    <!-- In-App Updates Details -->
+    <string name="update_channel_name">Application Updates</string>
+    <string name="update_channel_desc">Notifications for Return Scanner app releases</string>
+    <string name="update_notification_title">Return Scanner Update Available</string>
+    <string name="update_notification_text">Version %1$s is available for installation</string>
+    <string name="update_dialog_title">Update Available</string>
+    <string name="update_dialog_message">A new version of Return Scanner (%1$s) is available.</string>
+    <string name="update_required_title">Update Required</string>
+    <string name="update_required_message">This version is no longer supported. Please update to %1$s to continue.</string>
+    <string name="update_whats_new">What\'s new:</string>
+    <string name="update_download_title">Download Update</string>
+    <string name="update_install">Install Now</string>
+    <string name="update_downloading_title">Downloading Update</string>
+    <string name="update_progress_format">%1$d%%</string>
+    <string name="update_waiting">Waiting to start…</string>
+    <string name="update_hide">Hide</string>
+    <string name="update_permission_title">Install Permission Required</string>
+    <string name="update_permission_message">Return Scanner needs permission to install application updates.</string>
+    <string name="update_open_settings">Open Settings</string>
+    <string name="later">Later</string>
+    <string name="close">Close</string>
+    <string name="update_install_failed">Could not start installer. Please install manually.</string>
+    <string name="update_failed_title">Update Failed</string>
+    <string name="update_damaged_message">The downloaded update file was corrupted. Please try again.</string>
+    <string name="update_failed_message">Download failed. Please check network connection and try again.</string>
     <string name="downloading_update">Downloading APK…</string>
+    <string name="update_try_again">Try Again</string>
+    <string name="update_open_browser">Open in Browser</string>
 </resources>
