@@ -74,7 +74,7 @@ jobs:
           printf '%s\n' "$HOSTINGER_SSH_KEY" | tr -d '\r' > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
           for i in {1..5}; do
-            ssh-keyscan -p "$HOSTINGER_PORT" "$HOSTINGER_HOST" >> ~/.ssh/known_hosts 2>/dev/null && break || sleep 2
+            ssh-keyscan -T 10 -p "$HOSTINGER_PORT" "$HOSTINGER_HOST" >> ~/.ssh/known_hosts 2>/dev/null && break || sleep 2
           done
 
       - name: Package Source Code and Prepare Environment
@@ -142,17 +142,36 @@ jobs:
           APP_DIR: '/opt/return-app/Return-App'
           HPANEL_LINK: '/docker/return-app'
         run: |
-          SSH="ssh -p $HOSTINGER_PORT -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=accept-new"
-          SCP="scp -P $HOSTINGER_PORT -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=accept-new"
+          SSH_OPTS="-o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ConnectionAttempts=5 -o ServerAliveInterval=15 -o ServerAliveCountMax=4"
+          SSH="ssh -p $HOSTINGER_PORT -i ~/.ssh/id_ed25519 $SSH_OPTS"
+          SCP="scp -P $HOSTINGER_PORT -i ~/.ssh/id_ed25519 $SSH_OPTS"
 
-          $SSH "${HOSTINGER_USER}@${HOSTINGER_HOST}" "mkdir -p ${APP_ROOT} ${APP_DIR} ${APP_DIR}/certs ${APP_DIR}/data"
-          $SCP /tmp/return-app.env "${HOSTINGER_USER}@${HOSTINGER_HOST}:${APP_ROOT}/uploaded.env"
+          run_cmd_retry() {
+            local max_attempts=4
+            local attempt=1
+            local delay=4
+            while [ $attempt -le $max_attempts ]; do
+              echo ">>> Connecting to VPS (attempt $attempt/$max_attempts)..."
+              if "$@"; then
+                return 0
+              fi
+              echo "⚠️ Connection attempt $attempt failed. Retrying in ${delay}s..."
+              sleep $delay
+              attempt=$((attempt + 1))
+              delay=$((delay * 2))
+            done
+            echo "❌ Connection failed after $max_attempts attempts."
+            return 1
+          }
+
+          run_cmd_retry $SSH "${HOSTINGER_USER}@${HOSTINGER_HOST}" "mkdir -p ${APP_ROOT} ${APP_DIR} ${APP_DIR}/certs ${APP_DIR}/data"
+          run_cmd_retry $SCP /tmp/return-app.env "${HOSTINGER_USER}@${HOSTINGER_HOST}:${APP_ROOT}/uploaded.env"
           if [ -d /tmp/certs ] && [ "$(ls -A /tmp/certs)" ]; then
             $SCP /tmp/certs/* "${HOSTINGER_USER}@${HOSTINGER_HOST}:${APP_DIR}/certs/" || true
           fi
-          $SCP /tmp/return-app-source.tar.gz "${HOSTINGER_USER}@${HOSTINGER_HOST}:${APP_ROOT}/return-app-source.tar.gz"
+          run_cmd_retry $SCP /tmp/return-app-source.tar.gz "${HOSTINGER_USER}@${HOSTINGER_HOST}:${APP_ROOT}/return-app-source.tar.gz"
 
-          $SSH "${HOSTINGER_USER}@${HOSTINGER_HOST}" "bash -s" <<'EOF'
+          run_cmd_retry $SSH "${HOSTINGER_USER}@${HOSTINGER_HOST}" "bash -s" <<'EOF'
           set -euo pipefail
           APP_ROOT="/opt/return-app"
           APP_DIR="/opt/return-app/Return-App"
