@@ -13,6 +13,16 @@ A genuine native Android Kotlin warehouse return scanning application for VB Exp
 - **Security & Storage:** Android KeyStore backed `EncryptedSharedPreferences` for persistent Bearer session tokens
 - **Audio & Haptics:** Zero-latency pre-synthesized PCM AudioTrack synthesis on `STREAM_MUSIC` (immune to system notification mute)
 
+## Permissions
+
+| Permission | Why | When it is asked |
+| :--- | :--- | :--- |
+| Camera | Reads the AWB barcode. No photo or video is taken or stored. | Right after sign-in, with a short explanation first. People who stay signed in across an update are asked once on the marketplace screen. |
+| Notifications (Android 13+) | Tells the warehouse that an app update is ready. | After the camera question, once. |
+| Install unknown apps | Lets the in-app update hand the downloaded APK to the installer. | Only when an update is installed. |
+
+If the camera is refused, the scanner stays open: the overlay offers **Allow camera**, or **Open Settings** once Android has blocked the dialog, and **Manual AWB** works without the camera.
+
 ## State Machine & Scan Flow
 
 ```
