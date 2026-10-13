@@ -88,6 +88,7 @@ jobs:
           SESSION_SECRET: ${{ secrets.SESSION_SECRET || '' }}
           CORS_ORIGIN: ${{ vars.CORS_ORIGIN || 'https://return.youthnic.shop' }}
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY || '' }}
+          RESEND_FROM_EMAIL: ${{ secrets.RESEND_FROM_EMAIL || vars.RESEND_FROM_EMAIL || 'return.scan@youthnic.shop' }}
           BRANDFETCH_CLIENT_ID: ${{ secrets.BRANDFETCH_CLIENT_ID || '' }}
           OMSGURU_CLIENT_ID: ${{ secrets.OMSGURU_CLIENT_ID || '' }}
           OMSGURU_CLIENT_SECRET: ${{ secrets.OMSGURU_CLIENT_SECRET || '' }}
@@ -105,6 +106,7 @@ jobs:
           SESSION_SECRET=${SESSION_SECRET}
           CORS_ORIGIN=${CORS_ORIGIN}
           RESEND_API_KEY=${RESEND_API_KEY}
+          RESEND_FROM_EMAIL=${RESEND_FROM_EMAIL}
           BRANDFETCH_CLIENT_ID=${BRANDFETCH_CLIENT_ID}
           OMSGURU_CLIENT_ID=${OMSGURU_CLIENT_ID}
           OMSGURU_CLIENT_SECRET=${OMSGURU_CLIENT_SECRET}

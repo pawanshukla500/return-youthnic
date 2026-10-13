@@ -191,10 +191,11 @@ ALTER TABLE receipt_scans ADD COLUMN IF NOT EXISTS partner_source_snapshot text 
 ALTER TABLE receipt_scans ADD COLUMN IF NOT EXISTS tracking_validation_snapshot text NOT NULL DEFAULT 'not_applicable';
 
 DO $$ BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'receipt_scans'::regclass AND conname = 'receipt_scans_matched_field_check') THEN
-    ALTER TABLE receipt_scans ADD CONSTRAINT receipt_scans_matched_field_check
-      CHECK (matched_tracking_field IN ('', 'tracking_id', 'alt_tracking_id')) NOT VALID;
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'receipt_scans'::regclass AND conname = 'receipt_scans_matched_field_check') THEN
+    ALTER TABLE receipt_scans DROP CONSTRAINT receipt_scans_matched_field_check;
   END IF;
+  ALTER TABLE receipt_scans ADD CONSTRAINT receipt_scans_matched_field_check
+    CHECK (matched_tracking_field IN ('', 'tracking_id', 'alt_tracking_id', 'order_number')) NOT VALID;
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'receipt_scans'::regclass AND conname = 'receipt_scans_matched_leg_check') THEN
     ALTER TABLE receipt_scans ADD CONSTRAINT receipt_scans_matched_leg_check
       CHECK (matched_leg IN ('return', 'forward', 'unknown')) NOT VALID;
@@ -225,6 +226,12 @@ ALTER TABLE claim_tickets ADD COLUMN IF NOT EXISTS claim_amount numeric(14,2);
 CREATE INDEX IF NOT EXISTS expected_returns_active_alt_tracking_idx
   ON expected_returns (marketplace_id, alt_tracking_id)
   WHERE lookup_status = 'active' AND alt_tracking_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS expected_returns_active_order_number_idx
+  ON expected_returns (marketplace_id, order_number)
+  WHERE lookup_status = 'active' AND order_number IS NOT NULL AND order_number <> '';
+CREATE INDEX IF NOT EXISTS expected_return_items_display_order_item_idx
+  ON expected_return_items (display_order_item_id)
+  WHERE display_order_item_id <> '';
 CREATE INDEX IF NOT EXISTS expected_return_items_shipment_idx
   ON expected_return_items (shipment_id)
   WHERE shipment_id <> '';

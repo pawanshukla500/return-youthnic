@@ -58,10 +58,18 @@ export function matchedFieldFor(
   trackingId: string,
   altTrackingId: string | null,
   trackingSource: string | null | undefined,
-): { field: "" | "tracking_id" | "alt_tracking_id"; leg: MatchedLeg } {
+  orderNumber?: string | null,
+  itemOrderIds?: string[],
+): { field: "" | "tracking_id" | "alt_tracking_id" | "order_number"; leg: MatchedLeg } {
   if (!scanned) return { field: "", leg: "unknown" }
   if (scanned === trackingId) return { field: "tracking_id", leg: legFor(trackingSource) }
   if (altTrackingId && scanned === altTrackingId) return { field: "alt_tracking_id", leg: "forward" }
+  if (orderNumber && scanned.toUpperCase() === orderNumber.toUpperCase()) {
+    return { field: "order_number", leg: "return" }
+  }
+  if (itemOrderIds && itemOrderIds.some((id) => id && id.toUpperCase() === scanned.toUpperCase())) {
+    return { field: "order_number", leg: "return" }
+  }
   return { field: "", leg: "unknown" }
 }
 
@@ -69,6 +77,7 @@ export const MATCHED_TRACKING_LABELS: Record<string, string> = {
   "": "Not recorded",
   tracking_id: "Primary tracking ID",
   alt_tracking_id: "Alternate tracking ID",
+  order_number: "Order ID (manual scan)",
 }
 
 export const MATCHED_LEG_LABELS: Record<string, string> = {

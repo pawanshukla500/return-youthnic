@@ -145,7 +145,9 @@ function matchedText(row: Row): string {
       ? "Forward (alternate) AWB"
       : row.matchedTrackingField === "tracking_id"
         ? "Primary AWB"
-        : "Not recorded"
+        : row.matchedTrackingField === "order_number"
+          ? "Order ID"
+          : "Not recorded"
   const leg = row.matchedLeg === "return" ? "return leg" : row.matchedLeg === "forward" ? "forward leg" : "leg not known"
   return row.matchedTrackingField ? `${field}, ${leg}` : "Not recorded"
 }

@@ -29,6 +29,7 @@ function catalogImageSrc(value: string) {
 const MATCHED_FIELD_LABELS: Record<string, string> = {
   tracking_id: "Primary tracking ID",
   alt_tracking_id: "Alternate tracking ID",
+  order_number: "Order ID (manual entry)",
 }
 const MATCHED_LEG_LABELS: Record<string, string> = {
   return: "Return leg",
@@ -1102,7 +1103,7 @@ export function ScanReturns() {
                     setError("")
                     setNotice("")
                   }}
-                  placeholder="Scan tracking ID and press Enter"
+                  placeholder="Scan tracking ID or Order ID and press Enter"
                 />
                 <span className="scan-input-helper">Auto opens on Enter</span>
                 <button type="submit" className="scan-submit-btn">

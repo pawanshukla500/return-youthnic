@@ -105,6 +105,21 @@ test("the matched AWB and its leg are recorded: return, forward, or not known", 
   assert.equal(legFor("tracking_id"), "unknown")
 })
 
+test("order number and item order IDs match correctly when typed into scan bar", () => {
+  assert.deepEqual(
+    matchedFieldFor("OD123456789", "SYN-R-1", "SYN-F-1", "return_tracking", "OD123456789", ["ITEM-999"]),
+    { field: "order_number", leg: "return" },
+  )
+  assert.deepEqual(
+    matchedFieldFor("ITEM-999", "SYN-R-1", "SYN-F-1", "return_tracking", "OD123456789", ["ITEM-999"]),
+    { field: "order_number", leg: "return" },
+  )
+  assert.deepEqual(
+    matchedFieldFor("item-999", "SYN-R-1", "SYN-F-1", "return_tracking", "OD123456789", ["ITEM-999"]),
+    { field: "order_number", leg: "return" },
+  )
+})
+
 // ---------------------------------------------------------------------------------------------------------------
 // Lookup decisions
 // ---------------------------------------------------------------------------------------------------------------

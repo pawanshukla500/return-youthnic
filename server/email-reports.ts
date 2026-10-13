@@ -12,7 +12,7 @@
 
 import type pg from "pg"
 
-export const SENDER_EMAIL = "return.scan@youthnic.shop"
+export const SENDER_EMAIL = process.env.RESEND_FROM_EMAIL?.trim() || "return.scan@youthnic.shop"
 
 export type ReportsConfig = {
   dailyEnabled: boolean
@@ -644,10 +644,10 @@ Planned domain: https://return.youthnic.shop
   <title>${subject}</title>
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background: #f8fafc; color: #0f172a; margin: 0; padding: 24px 12px; }
-    .container { max-width: 680px; margin: 0 auto; background: #ffffff; border-radius: 12px; border: 1px solid #e2e8f0; overflow: hidden; }
-    .header { background: #0f172a; color: #ffffff; padding: 24px; text-align: left; }
-    .header h1 { margin: 0 0 6px; font-size: 20px; font-weight: 600; color: #ffffff; }
-    .header p { margin: 0; font-size: 13px; color: #94a3b8; }
+    .container { max-width: 680px; margin: 0 auto; background: #ffffff; border-radius: 12px; border: 1px solid #e2e8f0; overflow: hidden; box-shadow: 0 4px 16px rgba(0,0,0,0.06); }
+    .header { background: linear-gradient(135deg, #093c31 0%, #136c57 100%); color: #ffffff; padding: 26px 28px; text-align: left; }
+    .header h1 { margin: 0 0 6px; font-size: 21px; font-weight: 700; color: #ffffff; letter-spacing: -0.2px; }
+    .header p { margin: 0; font-size: 13px; color: #a7f3d0; }
     .content { padding: 24px; }
     .stats-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-bottom: 24px; }
     .stat-card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; }
@@ -668,7 +668,7 @@ Planned domain: https://return.youthnic.shop
 <body>
   <div class="container">
     <div class="header">
-      <h1>Return Operations Daily Report</h1>
+      <h1>Youthnic · Return Operations Daily Report</h1>
       <p>Report Date: ${data.dateIst} (IST) · VB Exports Returns Management</p>
     </div>
     <div class="content">
@@ -807,10 +807,10 @@ Sent automatically by Return App (return.scan@youthnic.shop)
   <title>${subject}</title>
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background: #f8fafc; color: #0f172a; margin: 0; padding: 24px 12px; }
-    .container { max-width: 680px; margin: 0 auto; background: #ffffff; border-radius: 12px; border: 1px solid #e2e8f0; overflow: hidden; }
-    .header { background: #0f172a; color: #ffffff; padding: 24px; text-align: left; }
-    .header h1 { margin: 0 0 6px; font-size: 20px; font-weight: 600; color: #ffffff; }
-    .header p { margin: 0; font-size: 13px; color: #94a3b8; }
+    .container { max-width: 680px; margin: 0 auto; background: #ffffff; border-radius: 12px; border: 1px solid #e2e8f0; overflow: hidden; box-shadow: 0 4px 16px rgba(0,0,0,0.06); }
+    .header { background: linear-gradient(135deg, #093c31 0%, #136c57 100%); color: #ffffff; padding: 26px 28px; text-align: left; }
+    .header h1 { margin: 0 0 6px; font-size: 21px; font-weight: 700; color: #ffffff; letter-spacing: -0.2px; }
+    .header p { margin: 0; font-size: 13px; color: #a7f3d0; }
     .content { padding: 24px; }
     .summary-card { background: #f0fdf4; border: 1px solid #bbf7d0; border-left: 4px solid #16a34a; padding: 14px 18px; border-radius: 6px; margin-bottom: 20px; font-size: 14px; color: #166534; line-height: 1.5; }
     .stats-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-bottom: 24px; }
@@ -829,7 +829,7 @@ Sent automatically by Return App (return.scan@youthnic.shop)
 <body>
   <div class="container">
     <div class="header">
-      <h1>Weekly Return Operations Report</h1>
+      <h1>Youthnic · Weekly Return Operations Report</h1>
       <p>Period: ${data.weekLabel} · VB Exports Operations</p>
     </div>
     <div class="content">
@@ -972,7 +972,7 @@ export async function sendEmailViaResend(options: {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      from: `VB Exports Return App <${SENDER_EMAIL}>`,
+      from: `Youthnic Returns <${SENDER_EMAIL}>`,
       to: options.to,
       subject: options.subject,
       html: options.html,

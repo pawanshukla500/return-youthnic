@@ -346,7 +346,16 @@ const ACTIVE_MATCH_SQL = `
   FROM expected_returns er
   JOIN marketplaces m ON m.id = er.marketplace_id
   WHERE er.lookup_status = 'active'
-    AND (er.tracking_id = $1::text OR er.alt_tracking_id = $1::text)
+    AND (
+      er.tracking_id = $1::text
+      OR er.alt_tracking_id = $1::text
+      OR UPPER(er.order_number) = UPPER($1::text)
+      OR EXISTS (
+        SELECT 1 FROM expected_return_items eri
+        WHERE eri.expected_return_id = er.id
+          AND (UPPER(eri.display_order_item_id) = UPPER($1::text) OR UPPER(eri.order_line_id) = UPPER($1::text))
+      )
+    )
     AND ($2::text = '' OR m.name = $2::text)
     AND ($3::integer IS NULL OR er.id = $3::integer)
     AND ($4::integer[] IS NULL OR m.id = ANY($4::integer[]))
@@ -359,7 +368,16 @@ const SCAN_MATCH_SQL = `
   JOIN expected_returns er ON er.id = rs.expected_return_id
   JOIN marketplaces m ON m.id = er.marketplace_id
   JOIN users scanner ON scanner.id = rs.scanned_by
-  WHERE (er.tracking_id = $1::text OR er.alt_tracking_id = $1::text)
+  WHERE (
+      er.tracking_id = $1::text
+      OR er.alt_tracking_id = $1::text
+      OR UPPER(er.order_number) = UPPER($1::text)
+      OR EXISTS (
+        SELECT 1 FROM expected_return_items eri
+        WHERE eri.expected_return_id = er.id
+          AND (UPPER(eri.display_order_item_id) = UPPER($1::text) OR UPPER(eri.order_line_id) = UPPER($1::text))
+      )
+    )
     AND ($2::text = '' OR m.name = $2::text)
     AND ($3::integer[] IS NULL OR m.id = ANY($3::integer[]))
   ORDER BY rs.scanned_at DESC`
@@ -431,7 +449,17 @@ async function loadShipmentDetail(client: pg.PoolClient, shipmentId: number, sca
     }
   }
   const units = items.reduce((sum, item) => sum + item.expectedQty, 0)
-  const matched = matchedFieldFor(scanned, String(header.tracking_id), header.alt_tracking_id, header.tracking_source)
+  const itemOrderIds = itemRows
+    .flatMap((r) => [String(r.display_order_item_id || ""), String(r.order_line_id || "")])
+    .filter(Boolean)
+  const matched = matchedFieldFor(
+    scanned,
+    String(header.tracking_id),
+    header.alt_tracking_id,
+    header.tracking_source,
+    header.order_number ? String(header.order_number) : null,
+    itemOrderIds,
+  )
   return {
     shipmentId,
     trackingId: String(header.tracking_id),
@@ -813,11 +841,16 @@ export async function recordScan(
       }
     }
 
+    const itemOrderIds = itemRows
+      .flatMap((r) => [String(r.display_order_item_id || ""), String(r.order_line_id || "")])
+      .filter(Boolean)
     const matched = matchedFieldFor(
       scannedTracking,
       String(shipment.tracking_id),
       shipment.alt_tracking_id,
       shipment.tracking_source,
+      shipment.order_number ? String(shipment.order_number) : null,
+      itemOrderIds,
     )
     const storedTracking = String(shipment.tracking_id)
     const csvTracking = String(shipment.csv_tracking_id || storedTracking)

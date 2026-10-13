@@ -1274,6 +1274,24 @@ Append new entries at the end. Do not edit earlier entries, except to correct a 
 - **The next agent must not:** touch `android/` only to change a version label or a note (it publishes a new release); lower the version code in the manifest.
 - **Open for the user:** hand-test v1.0.20 on a warehouse phone (see the earlier entry), and say whether `GET /api/accounts` should return a scannable count.
 
+### 2026-10-13, Antigravity Agent, Resend Reports Email Branding & Order ID Manual Scanbar Entry
+
+- **Context & Goal:** User configured `RESEND_API_KEY` in environment and repository secrets. Requested polished Youthnic-branded operational emails, verification of Resend delivery parameters, and seamless support for typing or scanning Order IDs or order item IDs directly into the scan bar.
+- **Changed:**
+  - `server/register-rules.ts`: Expanded `matchedFieldFor` to accept optional `orderNumber` and `itemOrderIds`, recording `field: "order_number"` and `leg: "return"`. Added label `order_number: "Order ID (manual scan)"`.
+  - `server/schema-register.sql`: Additive constraint update allowing `'order_number'` in `receipt_scans_matched_field_check`. Added performance indexes for fast lookup on `expected_returns (marketplace_id, order_number)` and `expected_return_items (display_order_item_id)`.
+  - `server/register-service.ts`: Updated `ACTIVE_MATCH_SQL` and `SCAN_MATCH_SQL` to match against `er.order_number` and `expected_return_items` (`display_order_item_id`, `order_line_id`). Updated `loadShipmentDetail` and `recordScan` to pass order numbers and item IDs to `matchedFieldFor`.
+  - `src/pages/ScanReturns.tsx`: Updated `MATCHED_FIELD_LABELS` with `order_number: "Order ID (manual entry)"` and updated scan input placeholder to `"Scan tracking ID or Order ID and press Enter"`.
+  - `src/pages/Reports.tsx`: Updated `matchedText` to display `"Order ID"` when `matchedTrackingField === "order_number"`.
+  - `server/email-reports.ts`: Bound `SENDER_EMAIL` to `process.env.RESEND_FROM_EMAIL || "return.scan@youthnic.shop"`, updated Resend API from address to `Youthnic Returns <${SENDER_EMAIL}>`, and updated HTML report templates with Youthnic signature forest-teal gradient styling and branding.
+  - `docker-compose.yml`, `.github/workflows/deploy.yml`, `.env.example`: Added `RESEND_FROM_EMAIL` configuration and verified environment propagation to production container.
+  - `server/tests/register-rules.test.ts`: Added unit tests verifying Order ID and item order ID matching in `matchedFieldFor`.
+- **Ran:**
+  - `npm.cmd run typecheck`: Passed (0 errors).
+  - `npm.cmd run build`: Passed (Vite built in 2.07s, server bundled in 15ms).
+  - `npm.cmd test`: 307 tests, 283 passed, 0 failed, 24 skipped (`TEST_DATABASE_URL`).
+- **Invariants preserved:** Zero secrets printed or logged. Schema changes strictly additive. Mobile APK sync and GitHub Actions workflow compatibility preserved.
+
 ## STOP — needs the user to resume
 
 **This is the exact point at which the agent stopped.** Everything that can be verified without external input has been verified. The following items require the user to act before any agent can resume:

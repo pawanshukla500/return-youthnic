@@ -18,6 +18,8 @@ services:
       - PORT=3001
       - TZ=Asia/Kolkata
       - NODE_OPTIONS=--max-old-space-size=384
+      - RESEND_API_KEY=${RESEND_API_KEY:-}
+      - RESEND_FROM_EMAIL=${RESEND_FROM_EMAIL:-return.scan@youthnic.shop}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     labels:
