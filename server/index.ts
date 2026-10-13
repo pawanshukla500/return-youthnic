@@ -354,6 +354,17 @@ app.post("/api/auth/login", requireDatabase, async (req, res, next) => {
   }
 })
 
+if (process.env.NODE_ENV !== "production") {
+  app.get("/api/auth/dev-login", async (req, res) => {
+    const token = String(req.query.token || "")
+    if (token) {
+      setSessionCookie(req, res, token, 30 * 24 * 3600)
+      return res.redirect("http://localhost:5173/")
+    }
+    res.status(400).send("Token required")
+  })
+}
+
 app.get("/api/auth/me", requireUser, async (req, res, next) => {
   try {
     const user = (req as SessionRequest).user
