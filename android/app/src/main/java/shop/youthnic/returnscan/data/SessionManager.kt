@@ -77,6 +77,8 @@ class SessionManager(private val context: Context) {
     val isLoggedIn: Boolean
         get() = !authToken.isNullOrBlank()
 
+    fun hasSession(): Boolean = isLoggedIn
+
     fun saveLogin(response: LoginResponse) {
         prefs.edit()
             .putString("auth_token", response.token)

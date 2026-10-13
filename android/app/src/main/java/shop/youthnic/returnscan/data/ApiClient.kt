@@ -261,6 +261,8 @@ class ApiClient(private val sessionManager: SessionManager) {
         }
     }
 
+    suspend fun getLatestRelease(): Result<AppRelease?> = checkLatestRelease()
+
     private fun authorizedRequestBuilder(endpoint: String): Request.Builder {
         val builder = Request.Builder()
             .url("${sessionManager.serverUrl}$endpoint")

@@ -76,10 +76,14 @@ object AppUpdater {
         val now = SystemClock.elapsedRealtime()
         if (!force && lastCheckAt != 0L && now - lastCheckAt < CHECK_EVERY_MS) return Result.success(available)
         val app = context.applicationContext as ReturnScanApp
-        val result = withContext(Dispatchers.IO) { app.apiClient.getLatestRelease() }
-        if (result.isFailure) return Result.failure(result.exceptionOrNull() ?: IllegalStateException())
+        val result: Result<AppRelease?> = withContext(Dispatchers.IO) { app.apiClient.getLatestRelease() }
+        val release = result.getOrNull()
+        if (result.isFailure || release == null) {
+            val ex = result.exceptionOrNull() ?: IllegalStateException("No release available")
+            return Result.failure(ex)
+        }
         lastCheckAt = now
-        val newer = result.getOrNull()?.takeIf { it.isNewerThan(installedVersionCode) }
+        val newer = release.takeIf { it.isNewerThan(installedVersionCode) }
         available = newer
         if (newer != null) notifyOnce(context.applicationContext, newer)
         return Result.success(newer)
@@ -259,12 +263,12 @@ object AppUpdater {
                 }
                 if (state.total > 0) {
                     val pct = ((state.done * 100) / state.total).toInt().coerceIn(0, 100)
-                    view.progressUpdate.setProgressCompat(pct, true)
-                    view.tvUpdateProgress.text = activity.getString(
+                    view.pbUpdateDownload.progress = pct
+                    view.tvUpdateProgressPercent.text = activity.getString(
                         R.string.update_progress_format, pct, Ui.megabytes(state.done), Ui.megabytes(state.total)
                     )
                 } else {
-                    view.tvUpdateProgress.text = activity.getString(R.string.update_waiting)
+                    view.tvUpdateProgressPercent.text = activity.getString(R.string.update_waiting)
                 }
                 delay(400)
             }
