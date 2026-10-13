@@ -301,11 +301,13 @@ class ReturnVerificationBottomSheet(
             if (validateInputs()) {
                 binding.btnSaveVerification.isEnabled = false
                 binding.btnSaveVerification.text = "Saving..."
+                // A copy, taken now: the chips and steppers stay usable while the request runs, and a later tap must not
+                // change what is sent or the summary shown after the save.
                 onSave(
                     VerificationSubmitData(
                         shipmentId = lookup.shipmentId,
                         scannedTracking = lookup.trackingNumber,
-                        items = itemStates
+                        items = itemStates.map { it.copy() }
                     )
                 )
             }

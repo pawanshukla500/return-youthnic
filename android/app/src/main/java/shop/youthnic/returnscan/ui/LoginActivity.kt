@@ -89,11 +89,12 @@ class LoginActivity : AppCompatActivity() {
 
     /**
      * Signed in: before the marketplace list, explain why the camera is needed and ask for it. Nothing is asked when
-     * the camera is already allowed, or when Android has blocked the dialog (the scanner then offers the Settings page).
+     * the camera is already allowed, when Android has blocked the dialog (the scanner then offers the Settings page),
+     * or when the explanation was already shown on this device, so it is not repeated at every sign-in.
      */
     private fun askCameraThenContinue() {
         val sm = (application as ReturnScanApp).sessionManager
-        if (CameraPermission.isGranted(this) || CameraPermission.isBlocked(this, sm)) {
+        if (CameraPermission.isGranted(this) || CameraPermission.isBlocked(this, sm) || sm.cameraRationaleShown) {
             openChannels()
             return
         }

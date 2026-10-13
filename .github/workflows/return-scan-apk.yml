@@ -140,7 +140,9 @@ jobs:
   publish-release:
     name: Publish GitHub Release
     needs: build-apk
-    if: github.event_name != 'pull_request'
+    # A push to main publishes. A manual run publishes only when the "publish" box is ticked (it is off by default).
+    # A pull request never publishes.
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish)
     runs-on: ubuntu-latest
     permissions:
       contents: write

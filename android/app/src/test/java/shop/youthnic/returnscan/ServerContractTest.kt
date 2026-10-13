@@ -16,7 +16,9 @@ import shop.youthnic.returnscan.data.SubIssue
 /**
  * The JSON below has the shape the server really sends (server/register-service.ts and server/register-routes.ts).
  * The app used to read a different shape, so every lookup came back as "not found" and no save could succeed.
- * Every text value starts with SYN- or is a synthetic number, as the project rules require.
+ * Test data is synthetic, as the project rules require: every AWB, order, SKU, name and reason starts with SYN-. The
+ * words that are part of the protocol (status, leg and category codes) and the display words (colour, size, time) are
+ * the plain values the server uses.
  */
 class ServerContractTest {
 
@@ -32,7 +34,7 @@ class ServerContractTest {
             "orderId": "SYN-ORDER-9",
             "courier": "SYN-Courier",
             "returnType": "Customer Return",
-            "returnReason": "Size issue",
+            "returnReason": "SYN size issue",
             "items": [
               {
                 "itemId": 41,
