@@ -19,14 +19,15 @@ export type MobileReleaseInfo = {
 }
 
 const DEFAULT_RELEASE: MobileReleaseInfo = {
-  versionCode: 10001,
-  versionName: "1.0.1",
+  versionCode: 10012,
+  versionName: "1.0.12",
   minRequiredVersionCode: 10001,
-  sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-  sizeBytes: 4194304,
-  notes: "Youthnic Native Android Return Scanner · Initial production release with continuous CameraX scanning, return verification bottom sheet, and low-latency audio/haptics.",
-  publishedAt: "2026-10-12T12:00:00Z",
-  pageUrl: "https://github.com/youthnic/return-scan/releases",
+  sha256: "3d5089ec1b5c490a618c5e632cb717ba68e27c768997a06a2374e2d3bbef04ee",
+  sizeBytes: 3243809,
+  notes: "Youthnic Native Android Return Scanner · Production Release v1.0.12. Features continuous CameraX scanning, physical return verification bottom sheet, low-latency audio/haptics, and offline image caching.",
+  publishedAt: "2026-10-13T08:20:00Z",
+  downloadUrl: "https://github.com/pawanshukla500/return-youthnic/releases/download/v1.0.12/ReturnScan-v1.0.12.apk",
+  pageUrl: "https://github.com/pawanshukla500/return-youthnic/releases",
 }
 
 export function getMobileReleaseInfo(): MobileReleaseInfo {
@@ -70,12 +71,12 @@ export function handleApkDownload(req: Request, res: Response) {
   for (const candidate of candidates) {
     if (fs.existsSync(candidate)) {
       res.setHeader("Content-Type", "application/vnd.android.package-archive")
-      res.setHeader("Content-Disposition", 'attachment; filename="return-scan-1.0.1.apk"')
+      res.setHeader("Content-Disposition", 'attachment; filename="ReturnScan-v1.0.12.apk"')
       res.setHeader("Cache-Control", "no-cache")
       return res.sendFile(candidate)
     }
   }
 
-  // If local APK file not compiled yet, redirect to GitHub release page
-  res.redirect("https://github.com/youthnic/return-scan/releases")
+  // If local APK file not compiled on this server, redirect to GitHub release download
+  res.redirect("https://github.com/pawanshukla500/return-youthnic/releases/download/v1.0.12/ReturnScan-v1.0.12.apk")
 }

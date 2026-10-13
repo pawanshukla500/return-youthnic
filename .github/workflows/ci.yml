@@ -37,3 +37,7 @@ jobs:
 
       - name: Run Test Suite
         run: npm test
+
+      - name: Verify Docker Container Build
+        run: docker build -t return-scan-app:test .
+

@@ -1,0 +1,30 @@
+services:
+  return-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: return-scan-app:latest
+    container_name: return-scan-app
+    restart: unless-stopped
+    ports:
+      # Expose port 3001 on localhost for Nginx reverse-proxy
+      - "127.0.0.1:3001:3001"
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
+      - PORT=3001
+    volumes:
+      - ./data:/app/data
+      - ./certs:/app/certs:ro
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3001/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

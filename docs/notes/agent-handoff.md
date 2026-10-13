@@ -1084,6 +1084,29 @@ Append new entries at the end. Do not edit earlier entries, except to correct a 
   - Point `TEST_DATABASE_URL` at production.
   - Print or expose raw database connection secrets.
 
+### 2026-10-13, Antigravity Agent, Docker Containerization, Hostinger VPS Deploy Actions & GitHub Releases
+
+- **Changed / Added Files**:
+  - `Dockerfile`: Multi-stage production container (`node:22-alpine`). Builds Vite React frontend in Stage 1 and runs lightweight Express 4 + Node backend in Stage 2 with healthcheck and non-root `node` user.
+  - `.dockerignore`: Excluded `node_modules`, `dist`, `android`, `.git`, `.env*`, and local secrets from container context.
+  - `docker-compose.yml`: Production Docker Compose definition for `return-scan-app` on port `127.0.0.1:3001:3001` with automated restart, volume mounts for `/app/data` and `/app/certs`, log rotation (`max-size: 10m`, `max-file: 3`), and container healthchecks.
+  - `.github/workflows/deploy.yml`: Updated Hostinger VPS deployment pipeline to deploy via Docker Compose (`docker compose up -d --build`), auto-prune stale images, poll container health check, and verify Docker container build during CI.
+  - `.github/workflows/ci.yml`: Added Docker container build validation step (`docker build -t return-scan-app:test .`) to verify all pull requests and pushes before merge.
+  - `.github/workflows/return-scan-apk.yml`: Added `permissions: contents: write` and automated official GitHub Release publishing (`gh release create` / `gh release upload`).
+  - `server/mobile-release.ts`: Updated release metadata to `v1.0.12` and pointing download links to `https://github.com/pawanshukla500/return-youthnic/releases`.
+  - `package.json`: Moved `tsx` to `dependencies` for clean container runtime compatibility.
+  - `docs/DEPLOYMENT_DOCKER_HOSTINGER.md`: Complete guide covering Docker architecture, Nginx reverse proxy configuration, Let's Encrypt SSL, and GitHub Actions PR workflow.
+
+- **Verification Results**:
+  - Published official GitHub Release `v1.0.12` with attached asset `ReturnScan-v1.0.12.apk` at `https://github.com/pawanshukla500/return-youthnic/releases/tag/v1.0.12`.
+  - `npm.cmd run typecheck`: Exit 0 (0 errors).
+  - `npm.cmd test`: 303 tests run: 279 pass, 0 fail, 24 skipped (dedicated `TEST_DATABASE_URL`).
+
+- **The next agent must not**:
+  - Remove non-root user execution in `Dockerfile`.
+  - Expose raw unprotected database ports on VPS.
+  - Bypass healthcheck polling in deployment workflow.
+
 ## STOP — needs the user to resume
 
 **This is the exact point at which the agent stopped.** Everything that can be verified without external input has been verified. The following items require the user to act before any agent can resume:
