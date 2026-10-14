@@ -19,15 +19,15 @@ export type MobileReleaseInfo = {
 }
 
 const DEFAULT_RELEASE: MobileReleaseInfo = {
-  versionCode: 10030,
-  versionName: "1.0.30",
+  versionCode: 10033,
+  versionName: "1.0.33",
   minRequiredVersionCode: 10001,
-  sha256: "d292b01fcd975715b31416bd2cb9e613968f82243edab236f4d37bc3044fe7f8",
-  sizeBytes: 3306977,
-  notes: "Youthnic Native Android Return Scanner · Release v1.0.30\n- Enforced persistent warehouse release keystore: guarantees consistent signature across all builds and eliminates package conflict errors\n- Iron Send issue fully integrated into multi-item/multi-order return verification workflow\n- Category-specific vibrant color chips & buttons (Clear Return, Iron Send, Damaged, Wrong Product, Missing, SKU Change, Size Change, Other)\n- Dynamic frequency-based issue button prioritization: frequently used issues automatically move forward (with Clear Return always first)\n- Synchronized frequency weighting and state persistence across warehouse scanning devices",
-  publishedAt: "2026-10-14T09:38:04Z",
-  downloadUrl: "https://github.com/pawanshukla500/return-youthnic/releases/download/v1.0.30/ReturnScan-v1.0.30.apk",
-  pageUrl: "https://github.com/pawanshukla500/return-youthnic/releases/tag/v1.0.30",
+  sha256: "5169998f3d5dbc34a35658ce1c1d09ba6f1d6a4b4ed41be28049e54b947014e2",
+  sizeBytes: 3325019,
+  notes: "Youthnic Native Android Return Scanner · Iron Send tracking & live sync\n- Correct times: last scan and recent scans are shown in IST and refresh every second (no more frozen \"Just now\" or UTC times)\n- Live sync: today's figures update instantly from other phones and web benches (WebSocket, with 4-second auto-sync fallback); the status pill shows LIVE / AUTO-SYNC / OFFLINE and when data was last synced\n- Iron Send is not an issue: Iron-only returns save as normal returns and are tracked separately for the Inward Team\n- Today's Issues and Iron Send counts on the scanner\n- Signed with the same warehouse key as v1.0.30: phones on v1.0.30 or later update in place",
+  publishedAt: "2026-10-14T12:54:11Z",
+  downloadUrl: "https://github.com/pawanshukla500/return-youthnic/releases/download/v1.0.33/ReturnScan-v1.0.33.apk",
+  pageUrl: "https://github.com/pawanshukla500/return-youthnic/releases/tag/v1.0.33",
 }
 
 let cachedRelease: MobileReleaseInfo | null = null
