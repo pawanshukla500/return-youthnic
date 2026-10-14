@@ -20,7 +20,19 @@ import { loadAnalytics } from "../analytics.js"
 import { loadReasons } from "../dashboard.js"
 import { applySchema, connectionSettingsFor } from "../db.js"
 import { generateDailyReportData, generateWeeklyReportData, renderWeeklyEmail } from "../email-reports.js"
-import { getIronRecord, ironSummary, listIronRecords, receiveIron } from "../iron.js"
+import {
+  createIronBatch,
+  getIronBatch,
+  getIronRecord,
+  ironBatchSheetRows,
+  ironBatchXlsx,
+  ironSummary,
+  listIronBatches,
+  listIronRecords,
+  receiveIron,
+  receiveIronBatch,
+  updateIronBatch,
+} from "../iron.js"
 import { currentCursor } from "../live.js"
 import { commitLookupUpload } from "../lookup-import.js"
 import { calculateGoodReturnsForDay } from "../omsguru-daily.js"
@@ -51,6 +63,8 @@ const AWB = {
   missing: `SYN-${run}-MISS`,
   clean: `SYN-${run}-CLEAN`,
   correct: `SYN-${run}-CORR`,
+  batchA: `SYN-${run}-BATA`,
+  batchB: `SYN-${run}-BATB`,
 }
 
 let pool: pg.Pool
@@ -154,6 +168,8 @@ before(async () => {
       row({ trackingId: AWB.missing, orderLineId: `SYN-${run}-L3`, qty: 2 }),
       row({ trackingId: AWB.clean, orderLineId: `SYN-${run}-L4`, qty: 1 }),
       row({ trackingId: AWB.correct, orderLineId: `SYN-${run}-L5`, qty: 1 }),
+      row({ trackingId: AWB.batchA, orderLineId: `SYN-${run}-L6`, qty: 2 }),
+      row({ trackingId: AWB.batchB, orderLineId: `SYN-${run}-L7`, qty: 1, channelListingId: `SYN-${run}-TOP-RED_L`, sku: `SYN-${run}-TOP-RED_L` }),
     ],
     images: new Map(),
     sources: new Map(),
@@ -443,4 +459,96 @@ test("every change moves the sync cursor", { skip: skip || false }, async () => 
   )
   await receiveIron(pool, admin, allScope, { recordId: Number(record.rows[0].id), qty: 1, notes: "", clientKey: null })
   assert.ok((await currentCursor(pool)) > before)
+})
+
+async function ironScan(tracking: string, key: string): Promise<number> {
+  const shipment = await shipmentOf(tracking)
+  const receipt = await recordScan(pool, scanner, {
+    submission: submission(shipment.shipmentId, key, [
+      {
+        itemId: shipment.items[0].itemId,
+        receivedQty: shipment.items[0].expectedQty,
+        verified: true,
+        issues: [{ categoryCode: "iron_send", subIssueId: null, qty: shipment.items[0].expectedQty, ticketCode: "", notes: "" }],
+      },
+    ]),
+    photoCount: 0,
+    hasVideo: false,
+  })
+  return (await recordOf(receipt.scan.id)).id
+}
+
+test("Iron batches: the Return Team batches pending lines for the khaata challan; the Inward Team receives the batch", { skip: skip || false }, async () => {
+  const a = await ironScan(AWB.batchA, `SYN-${run}-BATA-1`)
+  const b = await ironScan(AWB.batchB, `SYN-${run}-BATB-1`)
+  const input = { recordIds: [a, b], khaataName: "SYN Khaata", challanNo: "", expectedDays: 4, notes: "SYN", clientKey: `SYN-${run}-BATCH-1` }
+
+  await expectError(createIronBatch(pool, inward, allScope, input), 403, /Return Team makes Iron Send batches/)
+  const made = await createIronBatch(pool, scanner, allScope, input)
+  assert.equal(made.replayed, false)
+  assert.match(made.batch.batchNo, /^IRN-\d{6}-\d{3}$/)
+  assert.equal(made.batch.lines, 2)
+  assert.equal(made.batch.qtySent, 3)
+  assert.equal(made.batch.state, "open")
+  const replay = await createIronBatch(pool, scanner, allScope, input)
+  assert.equal(replay.replayed, true, "a retried create with the same key returns the same batch")
+  assert.equal(replay.batch.id, made.batch.id)
+  await expectError(
+    createIronBatch(pool, scanner, allScope, { ...input, clientKey: `SYN-${run}-BATCH-2` }),
+    409,
+    /already in a batch/,
+  )
+  const record = await getIronRecord(pool, allScope, a)
+  assert.equal(record.batchNo, made.batch.batchNo)
+  assert.ok(record.dueAt)
+  const unbatched = await listIronRecords(pool, allScope, { state: "unbatched", search: AWB.batchA })
+  assert.equal(unbatched.rows.length, 0, "a batched line leaves the not-in-a-batch list")
+
+  // The scan bench cannot change an Iron Send that has gone out in a batch.
+  const shipment = await lookupShipment(pool, { tracking: AWB.batchA, marketplace: ACCOUNT, shipmentId: null })
+  assert.equal(shipment.status, "duplicate")
+  const scanRow = await pool.query("SELECT rs.expected_return_id FROM iron_send_records r JOIN receipt_scans rs ON rs.id = r.receipt_scan_id WHERE r.id = $1", [a])
+  const item = await pool.query("SELECT id FROM expected_return_items WHERE expected_return_id = $1", [scanRow.rows[0].expected_return_id])
+  await expectError(
+    correctScanIssue(
+      pool,
+      scanner,
+      submission(Number(scanRow.rows[0].expected_return_id), `SYN-${run}-BATA-1`, [
+        { itemId: Number(item.rows[0].id), receivedQty: 2, verified: true, issues: [] },
+      ]),
+      allScope,
+    ),
+    409,
+    /gone out in batch/,
+  )
+
+  // The challan number can be added later by the Return Team, not by the Inward Team.
+  await expectError(updateIronBatch(pool, inward, allScope, made.batch.id, { challanNo: "SYN-CH-1" }), 403, /Return Team/)
+  const updated = await updateIronBatch(pool, scanner, allScope, made.batch.id, { challanNo: "SYN-CH-1" })
+  assert.equal(updated.challanNo, "SYN-CH-1")
+
+  // Past its expected date, the batch and its lines are overdue (ironing can take 4-5 days, so each batch has its own date).
+  await pool.query("UPDATE iron_batches SET expected_return_at = now() - interval '1 hour' WHERE id = $1", [made.batch.id])
+  const late = await getIronBatch(pool, allScope, made.batch.id)
+  assert.equal(late.batch.state, "overdue")
+  assert.ok(late.rows.every((row) => row.state === "overdue"))
+  const overdueList = await listIronBatches(pool, allScope, { state: "overdue", search: made.batch.batchNo })
+  assert.equal(overdueList.length, 1)
+
+  // The challan sheet.
+  const sheet = ironBatchSheetRows(late.batch, late.rows)
+  assert.deepEqual(sheet[1], ["Batch No", made.batch.batchNo])
+  assert.equal(sheet[3][1], "SYN-CH-1")
+  assert.equal(sheet[sheet.length - 1][8], 3, "the total sent")
+  assert.equal(ironBatchXlsx(late.batch, late.rows).subarray(0, 2).toString(), "PK", "a real .xlsx file")
+
+  // Only the Inward Team receives, by hand; a retried receive counts once.
+  await expectError(receiveIronBatch(pool, scanner, allScope, made.batch.id, { notes: "", clientKey: null }), 403, /Inward Team/)
+  const received = await receiveIronBatch(pool, inward, allScope, made.batch.id, { notes: "", clientKey: `SYN-${run}-RB-1` })
+  assert.equal(received.unitsReceived, 3)
+  assert.equal(received.batch.state, "received")
+  const again = await receiveIronBatch(pool, inward, allScope, made.batch.id, { notes: "", clientKey: `SYN-${run}-RB-1` })
+  assert.equal(again.unitsReceived, 0)
+  const done = await listIronBatches(pool, allScope, { state: "received", search: made.batch.batchNo })
+  assert.equal(done.length, 1)
 })

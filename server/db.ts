@@ -53,6 +53,7 @@ const HISTORY_TABLES = [
   "register_audit_log",
   "iron_send_records",
   "iron_receive_events",
+  "iron_batches",
 ] as const
 
 // Reads every schema file and refuses to apply them if any contain a destructive statement against a

@@ -117,3 +117,27 @@ WHERE rs.outcome = 'issue'
     WHERE i.receipt_scan_id = rs.id
   )
   AND NOT EXISTS (SELECT 1 FROM claim_tickets ct WHERE ct.receipt_scan_id = rs.id);
+
+-- ---------------------------------------------------------------------------------------------------------------
+-- Iron batches (2026-10-14). The Return Team groups pending Iron Send lines into a numbered batch (IRN-YYMMDD-NNN)
+-- and writes the batch number on the khaata challan that goes with the goods. Ironing takes 2-3 days, sometimes 4-5,
+-- so each batch has its own expected return date; a line in a batch is overdue after that date. The outward and inward
+-- teams track by batch. A batch is never deleted, and a line, once in a batch, stays in it.
+-- ---------------------------------------------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS iron_batches (
+  id serial PRIMARY KEY,
+  batch_no text NOT NULL UNIQUE,
+  khaata_name text NOT NULL DEFAULT '',
+  challan_no text NOT NULL DEFAULT '',
+  expected_days integer NOT NULL DEFAULT 3 CHECK (expected_days BETWEEN 1 AND 30),
+  expected_return_at timestamptz NOT NULL,
+  notes text NOT NULL DEFAULT '',
+  created_by integer REFERENCES users(id),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  client_key text
+);
+CREATE UNIQUE INDEX IF NOT EXISTS iron_batches_client_key_uidx ON iron_batches (client_key) WHERE client_key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS iron_batches_created_idx ON iron_batches (created_at DESC);
+ALTER TABLE iron_send_records ADD COLUMN IF NOT EXISTS batch_id integer REFERENCES iron_batches(id) ON DELETE RESTRICT;
+CREATE INDEX IF NOT EXISTS iron_send_records_batch_idx ON iron_send_records (batch_id);

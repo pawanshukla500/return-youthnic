@@ -17,7 +17,7 @@ import type pg from "pg"
 import { WebSocketServer, type WebSocket } from "ws"
 import { allowsAccount, type AccountScope } from "./access.js"
 
-export type ChangeKind = "scan.saved" | "scan.corrected" | "ticket.updated" | "upload.activated" | "iron.received" | "iron.settings"
+export type ChangeKind = "scan.saved" | "scan.corrected" | "ticket.updated" | "upload.activated" | "iron.received" | "iron.settings" | "iron.batch"
 
 export type LiveChange = {
   kind: ChangeKind

@@ -226,3 +226,44 @@ button.iron-stat:hover { border-color: #94a3b8; }
   .shipment-meta { grid-template-columns: 1fr 1fr !important; }
   .scan-notice, .result-success { margin-left: 12px !important; margin-right: 12px !important; }
 }
+
+/* ---- Iron Send batches ---- */
+.iron-batch-bar { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; }
+.iron-view-switch { display: flex; gap: 4px; padding: 4px; border-radius: 10px; background: #fff; border: 1px solid var(--line); }
+.iron-view-switch button { height: 36px; padding: 0 18px; border: 0; border-radius: 8px; background: transparent; font-size: 14px; font-weight: 700; color: #4f5a57; }
+.iron-view-switch button.active { background: var(--green); color: #fff; }
+.iron-batch-callout { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; padding: 8px 8px 8px 14px; border-radius: 12px; border: 1px dashed #93c5fd; background: #f8fbff; font-size: 13px; color: #1e3a8a; }
+.iron-batch-callout strong { font-size: 15px; }
+.iron-batch-chip { display: inline-flex; align-items: center; height: 22px; padding: 0 8px; border-radius: 6px; background: #1e3a8a; color: #fff; font: 700 11px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; letter-spacing: .3px; }
+.iron-batch-chip.none { background: #fef3c7; color: #92400e; font-family: inherit; }
+.iron-batch-row { display: grid; grid-template-columns: 190px minmax(0, 1fr) auto auto; gap: 16px; align-items: center; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+.iron-batch-row.state-overdue { background: #fff7f7; }
+.iron-batch-id { display: grid; gap: 6px; justify-items: start; }
+.iron-batch-id strong { font: 800 17px/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: #0f172a; }
+.iron-batch-actions { display: flex; gap: 8px; }
+.iron-due-late { color: #dc2626; font-weight: 700; }
+.iron-challan { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 10px; background: #f8faf9; font-size: 13px; }
+.iron-challan input { height: 36px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; font-size: 14px; min-width: 180px; }
+.iron-batch-dialog { min-width: min(760px, 90vw); }
+.iron-batch-lines { display: grid; gap: 6px; max-height: 46vh; overflow: auto; padding-right: 2px; }
+.iron-batch-line { display: grid; grid-template-columns: auto 44px minmax(0, 1fr) auto auto; gap: 10px; align-items: center; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--line); background: #fff; }
+.iron-batch-line.pick { grid-template-columns: auto 44px minmax(0, 1fr) auto; cursor: pointer; }
+.iron-batch-line.pick input { width: 18px; height: 18px; }
+.iron-batch-line.state-overdue { border-color: #fecaca; background: #fff7f7; }
+.iron-batch-line-no { width: 22px; text-align: center; font-size: 12px; color: var(--muted); }
+.iron-thumb.small { width: 44px; height: 44px; border-radius: 8px; }
+.iron-batch-line-qty { font: 800 16px/1 'Manrope', sans-serif; color: #18201e; min-width: 40px; text-align: right; }
+.iron-batch-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.iron-batch-form select { height: 44px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; font-size: 15px; background: #fff; }
+.iron-batch-pick-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 13px; }
+.iron-batch-made { display: grid; gap: 10px; justify-items: center; text-align: center; padding: 8px 4px; }
+.iron-batch-made small { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px; color: var(--green); }
+.iron-batch-big { font: 800 34px/1.1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; letter-spacing: 1px; color: #0f172a; padding: 10px 18px; border: 2px dashed #1e3a8a; border-radius: 12px; background: #f8fbff; }
+.iron-batch-made p { margin: 0; font-size: 14px; color: #33403c; }
+@media (max-width: 900px) {
+  .iron-batch-row { grid-template-columns: minmax(0, 1fr); }
+  .iron-batch-actions .btn { flex: 1; justify-content: center; }
+  .iron-batch-form { grid-template-columns: 1fr; }
+  .iron-batch-callout { width: 100%; justify-content: space-between; }
+  .iron-batch-big { font-size: 26px; }
+}

@@ -252,7 +252,31 @@ export type IronRecord = {
   ageDays: number
   lastReceivedAt: string | null
   notes: string
+  batchId: number | null
+  batchNo: string | null
+  // When the line is due back: its batch's expected return date. Null until it is in a batch.
+  dueAt: string | null
   receipts: { id: number; qty: number; receivedAt: string; receivedBy: string; notes: string }[]
+}
+
+export type IronBatchState = "open" | "partial" | "overdue" | "received"
+
+export type IronBatch = {
+  id: number
+  batchNo: string
+  khaataName: string
+  challanNo: string
+  expectedDays: number
+  expectedReturnAt: string
+  notes: string
+  createdBy: string
+  createdAt: string
+  state: IronBatchState
+  lines: number
+  qtySent: number
+  qtyReceived: number
+  qtyPending: number
+  lastReceivedAt: string | null
 }
 
 export type IronSummary = {
@@ -260,6 +284,7 @@ export type IronSummary = {
   records: { open: number; pending: number; partial: number; overdue: number; received: number }
   units: { sent: number; received: number; pending: number; overdue: number }
   receivedToday: number
+  unbatched?: { lines: number; units: number }
 }
 
 // ---- Return analytics (server/analytics.ts) ----

@@ -27,3 +27,9 @@ export function isInwardUser(user: Pick<SessionUser, "role">): boolean {
 export function canReceiveIron(user: Pick<SessionUser, "role">): boolean {
   return isInwardUser(user) || isAdminUser(user)
 }
+
+// The Return Team (Scanner, Supervisor, Admin) makes Iron Send batches. The Inward Team only receives.
+export function canDispatchIron(user: Pick<SessionUser, "role">): boolean {
+  const role = String(user.role || "").trim()
+  return role !== "" && !isInwardUser(user)
+}
