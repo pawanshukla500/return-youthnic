@@ -1,11 +1,11 @@
 {
-  "versionCode": 10027,
-  "versionName": "1.0.27",
+  "versionCode": 10028,
+  "versionName": "1.0.28",
   "minRequiredVersionCode": 10001,
-  "sha256": "pending_ci_build",
-  "sizeBytes": 3305402,
-  "notes": "Youthnic Native Android Return Scanner · Release v1.0.27\n- Iron Send issue fully integrated into multi-item/multi-order return verification workflow\n- Category-specific vibrant color chips & buttons (Clear Return, Iron Send, Damaged, Wrong Product, Missing, SKU Change, Size Change, Other)\n- Dynamic frequency-based issue button prioritization: frequently used issues automatically move forward (with Clear Return always first)\n- Synchronized frequency weighting and state persistence across warehouse scanning devices",
-  "publishedAt": "2026-10-14T07:30:00Z",
-  "downloadUrl": "https://github.com/pawanshukla500/return-youthnic/releases/download/v1.0.27/ReturnScan-v1.0.27.apk",
-  "pageUrl": "https://github.com/pawanshukla500/return-youthnic/releases/tag/v1.0.27"
+  "sha256": "188b000d2d747e9e01de1cd4b1982492b074d35df2f065b090aaaa190f9e8a4a",
+  "sizeBytes": 3306898,
+  "notes": "Youthnic Native Android Return Scanner · Release v1.0.28\n- Iron Send issue fully integrated into multi-item/multi-order return verification workflow\n- Category-specific vibrant color chips & buttons (Clear Return, Iron Send, Damaged, Wrong Product, Missing, SKU Change, Size Change, Other)\n- Dynamic frequency-based issue button prioritization: frequently used issues automatically move forward (with Clear Return always first)\n- Synchronized frequency weighting and state persistence across warehouse scanning devices",
+  "publishedAt": "2026-10-14T08:03:38Z",
+  "downloadUrl": "https://github.com/pawanshukla500/return-youthnic/releases/download/v1.0.28/ReturnScan-v1.0.28.apk",
+  "pageUrl": "https://github.com/pawanshukla500/return-youthnic/releases/tag/v1.0.28"
 }
