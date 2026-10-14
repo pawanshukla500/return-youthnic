@@ -346,6 +346,8 @@ export type RegisterRow = {
   amount: number | null
   claimAmount: number | null
   issues: RegisterIssue[]
+  // Units sent for ironing on this line. Iron Send is operational and never listed in issues.
+  ironSendQty?: number
 }
 
 export type RegisterPage = {

@@ -178,12 +178,24 @@ export async function loadReasons(db: pg.Pool, scope: AccountScope) {
   const condition = accountCondition(scope, "er.marketplace_id", params)
   const result = await db.query(
     `
-    SELECT rs.issue_label AS reason, COUNT(*)::int AS reason_count
-    FROM receipt_scans rs
-    JOIN expected_returns er ON er.id = rs.expected_return_id
-    WHERE rs.outcome = 'issue' AND ${condition}
-    GROUP BY rs.issue_label
-    ORDER BY reason_count DESC, rs.issue_label
+    -- The reason is built from the stored issue rows, without operational categories (Iron Send is never a return
+    -- issue). Legacy scans, which have no issue rows, keep their stored label.
+    SELECT t.reason, COUNT(*)::int AS reason_count
+    FROM (
+      SELECT COALESCE(
+        (SELECT string_agg(DISTINCT x.category_label, '; ')
+           FROM receipt_scan_items i
+           JOIN receipt_scan_issues x ON x.receipt_scan_item_id = i.id
+           LEFT JOIN receipt_issue_categories c ON c.code = x.category_code
+          WHERE i.receipt_scan_id = rs.id AND NOT COALESCE(c.is_operational, false)),
+        rs.issue_label
+      ) AS reason
+      FROM receipt_scans rs
+      JOIN expected_returns er ON er.id = rs.expected_return_id
+      WHERE rs.outcome = 'issue' AND ${condition}
+    ) t
+    GROUP BY t.reason
+    ORDER BY reason_count DESC, t.reason
     LIMIT 6
     `,
     params,

@@ -381,6 +381,8 @@ export type RawIssue = {
   ticketCode?: string | null
   ticketStatus?: string | null
   rejectionReason?: string | null
+  // Iron Send and any other operational category. Never a return issue; reported in ironSendQty instead.
+  operational?: boolean | null
 }
 
 // One row of the register query: one verified item (or one legacy shipment line), with its issues as JSON.
@@ -486,13 +488,19 @@ export type RegisterRow = {
   amount: number | null
   // Reserved for the claims integration. Always null until a verified source exists.
   claimAmount: number | null
+  // Return issues only. Iron Send is operational and is never listed here (see ironSendQty).
   issues: RegisterIssue[]
+  // Units of this line sent for ironing. Shown in its own column, never as a return issue.
+  ironSendQty: number
 }
 
 // "no_issue" entries are dropped, so a clean line has an empty issue list. Legacy scans keep their old label.
+// Operational entries (Iron Send) are taken out of the issue list and summed into ironSendQty.
 export function mapRegisterRow(raw: RawRegisterRow): RegisterRow {
-  const issues: RegisterIssue[] = (raw.issues || [])
-    .filter((issue) => Boolean(issue) && issue.categoryCode !== "no_issue")
+  const all = (raw.issues || []).filter((issue) => Boolean(issue) && issue.categoryCode !== "no_issue")
+  const ironSendQty = all.filter((issue) => issue.operational).reduce((sum, issue) => sum + Number(issue.qty ?? 0), 0)
+  const issues: RegisterIssue[] = all
+    .filter((issue) => !issue.operational)
     .map((issue) => ({
       categoryCode: String(issue.categoryCode ?? ""),
       categoryLabel: String(issue.categoryLabel ?? ""),
@@ -549,6 +557,7 @@ export function mapRegisterRow(raw: RawRegisterRow): RegisterRow {
     amount: raw.sales_amount !== null && raw.sales_amount !== undefined && raw.sales_amount !== "" ? Number(raw.sales_amount) : null,
     claimAmount: null,
     issues,
+    ironSendQty,
   }
 }
 
@@ -599,6 +608,7 @@ export const REGISTER_OPERATIONAL_HEADERS = [
   "Return Type (as file)",
   "Display Identifier Kind",
   "Tracking Validation",
+  "Iron Send Qty (operational, not an issue)",
 ]
 
 export type RegisterColumnMode = "approved" | "extended" | "operational"
@@ -660,6 +670,7 @@ export function registerRecords(rows: RegisterRow[], mode: RegisterColumnMode = 
       row.returnTypeRaw,
       row.displayIdentifierKind,
       row.trackingValidation,
+      row.ironSendQty,
     ]
   })
 }
