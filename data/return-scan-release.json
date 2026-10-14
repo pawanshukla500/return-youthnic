@@ -1,11 +1,11 @@
 {
-  "versionCode": 10034,
-  "versionName": "1.0.34",
+  "versionCode": 10035,
+  "versionName": "1.0.35",
   "minRequiredVersionCode": 10001,
-  "sha256": "5169998f3d5dbc34a35658ce1c1d09ba6f1d6a4b4ed41be28049e54b947014e2",
-  "sizeBytes": 3325019,
+  "sha256": "28ddb67a6ecc0cbe591522c179349c472b0a411b168af8e93b08bb029c54b048",
+  "sizeBytes": 3325570,
   "notes": "Youthnic Native Android Return Scanner · Meesho flyer capture & continuous scanning\n- Meesho issue returns capture the flyer ID for future claims (scan the flyer or mark it unavailable; Iron Send never takes a flyer)\n- Same backend, database and validation as desktop; flyer stored permanently against the return tracking ID\n- Continuous scanning: compact success toast, scanner stays focused, buffered parcels continue automatically\n- Signed with the same warehouse key as v1.0.30: phones on v1.0.30 or later update in place",
-  "publishedAt": "2026-10-14T00:00:00Z",
-  "downloadUrl": "https://github.com/pawanshukla500/return-youthnic/releases/download/v1.0.34/ReturnScan-v1.0.34.apk",
-  "pageUrl": "https://github.com/pawanshukla500/return-youthnic/releases/tag/v1.0.34"
+  "publishedAt": "2026-10-14T15:44:06Z",
+  "downloadUrl": "https://github.com/pawanshukla500/return-youthnic/releases/download/v1.0.35/ReturnScan-v1.0.35.apk",
+  "pageUrl": "https://github.com/pawanshukla500/return-youthnic/releases/tag/v1.0.35"
 }
