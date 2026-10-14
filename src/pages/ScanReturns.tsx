@@ -12,6 +12,7 @@ import type {
   SubIssue,
 } from "../types"
 import { Badge, Icon, Modal, PartnerBadge } from "../ui"
+import { LiveSyncBadge, useLiveChanges } from "../live"
 import { useWorkspace } from "../workspace"
 
 // Only absolute http(s) links are shown. The app fetches and caches them, so a marketplace
@@ -64,6 +65,46 @@ function nextUid(): string {
   issueCounter += 1
   return `issue-${issueCounter}`
 }
+
+// The garment size in a SKU, for the size chip. The same tokens as extractGarmentSize on the server.
+const SIZE_TOKENS: Record<string, string> = {
+  xs: "XS", s: "S", m: "M", l: "L", xl: "XL", xxl: "XXL", "2xl": "XXL", "3xl": "3XL", xxxl: "3XL", "4xl": "4XL", "5xl": "5XL", "6xl": "6XL",
+}
+export function sizeFromSku(...values: string[]): string {
+  for (const value of values) {
+    const text = String(value || "").trim()
+    if (!text) continue
+    if (/\b(free\s*size|freesize)\b/i.test(text)) return "Free Size"
+    const match = text.match(/[_\-\s](xs|s|m|l|xl|xxl|2xl|3xl|xxxl|4xl|5xl|6xl)(?:[_\-\s]|$)/i)
+    if (match) return SIZE_TOKENS[match[1].toLowerCase()] ?? ""
+  }
+  return ""
+}
+
+// The big result banner shown after every scan, so the result reads from across the bench.
+type FeedbackTone = "ok" | "iron" | "issue" | "duplicate" | "notfound" | "error"
+type ScanFeedback = {
+  tone: FeedbackTone
+  title: string
+  awb: string
+  detail: string
+  sku: string
+  size: string
+  image: string
+  at: number
+}
+type SessionOutcome = "clear" | "issue" | "iron"
+
+const FEEDBACK_ICON: Record<FeedbackTone, "check" | "alert" | "search" | "iron"> = {
+  ok: "check",
+  iron: "iron",
+  issue: "alert",
+  duplicate: "alert",
+  notfound: "search",
+  error: "alert",
+}
+
+const IST_CLOCK = new Intl.DateTimeFormat("en-IN", { hour: "numeric", minute: "2-digit", second: "2-digit", hour12: true, timeZone: "Asia/Kolkata" })
 
 // Short names for the bench. The code and the stored label stay as they are.
 const CHIP_LABEL: Record<string, string> = {
@@ -289,7 +330,7 @@ function linePlan(item: LookupItem, line: LineForm, categories: IssueCategory[])
   return { problems, missing }
 }
 
-function playScanChime(type: "success" | "issue" | "error" = "success") {
+function playScanChime(type: "success" | "issue" | "error" | "iron" = "success") {
   try {
     const AudioContextClass =
       window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
@@ -306,6 +347,15 @@ function playScanChime(type: "success" | "issue" | "error" = "success") {
       gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.25)
       osc.start(ctx.currentTime)
       osc.stop(ctx.currentTime + 0.25)
+    } else if (type === "iron") {
+      // Two short equal beeps: saved, and set aside for ironing.
+      osc.frequency.setValueAtTime(660, ctx.currentTime)
+      gain.gain.setValueAtTime(0.18, ctx.currentTime)
+      gain.gain.setValueAtTime(0.001, ctx.currentTime + 0.09)
+      gain.gain.setValueAtTime(0.18, ctx.currentTime + 0.14)
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.26)
+      osc.start(ctx.currentTime)
+      osc.stop(ctx.currentTime + 0.27)
     } else if (type === "issue") {
       osc.frequency.setValueAtTime(440, ctx.currentTime)
       osc.frequency.setValueAtTime(349.23, ctx.currentTime + 0.1)
@@ -360,7 +410,7 @@ function accountColorDot(accName: string): string {
 }
 
 export function ScanReturns() {
-  const { openPage, setClaimsBadge } = useWorkspace()
+  const { openPage, setClaimsBadge, user } = useWorkspace()
   const [scannerState, setScannerState] = useState<ScannerState>("READY")
   const scannerStateRef = useRef<ScannerState>("READY")
   scannerStateRef.current = scannerState
@@ -416,6 +466,11 @@ export function ScanReturns() {
     return localStorage.getItem("scanner_video_recording_enabled") === "true"
   })
   const [shift, setShift] = useState<ShiftCard | null>(null)
+  const [feedback, setFeedback] = useState<ScanFeedback | null>(null)
+  // This workstation's session: scans saved here, by their latest outcome, and lookups that found nothing or a duplicate.
+  const [sessionOutcomes, setSessionOutcomes] = useState<Record<number, SessionOutcome>>({})
+  const [sessionMisses, setSessionMisses] = useState({ notFound: 0, duplicate: 0 })
+  const [remoteSaved, setRemoteSaved] = useState("")
   const [categories, setCategories] = useState<IssueCategory[]>([])
   const [subIssues, setSubIssues] = useState<SubIssue[]>([])
   const [previewOpen, setPreviewOpen] = useState(false)
@@ -491,6 +546,54 @@ export function ScanReturns() {
 
     return () => window.removeEventListener("focus", handleWindowFocus)
   }, [])
+
+  // Live updates: scans saved on other workstations and phones refresh today's figures. If the parcel on screen was
+  // saved somewhere else, say so before this bench saves it (the server refuses a second save in any case).
+  const shipmentRef = useRef<LookupShipment | null>(null)
+  shipmentRef.current = shipment
+  const savedScanIdRef = useRef<number | null>(null)
+  savedScanIdRef.current = savedScanId
+  useLiveChanges((change) => {
+    api<{ shift: ShiftCard }>("/api/scan/session")
+      .then((data) => setShift(data.shift))
+      .catch(() => {})
+    const current = shipmentRef.current
+    if (
+      current &&
+      change.shipmentId === current.shipmentId &&
+      change.kind === "scan.saved" &&
+      change.scanId !== savedScanIdRef.current &&
+      change.actorId !== user.id
+    ) {
+      setRemoteSaved(`This return (${current.trackingId}) was just saved on another device. Scan the next parcel.`)
+    }
+  }, 300)
+
+  // A click on an empty part of the page puts the cursor back in the scan box, so the bench never stays "not listening".
+  useEffect(() => {
+    const onPointerUp = (event: PointerEvent) => {
+      const target = event.target as HTMLElement | null
+      if (!target || target.closest("input, textarea, select, button, a, label, [role='dialog'], .modal, video")) return
+      if (window.getSelection()?.toString()) return
+      focusScanInput()
+    }
+    document.addEventListener("pointerup", onPointerUp)
+    return () => document.removeEventListener("pointerup", onPointerUp)
+  }, [focusScanInput])
+
+  // Focus watchdog: when the bench is idle and focus has drifted to a button or the page (after tapping an issue chip,
+  // the sidebar, or switching windows), the cursor goes back to the scan box. Text fields, selects and open dialogs are
+  // never interrupted.
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (!document.hasFocus()) return
+      const active = document.activeElement as HTMLElement | null
+      if (active && ["INPUT", "TEXTAREA", "SELECT"].includes(active.tagName)) return
+      if (document.querySelector(".modal-backdrop")) return
+      focusScanInput()
+    }, 1000)
+    return () => window.clearInterval(timer)
+  }, [focusScanInput])
 
   useEffect(() => {
     if (cameraStatus !== "recording") return
@@ -629,6 +732,39 @@ export function ScanReturns() {
     }),
   })
 
+  const outcomeOf = (result: ScanReceipt): SessionOutcome =>
+    result.issueCount > 0 ? "issue" : (result.ironSendQty ?? 0) > 0 ? "iron" : "clear"
+
+  // Shows the result banner for a saved return and counts it in this session.
+  const showSaved = (result: ScanReceipt, target: LookupShipment | null) => {
+    const outcome = outcomeOf(result)
+    setSessionOutcomes((current) => ({ ...current, [result.scan.id]: outcome }))
+    const first = target?.items[0]
+    setFeedback({
+      tone: outcome === "issue" ? "issue" : outcome === "iron" ? "iron" : "ok",
+      title:
+        result.replayed
+          ? "Already saved — nothing saved twice"
+          : outcome === "issue"
+            ? `Saved with ${result.issueCount} issue${result.issueCount === 1 ? "" : "s"}`
+            : outcome === "iron"
+              ? `Saved · ${result.ironSendQty} unit${result.ironSendQty === 1 ? "" : "s"} to Iron Send`
+              : "Saved · normal return",
+      awb: result.scan.scannedTracking || result.scan.trackingId,
+      detail: `${result.scan.marketplace} · order ${result.scan.orderId || "—"} · ${result.itemCount} item${result.itemCount === 1 ? "" : "s"} · ${result.scan.timeLabel}`,
+      sku: first ? first.productSku || first.marketplaceSku : "",
+      size: first ? sizeFromSku(first.marketplaceSku, first.productSku, first.productName) : "",
+      image: first ? catalogImageSrc(first.imageUrl) : "",
+      at: Date.now(),
+    })
+  }
+
+  const showProblem = (tone: FeedbackTone, title: string, awb: string, detail: string) => {
+    if (tone === "notfound") setSessionMisses((current) => ({ ...current, notFound: current.notFound + 1 }))
+    if (tone === "duplicate") setSessionMisses((current) => ({ ...current, duplicate: current.duplicate + 1 }))
+    setFeedback({ tone, title, awb, detail, sku: "", size: "", image: "", at: Date.now() })
+  }
+
   const applyReceipt = (result: ScanReceipt, corrected: boolean) => {
     setReceipt(result)
     setShift(result.shift)
@@ -650,6 +786,7 @@ export function ScanReturns() {
         })
         benchRef.current = { key, corrected: false }
         applyReceipt(result, false)
+        showSaved(result, target)
         const waiting = pendingLines.current
         if (waiting && issueReady(waiting, categoriesRef.current) && benchRef.current) {
           pendingLines.current = null
@@ -658,6 +795,7 @@ export function ScanReturns() {
             body: JSON.stringify(bodyFor(target, waiting, key, scanned, "")),
           })
           applyReceipt(corrected, true)
+          showSaved(corrected, target)
           setNotice("Saved with the issue. Scan the next parcel, or change selection.")
         } else {
           setNotice(
@@ -686,6 +824,8 @@ export function ScanReturns() {
         } else {
           setError(err instanceof Error ? err.message : "Could not save this return")
         }
+        if (soundEnabled) playScanChime("error")
+        showProblem("error", "Not saved — retry", scanned || target.trackingId, err instanceof Error ? err.message : "Could not save this return")
         transitionTo("SAVE_ERROR")
       } finally {
         setSaving(false)
@@ -711,6 +851,8 @@ export function ScanReturns() {
         body: JSON.stringify(bodyFor(target, ready, bench.key, scannedAwb || target.scannedTracking, notes)),
       })
       applyReceipt(corrected, hasAnyIssue)
+      showSaved(corrected, target)
+      if (soundEnabled) playScanChime(corrected.issueCount ? "issue" : (corrected.ironSendQty ?? 0) > 0 ? "iron" : "success")
       setIssueRecorded(hasAnyIssue)
       setNotice(
         hasAnyIssue
@@ -754,6 +896,7 @@ export function ScanReturns() {
     setSavedScanId(null)
     setIssueRecorded(false)
     setMultiOpen(false)
+    setRemoteSaved("")
     benchRef.current = null
     pendingLines.current = null
     const scanned = value.trim().toUpperCase()
@@ -805,6 +948,12 @@ export function ScanReturns() {
         setClientKey("")
         setVerifyModalOpen(false)
         if (soundEnabled) playScanChime("error")
+        showProblem(
+          "duplicate",
+          "Duplicate — already received",
+          result.trackingId,
+          `Scanned at ${result.time} by ${result.scannedBy} in ${result.marketplace}. Set the parcel aside.`,
+        )
         transitionTo("DUPLICATE")
       } else if (result.status === "choose") {
         setShipment(null)
@@ -818,6 +967,12 @@ export function ScanReturns() {
         setClientKey("")
         setVerifyModalOpen(false)
         if (soundEnabled) playScanChime("error")
+        showProblem(
+          "notfound",
+          "Not found in return data",
+          result.trackingId,
+          account === "Auto detect" ? "No active return in any account you can use." : `No active return in ${account}.`,
+        )
         transitionTo("LOOKUP_ERROR")
       }
     } catch (err) {
@@ -827,6 +982,7 @@ export function ScanReturns() {
       setVerifyModalOpen(false)
       if (soundEnabled) playScanChime("error")
       setError(err instanceof Error ? err.message : "Lookup failed")
+      showProblem("error", "Lookup failed", scanned, err instanceof Error ? err.message : "Check the connection and scan again.")
       transitionTo("LOOKUP_ERROR")
     }
   }
@@ -1028,7 +1184,8 @@ export function ScanReturns() {
       setReceipt(result)
       setShift(result.shift)
       setClaimsBadge(result.claimsBadge)
-      if (soundEnabled) playScanChime(result.issueCount ? "issue" : "success")
+      showSaved(result, shipment)
+      if (soundEnabled) playScanChime(result.issueCount ? "issue" : (result.ironSendQty ?? 0) > 0 ? "iron" : "success")
       setNotice(
         result.replayed
           ? "This return was already saved. The earlier result is shown, and nothing was saved twice."
@@ -1164,7 +1321,7 @@ export function ScanReturns() {
                   : "Scan the label. A match is saved at once as a normal return."}
               </p>
             </div>
-            <i className="live-dot">{scannerState === "READY" ? "Scan input ready" : STATE_LABELS[scannerState]}</i>
+            <LiveSyncBadge compact />
           </div>
           {scanQueue.length > 0 && (
             <div className="queue-banner" style={{ margin: "12px 24px 0" }}>
@@ -1295,10 +1452,35 @@ export function ScanReturns() {
               </button>
             </div>
             <div className="scan-hint">
-              <span>Scanner stays focused after every saved return</span>
+              <span>Scanner stays focused after every saved return · type an AWB or Order ID by hand and press Enter</span>
               <span>Press Enter to search</span>
             </div>
           </form>
+
+          {feedback && (
+            <div className={`scan-feedback tone-${feedback.tone}`} role="status" aria-live="assertive" key={feedback.at}>
+              <div className="scan-feedback-icon">
+                {feedback.image ? <img src={feedback.image} alt="" /> : <Icon name={FEEDBACK_ICON[feedback.tone]} size={30} />}
+              </div>
+              <div className="scan-feedback-body">
+                <strong className="scan-feedback-title">{feedback.title}</strong>
+                <span className="scan-feedback-awb">{feedback.awb}</span>
+                {feedback.sku && (
+                  <span className="scan-feedback-sku">
+                    {feedback.sku}
+                    {feedback.size && <b className="size-chip">{feedback.size}</b>}
+                  </span>
+                )}
+                <small>{feedback.detail}</small>
+              </div>
+              <time className="scan-feedback-time">{IST_CLOCK.format(new Date(feedback.at))}</time>
+            </div>
+          )}
+          {remoteSaved && (
+            <div className="form-error" style={{ margin: "12px 24px 0" }} role="alert">
+              {remoteSaved}
+            </div>
+          )}
 
           {error && (
             <div className="form-error" style={{ margin: "16px 24px 0", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -1550,6 +1732,14 @@ export function ScanReturns() {
                           {item.marketplaceSku || "—"}
                         </strong>
                       </div>
+                      {sizeFromSku(item.marketplaceSku, item.productSku, item.productName) && (
+                        <div className="desktop-sku-card size-card" aria-label="Size">
+                          <span className="desktop-sku-label">SIZE</span>
+                          <strong className="desktop-sku-value size-value">
+                            {sizeFromSku(item.marketplaceSku, item.productSku, item.productName)}
+                          </strong>
+                        </div>
+                      )}
                       {item.productSku && item.productSku !== item.marketplaceSku && (
                         <div className="desktop-sku-card secondary-sku">
                           <span className="desktop-sku-label">MASTER / PRODUCT SKU</span>
@@ -1763,7 +1953,7 @@ export function ScanReturns() {
             <small>{shift?.targetLabel || "Loading shift…"}</small>
           </div>
           <div className="session-card">
-            <h3>Current session</h3>
+            <h3>Today, all benches</h3>
             <div>
               <span>
                 Correct returns <b>{shift?.correct || "—"}</b>
@@ -1772,7 +1962,39 @@ export function ScanReturns() {
                 Issue returns <b className="orange-text">{shift?.issues || "—"}</b>
               </span>
               <span>
+                Iron Send units <b className="iron-text">{shift?.ironSend ?? "—"}</b>
+              </span>
+              <span>
                 Clear rate <b>{shift?.accuracy || "—"}</b>
+              </span>
+            </div>
+          </div>
+          <div className="session-card bench-counters">
+            <h3>This workstation</h3>
+            <div className="bench-counter-grid">
+              <span className="c-total">
+                <b>{Object.keys(sessionOutcomes).length}</b>
+                <small>Saved</small>
+              </span>
+              <span className="c-ok">
+                <b>{Object.values(sessionOutcomes).filter((o) => o === "clear").length}</b>
+                <small>Normal</small>
+              </span>
+              <span className="c-issue">
+                <b>{Object.values(sessionOutcomes).filter((o) => o === "issue").length}</b>
+                <small>Issues</small>
+              </span>
+              <span className="c-iron">
+                <b>{Object.values(sessionOutcomes).filter((o) => o === "iron").length}</b>
+                <small>Iron Send</small>
+              </span>
+              <span className="c-miss">
+                <b>{sessionMisses.notFound}</b>
+                <small>Not found</small>
+              </span>
+              <span className="c-dup">
+                <b>{sessionMisses.duplicate}</b>
+                <small>Duplicates</small>
               </span>
             </div>
           </div>

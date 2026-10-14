@@ -21,6 +21,7 @@ const SCHEMA_VERSION = 1
 //  schema-scan-history.sql  scan history snapshots (original AWB, link AWB, source file, return event) and indexes
 //  schema-shopify.sql       Shopify real-time return and RTO ingestion and sync runs
 //  schema-payment.sql       Payment and sales amount synchronization and sync runs
+//  schema-iron.sql          Iron Send tracking (operational category, sent and received quantities, overdue setting)
 const SCHEMA_FILES = [
   "schema.sql",
   "schema-import.sql",
@@ -30,6 +31,7 @@ const SCHEMA_FILES = [
   "schema-payment.sql",
   "schema-unmapped-skus.sql",
   "schema-return-reasons.sql",
+  "schema-iron.sql",
 ] as const
 
 // History tables whose rows must never be destroyed by any code path. Listed here so they cannot silently
@@ -49,6 +51,8 @@ const HISTORY_TABLES = [
   "upload_batches",
   "upload_rows",
   "register_audit_log",
+  "iron_send_records",
+  "iron_receive_events",
 ] as const
 
 // Reads every schema file and refuses to apply them if any contain a destructive statement against a

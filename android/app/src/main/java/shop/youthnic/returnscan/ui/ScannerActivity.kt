@@ -37,6 +37,7 @@ import shop.youthnic.returnscan.ReturnScanApp
 import shop.youthnic.returnscan.data.AuthExpiredException
 import shop.youthnic.returnscan.data.BarcodeRules
 import shop.youthnic.returnscan.data.DuplicateGuard
+import shop.youthnic.returnscan.data.LiveSync
 import shop.youthnic.returnscan.data.LookupResult
 import shop.youthnic.returnscan.data.NetworkException
 import shop.youthnic.returnscan.data.RecentScan
@@ -88,6 +89,17 @@ class ScannerActivity : AppCompatActivity() {
     private var sessionData = ScanSessionData()
     private val recentScansList = mutableListOf<RecentScan>()
     private var scannedCountToday = 0
+    private var issuesToday = 0
+    private var ironSendToday = 0
+
+    // Live updates (WebSocket, with a 4-second poll as the fallback) and the clock on screen. Times are shown in IST and
+    // refreshed every second, so "Last scan" and "Synced" never stay frozen at "Just now".
+    private var liveSync: LiveSync? = null
+    private var syncMode = LiveSync.Mode.CONNECTING
+    private var lastSyncedAt = 0L
+    private var online = true
+    private var lastVerdictAt = 0L
+    private var tickerJob: Job? = null
 
     private val sessionManager get() = (application as ReturnScanApp).sessionManager
 
@@ -116,6 +128,19 @@ class ScannerActivity : AppCompatActivity() {
         initUi()
         initBarcodeScanner()
         loadSessionData()
+        liveSync = LiveSync(
+            (application as ReturnScanApp).apiClient,
+            sessionManager,
+            lifecycleScope,
+            onChange = { refreshShift() },
+            onStatus = { mode, syncedAt ->
+                syncMode = mode
+                if (syncedAt > 0) lastSyncedAt = syncedAt
+                if (mode == LiveSync.Mode.LIVE || mode == LiveSync.Mode.POLLING) online = true
+                if (mode == LiveSync.Mode.OFFLINE) online = false
+                renderConnection()
+            },
+        )
 
         // Build the beep tones once the first frame is up, so the first scan result is not late.
         binding.root.post { (application as ReturnScanApp).soundManager.prepare() }
@@ -129,11 +154,16 @@ class ScannerActivity : AppCompatActivity() {
         if (CameraPermission.isGranted(this)) resumeCamera() else showCameraNeeded()
         startIdleWatch()
         checkForUpdates()
+        liveSync?.start()
+        refreshShift()
+        startTicker()
     }
 
     override fun onPause() {
         super.onPause()
         idleJob?.cancel()
+        liveSync?.stop()
+        tickerJob?.cancel()
         pauseCamera(showOverlay = false)
     }
 
@@ -202,20 +232,80 @@ class ScannerActivity : AppCompatActivity() {
     private fun applySessionData(data: ScanSessionData) {
         sessionData = data
         scannedCountToday = data.shiftProgress.scannedToday
+        issuesToday = data.shiftProgress.issuesToday
+        ironSendToday = data.shiftProgress.ironSendToday
+        lastSyncedAt = System.currentTimeMillis()
         updateCountsUi()
+        renderConnection()
+    }
+
+    /** Reloads today's figures (all benches and phones). Called on open, and whenever the live cursor moves. */
+    private fun refreshShift() {
+        lifecycleScope.launch {
+            val app = application as ReturnScanApp
+            val result = app.apiClient.getSessionData(accountId)
+            val data = result.getOrNull()
+            if (data != null) {
+                // Keep the issue rules the open verification sheet already uses; only the figures change.
+                sessionData = if (sessionData.categories.isEmpty()) data else sessionData.copy(shift = data.shift)
+                scannedCountToday = data.shiftProgress.scannedToday
+                issuesToday = data.shiftProgress.issuesToday
+                ironSendToday = data.shiftProgress.ironSendToday
+                lastSyncedAt = System.currentTimeMillis()
+                online = true
+                updateCountsUi()
+                renderConnection()
+            } else if (result.exceptionOrNull() is AuthExpiredException) {
+                goToLogin()
+            } else if (result.exceptionOrNull() is NetworkException) {
+                setOnline(false)
+            }
+        }
     }
 
     private fun updateCountsUi() {
         binding.tvProgressScanned.text = getString(R.string.scanned_today_format, Ui.count(scannedCountToday))
         binding.progressBarScans.progress = (scannedCountToday % 100)
+        binding.tvProgressPending.text = getString(R.string.today_issue_iron_format, Ui.count(issuesToday), Ui.count(ironSendToday))
     }
 
-    private fun setOnline(online: Boolean) {
-        binding.tvConnectionStatus.setText(if (online) R.string.connection_online else R.string.connection_offline)
-        if (online) {
-            Ui.pillRes(binding.tvConnectionStatus, R.color.verdict_ok, R.color.verdict_ok_bg)
-        } else {
-            Ui.pillRes(binding.tvConnectionStatus, R.color.verdict_stop, R.color.verdict_stop_bg)
+    private fun setOnline(isOnline: Boolean) {
+        online = isOnline
+        renderConnection()
+    }
+
+    /** The sync pill: Live / Auto-sync / Offline, with how long ago the data was last confirmed (IST). */
+    private fun renderConnection() {
+        val age = Ui.ageLabel(lastSyncedAt)
+        val text = when {
+            !online || syncMode == LiveSync.Mode.OFFLINE ->
+                if (lastSyncedAt > 0) getString(R.string.sync_offline_format, Ui.istTime(java.util.Date(lastSyncedAt)))
+                else getString(R.string.connection_offline)
+            syncMode == LiveSync.Mode.LIVE -> getString(R.string.sync_live_format, age.ifBlank { getString(R.string.banner_just_now) })
+            syncMode == LiveSync.Mode.POLLING -> getString(R.string.sync_polling_format, age.ifBlank { getString(R.string.banner_just_now) })
+            else -> getString(R.string.connection_online)
+        }
+        binding.tvConnectionStatus.text = text
+        when {
+            !online || syncMode == LiveSync.Mode.OFFLINE ->
+                Ui.pillRes(binding.tvConnectionStatus, R.color.verdict_stop, R.color.verdict_stop_bg)
+            syncMode == LiveSync.Mode.POLLING ->
+                Ui.pillRes(binding.tvConnectionStatus, R.color.verdict_check, R.color.verdict_check_bg)
+            else -> Ui.pillRes(binding.tvConnectionStatus, R.color.verdict_ok, R.color.verdict_ok_bg)
+        }
+    }
+
+    /** Refreshes the relative times on screen every second while the scanner is open. */
+    private fun startTicker() {
+        tickerJob?.cancel()
+        tickerJob = lifecycleScope.launch {
+            while (isActive) {
+                renderConnection()
+                if (lastVerdictAt > 0 && binding.cardScanBanner.visibility == View.VISIBLE) {
+                    binding.tvLastVerdictTime.text = Ui.ageLabel(lastVerdictAt)
+                }
+                delay(1000)
+            }
         }
     }
 
@@ -712,7 +802,8 @@ class ScannerActivity : AppCompatActivity() {
         binding.cardScanBanner.visibility = View.VISIBLE
         binding.bannerLastVerdict.setBackgroundColor(ContextCompat.getColor(this, colorRes))
         binding.tvBannerStatus.text = status
-        binding.tvLastVerdictTime.setText(R.string.banner_just_now)
+        lastVerdictAt = System.currentTimeMillis()
+        binding.tvLastVerdictTime.text = Ui.ageLabel(lastVerdictAt)
         binding.tvBannerAwb.text = awb
         binding.tvBannerOrder.text = line1
         binding.tvBannerDetails.text = line2

@@ -27,7 +27,7 @@ It does not replace [CLAUDE.md](../../CLAUDE.md), which holds the business and t
 
 ## Current state
 
-Status words used here: **Written** means the code exists and was read back. **Tested** means an automated check exists. **Verified** means the check was run and its output was read. On 2026-10-14 the local typecheck, build and non-database tests were run (304 pass, 0 fail, 24 skipped). The database tests are still skipped.
+Status words used here: **Written** means the code exists and was read back. **Tested** means an automated check exists. **Verified** means the check was run and its output was read. On 2026-10-14 (Claude Code) the local typecheck, build and the full test suite including the database tests were run against a local PGlite database: 346 pass, 0 fail, 0 skipped.
 
 ## Start here (2026-10-14)
 
@@ -42,7 +42,10 @@ Read this before the session log. The log below is history. This section is the 
 - **Multi return & Iron Send.** Multi-item/multi-order return verification supports Iron Send seamlessly across Web and Mobile app. Distinct theme colors apply to each issue category (Clear = Emerald, Iron Send = Vibrant Blue, Damaged = Crimson Red, Wrong Product = Amber, Missing = Rose, SKU Change = Purple, Size Change = Teal, Other = Slate). Issue buttons dynamically move forward based on real operational usage frequency while strictly keeping Clear Return first.
 - **Register.** Filters are three rows. Empty dates say "Any day". There is no card list under the table. Details opens a two-column record sheet.
 - **Mobile Android Client.** Production release `v1.0.30` (`versionCode: 10030`), in `android/app`, built with CameraX continuous scanning, camera permission onboarding dialog, server contract alignment (`ScanPayload.kt`), automated in-app updater, category chip colors, Iron Send integration, usage frequency sorting, and persistent warehouse release keystore (`release.keystore`) eliminating package signature update conflicts. Synced via `.github/workflows/return-scan-apk.yml`.
-- **Not done.** 24 database tests skipped because TEST_DATABASE_URL is not configured on a dedicated test database. `CLAUDE.md` is missing from the folder.
+- **Iron Send (2026-10-14, Claude Code).** Iron Send is an operational category (`is_operational`), not a return issue: an Iron-only scan is `clear` / `Clear`, never a claim, never in issue figures, never in the OMSGuru file. Each line sent for ironing opens an `iron_send_records` row; the Inward Team (role `Inward`, or Admin) records units that come back on the **Iron tracking** page (`/iron`). Nothing is received automatically. Pending, Received and Overdue (default > 3 days, Admin setting) are tracked separately. Scans saved earlier as Iron-only issues were reclassified once by `schema-iron.sql`, with an audit row each (`scan.reclassify_operational`).
+- **Live sync.** WebSocket `/api/live` plus a 3.5 s (web) / 4 s (Android) poll of `/api/sync/state` as the fallback. The cursor is the newest audit id. Clients reload through the normal scoped routes.
+- **Database tests now run.** `{ skip }` with an empty string marked every database test as skipped on Node 24 and hid its failures. Fixed (`skip: skip || false`), the stale tests were corrected, `npm test` runs files one at a time, and CI runs them against a `postgres:16` service (`return_test`). Locally they can run against PGlite (`@electric-sql/pglite-socket`, outside the project). 346 tests, 0 skipped when `TEST_DATABASE_URL` is set.
+- **Not done.** `CLAUDE.md` is missing from the folder.
 
 | Area | Status | Tests | Notes |
 |---|---|---|---|
@@ -1484,6 +1487,21 @@ Append new entries at the end. Do not edit earlier entries, except to correct a 
   - Rule 8: Zero secrets printed or committed.
   - Rule 10: Every screen control works or is disabled with explanation.
   - Rule 11: Reported only tests that were executed and passed.
+
+### 2026-10-14, Claude Code, Iron Send tracking, live sync, analytics, scan page, mobile time, root-cause fixes
+
+- **Root causes found and fixed (read-only review first):**
+  - Iron Send was stored as an ordinary issue: it set the scan to `issue` / `Draft`, so it was counted in the issue figures and the claims. Now operational (`receipt_issue_categories.is_operational`), see `server/schema-iron.sql`, `countsAsReturnIssue` in `server/register-rules.ts`, `recordScan` / `correctScanIssue` in `server/register-service.ts`.
+  - OMSGuru good quantity was `received - every issue qty`, which subtracted a missing unit twice (it is already not in `received_qty`), and the query read `rs.scanned_awb`, a column that does not exist. Now `received - non-missing issue qty` (Iron Send and damaged stay excluded), tracking from `scanned_tracking`. `server/omsguru-daily.ts`.
+  - The daily and weekly email queries used columns that do not exist (`s.created_at`, `s.created_by`, `i.quantity_received`, `receipt_scans.marketplace_id`, `receipt_scan_issues.receipt_scan_id`) and status values that are never stored. Rewritten on the real schema; Iron Send excluded from top issues. `server/email-reports.ts`.
+  - The 24 database tests never ran: `{ skip }` with `""` is a skip on Node 24 and hid failures. Fixed, stale expectations corrected (uppercase run id, ticket rule now switched off at the bench, whole-account activation, renamed CSV header, 404 for an unknown return).
+  - A bench correction deleted the replaced issues, tickets and ticket history with no trace. It now writes them to the audit log first (`scan.issues_replaced`).
+  - Android: the last-scan banner time was set to "Just now" once and never refreshed, and Recent scans showed the server's raw UTC ISO text (5 h 30 min behind IST). Times now parse with their offset and show in IST, refreshed every second (`util/ServerTime.kt`).
+  - Web scan page: focus could drift to a button and stay there ("Not listening"). A watchdog returns focus to the scan box when the bench is idle.
+- **Added:** Iron tracking page and API (`server/iron.ts`, `server/iron-routes.ts`, `src/pages/IronTracking.tsx`), role `Inward` (Admin user form), return analytics (`server/analytics.ts`, `src/AnalyticsReport.tsx`, Register > Return Analytics, CSV), weekly email insights (size, SKU, reason, Iron Send pending/overdue), live sync (`server/live.ts`, `src/live.tsx`, Android `data/LiveSync.kt`), scan page result banner, size chip, workstation counters, Iron Send counts and live figures (`src/pages/ScanReturns.tsx`, `src/features.css`), Android sync pill and today's Issues/Iron line.
+- **Ran (2026-10-14, local):** `npm run typecheck` passed. `npm run build` passed. `npm test` with `TEST_DATABASE_URL` on a local PGlite database: 346 tests, 346 pass, 0 fail, 0 skipped. An HTTP + WebSocket smoke test against the built server on PGlite (synthetic users and `SYN` data only): Iron-only save is `clear`/`Clear`, replayed key creates nothing, second scan is a duplicate, the WebSocket pushed `scan.saved`, an unauthenticated socket got 401, a Scanner receiving Iron got 403, the Inward user succeeded, the Inward user got 403 on the Admin setting. Browser pane: scan result banner, Iron tracking page and analytics checked at desktop and 375 px.
+- **Not run locally:** the Android build and unit tests (no JDK on this machine); they run in the APK workflow. The production database was not touched by any agent command; the schema run on deploy applies `schema-iron.sql`.
+- **Next agent must not change:** Iron Send must stay out of issue figures, claims and OMSGuru; only `Inward`/Admin may record Iron received; nothing may mark Iron received automatically; keep `skip: skip || false` in the database tests.
 
 ## STOP — needs the user to resume
 

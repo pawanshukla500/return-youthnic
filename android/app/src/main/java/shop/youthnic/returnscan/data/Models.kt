@@ -99,7 +99,9 @@ data class MarketplaceAccount(
 data class ShiftProgress(
     val scansToday: Int,
     val issuesToday: Int,
-    val clearRate: String
+    val clearRate: String,
+    /** Units sent for ironing today. Iron Send is operational: those returns are counted as correct, not as issues. */
+    val ironSendToday: Int = 0
 ) {
     val scannedToday: Int get() = scansToday
 
@@ -110,7 +112,8 @@ data class ShiftProgress(
             return ShiftProgress(
                 scansToday = json.countOf("scanned", "scansToday"),
                 issuesToday = json.countOf("issues", "issuesToday"),
-                clearRate = json.optString("accuracy", json.optString("clearRate", "100%"))
+                clearRate = json.optString("accuracy", json.optString("clearRate", "100%")),
+                ironSendToday = json.countOf("ironSend")
             )
         }
     }
@@ -335,6 +338,8 @@ data class ScanReceipt(
     val scannedAt: String,
     val issueCount: Int = 0,
     val replayed: Boolean = false,
+    /** Units sent for ironing in this scan. Iron Send is not an issue (issueCount does not include it). */
+    val ironSendQty: Int = 0,
     val scannedToday: Int = -1
 ) {
     companion object {
@@ -350,6 +355,7 @@ data class ScanReceipt(
                 scannedAt = scan.optString("scannedAt", scan.optString("scanned_at", "")),
                 issueCount = issues,
                 replayed = json.optBoolean("replayed", false),
+                ironSendQty = json.optInt("ironSendQty", 0),
                 scannedToday = shift?.countOf("scanned", "scansToday") ?: -1
             )
         }

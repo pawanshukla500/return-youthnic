@@ -3,7 +3,7 @@ import { MARKETPLACE_CLASS, MARKETPLACE_LOGO } from "./marketplaces"
 import { PARTNER_LOGO } from "./partners"
 import type { IconName } from "./types"
 
-const iconPaths: Record<IconName, ReactNode> = {
+const iconPaths: Partial<Record<IconName, ReactNode>> = {
   grid: (
     <>
       <rect x="3" y="3" width="7" height="7" rx="1" />
@@ -104,6 +104,23 @@ const iconPaths: Record<IconName, ReactNode> = {
   ),
 }
 
+// Icons added with Iron Send tracking and live sync. Kept apart from the original set above.
+const extraIconPaths: Partial<Record<IconName, ReactNode>> = {
+  iron: (
+    <>
+      <path d="M3 17h15a3 3 0 0 0 3-3V9a2 2 0 0 0-2-2h-5a5 5 0 0 0-5 5v1H6a3 3 0 0 0-3 3z" />
+      <path d="M12 7V5h4" />
+    </>
+  ),
+  wifi: (
+    <>
+      <path d="M5 12.5a10 10 0 0 1 14 0" />
+      <path d="M8.5 16a5 5 0 0 1 7 0" />
+      <path d="M12 19.5h.01" />
+    </>
+  ),
+}
+
 export function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
   return (
     <svg
@@ -118,7 +135,7 @@ export function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
       strokeLinejoin="round"
       aria-hidden="true"
     >
-      {iconPaths[name]}
+      {extraIconPaths[name] ?? iconPaths[name]}
     </svg>
   )
 }

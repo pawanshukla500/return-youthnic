@@ -10,6 +10,7 @@ import { Claims } from "./pages/Claims"
 import { Dashboard } from "./pages/Dashboard"
 import { Login } from "./pages/Login"
 import { Reports } from "./pages/Reports"
+import { IronTracking } from "./pages/IronTracking"
 import { ScanReturns } from "./pages/ScanReturns"
 import { Uploads } from "./pages/Uploads"
 import { WorkspaceContext, type WorkspaceValue } from "./workspace"
@@ -18,6 +19,7 @@ const PAGE_TITLES: Record<Page, string> = {
   dashboard: "Overview · Return Operations",
   scan: "Scan Returns · Return Operations",
   reports: "Return Register · Return Operations",
+  iron: "Iron Tracking · Return Operations",
   claims: "Claims · Return Operations",
   uploads: "Data Uploads · Return Operations",
   admin: "Admin Settings · Return Operations",
@@ -163,6 +165,7 @@ export default function App() {
           {page === "dashboard" && <Dashboard />}
           {page === "scan" && <ScanReturns />}
           {page === "reports" && <Reports />}
+          {page === "iron" && <IronTracking />}
           {page === "claims" && <Claims />}
           {page === "uploads" && <Uploads />}
           {page === "admin" &&

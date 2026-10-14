@@ -10,9 +10,6 @@ import shop.youthnic.returnscan.data.RecentScan
 import shop.youthnic.returnscan.databinding.DialogRecentScansBinding
 import shop.youthnic.returnscan.databinding.ItemRecentScanRowBinding
 import shop.youthnic.returnscan.util.Ui
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
 class RecentScansDialog(
     context: Context,
@@ -20,7 +17,6 @@ class RecentScansDialog(
 ) : BottomSheetDialog(context) {
 
     private val binding = DialogRecentScansBinding.inflate(LayoutInflater.from(context))
-    private val timeFormat = SimpleDateFormat("h:mm a", Locale.US)
 
     init {
         setContentView(binding.root)
@@ -41,18 +37,9 @@ class RecentScansDialog(
                     .filter { it.isNotBlank() }
                     .joinToString(" · ")
                 row.tvRecentMeta.text = metaText.ifBlank { "Return Scan" }
-                val displayTime = try {
-                    val tsLong = scan.timestamp.toLongOrNull()
-                    if (tsLong != null) {
-                        timeFormat.format(Date(tsLong))
-                    } else if (scan.timestamp.isNotBlank()) {
-                        scan.timestamp
-                    } else {
-                        "Just now"
-                    }
-                } catch (_: Exception) {
-                    "Just now"
-                }
+                // The timestamp is epoch milliseconds (saved on this phone) or the server's UTC time. Both are shown in IST.
+                val displayTime = Ui.parseServerTime(scan.timestamp)?.let { Ui.istTime(it) }
+                    ?: scan.timestamp.ifBlank { "Just now" }
                 row.tvRecentTime.text = displayTime
 
                 row.tvRecentOutcomeBadge.text = scan.outcome

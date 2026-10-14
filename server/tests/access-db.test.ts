@@ -188,6 +188,14 @@ async function countScansFor(marketplaceId: number | null): Promise<number> {
   return Number(result.rows[0].n)
 }
 
+// These checks exercise the ticket rules. Production switches the ticket requirement off at the bench on every start
+// (schema-import.sql), so a ticket check turns it back on in the test database first. A later schema run turns it off.
+async function ticketRulesOn(): Promise<void> {
+  await pool.query(
+    "UPDATE receipt_issue_categories SET requires_ticket = true WHERE code IN ('missing_component', 'wrong_product', 'damaged_product')",
+  )
+}
+
 before(async () => {
   if (skip) return
   const settings = connectionSettingsFor(rawUrl)
@@ -227,12 +235,12 @@ after(async () => {
   if (pool) await pool.end()
 })
 
-test("applySchema runs twice without error, so it is safe on every start", { skip }, async () => {
+test("applySchema runs twice without error, so it is safe on every start", { skip: skip || false }, async () => {
   await applySchema(pool)
   await applySchema(pool)
 })
 
-test("a user sees only the accounts assigned to them; an Admin sees all; no assignment means none", { skip }, async () => {
+test("a user sees only the accounts assigned to them; an Admin sees all; no assignment means none", { skip: skip || false }, async () => {
   const everything = (await accessibleAccounts(pool, adminScope)).map((account) => account.name)
   assert.ok(everything.includes("Myntra EJ") && everything.includes("Myntra VB"))
   assert.deepEqual((await accessibleAccounts(pool, ejScope)).map((account) => account.name), ["Myntra EJ"])
@@ -240,7 +248,7 @@ test("a user sees only the accounts assigned to them; an Admin sees all; no assi
   assert.deepEqual(await accessibleAccounts(pool, NO_ACCOUNTS), [])
 })
 
-test("a named account outside the user's scope is refused with 403", { skip }, async () => {
+test("a named account outside the user's scope is refused with 403", { skip: skip || false }, async () => {
   await expectError(
     lookupShipment(pool, { tracking: AWB.vb, marketplace: "Myntra VB", shipmentId: null }, ejScope),
     403,
@@ -248,19 +256,19 @@ test("a named account outside the user's scope is refused with 403", { skip }, a
   )
 })
 
-test("an AWB outside the user's scope is not found, and no other account is named", { skip }, async () => {
+test("an AWB outside the user's scope is not found, and no other account is named", { skip: skip || false }, async () => {
   const result = await lookupShipment(pool, { tracking: AWB.vb, marketplace: "Auto detect", shipmentId: null }, ejScope)
   assert.equal(result.status, "not_found")
 })
 
-test("the Admin finds the same AWB in its own account", { skip }, async () => {
+test("the Admin finds the same AWB in its own account", { skip: skip || false }, async () => {
   const result = await lookupShipment(pool, { tracking: AWB.vb, marketplace: "Auto detect", shipmentId: null }, adminScope)
   assert.equal(result.status, "found")
   if (result.status !== "found") return
   assert.equal(result.shipment.marketplace, "Myntra VB")
 })
 
-test("a shared AWB in two accounts is a choice for an Admin, and a single match for a restricted user", { skip }, async () => {
+test("a shared AWB in two accounts is a choice for an Admin, and a single match for a restricted user", { skip: skip || false }, async () => {
   const forAdmin = await lookupShipment(pool, { tracking: AWB.shared, marketplace: "Auto detect", shipmentId: null }, adminScope)
   assert.equal(forAdmin.status, "choose")
   const forEj = await lookupShipment(pool, { tracking: AWB.shared, marketplace: "Auto detect", shipmentId: null }, ejScope)
@@ -269,7 +277,7 @@ test("a shared AWB in two accounts is a choice for an Admin, and a single match 
   assert.equal(forEj.shipment.marketplace, "Myntra EJ")
 })
 
-test("a restricted user cannot save a scan for another account's return (404, nothing saved)", { skip }, async () => {
+test("a restricted user cannot save a scan for another account's return (404, nothing saved)", { skip: skip || false }, async () => {
   const vb = await lookupShipment(pool, { tracking: AWB.vb, marketplace: "Auto detect", shipmentId: null }, adminScope)
   assert.equal(vb.status, "found")
   if (vb.status !== "found") return
@@ -280,7 +288,7 @@ test("a restricted user cannot save a scan for another account's return (404, no
   assert.equal(Number(saved.rows[0].n), 0)
 })
 
-test("several items on one AWB are one scan with one verified line per item, and the scanned AWB is kept", { skip }, async () => {
+test("several items on one AWB are one scan with one verified line per item, and the scanned AWB is kept", { skip: skip || false }, async () => {
   const shipment = await lookupShipment(pool, { tracking: AWB.ej, marketplace: "Myntra EJ", shipmentId: null }, ejScope)
   assert.equal(shipment.status, "found")
   if (shipment.status !== "found") return
@@ -312,7 +320,7 @@ test("several items on one AWB are one scan with one verified line per item, and
   assert.equal(Number(lines.rows[0].n), 2)
 })
 
-test("a repeated save with the same key returns the first scan, and a second scan of the AWB is refused", { skip }, async () => {
+test("a repeated save with the same key returns the first scan, and a second scan of the AWB is refused", { skip: skip || false }, async () => {
   const lookup = await lookupShipment(pool, { tracking: AWB.ej, marketplace: "Myntra EJ", shipmentId: null }, ejScope)
   assert.equal(lookup.status, "duplicate", "a received AWB is reported as a duplicate, never as found")
   const shipmentId = await activeEjShipmentId(AWB.ej)
@@ -338,7 +346,8 @@ test("a repeated save with the same key returns the first scan, and a second sca
   )
 })
 
-test("a wrong-product issue opens a ticket; a restricted user cannot change it, the Admin can", { skip }, async () => {
+test("a wrong-product issue opens a ticket; a restricted user cannot change it, the Admin can", { skip: skip || false }, async () => {
+  await ticketRulesOn()
   const vb = await lookupShipment(pool, { tracking: AWB.vb, marketplace: "Auto detect", shipmentId: null }, adminScope)
   assert.equal(vb.status, "found")
   if (vb.status !== "found") return
@@ -373,7 +382,7 @@ test("a wrong-product issue opens a ticket; a restricted user cannot change it, 
   assert.equal(changed.status, "Review")
 })
 
-test("the register and its export show only the accounts the user can see", { skip }, async () => {
+test("the register and its export show only the accounts the user can see", { skip: skip || false }, async () => {
   const forEj = await listRegister(pool, {}, 1, 200, {}, ejScope)
   assert.ok(forEj.rows.length > 0)
   assert.ok(forEj.rows.every((line) => line.marketplace === "Myntra EJ"), "no other account in the register")
@@ -384,13 +393,13 @@ test("the register and its export show only the accounts the user can see", { sk
   assert.equal((await exportRegisterRows(pool, {}, NO_ACCOUNTS)).length, 0)
 })
 
-test("the dashboard figures count only the accounts the user can see", { skip }, async () => {
+test("the dashboard figures count only the accounts the user can see", { skip: skip || false }, async () => {
   assert.equal((await loadHeadline(pool, ejScope)).received, await countScansFor(ejId))
   assert.equal((await loadHeadline(pool, adminScope)).received, await countScansFor(null))
   assert.equal((await loadHeadline(pool, noneScope)).received, 0)
 })
 
-test("a saved scan keeps its snapshot after its lookup data is replaced, and survives a reconnect", { skip }, async () => {
+test("a saved scan keeps its snapshot after its lookup data is replaced, and survives a reconnect", { skip: skip || false }, async () => {
   const beforeReplace = await listRegister(pool, { tracking: AWB.ej }, 1, 50, {}, ejScope)
   assert.equal(beforeReplace.rows.length, 2, "both lines of the scan are listed")
   // Myntra EJ is uploaded again without the AWB. The old lookup row becomes superseded, and the scan stays.
