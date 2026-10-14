@@ -267,3 +267,4 @@ button.iron-stat:hover { border-color: #94a3b8; }
   .iron-batch-callout { width: 100%; justify-content: space-between; }
   .iron-batch-big { font-size: 26px; }
 }
+.iron-dialog-head h2.plain { font-family: 'Manrope', sans-serif; font-weight: 800; }

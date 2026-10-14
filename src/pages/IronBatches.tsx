@@ -532,7 +532,7 @@ export function CreateBatchDialog({
         <div className="iron-dialog-head">
           <div>
             <small>Create Iron Send batch</small>
-            <h2>Send pending lines to the khaata</h2>
+            <h2 className="plain">Send pending lines to the khaata</h2>
             <p>Every line not yet in a batch is ticked. Untick what is not going out now. The batch number goes on the khaata challan.</p>
           </div>
           <button type="button" className="icon-button" onClick={onClose} aria-label="Close">

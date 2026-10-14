@@ -547,7 +547,7 @@ function OverdueSettings({ current, onClose, onSaved }: { current: number; onClo
         <div className="iron-dialog-head">
           <div>
             <small>Admin setting</small>
-            <h2>When is Iron Send overdue?</h2>
+            <h2 className="plain">When is Iron Send overdue?</h2>
             <p>Ironed units usually come back in 2-3 days. Lines still pending after this many days are shown as overdue.</p>
           </div>
         </div>
