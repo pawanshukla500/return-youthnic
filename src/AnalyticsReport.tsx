@@ -83,7 +83,8 @@ export function AnalyticsReport() {
     const timer = window.setTimeout(() => void load(), 200)
     return () => window.clearTimeout(timer)
   }, [load])
-  useLiveChanges(() => void load(true), 1500)
+  // Analytics are heavier: reload at most about every 15 seconds while scans keep coming in.
+  useLiveChanges(() => void load(true), 5000, 15000)
 
   const preset = (days: number) => {
     setDateTo(today)

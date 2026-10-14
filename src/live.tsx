@@ -158,28 +158,35 @@ export function useSyncState(): SyncState {
   return useSyncExternalStore(subscribeState, () => state, () => state)
 }
 
-// Calls onChange after data changed anywhere (debounced, so a burst of saves is one reload).
-export function useLiveChanges(onChange: (change: LiveChange) => void, debounceMs = 400) {
+// Calls onChange after data changed anywhere. Debounced, so a burst of saves is one reload, and never delayed past
+// maxWaitMs, so a busy floor (a save every few seconds) still refreshes the screen.
+export function useLiveChanges(onChange: (change: LiveChange) => void, debounceMs = 400, maxWaitMs = Math.max(debounceMs * 4, 3000)) {
   const callback = useRef(onChange)
   callback.current = onChange
   useEffect(() => {
     ensureStarted()
     let timer: number | null = null
+    let firstPendingAt = 0
     let last: LiveChange | null = null
+    const fire = () => {
+      timer = null
+      firstPendingAt = 0
+      if (last) callback.current(last)
+    }
     const listener = (change: LiveChange) => {
       last = change
+      const now = Date.now()
+      if (!firstPendingAt) firstPendingAt = now
       if (timer !== null) window.clearTimeout(timer)
-      timer = window.setTimeout(() => {
-        timer = null
-        if (last) callback.current(last)
-      }, debounceMs)
+      const wait = Math.max(0, Math.min(debounceMs, firstPendingAt + maxWaitMs - now))
+      timer = window.setTimeout(fire, wait)
     }
     changeListeners.add(listener)
     return () => {
       changeListeners.delete(listener)
       if (timer !== null) window.clearTimeout(timer)
     }
-  }, [debounceMs])
+  }, [debounceMs, maxWaitMs])
 }
 
 const IST_TIME = new Intl.DateTimeFormat("en-IN", {
