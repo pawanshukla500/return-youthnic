@@ -1464,6 +1464,27 @@ Append new entries at the end. Do not edit earlier entries, except to correct a 
   - Rule 11: Reported only tests that were executed and passed.
   - Rule 12: Mobile APK version and manifest synchronized (`v1.0.26` / `10026`).
 
+### 2026-10-14, Antigravity Agent, High-Visibility Desktop SKU Display (2-2.5 ft viewing)
+
+- **Features & Enhancements Delivered:**
+  - **Desktop SKU Callout Banner (`src/pages/ScanReturns.tsx` & `src/index.css`):**
+    - Created a high-visibility desktop SKU banner (`.desktop-sku-banner`) displaying Marketplace SKU in 26px bold monospace (`ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace`) with high contrast emerald/dark styling (`#092c22` on `#f0fdf4` with `#059669` border and shadow).
+    - Added Master / Product SKU secondary callout in 22px bold monospace (`#0f172a` on `#f8fafc` with `#94a3b8` border) when distinct from Marketplace SKU.
+    - Enlarged Product SKU in `.visual-checks` to 16px bold monospace with full wrapping (`white-space: normal; word-break: break-word; overflow: visible`), eliminating truncation.
+    - Updated Multi-Order verification modal (`.multi-order-sku-block`) with prominent 20px bold monospace SKU pill tags on desktop screens.
+  - **Strict Desktop-Only Scope:**
+    - Scoped large font styling to desktop screens (`@media (min-width: 761px)`).
+    - Mobile view (`@media (max-width: 760px)`) retains compact 12px–13px typography and zero-padded pills, preventing layout stretching or wrapping on handheld devices.
+- **Ran:**
+  - `npm.cmd run typecheck` -> Passed (0 errors).
+  - `npm.cmd run build` -> Passed (Vite in 1.64s, server bundled in 24ms).
+  - `npm.cmd test` -> 328 tests: 304 passed, 0 failed, 24 skipped (`TEST_DATABASE_URL`).
+- **Invariants preserved:**
+  - Rule 1 & Rule 2: Account scope and Admin role strictly preserved.
+  - Rule 8: Zero secrets printed or committed.
+  - Rule 10: Every screen control works or is disabled with explanation.
+  - Rule 11: Reported only tests that were executed and passed.
+
 ## STOP — needs the user to resume
 
 
