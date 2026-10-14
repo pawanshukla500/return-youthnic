@@ -26,10 +26,12 @@ import {
   countsAsReturnIssue,
   decideLookup,
   describeIssues,
+  flyerErrorFor,
   isValidClientKey,
   legFor,
   matchedFieldFor,
   mapRegisterRow,
+  normalizeFlyer,
   normalizeTicketCode,
   normalizeTracking,
   productSkuFor,
@@ -748,6 +750,9 @@ export type ScanReceipt = {
   // Return issues only. Iron Send is not an issue and is counted in ironSendQty.
   issueCount: number
   ironSendQty: number
+  // Meesho flyer capture (permanent claim evidence). Empty unless flyerState is 'scanned'.
+  flyerId: string
+  flyerState: string
   shift: ReturnType<typeof presentShift>
   claimsBadge: string
 }
@@ -811,6 +816,8 @@ async function loadReceipt(db: pg.Pool, scanId: number, replayed: boolean, scope
               COALESCE(rs.order_number_snapshot, er.order_number) AS order_number,
               rs.scanned_tracking, rs.matched_tracking_field, rs.matched_leg, rs.logistic_partner_snapshot,
               rs.source_filename_snapshot AS source_filename, rs.source_batch_id,
+              COALESCE(rs.flyer_id, '') AS flyer_id,
+              COALESCE(rs.flyer_state, 'not_required') AS flyer_state,
               (SELECT COUNT(*)::int FROM receipt_scan_items x WHERE x.receipt_scan_id = rs.id) AS item_count,
               (SELECT COUNT(*)::int FROM receipt_scan_issues y
                  JOIN receipt_scan_items x ON x.id = y.receipt_scan_item_id
@@ -854,6 +861,8 @@ async function loadReceipt(db: pg.Pool, scanId: number, replayed: boolean, scope
     itemCount: Number(scan.item_count),
     issueCount: Number(scan.issue_count),
     ironSendQty: Number(scan.iron_send_qty || 0),
+    flyerId: String(scan.flyer_id || ""),
+    flyerState: String(scan.flyer_state || "not_required"),
     shift: presentShift(shift),
     claimsBadge: ui.claimsBadge,
   }
@@ -995,6 +1004,21 @@ export async function recordScan(
     const hasIssue = submission.items.some((item) =>
       item.issues.some((issue) => countsAsReturnIssue(categoryByCode.get(issue.categoryCode))),
     )
+    // Meesho flyer capture (Meesho issue returns only; Iron Send never takes a flyer).
+    const flyerProblem = flyerErrorFor({
+      marketplace: String(shipment.marketplace || ""),
+      hasRealIssue: hasIssue,
+      flyerId: String(submission.flyerId || ""),
+      flyerState: String(submission.flyerState || "not_required"),
+      returnTrackingId: String(shipment.tracking_id || ""),
+    })
+    if (flyerProblem) {
+      throw new ServiceError(400, flyerProblem)
+    }
+    const flyerId = hasIssue ? normalizeFlyer(String(submission.flyerId || "")).value : ""
+    const flyerState = hasIssue
+      ? String(submission.flyerState || "not_required").trim().toLowerCase()
+      : "not_required"
     const parts = issueLabelParts(submission.items, categoryByCode, subById)
 
     const itemOrderIds = itemRows
@@ -1018,8 +1042,8 @@ export async function recordScan(
          scanned_tracking, matched_tracking_field, matched_leg, source_batch_id,
          logistic_partner_snapshot, partner_method_snapshot, partner_source_snapshot, tracking_validation_snapshot,
          csv_tracking_snapshot, url_tracking_snapshot, tracking_source_snapshot, forward_tracking_snapshot,
-         return_event_snapshot, source_filename_snapshot, return_type_raw_snapshot)
-       VALUES ($1, $2, now(), $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)
+         return_event_snapshot, source_filename_snapshot, return_type_raw_snapshot, flyer_id, flyer_state)
+       VALUES ($1, $2, now(), $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28)
        RETURNING id`,
       [
         submission.shipmentId,
@@ -1048,6 +1072,8 @@ export async function recordScan(
         String(shipment.return_event_id || ""),
         String(shipment.source_filename || ""),
         String(shipment.return_type_raw || ""),
+        flyerId,
+        flyerState,
       ],
     )
     const scanId = Number(scanInsert.rows[0].id)
@@ -1142,6 +1168,8 @@ export async function recordScan(
       ironSendRecords: iron.opened,
       matchedTrackingField: matched.field,
       matchedLeg: matched.leg,
+      flyerId,
+      flyerState,
     })
     await client.query("COMMIT")
     open = false
@@ -1251,7 +1279,7 @@ export async function correctScanIssue(
         }
       }
       await client.query(
-        `UPDATE receipt_scans SET outcome = 'clear', issue_label = '', status = 'Clear' WHERE id = $1`,
+        `UPDATE receipt_scans SET outcome = 'clear', issue_label = '', status = 'Clear', flyer_id = '', flyer_state = 'not_required' WHERE id = $1`,
         [found.scanId],
       )
       await syncIronRecordsForScan(client, found.scanId, actor.id, "Changed to a normal return at the scan bench")
@@ -1280,6 +1308,27 @@ export async function correctScanIssue(
     const realIssue = submission.items.some((item) =>
       item.issues.some((issue) => countsAsReturnIssue(categoryByCode.get(issue.categoryCode))),
     )
+    const scanMarket = (
+      await client.query(
+        `SELECT m.name AS marketplace, er.tracking_id FROM expected_returns er
+         JOIN marketplaces m ON m.id = er.marketplace_id WHERE er.id = $1`,
+        [submission.shipmentId],
+      )
+    ).rows[0]
+    const flyerProblem = flyerErrorFor({
+      marketplace: String(scanMarket?.marketplace || ""),
+      hasRealIssue: realIssue,
+      flyerId: String(submission.flyerId || ""),
+      flyerState: String(submission.flyerState || "not_required"),
+      returnTrackingId: String(scanMarket?.tracking_id || ""),
+    })
+    if (flyerProblem) {
+      throw new ServiceError(400, flyerProblem)
+    }
+    const correctFlyerId = realIssue ? normalizeFlyer(String(submission.flyerId || "")).value : ""
+    const correctFlyerState = realIssue
+      ? String(submission.flyerState || "not_required").trim().toLowerCase()
+      : "not_required"
     const ticketCodes: string[] = []
     for (const item of submission.items) {
       const scanItemId = scanItemByExpected.get(item.itemId)
@@ -1325,12 +1374,14 @@ export async function correctScanIssue(
     }
 
     await client.query(
-      `UPDATE receipt_scans SET outcome = $4, issue_label = $2, status = $3 WHERE id = $1`,
+      `UPDATE receipt_scans SET outcome = $4, issue_label = $2, status = $3, flyer_id = $5, flyer_state = $6 WHERE id = $1`,
       [
         found.scanId,
         describeIssues(parts),
         scanStatusFor(realIssue, realIssue && ticketCodes.length > 0),
         realIssue ? "issue" : "clear",
+        correctFlyerId,
+        correctFlyerState,
       ],
     )
     const iron = await syncIronRecordsForScan(client, found.scanId, actor.id, "Changed at the scan bench")
@@ -1340,6 +1391,8 @@ export async function correctScanIssue(
       outcome: realIssue ? "issue" : "clear",
       ironSendRecordsOpened: iron.opened,
       ironSendRecordsCancelled: iron.cancelled,
+      flyerId: correctFlyerId,
+      flyerState: correctFlyerState,
     })
     await client.query("COMMIT")
     open = false
@@ -1502,6 +1555,8 @@ const REGISTER_UNION_SQL = `
     rs.source_filename_snapshot AS source_filename,
     rs.source_batch_id AS source_batch_id,
     COALESCE(rsi.sales_amount, eri.sales_amount) AS sales_amount,
+    COALESCE(rs.flyer_id, '') AS flyer_id,
+    COALESCE(rs.flyer_state, 'not_required') AS flyer_state,
     -- The codes the issue filter matches. A line with only Iron Send (operational) is a "no_issue" line that also
     -- matches the iron_send filter, so it is never listed as a return issue.
     ARRAY(SELECT x.category_code FROM receipt_scan_issues x WHERE x.receipt_scan_item_id = rsi.id ORDER BY x.id)
@@ -1583,6 +1638,8 @@ const REGISTER_UNION_SQL = `
     COALESCE((SELECT b.filename FROM upload_batches b WHERE b.id = er.upload_batch_id), '')::text,
     er.upload_batch_id,
     eri.sales_amount,
+    ''::text AS flyer_id,
+    'not_required'::text AS flyer_state,
     CASE WHEN rs.outcome = 'clear' THEN ARRAY['no_issue']::text[] ELSE ARRAY['legacy']::text[] END,
     CASE WHEN ct.id IS NULL THEN ARRAY[]::text[] ELSE ARRAY[ct.status]::text[] END,
     json_build_array(json_build_object(
@@ -1624,7 +1681,7 @@ export function buildRegisterWhere(
     add(
       filters.tracking,
       (p) =>
-        `(position(lower(${p}::text) in lower(r.tracking_id)) > 0 OR position(lower(${p}::text) in lower(COALESCE(r.alt_tracking_id, ''))) > 0 OR position(lower(${p}::text) in lower(COALESCE(r.csv_tracking, ''))) > 0 OR position(lower(${p}::text) in lower(COALESCE(r.scanned_tracking, ''))) > 0)`,
+        `(position(lower(${p}::text) in lower(r.tracking_id)) > 0 OR position(lower(${p}::text) in lower(COALESCE(r.alt_tracking_id, ''))) > 0 OR position(lower(${p}::text) in lower(COALESCE(r.csv_tracking, ''))) > 0 OR position(lower(${p}::text) in lower(COALESCE(r.scanned_tracking, ''))) > 0 OR position(lower(${p}::text) in lower(COALESCE(r.flyer_id, ''))) > 0)`,
     )
   }
   if (filters.order) {

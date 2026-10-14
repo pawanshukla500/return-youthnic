@@ -77,6 +77,7 @@ export function filtersFrom(query: Record<string, unknown>): RegisterFilters {
 
 // Turns the JSON body of a save into the submission type. Anything missing becomes a value the rules reject.
 // scannedTracking is the AWB the scanner read. It is recorded with the scan, so the match can be checked later.
+// flyerId/flyerState carry the Meesho flyer capture (Meesho issue returns only; see flyerErrorFor).
 export function submissionFrom(body: Record<string, unknown>): ScanSubmission {
   const items: unknown[] = Array.isArray(body.items) ? body.items : []
   return {
@@ -84,6 +85,8 @@ export function submissionFrom(body: Record<string, unknown>): ScanSubmission {
     clientScanKey: String(body.clientScanKey ?? ""),
     notes: String(body.notes ?? "").trim(),
     scannedTracking: String(body.scannedTracking ?? "").trim().slice(0, 80),
+    flyerId: String(body.flyerId ?? "").trim().toUpperCase().slice(0, 120),
+    flyerState: String(body.flyerState ?? "not_required").trim().toLowerCase().slice(0, 20) || "not_required",
     items: items.map((raw) => {
       const item = (raw ?? {}) as Record<string, unknown>
       const issues: unknown[] = Array.isArray(item.issues) ? item.issues : []

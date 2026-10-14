@@ -65,7 +65,29 @@ class ReturnVerificationBottomSheet(
 
         populateHeaderAndShipment()
         populateProducts()
+        setupFlyerCard()
         setupActions()
+    }
+
+    /** Meesho issue returns (any real issue; Iron Send excluded) capture the flyer ID for future claims. */
+    private fun isMeesho(): Boolean = lookup.marketplace.contains("meesho", ignoreCase = true)
+
+    private fun hasRealIssue(): Boolean = itemStates.any { !it.category.isClear && !it.category.isOperational }
+
+    private fun needsFlyer(): Boolean = isMeesho() && hasRealIssue()
+
+    private fun setupFlyerCard() {
+        binding.cbFlyerUnavailable.setOnCheckedChangeListener { _, _ -> refreshFlyerCard() }
+        refreshFlyerCard()
+    }
+
+    private fun refreshFlyerCard() {
+        val needed = needsFlyer()
+        binding.cardFlyer.visibility = if (needed) View.VISIBLE else View.GONE
+        if (!needed) return
+        val unavailable = binding.cbFlyerUnavailable.isChecked
+        binding.etFlyerId.isEnabled = !unavailable
+        binding.etFlyerId.alpha = if (unavailable) 0.5f else 1.0f
     }
 
     private fun populateHeaderAndShipment() {
@@ -260,6 +282,7 @@ class ReturnVerificationBottomSheet(
         state.category = category
         state.subIssueId = null
         binding.tvVerificationError.visibility = View.GONE
+        refreshFlyerCard()
 
         // The same one-tap rule as the web screen: a missing item means none of the line arrived; any other choice means
         // every unit arrived. The stepper can still be changed afterwards.
@@ -325,11 +348,19 @@ class ReturnVerificationBottomSheet(
                 for (item in itemStates) {
                     IssueCategoryUi.recordUsage(activity, item.category.code)
                 }
+                val flyerId = binding.etFlyerId.text?.toString()?.trim()?.uppercase().orEmpty()
+                val unavailable = binding.cbFlyerUnavailable.isChecked
                 onSave(
                     VerificationSubmitData(
                         shipmentId = lookup.shipmentId,
                         scannedTracking = lookup.trackingNumber,
-                        items = itemStates.map { it.copy() }
+                        items = itemStates.map { it.copy() },
+                        flyerId = if (needsFlyer() && !unavailable) flyerId else "",
+                        flyerState = when {
+                            !needsFlyer() -> "not_required"
+                            unavailable -> "unavailable"
+                            else -> "scanned"
+                        }
                     )
                 )
             }
@@ -338,6 +369,33 @@ class ReturnVerificationBottomSheet(
 
     private fun validateInputs(): Boolean {
         binding.tvVerificationError.visibility = View.GONE
+
+        if (needsFlyer()) {
+            val unavailable = binding.cbFlyerUnavailable.isChecked
+            val flyer = binding.etFlyerId.text?.toString()?.trim()?.uppercase().orEmpty()
+            if (!unavailable) {
+                if (flyer.length < 4) {
+                    showError("Scan the Meesho flyer barcode, or tick Flyer unavailable.")
+                    binding.etFlyerId.requestFocus()
+                    return false
+                }
+                if (flyer.length > 80) {
+                    showError("The flyer ID must be 80 characters or fewer. Scan the flyer again.")
+                    binding.etFlyerId.requestFocus()
+                    return false
+                }
+                if (Regex("^[+-]?\\d+(\\.\\d+)?E[+-]?\\d+$").matches(flyer)) {
+                    showError("That flyer ID is in scientific notation, so its digits were lost. Scan the flyer again.")
+                    binding.etFlyerId.requestFocus()
+                    return false
+                }
+                if (flyer == lookup.trackingNumber.trim().uppercase()) {
+                    showError("That is the return label. Scan the Meesho flyer, not the return label again.")
+                    binding.etFlyerId.requestFocus()
+                    return false
+                }
+            }
+        }
 
         for (i in itemStates.indices) {
             val state = itemStates[i]

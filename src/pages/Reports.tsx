@@ -267,6 +267,23 @@ const COLUMNS: ColumnDef[] = [
       ),
   },
   {
+    // Meesho flyer ID captured at the bench for an issue return (permanent claim evidence).
+    key: "flyer",
+    header: "Meesho Flyer ID",
+    render: (row) =>
+      row.flyerId ? (
+        <span title={`Flyer status: ${row.flyerState || "scanned"}`}>
+          <strong>{row.flyerId}</strong>
+        </span>
+      ) : row.flyerState === "unavailable" ? (
+        <span title="The flyer was missing at the bench. No ID was stored.">
+          <Badge tone="warning">Unavailable</Badge>
+        </span>
+      ) : (
+        "—"
+      ),
+  },
+  {
     key: "subIssue",
     header: "Return Received Sub Issue (Only If Missing)",
     render: (row) => subIssueText(row) || "—",
@@ -421,7 +438,11 @@ function TicketEditor({
 
 // Every field of one row, for the record view: the 19 columns, then the scan and the file the return came from.
 function RecordDetail({ row }: { row: Row }) {
+  const flyerValue =
+    row.flyerId || (row.flyerState === "unavailable" ? "Unavailable at bench" : row.flyerState === "scanned" ? "—" : "Not required")
   const traceability: [string, string | number][] = [
+    ["Meesho flyer ID (claim)", flyerValue || "—"],
+    ["Flyer status", row.flyerState || "not_required"],
     ["Scanned AWB", row.scannedTracking || "Not recorded"],
     ["Original tracking ID (file)", row.originalTrackingId || "—"],
     ["Link tracking ID", row.urlTrackingId || "—"],

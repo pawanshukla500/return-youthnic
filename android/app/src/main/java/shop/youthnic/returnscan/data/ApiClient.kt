@@ -151,10 +151,12 @@ class ApiClient(private val sessionManager: SessionManager) {
         shipmentId: Int,
         clientScanKey: String,
         scannedTracking: String,
-        items: List<ItemVerificationState>
+        items: List<ItemVerificationState>,
+        flyerId: String = "",
+        flyerState: String = "not_required"
     ): Result<ScanReceipt> = withContext(Dispatchers.IO) {
         try {
-            val submission = ScanPayload.build(shipmentId, clientScanKey, scannedTracking, items)
+            val submission = ScanPayload.build(shipmentId, clientScanKey, scannedTracking, items, flyerId, flyerState)
             val req = authorizedRequestBuilder("/api/scan/complete")
                 .post(submission.toString().toRequestBody(jsonMediaType))
                 .build()

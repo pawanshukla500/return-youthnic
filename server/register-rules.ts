@@ -50,6 +50,71 @@ export function normalizeTicketCode(raw: string): string {
   return raw.trim()
 }
 
+// ---- Meesho flyer ID (claim evidence) ----
+
+export const FLYER_STATES = ["scanned", "unavailable", "not_required"] as const
+export type FlyerState = (typeof FLYER_STATES)[number]
+
+export const MAX_FLYER_LENGTH = 80
+
+// True for the Meesho marketplace account (Meesho flyer capture is Meesho-only).
+export function isMeeshoMarketplace(name: string | null | undefined): boolean {
+  return String(name || "").toLowerCase().includes("meesho")
+}
+
+// A flyer barcode, normalized the same way as a tracking ID: surrounding spaces
+// removed, letters upper-cased. Scientific notation is refused, because its digits
+// are already lost. Empty means "no flyer typed yet".
+export function normalizeFlyer(raw: string): { value: string; error: string } {
+  const value = String(raw || "").trim().toUpperCase()
+  if (!value) return { value: "", error: "" }
+  if (/^[+-]?\d+(\.\d+)?E[+-]?\d+$/.test(value)) {
+    return { value, error: `${value} is in scientific notation, so its digits were lost. Scan the flyer again.` }
+  }
+  if (value.length < 4) return { value, error: "The flyer ID looks too short. Scan the Meesho flyer again." }
+  if (value.length > MAX_FLYER_LENGTH) return { value, error: `The flyer ID must be ${MAX_FLYER_LENGTH} characters or fewer.` }
+  return { value, error: "" }
+}
+
+// Validates the flyer decision for one save. Returns the refusal reason, or null
+// when the flyer fields may be stored as given.
+//  - Meesho + a return issue (Iron Send excluded: an Iron-only scan never takes a
+//    flyer): flyerState must be 'scanned' (with a valid, distinct flyer ID) or
+//    'unavailable' (with no ID). An empty decision is refused, so a missing flyer
+//    is recorded as unavailable instead of silently storing a blank claim field.
+//  - Anything else (not Meesho, a clear scan, or Iron-only): no flyer is stored.
+export function flyerErrorFor(input: {
+  marketplace: string
+  hasRealIssue: boolean
+  flyerId: string
+  flyerState: string
+  returnTrackingId: string
+}): string | null {
+  const state = String(input.flyerState || "").trim().toLowerCase() || "not_required"
+  const flyer = String(input.flyerId || "").trim().toUpperCase()
+  const needsFlyer = isMeeshoMarketplace(input.marketplace) && input.hasRealIssue
+  if (!needsFlyer) {
+    if (state !== "not_required" || flyer !== "") {
+      return "A flyer ID is only stored for Meesho issue returns. Iron Send and clear returns never take one."
+    }
+    return null
+  }
+  if (state !== "scanned" && state !== "unavailable") {
+    return "Scan the Meesho flyer, or mark it unavailable. Nothing is saved until then."
+  }
+  if (state === "unavailable") {
+    if (flyer !== "") return "The flyer is marked unavailable, so no flyer ID should be stored."
+    return null
+  }
+  const normalized = normalizeFlyer(flyer)
+  if (normalized.error) return normalized.error
+  const returnTracking = String(input.returnTrackingId || "").trim().toUpperCase()
+  if (returnTracking && normalized.value === returnTracking) {
+    return "The flyer ID must differ from the return tracking ID. Scan the Meesho flyer, not the return label again."
+  }
+  return null
+}
+
 // The product SKU is shown only when it was resolved. An unresolved line shows nothing, so the scanner sees a gap.
 export function productSkuFor(source: string | null, code: string): string {
   return source === "unresolved" ? "" : code
@@ -204,6 +269,9 @@ export type ScanSubmission = {
   items: SubmittedItem[]
   // The AWB the employee scanned. Used to record which stored AWB matched (see matchedFieldFor).
   scannedTracking?: string
+  // Meesho flyer capture (Meesho issue returns only; see flyerErrorFor). Empty + 'not_required' otherwise.
+  flyerId?: string
+  flyerState?: string
 }
 
 export type RuleResult = { ok: true } | { ok: false; errors: string[] }
@@ -429,6 +497,8 @@ export type RawRegisterRow = {
   source_filename?: string | null
   source_batch_id?: number | null
   sales_amount?: number | string | null
+  flyer_id?: string | null
+  flyer_state?: string | null
 }
 
 export type RegisterTicket = { id: number; code: string; status: string; rejectionReason: string }
@@ -490,8 +560,12 @@ export type RegisterRow = {
   claimAmount: number | null
   // Return issues only. Iron Send is operational and is never listed here (see ironSendQty).
   issues: RegisterIssue[]
-  // Units of this line sent for ironing. Shown in its own column, never as a return issue.
+  // Units sent for ironing on this line. Shown in its own column, never as a return issue.
   ironSendQty: number
+  // Meesho flyer ID captured at the bench for an issue return (permanent claim evidence).
+  // Empty unless flyerState is 'scanned'. 'unavailable' means the flyer was missing.
+  flyerId: string
+  flyerState: string
 }
 
 // "no_issue" entries are dropped, so a clean line has an empty issue list. Legacy scans keep their old label.
@@ -558,6 +632,8 @@ export function mapRegisterRow(raw: RawRegisterRow): RegisterRow {
     claimAmount: null,
     issues,
     ironSendQty,
+    flyerId: String(raw.flyer_id || ""),
+    flyerState: String(raw.flyer_state || "not_required"),
   }
 }
 
@@ -609,6 +685,8 @@ export const REGISTER_OPERATIONAL_HEADERS = [
   "Display Identifier Kind",
   "Tracking Validation",
   "Iron Send Qty (operational, not an issue)",
+  "Meesho Flyer ID (claim evidence)",
+  "Flyer Status",
 ]
 
 export type RegisterColumnMode = "approved" | "extended" | "operational"
@@ -671,6 +749,8 @@ export function registerRecords(rows: RegisterRow[], mode: RegisterColumnMode = 
       row.displayIdentifierKind,
       row.trackingValidation,
       row.ironSendQty,
+      row.flyerId,
+      row.flyerState,
     ]
   })
 }

@@ -1,11 +1,11 @@
 {
-  "versionCode": 10033,
-  "versionName": "1.0.33",
+  "versionCode": 10034,
+  "versionName": "1.0.34",
   "minRequiredVersionCode": 10001,
   "sha256": "5169998f3d5dbc34a35658ce1c1d09ba6f1d6a4b4ed41be28049e54b947014e2",
   "sizeBytes": 3325019,
-  "notes": "Youthnic Native Android Return Scanner · Iron Send tracking & live sync\n- Correct times: last scan and recent scans are shown in IST and refresh every second (no more frozen \"Just now\" or UTC times)\n- Live sync: today's figures update instantly from other phones and web benches (WebSocket, with 4-second auto-sync fallback); the status pill shows LIVE / AUTO-SYNC / OFFLINE and when data was last synced\n- Iron Send is not an issue: Iron-only returns save as normal returns and are tracked separately for the Inward Team\n- Today's Issues and Iron Send counts on the scanner\n- Signed with the same warehouse key as v1.0.30: phones on v1.0.30 or later update in place",
-  "publishedAt": "2026-10-14T12:54:11Z",
-  "downloadUrl": "https://github.com/pawanshukla500/return-youthnic/releases/download/v1.0.33/ReturnScan-v1.0.33.apk",
-  "pageUrl": "https://github.com/pawanshukla500/return-youthnic/releases/tag/v1.0.33"
+  "notes": "Youthnic Native Android Return Scanner · Meesho flyer capture & continuous scanning\n- Meesho issue returns capture the flyer ID for future claims (scan the flyer or mark it unavailable; Iron Send never takes a flyer)\n- Same backend, database and validation as desktop; flyer stored permanently against the return tracking ID\n- Continuous scanning: compact success toast, scanner stays focused, buffered parcels continue automatically\n- Signed with the same warehouse key as v1.0.30: phones on v1.0.30 or later update in place",
+  "publishedAt": "2026-10-14T00:00:00Z",
+  "downloadUrl": "https://github.com/pawanshukla500/return-youthnic/releases/download/v1.0.34/ReturnScan-v1.0.34.apk",
+  "pageUrl": "https://github.com/pawanshukla500/return-youthnic/releases/tag/v1.0.34"
 }
