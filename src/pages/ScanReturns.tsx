@@ -1532,30 +1532,45 @@ export function ScanReturns() {
                       <div>
                         <span className="eyebrow">EXPECTED ITEM</span>
                         <h3>{item.productName || item.marketplaceSku || "Item"}</h3>
-                        <p>
-                          Marketplace SKU <strong>{item.marketplaceSku || "—"}</strong>
-                          {item.orderItemId && (
-                            <>
-                              {" "}
-                              · {item.displayIdentifierKind === "ajio_return_order_number" ? "Return order" : item.displayIdentifierKind === "amazon_shipment_id" ? "Shipment" : "Order item"}{" "}
-                              <strong>{item.orderItemId}</strong>
-                            </>
-                          )}
-                        </p>
+                        {item.orderItemId && (
+                          <p className="verification-order-subline">
+                            {item.displayIdentifierKind === "ajio_return_order_number" ? "Return order" : item.displayIdentifierKind === "amazon_shipment_id" ? "Shipment" : "Order item"}{" "}
+                            <strong>{item.orderItemId}</strong>
+                          </p>
+                        )}
                       </div>
                       <Badge tone="neutral">Expected {item.expectedQty}</Badge>
                     </div>
+
+                    {/* Dedicated High-Visibility SKU Banner (Enlarged on desktop for 2-2.5 ft viewing) */}
+                    <div className="desktop-sku-banner" aria-label="SKU Information">
+                      <div className="desktop-sku-card primary-sku">
+                        <span className="desktop-sku-label">MARKETPLACE SKU</span>
+                        <strong className="desktop-sku-value" title={item.marketplaceSku || ""}>
+                          {item.marketplaceSku || "—"}
+                        </strong>
+                      </div>
+                      {item.productSku && item.productSku !== item.marketplaceSku && (
+                        <div className="desktop-sku-card secondary-sku">
+                          <span className="desktop-sku-label">MASTER / PRODUCT SKU</span>
+                          <strong className="desktop-sku-value master" title={item.productSku}>
+                            {item.productSku}
+                          </strong>
+                        </div>
+                      )}
+                    </div>
+
                     <div className="visual-checks">
                       <div>
                         <p>
                           <small>PRODUCT SKU</small>
-                          <strong>{item.productSku || "Not resolved"}</strong>
+                          <strong className="visual-sku-val">{item.productSku || "Not resolved"}</strong>
                         </p>
                       </div>
                       <div>
                         <p>
                           <small>MARKETPLACE SKU ID</small>
-                          <strong>{item.marketplaceSkuIdentifier || "Not in the file"}</strong>
+                          <strong className="visual-sku-val">{item.marketplaceSkuIdentifier || "Not in the file"}</strong>
                         </p>
                       </div>
                       <div>
@@ -2013,13 +2028,19 @@ export function ScanReturns() {
                         <h4 style={{ margin: "0 0 3px", fontSize: 14, fontWeight: 700 }}>
                           {item.productName || item.marketplaceSku}
                         </h4>
-                        <div style={{ fontSize: 12, color: "#4d5b57" }}>
-                          <span>Marketplace SKU: <strong>{item.marketplaceSku}</strong></span>
+                        <div className="multi-order-sku-block">
+                          <div className="multi-order-sku-pill primary">
+                            <span className="multi-order-sku-label">SKU:</span>
+                            <strong className="multi-order-sku-text">{item.marketplaceSku}</strong>
+                          </div>
                           {item.productSku && item.productSku !== item.marketplaceSku && (
-                            <span> · Master SKU: <strong>{item.productSku}</strong></span>
+                            <div className="multi-order-sku-pill secondary">
+                              <span className="multi-order-sku-label">Master:</span>
+                              <strong className="multi-order-sku-text">{item.productSku}</strong>
+                            </div>
                           )}
                           {item.colorName && item.colorName !== "—" && (
-                            <span> · Color: {item.colorName}</span>
+                            <span className="multi-order-color">Color: <strong>{item.colorName}</strong></span>
                           )}
                         </div>
                       </div>

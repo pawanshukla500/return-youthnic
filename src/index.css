@@ -530,9 +530,143 @@ td > small { margin-top: 2px; display: block; color: #949c99; font-size: 8px; }
 .scan-main .product-verification { margin: 8px 16px; padding: 10px; grid-template-columns: 120px minmax(0, 1fr); gap: 12px; }
 .scan-main .catalog-image-wrap { height: 120px; }
 .scan-main .verification-heading h3 { margin: 2px 0; font-size: 15px; }
-.scan-main .visual-checks { margin-top: 8px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
-.scan-main .visual-checks > div { min-height: 0; padding: 6px 8px; }
+.scan-main .visual-checks { margin-top: 8px; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.scan-main .visual-checks > div { min-height: 48px; padding: 6px 10px; }
 .scan-main .visual-checks strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scan-main .visual-checks .visual-sku-val { font-size: 16px; font-weight: 800; color: #0f172a; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; letter-spacing: 0.02em; white-space: normal; word-break: break-word; overflow: visible; }
+
+/* High-Visibility Desktop SKU Callout (optimized for 2 to 2.5 feet viewing distance) */
+.desktop-sku-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 10px;
+  margin: 8px 0 10px;
+}
+
+.desktop-sku-card {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 8px 16px;
+  border-radius: 10px;
+  background: #ffffff;
+  border: 2px solid #cbd5e1;
+  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.05);
+  min-width: 0;
+  transition: all 0.15s ease;
+}
+
+.desktop-sku-card.primary-sku {
+  background: #f0fdf4;
+  border: 2px solid #059669;
+  box-shadow: 0 2px 8px rgba(5, 150, 105, 0.12);
+  flex: 1 1 auto;
+}
+
+.desktop-sku-card.secondary-sku {
+  background: #f8fafc;
+  border: 2px solid #94a3b8;
+  flex: 1 1 auto;
+}
+
+.desktop-sku-label {
+  display: block;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: #065f46;
+  margin-bottom: 2px;
+}
+
+.desktop-sku-card.secondary-sku .desktop-sku-label {
+  color: #475569;
+}
+
+/* 26px bold font for desktop view - readable from 2 to 2.5 feet away */
+.desktop-sku-value {
+  display: block;
+  font-size: 26px;
+  font-weight: 800;
+  line-height: 1.15;
+  color: #092c22;
+  letter-spacing: 0.03em;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  word-break: break-word;
+  user-select: all;
+}
+
+.desktop-sku-value.master {
+  font-size: 22px;
+  color: #0f172a;
+}
+
+.verification-order-subline {
+  margin: 0;
+  color: #7c8783;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.verification-order-subline strong {
+  color: #263633;
+}
+
+/* Multi-Order verification modal SKU styles */
+.multi-order-sku-block {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.multi-order-sku-pill {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 8px;
+  border: 1.5px solid #cbd5e1;
+  background: #f8fafc;
+}
+
+.multi-order-sku-pill.primary {
+  background: #f0fdf4;
+  border-color: #059669;
+}
+
+.multi-order-sku-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: #475569;
+  letter-spacing: 0.04em;
+}
+
+.multi-order-sku-pill.primary .multi-order-sku-label {
+  color: #065f46;
+}
+
+.multi-order-sku-text {
+  font-size: 20px;
+  font-weight: 800;
+  color: #092c22;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  letter-spacing: 0.02em;
+}
+
+.multi-order-sku-pill.secondary .multi-order-sku-text {
+  font-size: 18px;
+  color: #0f172a;
+}
+
+.multi-order-color {
+  font-size: 13px;
+  color: #475569;
+}
+
 .verify-block { display: grid; gap: 8px; margin-top: 8px; }
 .issue-report { display: grid; gap: 8px; margin-top: 8px; }
 .scan-main .issue-report { grid-column: 1 / -1; margin: 0; }
@@ -828,6 +962,87 @@ button.catalog-image-wrap { width: 100%; padding: 0; border: 0; display: block; 
   .catalog-preview { display: grid; grid-template-columns: 1fr 50px; gap: 8px; }
   .image-thumbnails { margin: 0; flex-direction: column; }
   .image-thumbnails span { margin: auto 0 0; }
+  /* Mobile view remains compact (not enlarged) */
+  .desktop-sku-banner {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin: 4px 0 6px 0;
+  }
+  .desktop-sku-card {
+    padding: 4px 8px;
+    border-radius: 6px;
+    background: #f1f5f9;
+    border: 1px solid #cbd5e1;
+    box-shadow: none;
+  }
+  .desktop-sku-card.primary-sku {
+    background: #f0fdf4;
+    border-color: #bbf7d0;
+    box-shadow: none;
+  }
+  .desktop-sku-card.secondary-sku {
+    background: #f8fafc;
+    border-color: #e2e8f0;
+  }
+  .desktop-sku-label {
+    font-size: 9px;
+    font-weight: 700;
+    color: #475569;
+    margin-bottom: 1px;
+  }
+  .desktop-sku-card.primary-sku .desktop-sku-label {
+    color: #065f46;
+  }
+  .desktop-sku-value {
+    font-size: 13px;
+    font-weight: 700;
+    line-height: 1.3;
+    color: #0f172a;
+    font-family: inherit;
+    letter-spacing: normal;
+  }
+  .desktop-sku-value.master {
+    font-size: 12px;
+    color: #334155;
+  }
+  .scan-main .visual-checks .visual-sku-val {
+    font-size: 10px;
+    font-weight: 600;
+    font-family: inherit;
+    letter-spacing: normal;
+  }
+  .multi-order-sku-block {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin-top: 3px;
+    font-size: 12px;
+  }
+  .multi-order-sku-pill {
+    display: inline-flex;
+    gap: 4px;
+    padding: 0;
+    background: transparent;
+    border: none;
+  }
+  .multi-order-sku-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: #4d5b57;
+  }
+  .multi-order-sku-text {
+    font-size: 12px;
+    font-weight: 700;
+    color: #1e293b;
+    font-family: inherit;
+    letter-spacing: normal;
+  }
+  .multi-order-color {
+    font-size: 11px;
+    color: #64748b;
+  }
 }
 @media (max-width: 520px) {
   .stats-grid { grid-template-columns: 1fr; }.header-actions .btn{display:none}.topbar h1{font-size:18px}.market-chart,.claim-chart{flex-direction:column;height:auto;gap:22px}.scan-input button{padding:0 10px}.scan-input button .icon{display:none}.inspection-actions{align-items:flex-start;flex-direction:column}.inspection-actions>div{width:100%}.inspection-actions .btn{flex:1}.report-summary{grid-template-columns:1fr}.report-summary div{border-right:0;border-bottom:1px solid var(--line)}.claims-grid{grid-template-columns:1fr}.upload-row{grid-template-columns:36px 1fr 70px}.upload-row>.marketplace,.upload-row>span{display:none}.choice-grid{grid-template-columns:1fr}
