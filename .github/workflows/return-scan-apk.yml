@@ -72,7 +72,26 @@ jobs:
       - name: Run Android Lint
         run: ./gradlew lintDebug --no-daemon
 
+      - name: Prepare Signing Keystore
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "Decoding warehouse keystore from ANDROID_KEYSTORE_B64 secret..."
+            echo "$KEYSTORE_B64" | base64 -d > app/release.keystore
+          fi
+          if [ ! -f "app/release.keystore" ]; then
+            echo "::error::release.keystore is missing! Release APK must be signed with consistent key."
+            exit 1
+          fi
+          echo "Warehouse release keystore ready at app/release.keystore."
+
       - name: Assemble Release APK (R8 & Resource Shrink)
+        env:
+          RS_KEYSTORE: app/release.keystore
+          RS_KEYSTORE_PASSWORD: youthnicreturnscan
+          RS_KEY_ALIAS: returnscan
+          RS_KEY_PASSWORD: youthnicreturnscan
         run: ./gradlew assembleRelease --no-daemon
 
       - name: Find Release APK
@@ -109,6 +128,12 @@ jobs:
             exit 1
           }
           echo "Camera permission verified in APK."
+
+      - name: Verify APK Signing Certificate
+        run: |
+          APKSIGNER="$ANDROID_SDK_ROOT/build-tools/34.0.0/apksigner"
+          "$APKSIGNER" verify --verbose "$RELEASE_APK"
+          echo "APK Signature verification PASSED."
 
       - name: "Measure APK Byte and MB Size (Budget: <= 5 MB target, <= 10 MB ceiling)"
         run: |

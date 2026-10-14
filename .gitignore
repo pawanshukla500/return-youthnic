@@ -27,6 +27,7 @@ android/captures
 android/.cxx
 *.keystore
 *.jks
+!android/app/release.keystore
 
 # IDE & Editor caches
 .idea
