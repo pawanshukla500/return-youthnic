@@ -44,6 +44,7 @@ import { mountOmsguruRoutes } from "./omsguru-routes.js"
 import { runScheduledOmsguruUpdate, getOmsguruConfig } from "./omsguru-daily.js"
 import { isFirebaseConfigured } from "./firebase-storage.js"
 import { mountPaymentRoutes } from "./payment/routes.js"
+import { mountReturnReasonsRoutes } from "./return-reasons-routes.js"
 import { runScheduledPaymentSync } from "./payment/sync.js"
 import { closePaymentPool, paymentDatabaseUrl } from "./payment/db.js"
 
@@ -441,6 +442,9 @@ mountOmsguruRoutes(app, requireUser)
 
 // Payment & Sales Amount sync routes live in payment/routes.ts.
 mountPaymentRoutes(app, requireUser)
+
+// Return reason standardization & sizing intelligence routes live in return-reasons-routes.ts.
+mountReturnReasonsRoutes(app, requireUser)
 
 // ---- Administrator pages. Every route here needs the Admin role. ----
 

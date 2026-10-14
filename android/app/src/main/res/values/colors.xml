@@ -48,4 +48,37 @@
     <color name="channel_amazon">#FF9900</color>
     <color name="channel_myntra">#F13AB1</color>
     <color name="channel_ajio">#2C4152</color>
+
+    <!-- Issue Category Distinct Colors (Unselected tint + border, Selected solid) -->
+    <color name="issue_clear">#059669</color>
+    <color name="issue_clear_bg">#ECFDF5</color>
+    <color name="issue_clear_border">#A7F3D0</color>
+
+    <color name="issue_iron_send">#2563EB</color>
+    <color name="issue_iron_send_bg">#EFF6FF</color>
+    <color name="issue_iron_send_border">#BFDBFE</color>
+
+    <color name="issue_damaged">#DC2626</color>
+    <color name="issue_damaged_bg">#FEF2F2</color>
+    <color name="issue_damaged_border">#FECACA</color>
+
+    <color name="issue_wrong">#D97706</color>
+    <color name="issue_wrong_bg">#FFFBEB</color>
+    <color name="issue_wrong_border">#FDE68A</color>
+
+    <color name="issue_missing">#E11D48</color>
+    <color name="issue_missing_bg">#FFF1F2</color>
+    <color name="issue_missing_border">#FECDD3</color>
+
+    <color name="issue_sku_change">#7C3AED</color>
+    <color name="issue_sku_change_bg">#F5F3FF</color>
+    <color name="issue_sku_change_border">#DDD6FE</color>
+
+    <color name="issue_size_change">#0D9488</color>
+    <color name="issue_size_change_bg">#F0FDFA</color>
+    <color name="issue_size_change_border">#99F6E4</color>
+
+    <color name="issue_other">#475569</color>
+    <color name="issue_other_bg">#F1F5F9</color>
+    <color name="issue_other_border">#CBD5E1</color>
 </resources>

@@ -5,6 +5,7 @@ import type { RegisterOptions, RegisterPage, RegisterRow, RegisterTicket, Ticket
 import { Badge, Icon, MarketplaceBadge, Modal, PartnerBadge } from "../ui"
 import { ShopifyReport } from "../ShopifyReport"
 import { OmsguruDailyReport } from "../OmsguruDailyReport"
+import { ReturnReasonsReport } from "../ReturnReasonsReport"
 
 // The return register. Each row is one verified item of a return, or one line of a legacy scan. The default export is the
 // 19 columns of the approved mapping, in that order. The operational export adds the service and traceability columns.
@@ -457,17 +458,19 @@ export function Reports() {
   const [detail, setDetail] = useState<Row | null>(null)
   const [hidden, setHidden] = useState<Set<string>>(new Set())
   const [showColumns, setShowColumns] = useState(false)
-  const [viewMode, setViewMode] = useState<"register" | "shopify" | "omsguru">(() => {
+  const [viewMode, setViewMode] = useState<"register" | "shopify" | "omsguru" | "reasons">(() => {
     const tab = new URLSearchParams(window.location.search).get("tab")
+    if (tab === "reasons" || tab === "sizing") return "reasons"
     if (tab === "omsguru") return "omsguru"
     if (tab === "shopify") return "shopify"
     return "register"
   })
 
-  const changeView = (mode: "register" | "shopify" | "omsguru") => {
+  const changeView = (mode: "register" | "shopify" | "omsguru" | "reasons") => {
     setViewMode(mode)
     const url = new URL(window.location.href)
-    if (mode === "shopify") url.searchParams.set("tab", "shopify")
+    if (mode === "reasons") url.searchParams.set("tab", "reasons")
+    else if (mode === "shopify") url.searchParams.set("tab", "shopify")
     else if (mode === "omsguru") url.searchParams.set("tab", "omsguru")
     else url.searchParams.delete("tab")
     window.history.replaceState(null, "", url.toString())
@@ -561,8 +564,28 @@ export function Reports() {
         <span>OMSGuru Update Daily</span>
         <span className="omsguru-live-indicator" title="Daily 7:45 PM IST automated schedule">● 7:45 PM IST</span>
       </button>
+      <button
+        type="button"
+        className={`report-view-tab ${viewMode === "reasons" ? "active" : ""}`}
+        onClick={() => changeView("reasons")}
+      >
+        <Icon name="report" size={16} />
+        <span>Reason & Sizing Intelligence</span>
+        <span className="shopify-live-indicator" style={{ background: "#4338ca", color: "#fff" }} title="Multi-Marketplace Standardized Return Reasons & Sizing Digest">
+          ● Weekly Digest
+        </span>
+      </button>
     </div>
   )
+
+  if (viewMode === "reasons") {
+    return (
+      <div className="page-content">
+        {switcher}
+        <ReturnReasonsReport />
+      </div>
+    )
+  }
 
   if (viewMode === "shopify") {
     return (

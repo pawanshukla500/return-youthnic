@@ -103,6 +103,17 @@ class ScanPayloadTest {
     }
 
     @Test
+    fun ironSendCoversReceivedUnitsWithoutMandatoryNotes() {
+        val ironSend = IssueCategory(IssueCategory.CODE_IRON_SEND, "Iron Send", false, false, false, false, false)
+        val body = ScanPayload.build(501, "SYN-MOBILE-1", "A", listOf(line(ironSend, expected = 2, received = 2)))
+        val issue = firstIssue(body)
+        assertEquals(IssueCategory.CODE_IRON_SEND, issue.getString("categoryCode"))
+        assertEquals(2, issue.getInt("qty"))
+        assertEquals(2, body.getJSONArray("items").getJSONObject(0).getInt("receivedQty"))
+        assertNull(ScanPayload.problemWith(line(ironSend, expected = 2, received = 2), "item #1"))
+    }
+
+    @Test
     fun problemsAreReportedInPlainWords() {
         assertNull(ScanPayload.problemWith(line(noIssue), "item #1"))
         assertNull(ScanPayload.problemWith(line(missing, received = 0, sub = "7"), "item #1"))
