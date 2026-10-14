@@ -1502,10 +1502,14 @@ const REGISTER_UNION_SQL = `
     rs.source_filename_snapshot AS source_filename,
     rs.source_batch_id AS source_batch_id,
     COALESCE(rsi.sales_amount, eri.sales_amount) AS sales_amount,
-    CASE WHEN EXISTS (SELECT 1 FROM receipt_scan_issues x WHERE x.receipt_scan_item_id = rsi.id)
-         THEN ARRAY(SELECT x.category_code FROM receipt_scan_issues x WHERE x.receipt_scan_item_id = rsi.id ORDER BY x.id)
-         ELSE ARRAY['no_issue']::text[]
-    END AS issue_codes,
+    -- The codes the issue filter matches. A line with only Iron Send (operational) is a "no_issue" line that also
+    -- matches the iron_send filter, so it is never listed as a return issue.
+    ARRAY(SELECT x.category_code FROM receipt_scan_issues x WHERE x.receipt_scan_item_id = rsi.id ORDER BY x.id)
+      || CASE WHEN EXISTS (
+           SELECT 1 FROM receipt_scan_issues x
+           LEFT JOIN receipt_issue_categories c ON c.code = x.category_code
+           WHERE x.receipt_scan_item_id = rsi.id AND NOT COALESCE(c.is_operational, false)
+         ) THEN ARRAY[]::text[] ELSE ARRAY['no_issue']::text[] END AS issue_codes,
     ARRAY(
       SELECT ct.status FROM receipt_scan_issues x
       JOIN claim_tickets ct ON ct.id = x.claim_ticket_id
@@ -1522,10 +1526,12 @@ const REGISTER_UNION_SQL = `
         'ticketId', ct.id,
         'ticketCode', ct.ticket_code,
         'ticketStatus', ct.status,
-        'rejectionReason', ct.rejection_reason
+        'rejectionReason', ct.rejection_reason,
+        'operational', COALESCE(c.is_operational, false)
       ) ORDER BY x.id)
       FROM receipt_scan_issues x
       LEFT JOIN claim_tickets ct ON ct.id = x.claim_ticket_id
+      LEFT JOIN receipt_issue_categories c ON c.code = x.category_code
       WHERE x.receipt_scan_item_id = rsi.id
     ) AS issues
   FROM receipt_scan_items rsi

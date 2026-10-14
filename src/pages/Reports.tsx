@@ -254,6 +254,19 @@ const COLUMNS: ColumnDef[] = [
     render: (row) => <span className={row.issues.length ? "issue-text" : "clean"}>{issueText(row)}</span>,
   },
   {
+    // Iron Send is operational, not a return issue, so it has its own column.
+    key: "ironSend",
+    header: "Iron Send",
+    render: (row) =>
+      row.ironSendQty ? (
+        <span className="iron-state state-pending" title="Sent for ironing. Not a return issue. Tracked on Iron tracking.">
+          Iron Send ×{row.ironSendQty}
+        </span>
+      ) : (
+        "—"
+      ),
+  },
+  {
     key: "subIssue",
     header: "Return Received Sub Issue (Only If Missing)",
     render: (row) => subIssueText(row) || "—",

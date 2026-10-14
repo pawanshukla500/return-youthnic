@@ -17,6 +17,7 @@ import assert from "node:assert/strict"
 import pg from "pg"
 import { scopeFor, type AccountScope } from "../access.js"
 import { loadAnalytics } from "../analytics.js"
+import { loadReasons } from "../dashboard.js"
 import { applySchema, connectionSettingsFor } from "../db.js"
 import { generateDailyReportData, generateWeeklyReportData, renderWeeklyEmail } from "../email-reports.js"
 import { getIronRecord, ironSummary, listIronRecords, receiveIron } from "../iron.js"
@@ -24,8 +25,8 @@ import { currentCursor } from "../live.js"
 import { commitLookupUpload } from "../lookup-import.js"
 import { calculateGoodReturnsForDay } from "../omsguru-daily.js"
 import { ensureReferenceData } from "../reference-data.js"
-import { ServiceError, correctScanIssue, lookupShipment, recordScan, scanSession, type Actor } from "../register-service.js"
-import type { ScanSubmission } from "../register-rules.js"
+import { ServiceError, correctScanIssue, exportRegisterRows, listRegister, lookupShipment, recordScan, scanSession, type Actor } from "../register-service.js"
+import { registerCsv, type ScanSubmission } from "../register-rules.js"
 import type { ParsedRow } from "../sheets.js"
 
 const rawUrl = process.env.TEST_DATABASE_URL?.trim() || ""
@@ -195,6 +196,23 @@ test("a scan with only Iron Send is a clear return, opens one Iron Send record, 
   assert.equal(record.size, "M")
 })
 
+test("the register never lists Iron Send as a return issue: it has its own column", { skip: skip || false }, async () => {
+  const page = await listRegister(pool, { tracking: AWB.iron }, 1, 50)
+  assert.equal(page.rows.length, 1)
+  assert.deepEqual(page.rows[0].issues, [], "Iron Send is not in the issue list")
+  assert.equal(page.rows[0].ironSendQty, 2)
+  const noIssue = await listRegister(pool, { tracking: AWB.iron, issue: "no_issue" }, 1, 50)
+  assert.equal(noIssue.total, 1, "an Iron-only line is a no-issue line")
+  const ironFilter = await listRegister(pool, { tracking: AWB.iron, issue: "iron_send" }, 1, 50)
+  assert.equal(ironFilter.total, 1, "the Iron Send filter still finds it")
+  const exported = await exportRegisterRows(pool, { tracking: AWB.iron })
+  const approved = registerCsv(exported, "approved")
+  assert.match(approved, /"No issue"/)
+  assert.doesNotMatch(approved, /Iron Send/, "the approved issue report never names Iron Send")
+  const operational = registerCsv(exported, "operational")
+  assert.match(operational, /"Iron Send Qty \(operational, not an issue\)"/)
+})
+
 test("Iron Send with a real issue is an issue return, and the issue text names only the real issue", { skip: skip || false }, async () => {
   const shipment = await shipmentOf(AWB.mixed)
   const receipt = await recordScan(pool, scanner, {
@@ -217,6 +235,13 @@ test("Iron Send with a real issue is an issue return, and the issue text names o
   assert.equal(receipt.ironSendQty, 1)
   const label = await pool.query("SELECT issue_label FROM receipt_scans WHERE id = $1", [receipt.scan.id])
   assert.doesNotMatch(String(label.rows[0].issue_label), /Iron/)
+  // An older mixed scan whose stored text still names Iron Send: the overview reasons ignore it.
+  await pool.query("UPDATE receipt_scans SET issue_label = 'Damaged product; Iron Send' WHERE id = $1", [receipt.scan.id])
+  const reasons = await loadReasons(pool, allScope)
+  assert.ok(!reasons.some((r) => /Iron/.test(r.reason)), "no overview issue reason names Iron Send")
+  const page = await listRegister(pool, { tracking: AWB.mixed }, 1, 50)
+  assert.deepEqual(page.rows[0].issues.map((i) => i.categoryCode), ["damaged_product"])
+  assert.equal(page.rows[0].ironSendQty, 1)
 })
 
 test("OMSGuru: Iron Send and damaged units are left out, and a missing unit is not subtracted twice", { skip: skip || false }, async () => {
