@@ -223,6 +223,8 @@ export type ScanReceipt = {
   itemCount: number
   issueCount: number
   ironSendQty?: number
+  flyerId?: string
+  flyerState?: string
   shift: ShiftCard
   claimsBadge: string
 }
@@ -373,6 +375,9 @@ export type RegisterRow = {
   issues: RegisterIssue[]
   // Units sent for ironing on this line. Iron Send is operational and never listed in issues.
   ironSendQty?: number
+  // Meesho flyer ID captured at the bench for an issue return (permanent claim evidence).
+  flyerId?: string
+  flyerState?: string
 }
 
 export type RegisterPage = {

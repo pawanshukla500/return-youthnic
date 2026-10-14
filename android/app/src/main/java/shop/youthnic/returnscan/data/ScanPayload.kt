@@ -31,7 +31,11 @@ data class ItemVerificationState(
 data class VerificationSubmitData(
     val shipmentId: String,
     val scannedTracking: String,
-    val items: List<ItemVerificationState>
+    val items: List<ItemVerificationState>,
+    /** Meesho flyer barcode for an issue return ("" when unavailable or not required). */
+    val flyerId: String = "",
+    /** One of "scanned", "unavailable", "not_required". */
+    val flyerState: String = "not_required"
 )
 
 /** Builds and checks the body of POST /api/scan/complete the way server/register-rules.ts expects it. */
@@ -73,7 +77,9 @@ object ScanPayload {
         shipmentId: Int,
         clientScanKey: String,
         scannedTracking: String,
-        items: List<ItemVerificationState>
+        items: List<ItemVerificationState>,
+        flyerId: String = "",
+        flyerState: String = "not_required"
     ): JSONObject {
         val itemsArray = JSONArray()
         for (item in items) {
@@ -105,6 +111,8 @@ object ScanPayload {
         body.put("shipmentId", shipmentId)
         body.put("clientScanKey", clientScanKey)
         body.put("scannedTracking", scannedTracking)
+        body.put("flyerId", flyerId.trim().uppercase())
+        body.put("flyerState", flyerState.ifBlank { "not_required" })
         body.put("notes", "")
         body.put("photoCount", 0)
         body.put("hasVideo", false)

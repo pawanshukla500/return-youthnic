@@ -126,7 +126,9 @@ data class IssueCategory(
     val isMissing: Boolean,
     val requiresTicket: Boolean,
     val allowsSubIssue: Boolean,
-    val requiresSubIssue: Boolean
+    val requiresSubIssue: Boolean,
+    /** Iron Send and any other operational category: recorded, but never a return issue. */
+    val isOperational: Boolean = false
 ) {
     companion object {
         /** The category the server seeds as "no issue" (is_clear). It is never sent as an issue. */
@@ -147,7 +149,8 @@ data class IssueCategory(
                 isMissing = json.optBoolean("isMissing", false),
                 requiresTicket = json.optBoolean("requiresTicket", false),
                 allowsSubIssue = json.optBoolean("allowsSubIssue", false),
-                requiresSubIssue = json.optBoolean("requiresSubIssue", false)
+                requiresSubIssue = json.optBoolean("requiresSubIssue", false),
+                isOperational = json.optBoolean("isOperational", false)
             )
         }
     }

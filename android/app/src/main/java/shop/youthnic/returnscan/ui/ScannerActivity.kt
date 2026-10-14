@@ -679,7 +679,9 @@ class ScannerActivity : AppCompatActivity() {
                 shipmentId = shipmentId,
                 clientScanKey = clientScanKey,
                 scannedTracking = data.scannedTracking,
-                items = data.items
+                items = data.items,
+                flyerId = data.flyerId,
+                flyerState = data.flyerState
             )
 
             val receipt = result.getOrNull()
@@ -731,18 +733,23 @@ class ScannerActivity : AppCompatActivity() {
         // Record recent scan
         val issueLabels = data.items.filter { it.hasIssue }.map { it.category.label }.distinct()
         val outcome = if (issueLabels.isEmpty()) "CLEAR" else issueLabels.joinToString(", ")
+        val flyerSuffix = when {
+            data.flyerId.isNotBlank() -> " · flyer ${data.flyerId}"
+            data.flyerState == "unavailable" -> " · flyer unavailable"
+            else -> ""
+        }
         recentScansList.add(
             RecentScan(
                 awb = lookup.trackingNumber,
                 marketplace = lookup.marketplace,
                 courier = lookup.carrier,
-                itemsSummary = "${data.items.sumOf { it.receivedQty }} unit(s)",
+                itemsSummary = "${data.items.sumOf { it.receivedQty }} unit(s)$flyerSuffix",
                 outcome = outcome,
                 timestamp = System.currentTimeMillis().toString()
             )
         )
 
-        showBannerSuccess(lookup.trackingNumber, lookup.orderId, outcome)
+        showBannerSuccess(lookup.trackingNumber, lookup.orderId, outcome + flyerSuffix)
 
         // Seamless auto-resume for the next return: no "Scan Again" button needed!
         lifecycleScope.launch {

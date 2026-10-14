@@ -406,6 +406,8 @@ Records one physical scan. Every expected item of the return must be listed once
   "clientScanKey": "<a key made for this scan: 8 to 100 letters, digits, - or _>",
   "notes": "",
   "scannedTracking": "SYN-AWB-1",
+  "flyerId": "",
+  "flyerState": "not_required",
   "photoCount": 0,
   "hasVideo": false,
   "items": [
@@ -423,6 +425,7 @@ Records one physical scan. Every expected item of the return must be listed once
 
 Rules, all checked before anything is written:
 
+- Meesho flyer capture (Meesho issue returns only; Iron Send never takes one): a Meesho return saved with a return issue needs `flyerState` `scanned` (with a valid `flyerId` that differs from the return tracking ID) or `unavailable` (with no ID). Any other save must send no flyer (`flyerState: "not_required"`, empty `flyerId`). The flyer stays on the scan permanently for Meesho claims, is shown in the register record and the operational export, and is searchable through the register `tracking` filter.
 - Every item of the return must be listed exactly once, and each must be verified.
 - Units not received (expected minus received) must equal the units covered by missing-item issues (`missing_component`).
 - Issues on received units (any other category) cannot exceed the units received.
@@ -455,6 +458,9 @@ Response:
   },
   "itemCount": 1,
   "issueCount": 1,
+  "ironSendQty": 0,
+  "flyerId": "",
+  "flyerState": "not_required",
   "shift": { "scanned": "1", "correct": "0", "issues": "1", "accuracy": "0.0%", "progress": 0, "targetLabel": "No daily target set" },
   "claimsBadge": "1"
 }
@@ -577,7 +583,7 @@ The column sets are fixed in `server/register-rules.ts`:
 
 - **approved** (19 columns, in this order): Date, Marketplace, Tracking ID, Order ID, Order Item ID, Marketplace SKU, Product SKU, Marketplace SKU Identification (FNSKU/ASIN/Myntra FSN), Logistic Partner Name, Return Type, Qty, Amount, Return Reason, Return Received Issue, Return Received Sub Issue (Only If Missing), Ticket ID (Only If Return Received Issue), Ticket ID Status, Claim Amount, If Rejected, What the Reason.
 - **extended** (23): the approved 19, then Received Qty, Scanned By, Source, Matched Tracking.
-- **operational** (34): the extended 23, then Original Tracking ID (file), Link Tracking ID, Scanned Tracking ID, Tracking Source, Forward Tracking ID, Return Event ID, Source File, Import Batch ID, Return Type (as file), Display Identifier Kind, Tracking Validation.
+- **operational** (37): the extended 23, then Original Tracking ID (file), Link Tracking ID, Scanned Tracking ID, Tracking Source, Forward Tracking ID, Return Event ID, Source File, Import Batch ID, Return Type (as file), Display Identifier Kind, Tracking Validation, Iron Send Qty, Meesho Flyer ID (claim evidence), Flyer Status.
 
 The file is named `return-register-<columns>.<format>`. A cell that begins with `=`, `+`, `-`, `@`, a tab or a carriage return is prefixed with an apostrophe, in both formats. More than 50,000 matching rows return HTTP 400 with `More than 50,000 rows match. Narrow the filters first.`
 

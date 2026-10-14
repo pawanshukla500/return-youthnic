@@ -478,6 +478,17 @@ export function ScanReturns() {
   const [activeItem, setActiveItem] = useState(0)
 
   const scanInput = useRef<HTMLInputElement>(null)
+  const flyerInputRef = useRef<HTMLInputElement>(null)
+  // True while the Meesho flyer panel waits for a flyer scan. The next barcode
+  // goes to the flyer field, not to a new lookup. Mirrored in a ref so the global
+  // barcode handler (registered once) always sees the current value.
+  const [flyerAwaiting, setFlyerAwaiting] = useState(false)
+  const flyerAwaitingRef = useRef(false)
+  useEffect(() => {
+    flyerAwaitingRef.current = flyerAwaiting
+  }, [flyerAwaiting])
+  const [flyerInput, setFlyerInput] = useState("")
+  const [flyerError, setFlyerError] = useState("")
   const multiTimer = useRef<number | null>(null)
   const benchRef = useRef<{ key: string; corrected: boolean } | null>(null)
   const pendingLines = useRef<Record<number, LineForm> | null>(null)
@@ -501,34 +512,37 @@ export function ScanReturns() {
   const [lastEvidenceAwb, setLastEvidenceAwb] = useState("")
   const [savedEvidenceCount, setSavedEvidenceCount] = useState(0)
 
-  // Focuses the barcode scan input only in safe states (READY, LOOKUP_ERROR, DUPLICATE).
-  // Never steals focus while user is in VERIFYING, SAVING, or SAVE_ERROR.
+  // Focuses the barcode scan input in every state where the bench can accept the
+  // next barcode. SAVED and SAVE_ERROR keep focus too: a new barcode is buffered
+  // while a parcel is on screen, and Enter retries a failed save. Only VERIFYING
+  // (modal open) and SAVING steal focus, so typing in the modal is never interrupted.
+  // The flyer input takes focus instead while the Meesho flyer panel is open.
   const focusScanInput = useCallback(() => {
-    const current = scannerStateRef.current
-    if (current === "READY" || current === "LOOKUP_ERROR" || current === "DUPLICATE") {
-      scanInput.current?.focus()
+    if (flyerAwaitingRef.current) {
+      flyerInputRef.current?.focus()
+      return
     }
+    const current = scannerStateRef.current
+    if (current === "VERIFYING" || current === "SAVING") return
+    scanInput.current?.focus()
   }, [])
 
   // Explicit state transition helper that manages state and restores scanner input focus when appropriate.
   const transitionTo = useCallback((nextState: ScannerState) => {
     scannerStateRef.current = nextState
     setScannerState(nextState)
-    if (nextState === "READY" || nextState === "LOOKUP_ERROR" || nextState === "DUPLICATE") {
-      window.requestAnimationFrame(() => {
-        scanInput.current?.focus()
-      })
-    }
+    if (nextState === "VERIFYING" || nextState === "SAVING") return
+    window.requestAnimationFrame(() => {
+      if (flyerAwaitingRef.current) flyerInputRef.current?.focus()
+      else scanInput.current?.focus()
+    })
   }, [])
 
   // Controlled autofocus on page mount and when the window/tab regains focus.
   useEffect(() => {
     window.requestAnimationFrame(() => scanInput.current?.focus())
     const handleWindowFocus = () => {
-      const current = scannerStateRef.current
-      if (current === "READY" || current === "LOOKUP_ERROR" || current === "DUPLICATE") {
-        scanInput.current?.focus()
-      }
+      focusScanInput()
     }
     window.addEventListener("focus", handleWindowFocus)
 
@@ -545,6 +559,8 @@ export function ScanReturns() {
       .catch((err: Error) => setError(err.message))
 
     return () => window.removeEventListener("focus", handleWindowFocus)
+    // focusScanInput is stable (useCallback with empty deps), so registering once is safe.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // Live updates: scans saved on other workstations and phones refresh today's figures. If the parcel on screen was
@@ -702,17 +718,37 @@ export function ScanReturns() {
     setCapturedImages((images) => [...images, image].slice(-4))
   }
 
+  // Meesho flyer capture (Meesho issue returns only; Iron Send never takes a flyer).
+  const isMeeshoShipment = (target: LookupShipment | null): boolean =>
+    Boolean(target && target.marketplace.toLowerCase().includes("meesho"))
+
+  const hasRealIssueLines = (ready: Record<number, LineForm>): boolean =>
+    Object.values(ready).some((line) =>
+      line.issues.some((issue) => {
+        const category = categoriesRef.current.find((entry) => entry.code === issue.categoryCode)
+        // A return issue is any recorded issue that is not operational (Iron Send).
+        // Clear scans carry no issues, so they never ask for a flyer.
+        return Boolean(category && !category.isOperational)
+      }),
+    )
+
+  const needsFlyerFor = (target: LookupShipment | null, ready: Record<number, LineForm>): boolean =>
+    isMeeshoShipment(target) && hasRealIssueLines(ready)
+
   const bodyFor = (
     target: LookupShipment,
     ready: Record<number, LineForm>,
     key: string,
     scanned: string,
     noteText: string,
+    flyer?: { id: string; state: string },
   ) => ({
     shipmentId: target.shipmentId,
     clientScanKey: key,
     notes: noteText.trim(),
     scannedTracking: scanned || target.scannedTracking,
+    flyerId: flyer?.id ?? "",
+    flyerState: flyer?.state ?? "not_required",
     photoCount: videoRecordingEnabled ? capturedImages.length : 0,
     hasVideo: videoRecordingEnabled && (mediaRecorder.current?.state === "recording" || videoReadyRef.current),
     items: target.items.map((item) => {
@@ -735,11 +771,17 @@ export function ScanReturns() {
   const outcomeOf = (result: ScanReceipt): SessionOutcome =>
     result.issueCount > 0 ? "issue" : (result.ironSendQty ?? 0) > 0 ? "iron" : "clear"
 
-  // Shows the result banner for a saved return and counts it in this session.
+  // Shows the compact success toast for a saved return and counts it in this session.
+  // The toast carries only the essentials (AWB, outcome, order, flyer when present)
+  // and disappears after a few seconds, so the bench stays compact for the next scan.
   const showSaved = (result: ScanReceipt, target: LookupShipment | null) => {
     const outcome = outcomeOf(result)
     setSessionOutcomes((current) => ({ ...current, [result.scan.id]: outcome }))
-    const first = target?.items[0]
+    const flyer = result.flyerId
+      ? ` · flyer ${result.flyerId}`
+      : result.flyerState === "unavailable"
+        ? " · flyer unavailable"
+        : ""
     setFeedback({
       tone: outcome === "issue" ? "issue" : outcome === "iron" ? "iron" : "ok",
       title:
@@ -751,10 +793,10 @@ export function ScanReturns() {
               ? `Saved · ${result.ironSendQty} unit${result.ironSendQty === 1 ? "" : "s"} to Iron Send`
               : "Saved · normal return",
       awb: result.scan.scannedTracking || result.scan.trackingId,
-      detail: `${result.scan.marketplace} · order ${result.scan.orderId || "—"} · ${result.itemCount} item${result.itemCount === 1 ? "" : "s"} · ${result.scan.timeLabel}`,
-      sku: first ? first.productSku || first.marketplaceSku : "",
-      size: first ? sizeFromSku(first.marketplaceSku, first.productSku, first.productName) : "",
-      image: first ? catalogImageSrc(first.imageUrl) : "",
+      detail: `${result.scan.marketplace} · order ${result.scan.orderId || "—"} · ${result.itemCount} item${result.itemCount === 1 ? "" : "s"} · ${result.scan.timeLabel}${flyer}`,
+      sku: "",
+      size: "",
+      image: "",
       at: Date.now(),
     })
   }
@@ -772,6 +814,71 @@ export function ScanReturns() {
     setSavedScanId(result.scan.id)
     setIssueRecorded(corrected)
     if (benchRef.current) benchRef.current.corrected = corrected
+  }
+
+  // Success toasts and save notices are temporary: they confirm the save and
+  // disappear on their own, so the bench stays compact for continuous scanning.
+  // Duplicates, not-found results and errors stay until the next scan.
+  useEffect(() => {
+    if (!feedback) return
+    if (feedback.tone !== "ok" && feedback.tone !== "iron" && feedback.tone !== "issue") return
+    const timer = window.setTimeout(() => setFeedback(null), 3500)
+    return () => window.clearTimeout(timer)
+  }, [feedback])
+
+  useEffect(() => {
+    if (!notice) return
+    // Buffered/queue notices describe parcels still waiting — they stay until the
+    // queue drains. Only short-lived confirmations auto-dismiss.
+    if (/Buffered|queued|remaining|Next:/.test(notice)) return
+    const timer = window.setTimeout(() => setNotice(""), 3500)
+    return () => window.clearTimeout(timer)
+  }, [notice])
+
+  const clearFlyer = () => {
+    setFlyerAwaiting(false)
+    setFlyerInput("")
+    setFlyerError("")
+    lastFlyerRef.current = null
+  }
+
+  // Moves to the next buffered parcel, or back to READY with the scanner focused.
+  const processNextOrReady = (label: string) => {
+    if (scanQueueRef.current.length > 0) {
+      const [nextBarcode, ...rest] = scanQueueRef.current
+      setScanQueue(rest)
+      scanQueueRef.current = rest
+      setNotice(`${label} ${nextBarcode} (${rest.length} remaining)`)
+      void runLookup(nextBarcode, marketplace, null)
+    } else {
+      transitionTo("READY")
+    }
+  }
+
+  // A save that fails with 409 "already been received" means the lookup was stale
+  // (another bench saved it first). Treat it as a duplicate scan: show the
+  // duplicate banner, free the bench, and continue with the buffer.
+  const handleAlreadyReceived = (err: unknown, scanned: string, target: LookupShipment): boolean => {
+    if (!(err instanceof ApiError) || err.status !== 409) return false
+    if (!/already been received/i.test(err.message)) return false
+    const when = err.body.time ? ` at ${String(err.body.time)}` : ""
+    const by = err.body.scannedBy ? ` by ${String(err.body.scannedBy)}` : ""
+    benchRef.current = null
+    pendingLines.current = null
+    clearFlyer()
+    setSavedScanId(null)
+    setShipment(null)
+    setLines({})
+    setClientKey("")
+    setReceipt(null)
+    setResponse(null)
+    setError("")
+    setErrorDetails([])
+    if (soundEnabled) playScanChime("error")
+    showProblem("duplicate", "Duplicate — already received", scanned || target.trackingId, `Set the parcel aside${when}${by}. No new return was created.`)
+    transitionTo("DUPLICATE")
+    processNextOrReady("Duplicate set aside. Next:")
+    return true
   }
 
   // Saves the matched return as a normal return, then applies an issue tap if one is waiting.
@@ -796,26 +903,16 @@ export function ScanReturns() {
           })
           applyReceipt(corrected, true)
           showSaved(corrected, target)
-          setNotice("Saved with the issue. Scan the next parcel, or change selection.")
+          setNotice("Saved with the issue. Scan the next parcel.")
         } else {
-          setNotice(
-            target.items.length > 1
-              ? `Saved. This tracking ID has ${target.items.length} items.`
-              : "Saved as a normal return. Scan the next parcel, or tap an issue if this one is not.",
-          )
+          setNotice("Saved. Scan the next parcel, or tap an issue.")
         }
         transitionTo("SAVED")
+        processNextOrReady("Next:")
 
-        if (scanQueueRef.current.length > 0) {
-          const [nextBarcode, ...rest] = scanQueueRef.current
-          setScanQueue(rest)
-          scanQueueRef.current = rest
-          setNotice(`Processing queued parcel ${nextBarcode} (${rest.length} remaining in buffer)`)
-          void runLookup(nextBarcode, marketplace, null)
-        } else {
-          transitionTo("READY")
-        }
+        if (soundEnabled) playScanChime("success")
       } catch (err) {
+        if (handleAlreadyReceived(err, scanned, target)) return
         benchRef.current = null
         setSavedScanId(null)
         if (err instanceof ApiError) {
@@ -835,10 +932,23 @@ export function ScanReturns() {
     await flight
   }
 
-  const recordIssue = async (target: LookupShipment, ready: Record<number, LineForm>) => {
+  // Saves an issue correction for the auto-saved return. When the return is a
+  // Meesho issue return, the bench first collects the flyer ID (or records it as
+  // unavailable) and only then saves, so the claim evidence is never skipped.
+  const recordIssue = async (
+    target: LookupShipment,
+    ready: Record<number, LineForm>,
+    flyer?: { id: string; state: string },
+  ) => {
     pendingLines.current = ready
     const hasAnyIssue = Object.values(ready).some((line) => line.issues.length > 0)
     if (hasAnyIssue && !issueReady(ready, categoriesRef.current)) return
+    if (hasAnyIssue && needsFlyerFor(target, ready) && !flyer) {
+      setFlyerError("")
+      setFlyerAwaiting(true)
+      window.requestAnimationFrame(() => flyerInputRef.current?.focus())
+      return
+    }
     if (saveFlight.current) await saveFlight.current
     const bench = benchRef.current
     if (!bench) return
@@ -848,28 +958,18 @@ export function ScanReturns() {
     try {
       const corrected = await api<ScanReceipt>("/api/scan/correct", {
         method: "POST",
-        body: JSON.stringify(bodyFor(target, ready, bench.key, scannedAwb || target.scannedTracking, notes)),
+        body: JSON.stringify(bodyFor(target, ready, bench.key, scannedAwb || target.scannedTracking, notes, flyer)),
       })
       applyReceipt(corrected, hasAnyIssue)
       showSaved(corrected, target)
       if (soundEnabled) playScanChime(corrected.issueCount ? "issue" : (corrected.ironSendQty ?? 0) > 0 ? "iron" : "success")
       setIssueRecorded(hasAnyIssue)
-      setNotice(
-        hasAnyIssue
-          ? "Issue saved. You can change selection or scan the next parcel."
-          : "Saved as a normal return. Scan the next parcel, or tap an issue if this one is not.",
-      )
+      clearFlyer()
+      setNotice(hasAnyIssue ? "Issue saved. Scan the next parcel." : "Saved. Scan the next parcel.")
       transitionTo("SAVED")
-      if (scanQueueRef.current.length > 0) {
-        const [nextBarcode, ...rest] = scanQueueRef.current
-        setScanQueue(rest)
-        scanQueueRef.current = rest
-        setNotice(`Processing queued parcel ${nextBarcode} (${rest.length} remaining in buffer)`)
-        void runLookup(nextBarcode, marketplace, null)
-      } else {
-        transitionTo("READY")
-      }
+      processNextOrReady("Next:")
     } catch (err) {
+      if (handleAlreadyReceived(err, scannedAwb || target.scannedTracking, target)) return
       if (err instanceof ApiError) {
         setErrorDetails(err.details)
         setError(err.message)
@@ -879,6 +979,49 @@ export function ScanReturns() {
       transitionTo("SAVE_ERROR")
     } finally {
       setSaving(false)
+    }
+  }
+
+  // The last flyer decision, so a retry of a failed flyer save resends the same
+  // flyer ID instead of dropping it and reopening the panel.
+  const lastFlyerRef = useRef<{ id: string; state: string } | null>(null)
+
+  // The Meesho flyer decision for the pending issue save: a scanned flyer ID, or
+  // an explicit "unavailable" that stores no ID. Either one saves at once and
+  // readies the bench for the next parcel; nothing here asks for confirmation.
+  // `typed` carries a barcode that was just routed here before React state caught up.
+  const submitFlyer = (state: "scanned" | "unavailable", typed?: string) => {
+    if (!shipment) return
+    if (state === "scanned") {
+      const value = (typed ?? flyerInput).trim().toUpperCase()
+      if (typed !== undefined && typed !== flyerInput) setFlyerInput(typed.trim().toUpperCase())
+      if (value.length < 4) {
+        setFlyerError("Scan the Meesho flyer barcode, or mark it unavailable.")
+        flyerInputRef.current?.focus()
+        return
+      }
+      if (value === (scannedAwb || shipment.scannedTracking || shipment.trackingId).toUpperCase()) {
+        setFlyerError("That is the return label. Scan the Meesho flyer, not the return label again.")
+        flyerInputRef.current?.focus()
+        return
+      }
+    const ready = pendingLines.current ?? lines
+    setFlyerError("")
+    lastFlyerRef.current = { id: value, state: "scanned" }
+    if (verifyModalOpen) {
+      void save(undefined, { id: value, state: "scanned" })
+    } else {
+      void recordIssue(shipment, ready, { id: value, state: "scanned" })
+    }
+    return
+    }
+    const ready = pendingLines.current ?? lines
+    setFlyerError("")
+    lastFlyerRef.current = { id: "", state: "unavailable" }
+    if (verifyModalOpen) {
+      void save(undefined, { id: "", state: "unavailable" })
+    } else {
+      void recordIssue(shipment, ready, { id: "", state: "unavailable" })
     }
   }
 
@@ -892,6 +1035,7 @@ export function ScanReturns() {
     setError("")
     setErrorDetails([])
     setNotice("")
+    clearFlyer()
     setReceipt(null)
     setSavedScanId(null)
     setIssueRecorded(false)
@@ -992,12 +1136,42 @@ export function ScanReturns() {
       const cleanBarcode = barcode.trim().toUpperCase()
       if (!cleanBarcode) return
 
+      // While the Meesho flyer panel waits, the next barcode is the flyer ID —
+      // not a new return. It fills the flyer field and saves at once. The barcode
+      // is passed directly: React state has not caught up with setFlyerInput yet.
+      if (flyerAwaitingRef.current) {
+        setFlyerInput(cleanBarcode)
+        setFlyerError("")
+        submitFlyer("scanned", cleanBarcode)
+        return
+      }
+
       const currentState = scannerStateRef.current
-      if (currentState === "READY" || currentState === "LOOKUP_ERROR" || currentState === "DUPLICATE") {
+      if (
+        currentState === "READY" ||
+        currentState === "LOOKUP_ERROR" ||
+        currentState === "DUPLICATE" ||
+        currentState === "SAVED" ||
+        currentState === "SAVE_ERROR"
+      ) {
+        // SAVED/SAVE_ERROR still accept a new parcel when no parcel is on screen;
+        // otherwise the scan is buffered so the current parcel is never lost.
+        if ((currentState === "SAVED" || currentState === "SAVE_ERROR") && shipmentRef.current) {
+          if (scanQueueRef.current.length >= 10) {
+            setError("Scan buffer full (10 parcels max). Please finish verifying current parcel.")
+            return
+          }
+          const updated = [...scanQueueRef.current, cleanBarcode]
+          setScanQueue(updated)
+          scanQueueRef.current = updated
+          setNotice(`Buffered ${cleanBarcode} (${updated.length} queued)`)
+          if (soundEnabled) playScanChime("success")
+          return
+        }
         setTracking("")
         void runLookup(cleanBarcode, marketplace, null)
       } else {
-        // Active parcel in flight (LOOKUP, VERIFYING, SAVING, SAVE_ERROR, AMBIGUOUS_MATCH)
+        // Active parcel in flight (LOOKUP, VERIFYING, SAVING, AMBIGUOUS_MATCH)
         if (scanQueueRef.current.length >= 10) {
           setError("Scan buffer full (10 parcels max). Please finish verifying current parcel.")
           return
@@ -1005,7 +1179,7 @@ export function ScanReturns() {
         const updated = [...scanQueueRef.current, cleanBarcode]
         setScanQueue(updated)
         scanQueueRef.current = updated
-        setNotice(`Buffered ${cleanBarcode} (${updated.length} parcel(s) queued for processing)`)
+        setNotice(`Buffered ${cleanBarcode} (${updated.length} queued)`)
         if (soundEnabled) playScanChime("success")
       }
     },
@@ -1059,6 +1233,26 @@ export function ScanReturns() {
     return () => window.removeEventListener("keydown", handleGlobalKeyDown)
   }, [handleBarcodeScan])
 
+  // Enter retries a failed save, or clears a duplicate, without touching the mouse.
+  // Typing in any field keeps its normal Enter behaviour.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Enter" || event.ctrlKey || event.altKey || event.metaKey) return
+      const target = event.target as HTMLElement | null
+      if (target && ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)) return
+      if (document.querySelector(".modal-backdrop")) return
+      if (scannerStateRef.current === "SAVE_ERROR" && shipmentRef.current) {
+        event.preventDefault()
+        retrySave()
+      } else if (scannerStateRef.current === "DUPLICATE") {
+        event.preventDefault()
+        resetForNext()
+      }
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  })
+
   const resetForNext = () => {
     setVerifyModalOpen(false)
     setResponse(null)
@@ -1068,12 +1262,14 @@ export function ScanReturns() {
     setNotes("")
     setTracking("")
     setScannedAwb("")
+    setError("")
     setErrorDetails([])
     setMultiOpen(false)
     setSavedScanId(null)
     setIssueRecorded(false)
     benchRef.current = null
     pendingLines.current = null
+    clearFlyer()
 
     if (scanQueueRef.current.length > 0) {
       const [nextBarcode, ...rest] = scanQueueRef.current
@@ -1141,10 +1337,19 @@ export function ScanReturns() {
   const problems = plans.flatMap((plan) => plan.problems)
   const canSave = Boolean(shipment && clientKey) && problems.length === 0 && !saving
 
-  const save = async (overrideLines?: Record<number, LineForm>) => {
+  // Saves a multi-item return (verification modal) or a manual single-item save.
+  // Meesho issue returns wait for the flyer decision first; the flyer panel calls
+  // back here with the scanned ID (or 'unavailable') and the save completes at once.
+  const save = async (overrideLines?: Record<number, LineForm>, flyer?: { id: string; state: string }) => {
     if (!shipment) return
     const activeLines = overrideLines || lines
     if (!overrideLines && !canSave) return
+    if (!flyer && needsFlyerFor(shipment, activeLines)) {
+      setFlyerError("")
+      setFlyerAwaiting(true)
+      window.requestAnimationFrame(() => flyerInputRef.current?.focus())
+      return
+    }
     transitionTo("SAVING")
     setSaving(true)
     setError("")
@@ -1157,6 +1362,8 @@ export function ScanReturns() {
         notes: notes.trim(),
         // The AWB that was read. The server records which stored AWB and leg it matched, and keeps this value.
         scannedTracking: scannedAwb || shipment.scannedTracking,
+        flyerId: flyer?.id ?? "",
+        flyerState: flyer?.state ?? "not_required",
         photoCount: videoRecordingEnabled ? capturedImages.length : 0,
         hasVideo,
         items: shipment.items.map((item) => {
@@ -1201,18 +1408,11 @@ export function ScanReturns() {
       setTracking("")
       setScannedAwb("")
       setCapturedImages([])
+      clearFlyer()
       transitionTo("SAVED")
-
-      if (scanQueueRef.current.length > 0) {
-        const [nextBarcode, ...rest] = scanQueueRef.current
-        setScanQueue(rest)
-        scanQueueRef.current = rest
-        setNotice(`Processing queued parcel ${nextBarcode} (${rest.length} remaining in buffer)`)
-        void runLookup(nextBarcode, marketplace, null)
-      } else {
-        transitionTo("READY")
-      }
+      processNextOrReady("Next:")
     } catch (err) {
+      if (shipment && handleAlreadyReceived(err, scannedAwb || shipment.scannedTracking, shipment)) return
       if (soundEnabled) playScanChime("error")
       transitionTo("SAVE_ERROR")
       if (err instanceof ApiError) {
@@ -1231,6 +1431,16 @@ export function ScanReturns() {
     }
   }
 
+  // Retries the failed save on the path that failed (modal save or issue
+  // correction), resending the last flyer decision when there was one.
+  const retrySave = () => {
+    if (!shipment || saving) return
+    const flyer = lastFlyerRef.current ?? undefined
+    if (verifyModalOpen) void save(undefined, flyer)
+    else if (pendingLines.current) void recordIssue(shipment, pendingLines.current, flyer)
+    else void save(undefined, flyer)
+  }
+
   useEffect(() => {
     if (!verifyModalOpen || saving) return
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -1242,6 +1452,10 @@ export function ScanReturns() {
       if (e.key === "Enter") {
         const target = e.target as HTMLElement | null
         if (target && target.tagName === "TEXTAREA") return
+        // The flyer field saves itself on Enter; the modal must not also fire a
+        // flyer-less save underneath it.
+        if (flyerAwaitingRef.current) return
+        if (target && ["INPUT", "SELECT"].includes(target.tagName)) return
         e.preventDefault()
         if (canSave) {
           void save()
@@ -1267,7 +1481,7 @@ export function ScanReturns() {
       multiTimer.current = null
     }
     setMultiOpen(false)
-    scanInput.current?.focus()
+    focusScanInput()
   }
 
   const showMulti = (shipment: LookupShipment) => {
@@ -1281,7 +1495,7 @@ export function ScanReturns() {
     multiTimer.current = window.setTimeout(() => {
       multiTimer.current = null
       setMultiOpen(false)
-      scanInput.current?.focus()
+      focusScanInput()
     }, 2000)
   }
 
@@ -1457,24 +1671,37 @@ export function ScanReturns() {
             </div>
           </form>
 
-          {feedback && (
-            <div className={`scan-feedback tone-${feedback.tone}`} role="status" aria-live="assertive" key={feedback.at}>
-              <div className="scan-feedback-icon">
-                {feedback.image ? <img src={feedback.image} alt="" /> : <Icon name={FEEDBACK_ICON[feedback.tone]} size={30} />}
+          {feedback && (feedback.tone === "ok" || feedback.tone === "iron" || feedback.tone === "issue") ? (
+            <div className={`scan-toast tone-${feedback.tone}`} role="status" aria-live="polite" key={feedback.at}>
+              <Icon name={FEEDBACK_ICON[feedback.tone]} size={18} />
+              <div>
+                <strong>{feedback.title}</strong>
+                <span>
+                  {feedback.awb} · {feedback.detail}
+                </span>
               </div>
-              <div className="scan-feedback-body">
-                <strong className="scan-feedback-title">{feedback.title}</strong>
-                <span className="scan-feedback-awb">{feedback.awb}</span>
-                {feedback.sku && (
-                  <span className="scan-feedback-sku">
-                    {feedback.sku}
-                    {feedback.size && <b className="size-chip">{feedback.size}</b>}
-                  </span>
-                )}
-                <small>{feedback.detail}</small>
-              </div>
-              <time className="scan-feedback-time">{IST_CLOCK.format(new Date(feedback.at))}</time>
+              <time>{IST_CLOCK.format(new Date(feedback.at))}</time>
             </div>
+          ) : (
+            feedback && (
+              <div className={`scan-feedback tone-${feedback.tone}`} role="status" aria-live="assertive" key={feedback.at}>
+                <div className="scan-feedback-icon">
+                  {feedback.image ? <img src={feedback.image} alt="" /> : <Icon name={FEEDBACK_ICON[feedback.tone]} size={30} />}
+                </div>
+                <div className="scan-feedback-body">
+                  <strong className="scan-feedback-title">{feedback.title}</strong>
+                  <span className="scan-feedback-awb">{feedback.awb}</span>
+                  {feedback.sku && (
+                    <span className="scan-feedback-sku">
+                      {feedback.sku}
+                      {feedback.size && <b className="size-chip">{feedback.size}</b>}
+                    </span>
+                  )}
+                  <small>{feedback.detail}</small>
+                </div>
+                <time className="scan-feedback-time">{IST_CLOCK.format(new Date(feedback.at))}</time>
+              </div>
+            )
           )}
           {remoteSaved && (
             <div className="form-error" style={{ margin: "12px 24px 0" }} role="alert">
@@ -1495,30 +1722,26 @@ export function ScanReturns() {
                 )}
               </div>
               {scannerState === "SAVE_ERROR" && shipment && (
-                <button
-                  type="button"
-                  className="btn danger"
-                  style={{ marginLeft: 16, whiteSpace: "nowrap" }}
-                  onClick={() => void save()}
-                  disabled={saving}
-                >
-                  <Icon name="alert" /> Retry Save
-                </button>
+                <div style={{ display: "flex", gap: 8, marginLeft: 16, whiteSpace: "nowrap" }}>
+                  <button
+                    type="button"
+                    className="btn danger"
+                    onClick={() => retrySave()}
+                    disabled={saving}
+                  >
+                    <Icon name="alert" /> Retry Save
+                  </button>
+                  <button type="button" className="btn secondary" onClick={resetForNext} disabled={saving}>
+                    Clear & scan next
+                  </button>
+                </div>
               )}
             </div>
           )}
           {notice && (
-            <div className="scan-notice">
+            <div className="scan-notice compact">
               <Icon name="check" />
-              <div>
-                <strong>{notice}</strong>
-                {receipt && (
-                  <span>
-                    {receipt.scan.marketplace} · scanned {receipt.scan.scannedTracking || receipt.scan.trackingId} ·{" "}
-                    {receipt.itemCount} item(s) · {receipt.scan.logisticPartner} · saved at {receipt.scan.timeLabel}
-                  </span>
-                )}
-              </div>
+              <strong>{notice}</strong>
               <Badge tone="success">SAVED</Badge>
             </div>
           )}
@@ -1852,8 +2075,59 @@ export function ScanReturns() {
                                     }
                                   })
                                 }
+                                onKeyDown={(event) => {
+                                  if (event.key === "Enter") {
+                                    event.preventDefault()
+                                    if (shipment) void recordIssue(shipment, { ...lines })
+                                  }
+                                }}
                               />
                             </label>
+                          )}
+                          {chosen && chosen.ticketCode.trim() !== "" && (
+                            <button
+                              type="button"
+                              className="btn primary"
+                              style={{ marginTop: 8 }}
+                              onClick={() => {
+                                if (shipment) void recordIssue(shipment, { ...lines })
+                              }}
+                              title="Save this issue with its ticket ID"
+                            >
+                              Save issue
+                            </button>
+                          )}
+                          {flyerAwaiting && !verifyModalOpen && shipment && isMeeshoShipment(shipment) && (
+                            <div className="flyer-panel" role="group" aria-label="Meesho flyer ID">
+                              <strong>Meesho flyer ID (for claim)</strong>
+                              <p>Scan the Meesho flyer barcode. It is stored against {shipment.trackingId} for future claims.</p>
+                              <div className="flyer-row">
+                                <input
+                                  ref={flyerInputRef}
+                                  aria-label="Meesho flyer ID"
+                                  value={flyerInput}
+                                  maxLength={80}
+                                  placeholder="Scan flyer barcode"
+                                  onChange={(event) => {
+                                    setFlyerInput(event.target.value.toUpperCase())
+                                    setFlyerError("")
+                                  }}
+                                  onKeyDown={(event) => {
+                                    if (event.key === "Enter") {
+                                      event.preventDefault()
+                                      submitFlyer("scanned")
+                                    }
+                                  }}
+                                />
+                                <button type="button" className="btn success" onClick={() => submitFlyer("scanned")}>
+                                  Save with flyer
+                                </button>
+                              </div>
+                              {flyerError && <p className="flyer-error">{flyerError}</p>}
+                              <button type="button" className="link-button" onClick={() => submitFlyer("unavailable")}>
+                                Flyer unavailable — save without a flyer ID
+                              </button>
+                            </div>
                           )}
                           {plan.problems.length > 0 && line.received !== "" && (
                             <ul className="issue-problems">
@@ -1896,7 +2170,7 @@ export function ScanReturns() {
                     <button
                       type="button"
                       className="btn danger"
-                      onClick={() => void save()}
+                      onClick={() => retrySave()}
                       disabled={saving}
                       title="Retry saving with preserved barcode, item details, and idempotency key"
                     >
@@ -2459,6 +2733,39 @@ export function ScanReturns() {
                 )
               })}
             </div>
+
+            {flyerAwaiting && shipment && isMeeshoShipment(shipment) && (
+              <div className="flyer-panel" role="group" aria-label="Meesho flyer ID" style={{ marginTop: 12 }}>
+                <strong>Meesho flyer ID (for claim)</strong>
+                <p>Scan the Meesho flyer barcode. It is stored against {shipment.trackingId} for future claims.</p>
+                <div className="flyer-row">
+                  <input
+                    ref={flyerInputRef}
+                    aria-label="Meesho flyer ID"
+                    value={flyerInput}
+                    maxLength={80}
+                    placeholder="Scan flyer barcode"
+                    onChange={(event) => {
+                      setFlyerInput(event.target.value.toUpperCase())
+                      setFlyerError("")
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault()
+                        submitFlyer("scanned")
+                      }
+                    }}
+                  />
+                  <button type="button" className="btn success" onClick={() => submitFlyer("scanned")}>
+                    Save with flyer
+                  </button>
+                </div>
+                {flyerError && <p className="flyer-error">{flyerError}</p>}
+                <button type="button" className="link-button" onClick={() => submitFlyer("unavailable")}>
+                  Flyer unavailable — save without a flyer ID
+                </button>
+              </div>
+            )}
 
             <div
               style={{
