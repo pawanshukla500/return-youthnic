@@ -21,21 +21,33 @@ android {
 
     signingConfigs {
         debug {
+            def ksFile = file("release.keystore")
             def ksPath = System.getenv("RS_KEYSTORE")
             if (ksPath && file(ksPath).exists()) {
                 storeFile file(ksPath)
-                storePassword 'android'
-                keyAlias 'androiddebugkey'
-                keyPassword 'android'
+                storePassword(System.getenv("RS_KEYSTORE_PASSWORD") ?: "youthnicreturnscan")
+                keyAlias(System.getenv("RS_KEY_ALIAS") ?: "returnscan")
+                keyPassword(System.getenv("RS_KEY_PASSWORD") ?: "youthnicreturnscan")
+            } else if (ksFile.exists()) {
+                storeFile ksFile
+                storePassword "youthnicreturnscan"
+                keyAlias "returnscan"
+                keyPassword "youthnicreturnscan"
             }
         }
         release {
+            def ksFile = file("release.keystore")
             def ksPath = System.getenv("RS_KEYSTORE")
             if (ksPath && file(ksPath).exists()) {
                 storeFile file(ksPath)
-                storePassword 'android'
-                keyAlias 'androiddebugkey'
-                keyPassword 'android'
+                storePassword(System.getenv("RS_KEYSTORE_PASSWORD") ?: "youthnicreturnscan")
+                keyAlias(System.getenv("RS_KEY_ALIAS") ?: "returnscan")
+                keyPassword(System.getenv("RS_KEY_PASSWORD") ?: "youthnicreturnscan")
+            } else if (ksFile.exists()) {
+                storeFile ksFile
+                storePassword "youthnicreturnscan"
+                keyAlias "returnscan"
+                keyPassword "youthnicreturnscan"
             }
         }
     }
