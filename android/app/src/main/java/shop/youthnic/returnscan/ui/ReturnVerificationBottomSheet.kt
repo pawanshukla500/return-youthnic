@@ -202,6 +202,7 @@ class ReturnVerificationBottomSheet(
     /** The category an inspection chip stands for. The code is the server's, so it is the same one the web screen sends. */
     private fun categoryCodeFor(chipId: Int): String? = when (chipId) {
         R.id.chipClear -> clearCategory.code
+        R.id.chipIronSend -> IssueCategory.CODE_IRON_SEND
         R.id.chipMissing -> IssueCategory.CODE_MISSING
         R.id.chipWrong -> IssueCategory.CODE_WRONG
         R.id.chipDamaged -> IssueCategory.CODE_DAMAGED
@@ -217,20 +218,40 @@ class ReturnVerificationBottomSheet(
         pBinding.tilTicketCode.visibility = View.GONE
         pBinding.layoutAffectedUnits.visibility = View.GONE
 
-        // An administrator can switch a category off. A chip for a category the server no longer offers is hidden.
-        val chips = listOf(
-            pBinding.chipMissing, pBinding.chipWrong, pBinding.chipDamaged,
-            pBinding.chipSkuChange, pBinding.chipSizeChange, pBinding.chipOther
+        // Map every chip to its category code
+        val chipByCode = mapOf(
+            clearCategory.code to pBinding.chipClear,
+            IssueCategory.CODE_IRON_SEND to pBinding.chipIronSend,
+            IssueCategory.CODE_MISSING to pBinding.chipMissing,
+            IssueCategory.CODE_WRONG to pBinding.chipWrong,
+            IssueCategory.CODE_DAMAGED to pBinding.chipDamaged,
+            IssueCategory.CODE_SKU_CHANGE to pBinding.chipSkuChange,
+            IssueCategory.CODE_SIZE_CHANGE to pBinding.chipSizeChange,
+            IssueCategory.CODE_OTHER to pBinding.chipOther
         )
-        for (chip in chips) {
-            val code = categoryCodeFor(chip.id)
-            chip.visibility = if (code != null && sessionData.categoryOf(code) != null) View.VISIBLE else View.GONE
+
+        // Apply distinct colors to each chip
+        for ((code, chip) in chipByCode) {
+            IssueCategoryUi.applyColorStyle(chip, code)
+        }
+
+        // Dynamically reorder chips: Clear Return is always first, then most frequently used moved forward
+        val sortedCategories = IssueCategoryUi.sortCategories(activity, sessionData.categories)
+        pBinding.chipGroupIssues.removeAllViews()
+
+        for (cat in sortedCategories) {
+            val chip = chipByCode[cat.code]
+            if (chip != null && (cat.isClear || sessionData.categoryOf(cat.code) != null)) {
+                chip.visibility = View.VISIBLE
+                pBinding.chipGroupIssues.addView(chip)
+            }
         }
 
         pBinding.chipGroupIssues.setOnCheckedStateChangeListener { _, checkedIds ->
             val checkedId = checkedIds.firstOrNull() ?: R.id.chipClear
             val code = categoryCodeFor(checkedId) ?: clearCategory.code
             val category = if (code == clearCategory.code) clearCategory else sessionData.categoryOf(code) ?: clearCategory
+            IssueCategoryUi.recordUsage(activity, category.code)
             chooseCategory(pBinding, state, category)
         }
     }
@@ -301,8 +322,9 @@ class ReturnVerificationBottomSheet(
             if (validateInputs()) {
                 binding.btnSaveVerification.isEnabled = false
                 binding.btnSaveVerification.text = "Saving..."
-                // A copy, taken now: the chips and steppers stay usable while the request runs, and a later tap must not
-                // change what is sent or the summary shown after the save.
+                for (item in itemStates) {
+                    IssueCategoryUi.recordUsage(activity, item.category.code)
+                }
                 onSave(
                     VerificationSubmitData(
                         shipmentId = lookup.shipmentId,

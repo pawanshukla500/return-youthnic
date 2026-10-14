@@ -68,6 +68,7 @@ function nextUid(): string {
 // Short names for the bench. The code and the stored label stay as they are.
 const CHIP_LABEL: Record<string, string> = {
   no_issue: "Normal Return",
+  iron_send: "Iron Send",
   damaged_product: "Damaged",
   missing_component: "Missing Item",
   wrong_product: "Wrong Product",
@@ -75,18 +76,153 @@ const CHIP_LABEL: Record<string, string> = {
   size_change: "Size Change",
   other_issue: "Other",
 }
-const CHIP_ORDER = ["no_issue", "damaged_product", "missing_component", "wrong_product", "sku_change", "size_change", "other_issue"]
+const CHIP_ORDER = ["no_issue", "iron_send", "damaged_product", "wrong_product", "missing_component", "sku_change", "size_change", "other_issue"]
+
+const FREQUENCY_STORAGE_KEY = "return_scan_issue_frequency"
+
+// High baseline scores ensuring healthy initial order: No Issue 1st, Iron Send 2nd, Damaged 3rd, etc.
+const BASELINE_FREQUENCIES: Record<string, number> = {
+  no_issue: 100000,
+  iron_send: 50000,
+  damaged_product: 40000,
+  wrong_product: 30000,
+  missing_component: 20000,
+  sku_change: 15000,
+  size_change: 10000,
+  other_issue: 5000,
+}
+
+export function getIssueFrequency(code: string): number {
+  try {
+    const raw = localStorage.getItem(FREQUENCY_STORAGE_KEY)
+    if (raw) {
+      const parsed = JSON.parse(raw) as Record<string, number>
+      if (typeof parsed[code] === "number") {
+        return (BASELINE_FREQUENCIES[code] ?? 0) + parsed[code]
+      }
+    }
+  } catch {}
+  return BASELINE_FREQUENCIES[code] ?? 0
+}
+
+export function recordIssueUsage(code: string) {
+  if (!code) return
+  try {
+    const raw = localStorage.getItem(FREQUENCY_STORAGE_KEY)
+    const counts: Record<string, number> = raw ? JSON.parse(raw) : {}
+    counts[code] = (counts[code] ?? 0) + 1
+    localStorage.setItem(FREQUENCY_STORAGE_KEY, JSON.stringify(counts))
+  } catch {}
+}
+
+export interface CategoryTheme {
+  primary: string
+  bgLight: string
+  bgSelected: string
+  textLight: string
+  textSelected: string
+  border: string
+}
+
+export const CATEGORY_THEMES: Record<string, CategoryTheme> = {
+  no_issue: {
+    primary: "#059669",
+    bgLight: "#ecfdf5",
+    bgSelected: "#059669",
+    textLight: "#065f46",
+    textSelected: "#ffffff",
+    border: "#a7f3d0",
+  },
+  iron_send: {
+    primary: "#2563eb",
+    bgLight: "#eff6ff",
+    bgSelected: "#2563eb",
+    textLight: "#1d4ed8",
+    textSelected: "#ffffff",
+    border: "#bfdbfe",
+  },
+  damaged_product: {
+    primary: "#dc2626",
+    bgLight: "#fef2f2",
+    bgSelected: "#dc2626",
+    textLight: "#b91c1c",
+    textSelected: "#ffffff",
+    border: "#fecaca",
+  },
+  wrong_product: {
+    primary: "#d97706",
+    bgLight: "#fffbeb",
+    bgSelected: "#d97706",
+    textLight: "#b45309",
+    textSelected: "#ffffff",
+    border: "#fde68a",
+  },
+  missing_component: {
+    primary: "#e11d48",
+    bgLight: "#fff1f2",
+    bgSelected: "#e11d48",
+    textLight: "#be123c",
+    textSelected: "#ffffff",
+    border: "#fecdd3",
+  },
+  sku_change: {
+    primary: "#7c3aed",
+    bgLight: "#f5f3ff",
+    bgSelected: "#7c3aed",
+    textLight: "#6d28d9",
+    textSelected: "#ffffff",
+    border: "#ddd6fe",
+  },
+  size_change: {
+    primary: "#0d9488",
+    bgLight: "#f0fdfa",
+    bgSelected: "#0d9488",
+    textLight: "#0f766e",
+    textSelected: "#ffffff",
+    border: "#99f6e4",
+  },
+  other_issue: {
+    primary: "#475569",
+    bgLight: "#f8fafc",
+    bgSelected: "#475569",
+    textLight: "#334155",
+    textSelected: "#ffffff",
+    border: "#cbd5e1",
+  },
+}
+
+export function getCategoryTheme(code: string): CategoryTheme {
+  return (
+    CATEGORY_THEMES[code] ?? {
+      primary: "#0284c7",
+      bgLight: "#f0f9ff",
+      bgSelected: "#0284c7",
+      textLight: "#0369a1",
+      textSelected: "#ffffff",
+      border: "#bae6fd",
+    }
+  )
+}
 
 function chipLabel(category: IssueCategory): string {
   return CHIP_LABEL[category.code] ?? category.label
 }
 
 function orderedCategories(categories: IssueCategory[]): IssueCategory[] {
-  const rank = (code: string) => {
-    const index = CHIP_ORDER.indexOf(code)
-    return index === -1 ? CHIP_ORDER.length : index
-  }
-  return [...categories].sort((a, b) => rank(a.code) - rank(b.code) || a.label.localeCompare(b.label))
+  return [...categories].sort((a, b) => {
+    // Clear / No Issue is always the first choice
+    if (a.isClear && !b.isClear) return -1
+    if (!a.isClear && b.isClear) return 1
+    const freqA = getIssueFrequency(a.code)
+    const freqB = getIssueFrequency(b.code)
+    if (freqB !== freqA) return freqB - freqA
+    const rankA = CHIP_ORDER.indexOf(a.code)
+    const rankB = CHIP_ORDER.indexOf(b.code)
+    const orderA = rankA === -1 ? CHIP_ORDER.length : rankA
+    const orderB = rankB === -1 ? CHIP_ORDER.length : rankB
+    if (orderA !== orderB) return orderA - orderB
+    return a.label.localeCompare(b.label)
+  })
 }
 
 function normalLines(shipment: LookupShipment): Record<number, LineForm> {
@@ -884,6 +1020,11 @@ export function ScanReturns() {
         }),
       }
       const result = await api<ScanReceipt>("/api/scan/complete", { method: "POST", body: JSON.stringify(payload) })
+      for (const it of payload.items) {
+        for (const iss of it.issues) {
+          recordIssueUsage(iss.categoryCode)
+        }
+      }
       setReceipt(result)
       setShift(result.shift)
       setClaimsBadge(result.claimsBadge)
@@ -1441,13 +1582,25 @@ export function ScanReturns() {
                           <div className="issue-chips" role="group" aria-label="Issue report">
                             {orderedCategories(categories).map((category) => {
                               const pressed = category.isClear ? normalSelected : chosen?.categoryCode === category.code
+                              const theme = getCategoryTheme(category.code)
                               return (
                                 <button
                                   key={category.code}
                                   type="button"
-                                  className={category.isClear ? "clear" : undefined}
+                                  className={`chip-${category.code} ${category.isClear ? "clear" : ""}`}
                                   aria-pressed={pressed}
-                                  onClick={() => chooseReport(item, category)}
+                                  style={{
+                                    border: `1.5px solid ${pressed ? theme.primary : theme.border}`,
+                                    background: pressed ? theme.bgSelected : theme.bgLight,
+                                    color: pressed ? theme.textSelected : theme.textLight,
+                                    boxShadow: pressed ? `0 2px 4px ${theme.primary}33` : "none",
+                                    transition: "all 0.15s ease",
+                                  }}
+                                  onClick={() => {
+                                    recordIssueUsage(category.code)
+                                    chooseReport(item, category)
+                                  }}
+                                  title={category.label}
                                 >
                                   {chipLabel(category)}
                                 </button>
@@ -1799,14 +1952,26 @@ export function ScanReturns() {
                 const currentIssue = line.issues[0]
                 const isClear = line.verified && line.issues.length === 0 && Number(line.received) === item.expectedQty
                 const hasIssue = line.issues.length > 0
+                const currentTheme = currentIssue ? getCategoryTheme(currentIssue.categoryCode) : null
                 return (
                   <div
                     key={item.itemId}
                     style={{
-                      border: `1.5px solid ${line.verified ? (hasIssue ? "#e3976c" : "#9ed3c0") : "#d4ded9"}`,
+                      border: `1.5px solid ${
+                        line.verified
+                          ? hasIssue
+                            ? currentTheme?.border ?? "#e3976c"
+                            : "#9ed3c0"
+                          : "#d4ded9"
+                      }`,
                       borderRadius: 10,
                       padding: 13,
-                      background: line.verified ? (hasIssue ? "#fff8f3" : "#f5fbf8") : "#ffffff",
+                      background: line.verified
+                        ? hasIssue
+                          ? currentTheme?.bgLight ?? "#fff8f3"
+                          : "#f5fbf8"
+                        : "#ffffff",
+                      transition: "all 0.15s ease",
                     }}
                   >
                     <div style={{ display: "grid", gridTemplateColumns: "70px 1fr auto", gap: 14, alignItems: "center" }}>
@@ -1907,87 +2072,105 @@ export function ScanReturns() {
                         <span>Physical condition inspected & verified</span>
                       </label>
 
-                      <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
-                        <button
-                          type="button"
-                          className={isClear ? "btn success" : "btn secondary"}
-                          style={{ height: 28, padding: "0 9px", fontSize: 11 }}
-                          onClick={() => {
-                            updateLine(item.itemId, {
-                              verified: true,
-                              received: String(item.expectedQty),
-                              issues: [],
-                            })
-                          }}
-                        >
-                          <Icon name="check" size={11} /> Clear Return
-                        </button>
-                        <button
-                          type="button"
-                          className={currentIssue?.categoryCode === "damaged_product" ? "btn danger" : "btn secondary"}
-                          style={{ height: 28, padding: "0 9px", fontSize: 11 }}
-                          onClick={() => {
-                            updateLine(item.itemId, {
-                              verified: true,
-                              received: String(item.expectedQty),
-                              issues: [{ uid: nextUid(), categoryCode: "damaged_product", subIssueId: "", qty: String(item.expectedQty), ticketCode: "", notes: "" }],
-                            })
-                          }}
-                        >
-                          Damaged Product
-                        </button>
-                        <button
-                          type="button"
-                          className={currentIssue?.categoryCode === "wrong_product" ? "btn danger" : "btn secondary"}
-                          style={{ height: 28, padding: "0 9px", fontSize: 11 }}
-                          onClick={() => {
-                            updateLine(item.itemId, {
-                              verified: true,
-                              received: String(item.expectedQty),
-                              issues: [{ uid: nextUid(), categoryCode: "wrong_product", subIssueId: "", qty: String(item.expectedQty), ticketCode: "", notes: "" }],
-                            })
-                          }}
-                        >
-                          Wrong Product
-                        </button>
-                        <button
-                          type="button"
-                          className={currentIssue?.categoryCode === "missing_component" ? "btn danger" : "btn secondary"}
-                          style={{ height: 28, padding: "0 9px", fontSize: 11 }}
-                          onClick={() => {
-                            updateLine(item.itemId, {
-                              verified: true,
-                              received: "0",
-                              issues: [{ uid: nextUid(), categoryCode: "missing_component", subIssueId: "", qty: String(item.expectedQty), ticketCode: "", notes: "" }],
-                            })
-                          }}
-                        >
-                          Missing Component
-                        </button>
-                        <button
-                          type="button"
-                          className={currentIssue?.categoryCode === "other_issue" ? "btn danger" : "btn secondary"}
-                          style={{ height: 28, padding: "0 9px", fontSize: 11 }}
-                          onClick={() => {
-                            updateLine(item.itemId, {
-                              verified: true,
-                              received: String(item.expectedQty),
-                              issues: [{ uid: nextUid(), categoryCode: "other_issue", subIssueId: "", qty: String(item.expectedQty), ticketCode: "", notes: "" }],
-                            })
-                          }}
-                        >
-                          Other Issue
-                        </button>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+                        {orderedCategories(categories).map((category) => {
+                          const isCategoryClear = category.isClear
+                          const isSelected = isCategoryClear
+                            ? isClear
+                            : currentIssue?.categoryCode === category.code
+                          const theme = getCategoryTheme(category.code)
+                          return (
+                            <button
+                              key={category.code}
+                              type="button"
+                              className={`verification-issue-btn verification-issue-${category.code} ${isSelected ? "selected" : ""}`}
+                              style={{
+                                height: 30,
+                                padding: "0 10px",
+                                fontSize: 11,
+                                fontWeight: 700,
+                                borderRadius: 6,
+                                cursor: "pointer",
+                                border: `1.5px solid ${isSelected ? theme.primary : theme.border}`,
+                                background: isSelected ? theme.bgSelected : theme.bgLight,
+                                color: isSelected ? theme.textSelected : theme.textLight,
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: 4,
+                                boxShadow: isSelected ? `0 2px 4px ${theme.primary}33` : "none",
+                                transition: "all 0.15s ease",
+                              }}
+                              onClick={() => {
+                                recordIssueUsage(category.code)
+                                if (isCategoryClear) {
+                                  updateLine(item.itemId, {
+                                    verified: true,
+                                    received: String(item.expectedQty),
+                                    issues: [],
+                                  })
+                                } else if (category.isMissing) {
+                                  updateLine(item.itemId, {
+                                    verified: true,
+                                    received: "0",
+                                    issues: [
+                                      {
+                                        uid: nextUid(),
+                                        categoryCode: category.code,
+                                        subIssueId: "",
+                                        qty: String(item.expectedQty),
+                                        ticketCode: "",
+                                        notes: "",
+                                      },
+                                    ],
+                                  })
+                                } else {
+                                  // Iron Send, Damaged, Wrong, SKU Change, Size Change, Other, etc.
+                                  const receivedQty =
+                                    line.received === "0" ? String(item.expectedQty) : line.received || String(item.expectedQty)
+                                  updateLine(item.itemId, {
+                                    verified: true,
+                                    received: receivedQty,
+                                    issues: [
+                                      {
+                                        uid: nextUid(),
+                                        categoryCode: category.code,
+                                        subIssueId: "",
+                                        qty: String(item.expectedQty),
+                                        ticketCode: "",
+                                        notes: "",
+                                      },
+                                    ],
+                                  })
+                                }
+                              }}
+                              title={category.label}
+                            >
+                              {isCategoryClear && <Icon name="check" size={11} />}
+                              {chipLabel(category)}
+                            </button>
+                          )
+                        })}
                       </div>
                     </div>
 
-                    {hasIssue && (
-                      <div style={{ marginTop: 8, padding: "8px 10px", background: "#fef5ef", borderRadius: 7, fontSize: 11 }}>
-                        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                          <span style={{ fontWeight: 700, color: "#9a4f23" }}>Issue: {currentIssue?.categoryCode.replace(/_/g, " ").toUpperCase()}</span>
-                          {subIssues.filter((s) => s.categoryCode === currentIssue?.categoryCode).length > 0 && (
+                    {hasIssue && currentIssue && (
+                      <div
+                        style={{
+                          marginTop: 8,
+                          padding: "8px 10px",
+                          background: currentTheme?.bgLight ?? "#fef5ef",
+                          border: `1px solid ${currentTheme?.border ?? "#dec6b6"}`,
+                          borderRadius: 7,
+                          fontSize: 11,
+                        }}
+                      >
+                        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                          <span style={{ fontWeight: 700, color: currentTheme?.primary ?? "#9a4f23" }}>
+                            Issue: {chipLabel(categories.find((c) => c.code === currentIssue.categoryCode) ?? { code: currentIssue.categoryCode, label: currentIssue.categoryCode.replace(/_/g, " "), isClear: false, isMissing: false, requiresTicket: false, allowsSubIssue: false, requiresSubIssue: false })}
+                          </span>
+                          {subIssues.filter((s) => s.categoryCode === currentIssue.categoryCode).length > 0 && (
                             <select
-                              value={currentIssue?.subIssueId || ""}
+                              value={currentIssue.subIssueId || ""}
                               onChange={(e) => {
                                 const subId = e.target.value
                                 updateLine(item.itemId, {
@@ -1998,7 +2181,7 @@ export function ScanReturns() {
                             >
                               <option value="">Select sub-issue…</option>
                               {subIssues
-                                .filter((s) => s.categoryCode === currentIssue?.categoryCode)
+                                .filter((s) => s.categoryCode === currentIssue.categoryCode)
                                 .map((s) => (
                                   <option key={s.id} value={String(s.id)}>
                                     {s.label}
@@ -2008,14 +2191,23 @@ export function ScanReturns() {
                           )}
                           <input
                             type="text"
-                            placeholder="Optional issue notes"
-                            value={currentIssue?.notes || ""}
+                            placeholder={currentIssue.categoryCode === "iron_send" ? "Optional iron/pressing note" : "Optional issue notes"}
+                            value={currentIssue.notes || ""}
                             onChange={(e) => {
                               updateLine(item.itemId, {
                                 issues: [{ ...currentIssue, notes: e.target.value }],
                               })
                             }}
-                            style={{ flex: 1, height: 26, padding: "0 7px", fontSize: 11, borderRadius: 5, border: "1px solid #dec6b6" }}
+                            style={{
+                              flex: 1,
+                              minWidth: 160,
+                              height: 26,
+                              padding: "0 7px",
+                              fontSize: 11,
+                              borderRadius: 5,
+                              border: `1px solid ${currentTheme?.border ?? "#dec6b6"}`,
+                              background: "#ffffff",
+                            }}
                           />
                         </div>
                       </div>

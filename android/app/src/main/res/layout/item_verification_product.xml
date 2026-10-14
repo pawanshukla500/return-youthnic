@@ -213,9 +213,14 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:checked="true"
-                    android:text="@string/issue_clear"
-                    app:chipBackgroundColor="@color/verdict_ok_bg"
-                    app:chipStrokeColor="@color/verdict_ok" />
+                    android:text="@string/issue_clear" />
+
+                <com.google.android.material.chip.Chip
+                    android:id="@+id/chipIronSend"
+                    style="@style/Widget.MaterialComponents.Chip.Choice"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/issue_iron_send" />
 
                 <com.google.android.material.chip.Chip
                     android:id="@+id/chipMissing"

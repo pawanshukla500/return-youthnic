@@ -19,15 +19,15 @@ export type MobileReleaseInfo = {
 }
 
 const DEFAULT_RELEASE: MobileReleaseInfo = {
-  versionCode: 10026,
-  versionName: "1.0.26",
+  versionCode: 10027,
+  versionName: "1.0.27",
   minRequiredVersionCode: 10001,
-  sha256: "a8d8100699f55eb75eed5beafdb858e0e7a867b8b5c551fb785d7d9d958f3934",
+  sha256: "pending_ci_build",
   sizeBytes: 3305402,
-  notes: "Youthnic Native Android Return Scanner · Release v1.0.26\n- Fixed in-app update crash on 'Install Now' by adding FileProvider external storage roots and exception handling\n- Amazon Order ID scanning & manual lookup support (hyphenated 408-XXXXXXX-XXXXXXX and numeric 17-digit IDs)\n- 2D Barcode Support: QR Code, Data Matrix, and PDF417 scanning for Amazon return labels and customer slips\n- Launcher icon: Official Youthnic white cursive 'Y' monogram rendered on all device launchers\n- Pre-OMSGuru unmapped SKU warning alerts and CSV workflow support",
-  publishedAt: "2026-10-13T16:37:43Z",
-  downloadUrl: "https://github.com/pawanshukla500/return-youthnic/releases/download/v1.0.26/ReturnScan-v1.0.26.apk",
-  pageUrl: "https://github.com/pawanshukla500/return-youthnic/releases/tag/v1.0.26",
+  notes: "Youthnic Native Android Return Scanner · Release v1.0.27\n- Iron Send issue fully integrated into multi-item/multi-order return verification workflow\n- Category-specific vibrant color chips & buttons (Clear Return, Iron Send, Damaged, Wrong Product, Missing, SKU Change, Size Change, Other)\n- Dynamic frequency-based issue button prioritization: frequently used issues automatically move forward (with Clear Return always first)\n- Synchronized frequency weighting and state persistence across warehouse scanning devices",
+  publishedAt: "2026-10-14T07:30:00Z",
+  downloadUrl: "https://github.com/pawanshukla500/return-youthnic/releases/download/v1.0.27/ReturnScan-v1.0.27.apk",
+  pageUrl: "https://github.com/pawanshukla500/return-youthnic/releases/tag/v1.0.27",
 }
 
 let cachedRelease: MobileReleaseInfo | null = null

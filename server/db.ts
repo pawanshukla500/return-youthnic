@@ -29,6 +29,7 @@ const SCHEMA_FILES = [
   "schema-shopify.sql",
   "schema-payment.sql",
   "schema-unmapped-skus.sql",
+  "schema-return-reasons.sql",
 ] as const
 
 // History tables whose rows must never be destroyed by any code path. Listed here so they cannot silently

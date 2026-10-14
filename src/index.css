@@ -537,9 +537,37 @@ td > small { margin-top: 2px; display: block; color: #949c99; font-size: 8px; }
 .issue-report { display: grid; gap: 8px; margin-top: 8px; }
 .scan-main .issue-report { grid-column: 1 / -1; margin: 0; }
 .issue-chips { display: flex; flex-wrap: wrap; gap: 8px; }
-.issue-chips button { min-height: 36px; padding: 6px 14px; border: 1px solid #d7dfdc; border-radius: 999px; color: #3c4744; background: white; font-size: 13px; font-weight: 600; }
-.issue-chips button[aria-pressed="true"] { color: white; border-color: #1c2430; background: #1c2430; }
-.issue-chips button.clear[aria-pressed="true"] { border-color: var(--green); background: var(--green); }
+.issue-chips button { min-height: 36px; padding: 6px 14px; border: 1.5px solid #d7dfdc; border-radius: 999px; color: #3c4744; background: white; font-size: 13px; font-weight: 700; cursor: pointer; transition: all 0.15s ease; }
+.issue-chips button:hover { filter: brightness(0.96); transform: translateY(-1px); }
+.issue-chips button:active { transform: translateY(0); }
+
+/* Distinct category button colors (unselected / pressed states) */
+.issue-chips button.chip-no_issue { background: #ecfdf5; color: #065f46; border-color: #a7f3d0; }
+.issue-chips button.chip-no_issue[aria-pressed="true"] { background: #059669; color: #ffffff; border-color: #059669; box-shadow: 0 2px 6px rgba(5,150,105,0.3); }
+
+.issue-chips button.chip-iron_send { background: #eff6ff; color: #1d4ed8; border-color: #bfdbfe; }
+.issue-chips button.chip-iron_send[aria-pressed="true"] { background: #2563eb; color: #ffffff; border-color: #2563eb; box-shadow: 0 2px 6px rgba(37,99,235,0.3); }
+
+.issue-chips button.chip-damaged_product { background: #fef2f2; color: #b91c1c; border-color: #fecaca; }
+.issue-chips button.chip-damaged_product[aria-pressed="true"] { background: #dc2626; color: #ffffff; border-color: #dc2626; box-shadow: 0 2px 6px rgba(220,38,38,0.3); }
+
+.issue-chips button.chip-wrong_product { background: #fffbeb; color: #b45309; border-color: #fde68a; }
+.issue-chips button.chip-wrong_product[aria-pressed="true"] { background: #d97706; color: #ffffff; border-color: #d97706; box-shadow: 0 2px 6px rgba(217,119,6,0.3); }
+
+.issue-chips button.chip-missing_component { background: #fff1f2; color: #be123c; border-color: #fecdd3; }
+.issue-chips button.chip-missing_component[aria-pressed="true"] { background: #e11d48; color: #ffffff; border-color: #e11d48; box-shadow: 0 2px 6px rgba(225,29,72,0.3); }
+
+.issue-chips button.chip-sku_change { background: #f5f3ff; color: #6d28d9; border-color: #ddd6fe; }
+.issue-chips button.chip-sku_change[aria-pressed="true"] { background: #7c3aed; color: #ffffff; border-color: #7c3aed; box-shadow: 0 2px 6px rgba(124,58,237,0.3); }
+
+.issue-chips button.chip-size_change { background: #f0fdfa; color: #0f766e; border-color: #99f6e4; }
+.issue-chips button.chip-size_change[aria-pressed="true"] { background: #0d9488; color: #ffffff; border-color: #0d9488; box-shadow: 0 2px 6px rgba(13,148,136,0.3); }
+
+.issue-chips button.chip-other_issue { background: #f8fafc; color: #334155; border-color: #cbd5e1; }
+.issue-chips button.chip-other_issue[aria-pressed="true"] { background: #475569; color: #ffffff; border-color: #475569; box-shadow: 0 2px 6px rgba(71,85,105,0.3); }
+
+.verification-issue-btn:hover { filter: brightness(0.96); transform: translateY(-1px); }
+.verification-issue-btn:active { transform: translateY(0); }
 .issue-sub { display: grid; gap: 6px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: #f7f9f8; }
 .issue-sub > span { color: #7b8582; font-size: 10px; font-weight: 700; letter-spacing: .6px; text-transform: uppercase; }
 .issue-hint, .issue-problems { margin: 0; color: #8a3b1f; font-size: 12px; }

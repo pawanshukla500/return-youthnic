@@ -128,6 +128,7 @@ data class IssueCategory(
     companion object {
         /** The category the server seeds as "no issue" (is_clear). It is never sent as an issue. */
         const val CODE_NO_ISSUE = "no_issue"
+        const val CODE_IRON_SEND = "iron_send"
         const val CODE_MISSING = "missing_component"
         const val CODE_WRONG = "wrong_product"
         const val CODE_DAMAGED = "damaged_product"

@@ -62,6 +62,7 @@
 
     <!-- Issue Categories -->
     <string name="issue_clear">Clear Return</string>
+    <string name="issue_iron_send">Iron Send</string>
     <string name="issue_missing">Missing Component</string>
     <string name="issue_wrong">Wrong Product</string>
     <string name="issue_damaged">Damaged Product</string>
