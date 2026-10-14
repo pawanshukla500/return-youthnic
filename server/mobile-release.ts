@@ -23,7 +23,7 @@ const DEFAULT_RELEASE: MobileReleaseInfo = {
   versionName: "1.0.30",
   minRequiredVersionCode: 10001,
   sha256: "d292b01fcd975715b31416bd2cb9e613968f82243edab236f4d37bc3044fe7f8",
-  sizeBytes": 3306977,
+  sizeBytes: 3306977,
   notes: "Youthnic Native Android Return Scanner · Release v1.0.30\n- Enforced persistent warehouse release keystore: guarantees consistent signature across all builds and eliminates package conflict errors\n- Iron Send issue fully integrated into multi-item/multi-order return verification workflow\n- Category-specific vibrant color chips & buttons (Clear Return, Iron Send, Damaged, Wrong Product, Missing, SKU Change, Size Change, Other)\n- Dynamic frequency-based issue button prioritization: frequently used issues automatically move forward (with Clear Return always first)\n- Synchronized frequency weighting and state persistence across warehouse scanning devices",
   publishedAt: "2026-10-14T09:38:04Z",
   downloadUrl: "https://github.com/pawanshukla500/return-youthnic/releases/download/v1.0.30/ReturnScan-v1.0.30.apk",
