@@ -8,9 +8,14 @@
 //   sent      qty_sent of an open record
 //   received  the sum of its receive events (never more than sent)
 //   pending   sent - received
-//   overdue   pending, when the record is older than the overdue setting (3 days unless Admin changes it)
+//   overdue   pending, past the expected return date of its batch, or (for a line not yet in a batch) older than the
+//             overdue setting (3 days unless Admin changes it)
+//
+// Batches: the Return Team groups pending lines into a numbered batch (IRN-YYMMDD-NNN), downloads the sheet, and writes
+// the batch number on the khaata challan. The outward and inward teams track by batch. See server/schema-iron.sql.
 
 import type pg from "pg"
+import * as XLSX from "xlsx"
 import { accountCondition, allowsAccount, isAdminRole, isInwardRole, type AccountScope } from "./access.js"
 import { extractGarmentSize } from "./return-reasons.js"
 import { ServiceError, type Actor } from "./register-service.js"
@@ -28,18 +33,33 @@ export function ironStateOf(input: {
   sentAt: Date
   now: Date
   overdueAfterDays: number
+  // The expected return date of the line's batch. A line in a batch is overdue after that date instead.
+  dueAt?: Date | null
 }): IronState {
   if (input.status === "cancelled") return "cancelled"
   const pending = Math.max(0, input.qtySent - input.qtyReceived)
   if (pending === 0) return "received"
-  const ageMs = input.now.getTime() - input.sentAt.getTime()
-  if (ageMs > input.overdueAfterDays * 24 * 3600_000) return "overdue"
+  const overdue = input.dueAt
+    ? input.now.getTime() > input.dueAt.getTime()
+    : input.now.getTime() - input.sentAt.getTime() > input.overdueAfterDays * 24 * 3600_000
+  if (overdue) return "overdue"
   return input.qtyReceived > 0 ? "partial" : "pending"
 }
 
 // Only the Inward Team (and an Admin) may record ironed units as received. The Return Team only sends.
 export function canReceiveIron(role: string): boolean {
   return isInwardRole(role) || isAdminRole(role)
+}
+
+// The Return Team (and Supervisors and Admins) make batches. The Inward Team only receives.
+export function canDispatchIron(role: string): boolean {
+  return !isInwardRole(role) && String(role || "").trim() !== ""
+}
+
+// IRN-YYMMDD-NNN, by the IST day the batch was made.
+export function ironBatchNumber(istDay: string, sequence: number): string {
+  const compact = istDay.replace(/-/g, "").slice(2)
+  return `IRN-${compact}-${String(sequence).padStart(3, "0")}`
 }
 
 // Checks one receive entry before it is written. Returns the problem, or null.
@@ -79,19 +99,21 @@ export async function syncIronRecordsForScan(
     [scanId],
   )
   const open = await client.query(
-    `SELECT r.id, r.receipt_scan_item_id, r.qty_sent,
+    `SELECT r.id, r.receipt_scan_item_id, r.qty_sent, r.batch_id,
+            (SELECT b.batch_no FROM iron_batches b WHERE b.id = r.batch_id) AS batch_no,
             COALESCE((SELECT SUM(e.qty) FROM iron_receive_events e WHERE e.iron_send_record_id = r.id), 0)::int AS received
      FROM iron_send_records r
      WHERE r.receipt_scan_id = $1 AND r.status = 'open'
      FOR UPDATE OF r`,
     [scanId],
   )
-  const openByItem = new Map<number, { id: number; qty: number; received: number }>()
+  const openByItem = new Map<number, { id: number; qty: number; received: number; batchNo: string | null }>()
   for (const row of open.rows) {
     openByItem.set(Number(row.receipt_scan_item_id), {
       id: Number(row.id),
       qty: Number(row.qty_sent),
       received: Number(row.received),
+      batchNo: row.batch_id === null ? null : String(row.batch_no),
     })
   }
 
@@ -103,6 +125,12 @@ export async function syncIronRecordsForScan(
     const current = openByItem.get(itemId)
     if (current && current.qty === qty) continue
     if (current) {
+      if (current.batchNo) {
+        throw new ServiceError(
+          409,
+          `This Iron Send has already gone out in batch ${current.batchNo}. Iron Send cannot be changed from the scan bench.`,
+        )
+      }
       if (current.received > 0) {
         throw new ServiceError(
           409,
@@ -173,8 +201,9 @@ export async function setOverdueDays(db: pg.Pool, actor: Actor, days: number): P
 // ---------------------------------------------------------------------------------------------------------------
 
 export type IronFilters = {
-  state?: string // pending | overdue | partial | received | open (pending+partial+overdue) | cancelled | all
+  state?: string // pending | overdue | partial | received | open (pending+partial+overdue) | unbatched | cancelled | all
   marketplaceId?: number | null
+  batchId?: number | null
   search?: string
   dateFrom?: string // YYYY-MM-DD, IST, on the sent date
   dateTo?: string
@@ -201,6 +230,10 @@ export type IronRecordView = {
   ageDays: number
   lastReceivedAt: string | null
   notes: string
+  batchId: number | null
+  batchNo: string | null
+  // When the line is due back: its batch's expected return date. Null until it is in a batch.
+  dueAt: string | null
   receipts: { id: number; qty: number; receivedAt: string; receivedBy: string; notes: string }[]
 }
 
@@ -209,6 +242,8 @@ export type IronSummary = {
   records: { open: number; pending: number; partial: number; overdue: number; received: number }
   units: { sent: number; received: number; pending: number; overdue: number }
   receivedToday: number
+  // Pending lines and units that are not in a batch yet (the Return Team still has to send them out).
+  unbatched: { lines: number; units: number }
 }
 
 const RECORD_SQL = `
@@ -222,6 +257,7 @@ const RECORD_SQL = `
          COALESCE((SELECT pm.image_url FROM product_master pm
                     WHERE pm.listing_sku = i.marketplace_sku AND pm.image_url <> '' LIMIT 1), '') AS image_url,
          COALESCE(sender.name, '') AS sent_by,
+         r.batch_id, b.batch_no, b.expected_return_at,
          COALESCE((SELECT SUM(e.qty) FROM iron_receive_events e WHERE e.iron_send_record_id = r.id), 0)::int AS received,
          (SELECT MAX(e.received_at) FROM iron_receive_events e WHERE e.iron_send_record_id = r.id) AS last_received_at
   FROM iron_send_records r
@@ -229,7 +265,8 @@ const RECORD_SQL = `
   JOIN expected_returns er ON er.id = rs.expected_return_id
   JOIN receipt_scan_items i ON i.id = r.receipt_scan_item_id
   LEFT JOIN marketplaces m ON m.id = COALESCE(r.marketplace_id, er.marketplace_id)
-  LEFT JOIN users sender ON sender.id = r.sent_by`
+  LEFT JOIN users sender ON sender.id = r.sent_by
+  LEFT JOIN iron_batches b ON b.id = r.batch_id`
 
 function ironWhere(scope: AccountScope, filters: IronFilters, params: unknown[]): string {
   const parts = [accountCondition(scope, "COALESCE(r.marketplace_id, er.marketplace_id)", params)]
@@ -239,6 +276,11 @@ function ironWhere(scope: AccountScope, filters: IronFilters, params: unknown[])
     params.push(filters.marketplaceId)
     parts.push(`COALESCE(r.marketplace_id, er.marketplace_id) = $${params.length}`)
   }
+  if (filters.batchId) {
+    params.push(filters.batchId)
+    parts.push(`r.batch_id = $${params.length}`)
+  }
+  if (filters.state === "unbatched") parts.push("r.batch_id IS NULL")
   const search = (filters.search || "").trim()
   if (search) {
     params.push(`%${search.toUpperCase()}%`)
@@ -262,6 +304,7 @@ function ironWhere(scope: AccountScope, filters: IronFilters, params: unknown[])
 
 function toView(row: Record<string, unknown>, now: Date, overdueDays: number): IronRecordView {
   const sentAt = new Date(row.sent_at as string)
+  const dueAt = row.expected_return_at ? new Date(row.expected_return_at as string) : null
   const qtySent = Number(row.qty_sent)
   const qtyReceived = Number(row.received)
   const marketplaceSku = String(row.marketplace_sku || "")
@@ -276,6 +319,7 @@ function toView(row: Record<string, unknown>, now: Date, overdueDays: number): I
       sentAt,
       now,
       overdueAfterDays: overdueDays,
+      dueAt,
     }),
     marketplace: String(row.marketplace || ""),
     marketplaceId: row.marketplace_id === null || row.marketplace_id === undefined ? null : Number(row.marketplace_id),
@@ -294,6 +338,9 @@ function toView(row: Record<string, unknown>, now: Date, overdueDays: number): I
     ageDays: Math.max(0, Math.floor((now.getTime() - sentAt.getTime()) / (24 * 3600_000))),
     lastReceivedAt: row.last_received_at ? new Date(row.last_received_at as string).toISOString() : null,
     notes: String(row.notes || ""),
+    batchId: row.batch_id === null || row.batch_id === undefined ? null : Number(row.batch_id),
+    batchNo: row.batch_no ? String(row.batch_no) : null,
+    dueAt: dueAt ? dueAt.toISOString() : null,
     receipts: [],
   }
 }
@@ -307,11 +354,16 @@ export async function listIronRecords(
   const overdueDays = await getOverdueDays(db)
   const now = new Date()
   const params: unknown[] = []
-  const where = ironWhere(scope, { ...filters, state: filters.state === "cancelled" ? "cancelled" : filters.state === "all" ? "all" : "open-or-done" }, params)
+  const where = ironWhere(
+    scope,
+    { ...filters, state: filters.state === "cancelled" ? "cancelled" : filters.state === "all" ? "all" : filters.state === "unbatched" ? "unbatched" : "open-or-done" },
+    params,
+  )
   const result = await db.query(`${RECORD_SQL} WHERE ${where} ORDER BY r.sent_at ASC, r.id ASC LIMIT 5000`, params)
   let rows = result.rows.map((row) => toView(row, now, overdueDays))
   const state = filters.state || "open"
   if (state === "open") rows = rows.filter((row) => row.state !== "received")
+  else if (state === "unbatched") rows = rows.filter((row) => row.state !== "received" && row.qtyReceived === 0)
   else if (["pending", "partial", "overdue", "received"].includes(state)) rows = rows.filter((row) => row.state === state)
   const summary = await ironSummary(db, scope, filters.marketplaceId ?? null)
   return { rows: rows.slice(0, Math.max(1, Math.min(limit, 2000))), summary }
@@ -325,24 +377,28 @@ export async function ironSummary(db: pg.Pool, scope: AccountScope, marketplaceI
   const daysParam = `$${params.length}`
   const result = await db.query(
     `WITH rec AS (
-       SELECT r.id, r.qty_sent, r.sent_at,
-              COALESCE((SELECT SUM(e.qty) FROM iron_receive_events e WHERE e.iron_send_record_id = r.id), 0)::int AS received
+       SELECT r.id, r.qty_sent, r.sent_at, r.batch_id,
+              COALESCE((SELECT SUM(e.qty) FROM iron_receive_events e WHERE e.iron_send_record_id = r.id), 0)::int AS received,
+              COALESCE(b.expected_return_at, r.sent_at + make_interval(days => ${daysParam})) AS due_at
        FROM iron_send_records r
        JOIN receipt_scans rs ON rs.id = r.receipt_scan_id
        JOIN expected_returns er ON er.id = rs.expected_return_id
        JOIN receipt_scan_items i ON i.id = r.receipt_scan_item_id
+       LEFT JOIN iron_batches b ON b.id = r.batch_id
        WHERE ${where}
      )
      SELECT
        COUNT(*) FILTER (WHERE qty_sent > received)::int AS open_records,
-       COUNT(*) FILTER (WHERE qty_sent > received AND received = 0 AND sent_at >= now() - make_interval(days => ${daysParam}))::int AS pending_records,
-       COUNT(*) FILTER (WHERE qty_sent > received AND received > 0 AND sent_at >= now() - make_interval(days => ${daysParam}))::int AS partial_records,
-       COUNT(*) FILTER (WHERE qty_sent > received AND sent_at < now() - make_interval(days => ${daysParam}))::int AS overdue_records,
+       COUNT(*) FILTER (WHERE qty_sent > received AND received = 0 AND due_at >= now())::int AS pending_records,
+       COUNT(*) FILTER (WHERE qty_sent > received AND received > 0 AND due_at >= now())::int AS partial_records,
+       COUNT(*) FILTER (WHERE qty_sent > received AND due_at < now())::int AS overdue_records,
+       COUNT(*) FILTER (WHERE qty_sent > received AND received = 0 AND batch_id IS NULL)::int AS unbatched_records,
+       COALESCE(SUM(qty_sent) FILTER (WHERE qty_sent > received AND received = 0 AND batch_id IS NULL), 0)::int AS unbatched_units,
        COUNT(*) FILTER (WHERE qty_sent <= received)::int AS received_records,
        COALESCE(SUM(qty_sent), 0)::int AS units_sent,
        COALESCE(SUM(received), 0)::int AS units_received,
        COALESCE(SUM(GREATEST(qty_sent - received, 0)), 0)::int AS units_pending,
-       COALESCE(SUM(GREATEST(qty_sent - received, 0)) FILTER (WHERE sent_at < now() - make_interval(days => ${daysParam})), 0)::int AS units_overdue,
+       COALESCE(SUM(GREATEST(qty_sent - received, 0)) FILTER (WHERE due_at < now()), 0)::int AS units_overdue,
        COALESCE((SELECT SUM(e.qty) FROM iron_receive_events e
                  WHERE e.iron_send_record_id IN (SELECT id FROM rec)
                    AND (e.received_at AT TIME ZONE 'Asia/Kolkata')::date = (now() AT TIME ZONE 'Asia/Kolkata')::date), 0)::int AS received_today
@@ -366,6 +422,7 @@ export async function ironSummary(db: pg.Pool, scope: AccountScope, marketplaceI
       overdue: Number(row.units_overdue || 0),
     },
     receivedToday: Number(row.received_today || 0),
+    unbatched: { lines: Number(row.unbatched_records || 0), units: Number(row.unbatched_units || 0) },
   }
 }
 
@@ -492,4 +549,358 @@ export async function ironRecordAccount(db: pg.Pool, id: number): Promise<number
     )
   ).rows[0]
   return row && row.marketplace_id !== null ? Number(row.marketplace_id) : null
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Batches: the Return Team sends pending lines out together, with one batch number on the khaata challan
+// ---------------------------------------------------------------------------------------------------------------
+
+export type IronBatchState = "open" | "partial" | "overdue" | "received"
+
+export type IronBatchView = {
+  id: number
+  batchNo: string
+  khaataName: string
+  challanNo: string
+  expectedDays: number
+  expectedReturnAt: string
+  notes: string
+  createdBy: string
+  createdAt: string
+  state: IronBatchState
+  lines: number
+  qtySent: number
+  qtyReceived: number
+  qtyPending: number
+  lastReceivedAt: string | null
+}
+
+export const MAX_BATCH_TEXT = 120
+
+// The state of a batch from its totals. Pure.
+export function ironBatchStateOf(input: { qtySent: number; qtyReceived: number; expectedReturnAt: Date; now: Date }): IronBatchState {
+  const pending = Math.max(0, input.qtySent - input.qtyReceived)
+  if (input.qtySent > 0 && pending === 0) return "received"
+  if (input.now.getTime() > input.expectedReturnAt.getTime()) return "overdue"
+  return input.qtyReceived > 0 ? "partial" : "open"
+}
+
+const BATCH_SQL = `
+  SELECT b.id, b.batch_no, b.khaata_name, b.challan_no, b.expected_days, b.expected_return_at, b.notes, b.created_at,
+         COALESCE(u.name, '') AS created_by,
+         COUNT(r.id)::int AS lines,
+         COALESCE(SUM(r.qty_sent), 0)::int AS qty_sent,
+         COALESCE(SUM((SELECT COALESCE(SUM(e.qty), 0) FROM iron_receive_events e WHERE e.iron_send_record_id = r.id)), 0)::int AS qty_received,
+         MAX((SELECT MAX(e.received_at) FROM iron_receive_events e WHERE e.iron_send_record_id = r.id)) AS last_received_at
+  FROM iron_batches b
+  LEFT JOIN users u ON u.id = b.created_by
+  JOIN iron_send_records r ON r.batch_id = b.id AND r.status = 'open'
+  JOIN receipt_scans rs ON rs.id = r.receipt_scan_id
+  JOIN expected_returns er ON er.id = rs.expected_return_id`
+
+function toBatchView(row: Record<string, unknown>, now: Date): IronBatchView {
+  const expectedReturnAt = new Date(row.expected_return_at as string)
+  const qtySent = Number(row.qty_sent || 0)
+  const qtyReceived = Number(row.qty_received || 0)
+  return {
+    id: Number(row.id),
+    batchNo: String(row.batch_no),
+    khaataName: String(row.khaata_name || ""),
+    challanNo: String(row.challan_no || ""),
+    expectedDays: Number(row.expected_days),
+    expectedReturnAt: expectedReturnAt.toISOString(),
+    notes: String(row.notes || ""),
+    createdBy: String(row.created_by || ""),
+    createdAt: new Date(row.created_at as string).toISOString(),
+    state: ironBatchStateOf({ qtySent, qtyReceived, expectedReturnAt, now }),
+    lines: Number(row.lines || 0),
+    qtySent,
+    qtyReceived,
+    qtyPending: Math.max(0, qtySent - qtyReceived),
+    lastReceivedAt: row.last_received_at ? new Date(row.last_received_at as string).toISOString() : null,
+  }
+}
+
+// Batches with at least one line the user may see. state: open (not fully received) | received | overdue | partial | all.
+export async function listIronBatches(
+  db: pg.Pool,
+  scope: AccountScope,
+  filters: { state?: string; search?: string } = {},
+): Promise<IronBatchView[]> {
+  const params: unknown[] = []
+  const parts = [accountCondition(scope, "COALESCE(r.marketplace_id, er.marketplace_id)", params)]
+  const search = (filters.search || "").trim()
+  if (search) {
+    params.push(`%${search.toUpperCase()}%`)
+    const p = `$${params.length}`
+    parts.push(`(UPPER(b.batch_no) LIKE ${p} OR UPPER(b.khaata_name) LIKE ${p} OR UPPER(b.challan_no) LIKE ${p})`)
+  }
+  const result = await db.query(
+    `${BATCH_SQL} WHERE ${parts.join(" AND ")}
+     GROUP BY b.id, u.name
+     ORDER BY b.created_at DESC
+     LIMIT 500`,
+    params,
+  )
+  const now = new Date()
+  const all = result.rows.map((row) => toBatchView(row, now))
+  const state = filters.state || "open"
+  if (state === "all") return all
+  if (state === "open") return all.filter((batch) => batch.state !== "received")
+  return all.filter((batch) => batch.state === state)
+}
+
+export async function getIronBatch(
+  db: pg.Pool,
+  scope: AccountScope,
+  id: number,
+): Promise<{ batch: IronBatchView; rows: IronRecordView[] }> {
+  const params: unknown[] = [id]
+  const scopeSql = accountCondition(scope, "COALESCE(r.marketplace_id, er.marketplace_id)", params)
+  const result = await db.query(`${BATCH_SQL} WHERE b.id = $1 AND ${scopeSql} GROUP BY b.id, u.name`, params)
+  if (!result.rows[0]) throw new ServiceError(404, "Iron batch not found")
+  const { rows } = await listIronRecords(db, scope, { state: "all", batchId: id }, 2000)
+  return { batch: toBatchView(result.rows[0], new Date()), rows: rows.filter((row) => row.state !== "cancelled") }
+}
+
+function cleanText(value: unknown, label: string, max = MAX_BATCH_TEXT): string {
+  const text = String(value ?? "").trim()
+  if (text.length > max) throw new ServiceError(400, `${label} must be ${max} characters or fewer.`)
+  return text
+}
+
+// Makes a batch from pending lines that are not in a batch and have nothing received yet. With no record ids, every
+// such line the user may see goes in. The batch number is made under a lock, so two benches never get the same one.
+export async function createIronBatch(
+  db: pg.Pool,
+  actor: Actor & { role: string },
+  scope: AccountScope,
+  input: {
+    recordIds: number[] | null
+    khaataName: string
+    challanNo: string
+    expectedDays: number
+    notes: string
+    clientKey: string | null
+  },
+): Promise<{ batch: IronBatchView; replayed: boolean }> {
+  if (!canDispatchIron(actor.role)) {
+    throw new ServiceError(403, "The Return Team makes Iron Send batches. The Inward Team records what comes back.")
+  }
+  const khaataName = cleanText(input.khaataName, "Khaata name")
+  if (!khaataName) throw new ServiceError(400, "Enter the khaata (ironing unit) the batch goes to.")
+  const challanNo = cleanText(input.challanNo, "Challan number")
+  const notes = cleanText(input.notes, "Notes", MAX_IRON_NOTES)
+  const expectedDays = Number(input.expectedDays)
+  if (!Number.isInteger(expectedDays) || expectedDays < 1 || expectedDays > 30) {
+    throw new ServiceError(400, "Expected back in must be a whole number of days from 1 to 30.")
+  }
+  const clientKey = input.clientKey && /^[A-Za-z0-9_.:-]{8,120}$/.test(input.clientKey) ? input.clientKey : null
+  if (clientKey) {
+    const replay = (await db.query("SELECT id FROM iron_batches WHERE client_key = $1", [clientKey])).rows[0]
+    if (replay) return { batch: (await getIronBatch(db, scope, Number(replay.id))).batch, replayed: true }
+  }
+
+  const client = await db.connect()
+  let open = false
+  try {
+    await client.query("BEGIN")
+    open = true
+    // One batch number at a time, across every bench.
+    await client.query("SELECT pg_advisory_xact_lock(hashtext('iron_batches.batch_no'))")
+    const params: unknown[] = []
+    const scopeSql = accountCondition(scope, "COALESCE(r.marketplace_id, er.marketplace_id)", params)
+    let idSql = ""
+    const wanted = input.recordIds && input.recordIds.length
+      ? [...new Set(input.recordIds.map(Number))].filter((n) => Number.isInteger(n) && n > 0)
+      : null
+    if (wanted) {
+      if (!wanted.length) throw new ServiceError(400, "Choose the Iron Send lines for this batch.")
+      params.push(wanted)
+      idSql = `AND r.id = ANY($${params.length}::integer[])`
+    }
+    const eligible = await client.query(
+      `SELECT r.id
+       FROM iron_send_records r
+       JOIN receipt_scans rs ON rs.id = r.receipt_scan_id
+       JOIN expected_returns er ON er.id = rs.expected_return_id
+       WHERE r.status = 'open' AND r.batch_id IS NULL ${idSql} AND ${scopeSql}
+         AND NOT EXISTS (SELECT 1 FROM iron_receive_events e WHERE e.iron_send_record_id = r.id)
+       ORDER BY r.sent_at, r.id
+       FOR UPDATE OF r`,
+      params,
+    )
+    const ids = eligible.rows.map((row) => Number(row.id))
+    if (wanted && ids.length !== wanted.length) {
+      throw new ServiceError(409, "Some chosen lines are already in a batch or were received. Refresh and choose again.")
+    }
+    if (!ids.length) throw new ServiceError(409, "There are no pending Iron Send lines to put in a batch.")
+
+    const istToday = String(
+      (await client.query("SELECT to_char((now() AT TIME ZONE 'Asia/Kolkata')::date, 'YYYY-MM-DD') AS d")).rows[0].d,
+    )
+    const sequence = Number(
+      (
+        await client.query(
+          "SELECT COUNT(*)::int + 1 AS n FROM iron_batches WHERE (created_at AT TIME ZONE 'Asia/Kolkata')::date = $1::date",
+          [istToday],
+        )
+      ).rows[0].n,
+    )
+    const batchNo = ironBatchNumber(istToday, sequence)
+    const inserted = await client.query(
+      `INSERT INTO iron_batches (batch_no, khaata_name, challan_no, expected_days, expected_return_at, notes, created_by, client_key)
+       VALUES ($1, $2, $3, $4::int, now() + make_interval(days => $4::int), $5, $6, $7)
+       RETURNING id`,
+      [batchNo, khaataName, challanNo, expectedDays, notes, actor.id, clientKey],
+    )
+    const batchId = Number(inserted.rows[0].id)
+    await client.query("UPDATE iron_send_records SET batch_id = $1 WHERE id = ANY($2::integer[])", [batchId, ids])
+    await client.query(
+      `INSERT INTO register_audit_log (actor_user_id, action, entity_type, entity_id, details)
+       VALUES ($1, 'iron.batch_create', 'iron_batch', $2, $3::jsonb)`,
+      [actor.id, String(batchId), JSON.stringify({ batchNo, lines: ids.length, khaataName, challanNo, expectedDays })],
+    )
+    await client.query("COMMIT")
+    open = false
+    return { batch: (await getIronBatch(db, scope, batchId)).batch, replayed: false }
+  } catch (error) {
+    if (open) await client.query("ROLLBACK")
+    const pgError = error as { code?: string; constraint?: string }
+    if (pgError.code === "23505" && pgError.constraint === "iron_batches_client_key_uidx" && clientKey) {
+      const replay = (await db.query("SELECT id FROM iron_batches WHERE client_key = $1", [clientKey])).rows[0]
+      if (replay) return { batch: (await getIronBatch(db, scope, Number(replay.id))).batch, replayed: true }
+    }
+    throw error
+  } finally {
+    client.release()
+  }
+}
+
+// The challan number often comes after the batch is made. Khaata, challan and notes can be corrected; every change
+// is audited with the values it replaced.
+export async function updateIronBatch(
+  db: pg.Pool,
+  actor: Actor & { role: string },
+  scope: AccountScope,
+  id: number,
+  input: { khaataName?: string; challanNo?: string; notes?: string },
+): Promise<IronBatchView> {
+  if (!canDispatchIron(actor.role)) throw new ServiceError(403, "Only the Return Team can change a batch.")
+  const current = await getIronBatch(db, scope, id)
+  const next = {
+    khaataName: input.khaataName === undefined ? current.batch.khaataName : cleanText(input.khaataName, "Khaata name"),
+    challanNo: input.challanNo === undefined ? current.batch.challanNo : cleanText(input.challanNo, "Challan number"),
+    notes: input.notes === undefined ? current.batch.notes : cleanText(input.notes, "Notes", MAX_IRON_NOTES),
+  }
+  if (!next.khaataName) throw new ServiceError(400, "Enter the khaata (ironing unit) the batch goes to.")
+  await db.query("UPDATE iron_batches SET khaata_name = $2, challan_no = $3, notes = $4, updated_at = now() WHERE id = $1", [
+    id,
+    next.khaataName,
+    next.challanNo,
+    next.notes,
+  ])
+  await db.query(
+    `INSERT INTO register_audit_log (actor_user_id, action, entity_type, entity_id, details)
+     VALUES ($1, 'iron.batch_update', 'iron_batch', $2, $3::jsonb)`,
+    [
+      actor.id,
+      String(id),
+      JSON.stringify({
+        from: { khaataName: current.batch.khaataName, challanNo: current.batch.challanNo, notes: current.batch.notes },
+        to: next,
+      }),
+    ],
+  )
+  return (await getIronBatch(db, scope, id)).batch
+}
+
+// The Inward Team records a whole batch as received back: every pending unit of every line, in one step. It is still
+// a manual action, and it writes one receive entry per line, like receiving the lines one by one.
+export async function receiveIronBatch(
+  db: pg.Pool,
+  actor: Actor & { role: string },
+  scope: AccountScope,
+  id: number,
+  input: { notes: string; clientKey: string | null },
+): Promise<{ batch: IronBatchView; linesReceived: number; unitsReceived: number }> {
+  if (!canReceiveIron(actor.role)) throw new ServiceError(403, "Only the Inward Team can record ironed units as received.")
+  const { batch, rows } = await getIronBatch(db, scope, id)
+  const keyBase = input.clientKey && /^[A-Za-z0-9_.:-]{8,100}$/.test(input.clientKey) ? input.clientKey : null
+  let linesReceived = 0
+  let unitsReceived = 0
+  for (const row of rows) {
+    if (row.qtyPending <= 0) continue
+    const result = await receiveIron(db, actor, scope, {
+      recordId: row.id,
+      qty: row.qtyPending,
+      notes: (input.notes || `Batch ${batch.batchNo} received`).slice(0, MAX_IRON_NOTES),
+      clientKey: keyBase ? `${keyBase}-${row.id}` : null,
+    })
+    if (!result.replayed) {
+      linesReceived += 1
+      unitsReceived += row.qtyPending
+    }
+  }
+  return { batch: (await getIronBatch(db, scope, id)).batch, linesReceived, unitsReceived }
+}
+
+const IST_DATE_TIME = new Intl.DateTimeFormat("en-IN", {
+  day: "2-digit",
+  month: "short",
+  year: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+  hour12: true,
+  timeZone: "Asia/Kolkata",
+})
+
+// The batch sheet that goes with the khaata challan: a header block, then one row per line, then the total.
+export function ironBatchSheetRows(batch: IronBatchView, rows: IronRecordView[]): (string | number)[][] {
+  const out: (string | number)[][] = [
+    ["Youthnic · Iron Send batch"],
+    ["Batch No", batch.batchNo],
+    ["Khaata (ironing unit)", batch.khaataName],
+    ["Challan No", batch.challanNo || "(write the challan number here)"],
+    ["Sent on (IST)", IST_DATE_TIME.format(new Date(batch.createdAt))],
+    ["Expected back by (IST)", IST_DATE_TIME.format(new Date(batch.expectedReturnAt))],
+    ["Made by", batch.createdBy],
+    ["Notes", batch.notes],
+    [],
+    ["#", "Product SKU", "Listing SKU", "Size", "Product", "Marketplace", "AWB", "Order", "Qty sent", "Qty received", "Pending"],
+  ]
+  rows.forEach((row, index) => {
+    out.push([
+      index + 1,
+      row.productSku,
+      row.marketplaceSku,
+      row.size,
+      row.productName,
+      row.marketplace,
+      row.trackingId,
+      row.orderId,
+      row.qtySent,
+      row.qtyReceived,
+      row.qtyPending,
+    ])
+  })
+  out.push(["", "Total", "", "", "", "", "", "", batch.qtySent, batch.qtyReceived, batch.qtyPending])
+  return out
+}
+
+export function ironBatchXlsx(batch: IronBatchView, rows: IronRecordView[]): Buffer {
+  const sheet = XLSX.utils.aoa_to_sheet(ironBatchSheetRows(batch, rows))
+  sheet["!cols"] = [{ wch: 22 }, { wch: 30 }, { wch: 30 }, { wch: 8 }, { wch: 34 }, { wch: 12 }, { wch: 20 }, { wch: 20 }, { wch: 9 }, { wch: 12 }, { wch: 9 }]
+  const book = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(book, sheet, batch.batchNo.slice(0, 31))
+  return XLSX.write(book, { type: "buffer", bookType: "xlsx" }) as Buffer
+}
+
+export function ironBatchCsv(batch: IronBatchView, rows: IronRecordView[]): string {
+  const cell = (value: unknown) => {
+    const text = String(value ?? "")
+    const safe = /^[=+\-@\t\r]/.test(text) ? `'${text}` : text
+    return `"${safe.replace(/"/g, '""')}"`
+  }
+  return ironBatchSheetRows(batch, rows).map((row) => row.map(cell).join(",")).join("\n") + "\n"
 }

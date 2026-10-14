@@ -34,6 +34,14 @@ A bench correction that would change an Iron Send that the Inward Team has alrea
 2. Inward Team: open **Iron tracking**, find the line (AWB, order or SKU), tap **Receive**, enter the units that came back. Part quantities are allowed; the rest stays pending.
 3. Overdue lines are red. The weekly email lists pending and overdue units.
 
+## Batches (khaata challan)
+
+1. Return Team: Iron tracking > **Create batch**. Every pending line not yet in a batch is ticked; untick what is not going now. Enter the khaata, the challan number if you have it, and expected back in (2-7 days).
+2. Write the batch number (for example `IRN-261014-004`) on the khaata challan. **Download Excel** gives the sheet to send with the goods. The challan number can be added later (Batches > Open > Add).
+3. Batches view: Out with khaata, Overdue (past the batch's own date), Part received, Received.
+4. Inward Team: open the batch, **Receive** a line (part quantities allowed) or **Receive whole batch**.
+5. A line that has gone out in a batch cannot be changed from the scan bench.
+
 ## Creating an Inward user
 
 Admin > Team members > Add user, role **Inward Team**, with the accounts the team works on (or all accounts).

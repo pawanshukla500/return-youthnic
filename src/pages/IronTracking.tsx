@@ -1,19 +1,22 @@
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react"
-import { canReceiveIron, isAdminUser } from "../access"
+import { canDispatchIron, canReceiveIron, isAdminUser } from "../access"
 import { ApiError, api } from "../api"
 import { useLiveChanges } from "../live"
 import type { AccountOption, IronRecord, IronState, IronSummary } from "../types"
+import { IronBatches, CreateBatchDialog } from "./IronBatches"
 import { Icon, MarketplaceBadge, Modal } from "../ui"
 import { useWorkspace } from "../workspace"
 
 // Iron Send tracking. The Return Team taps "Iron Send" at the scan bench; each scanned line sent for ironing appears
 // here. The Inward Team records what came back, by hand, when the ironed units return (about 2-3 days). Nothing on this
 // page or on the server marks a unit received on its own. Iron Send is never a return issue and is never sent to OMSGuru.
+// The Return Team groups pending lines into numbered batches for the khaata challan (src/pages/IronBatches.tsx).
 
-type StateFilter = "open" | "pending" | "overdue" | "partial" | "received" | "cancelled" | "all"
+type StateFilter = "open" | "unbatched" | "pending" | "overdue" | "partial" | "received" | "cancelled" | "all"
 
 const STATE_TABS: { id: StateFilter; label: string }[] = [
   { id: "open", label: "All open" },
+  { id: "unbatched", label: "Not in a batch" },
   { id: "pending", label: "Pending" },
   { id: "overdue", label: "Overdue" },
   { id: "partial", label: "Part received" },
@@ -38,16 +41,16 @@ const IST_DATE_TIME = new Intl.DateTimeFormat("en-IN", {
   timeZone: "Asia/Kolkata",
 })
 
-function istDateTime(iso: string | null): string {
+export function istDateTime(iso: string | null): string {
   if (!iso) return "—"
   return IST_DATE_TIME.format(new Date(iso))
 }
 
-function imageSrc(url: string): string {
+export function imageSrc(url: string): string {
   return /^https?:\/\//i.test(url) ? `/api/catalog-image?url=${encodeURIComponent(url)}` : ""
 }
 
-function newKey(): string {
+export function newKey(): string {
   const random = Math.random().toString(36).slice(2, 10)
   return `iron-${Date.now().toString(36)}-${random}`
 }
@@ -55,6 +58,11 @@ function newKey(): string {
 export function IronTracking() {
   const { user } = useWorkspace()
   const mayReceive = canReceiveIron(user)
+  const mayDispatch = canDispatchIron(user)
+  const [view, setView] = useState<"lines" | "batches">(() =>
+    new URLSearchParams(window.location.search).get("view") === "batches" ? "batches" : "lines",
+  )
+  const [creating, setCreating] = useState(false)
   const [state, setState] = useState<StateFilter>("open")
   const [accountId, setAccountId] = useState("")
   const [search, setSearch] = useState("")
@@ -107,7 +115,16 @@ export function IronTracking() {
   // Another screen or phone saved a scan or received units: reload quietly, keeping the filters.
   useLiveChanges(() => void load(true))
 
+  const changeView = (next: "lines" | "batches") => {
+    setView(next)
+    const url = new URL(window.location.href)
+    if (next === "batches") url.searchParams.set("view", "batches")
+    else url.searchParams.delete("view")
+    window.history.replaceState(null, "", url.toString())
+  }
+
   const units = summary?.units
+  const unbatched = summary?.unbatched
   return (
     <div className="page-content iron-page">
       <div className="iron-explainer">
@@ -121,6 +138,43 @@ export function IronTracking() {
         </div>
       </div>
 
+      <div className="iron-batch-bar">
+        <div className="iron-view-switch" role="tablist" aria-label="View">
+          <button type="button" role="tab" aria-selected={view === "lines"} className={view === "lines" ? "active" : ""} onClick={() => changeView("lines")}>
+            Lines
+          </button>
+          <button type="button" role="tab" aria-selected={view === "batches"} className={view === "batches" ? "active" : ""} onClick={() => changeView("batches")}>
+            Batches
+          </button>
+        </div>
+        <div className="iron-batch-callout">
+          <span>
+            <strong>{unbatched ? unbatched.lines : "—"}</strong> line{unbatched?.lines === 1 ? "" : "s"} ·{" "}
+            <strong>{unbatched ? unbatched.units : "—"}</strong> unit{unbatched?.units === 1 ? "" : "s"} not in a batch yet
+          </span>
+          <button
+            type="button"
+            className="btn primary"
+            disabled={!mayDispatch || !unbatched?.lines}
+            title={
+              !mayDispatch
+                ? "The Return Team makes batches. The Inward Team records what comes back."
+                : !unbatched?.lines
+                  ? "Every pending Iron Send line is already in a batch."
+                  : "Group the pending lines into a numbered batch for the khaata challan"
+            }
+            onClick={() => setCreating(true)}
+          >
+            <Icon name="iron" size={16} /> Create batch
+          </button>
+        </div>
+      </div>
+
+      {view === "batches" ? (
+        <IronBatches mayReceive={mayReceive} mayDispatch={mayDispatch} onChanged={() => void load(true)} />
+      ) : (
+      <>
+
       <div className="iron-stats">
         <button type="button" className={`iron-stat tone-pending ${state === "pending" ? "active" : ""}`} onClick={() => setState("pending")}>
           <span>Pending with ironing</span>
@@ -130,7 +184,7 @@ export function IronTracking() {
         <button type="button" className={`iron-stat tone-overdue ${state === "overdue" ? "active" : ""}`} onClick={() => setState("overdue")}>
           <span>Overdue</span>
           <strong>{units ? units.overdue.toLocaleString("en-IN") : "—"}</strong>
-          <small>units · {summary?.records.overdue ?? 0} lines older than {summary?.overdueAfterDays ?? 3} days</small>
+          <small>units · {summary?.records.overdue ?? 0} lines past their batch date (or {summary?.overdueAfterDays ?? 3} days if not batched)</small>
         </button>
         <button type="button" className={`iron-stat tone-received ${state === "received" ? "active" : ""}`} onClick={() => setState("received")}>
           <span>Received back</span>
@@ -230,6 +284,14 @@ export function IronTracking() {
                     <span>AWB {row.trackingId || "—"}</span>
                     <span>Order {row.orderId || "—"}</span>
                     {row.productSku && row.marketplaceSku && row.productSku !== row.marketplaceSku && <span>Listing {row.marketplaceSku}</span>}
+                    {row.batchNo ? (
+                      <span className="iron-batch-chip" title="Batch number on the khaata challan">
+                        {row.batchNo}
+                      </span>
+                    ) : (
+                      row.state !== "received" && row.state !== "cancelled" && <span className="iron-batch-chip none">Not in a batch</span>
+                    )}
+                    {row.dueAt && row.state !== "received" && row.state !== "cancelled" && <span>Due back {istDateTime(row.dueAt)}</span>}
                   </div>
                   <div className="iron-meta subtle">
                     <span>
@@ -275,7 +337,21 @@ export function IronTracking() {
           </div>
         )}
       </div>
+      </>
+      )}
 
+      {creating && (
+        <CreateBatchDialog
+          onClose={() => setCreating(false)}
+          onCreated={() => {
+            void load(true)
+          }}
+          onOpenBatches={() => {
+            setCreating(false)
+            changeView("batches")
+          }}
+        />
+      )}
       {receiving && (
         <ReceiveDialog
           record={receiving}
@@ -303,7 +379,7 @@ export function IronTracking() {
   )
 }
 
-function ReceiveDialog({
+export function ReceiveDialog({
   record,
   mayReceive,
   onClose,
@@ -471,7 +547,7 @@ function OverdueSettings({ current, onClose, onSaved }: { current: number; onClo
         <div className="iron-dialog-head">
           <div>
             <small>Admin setting</small>
-            <h2>When is Iron Send overdue?</h2>
+            <h2 className="plain">When is Iron Send overdue?</h2>
             <p>Ironed units usually come back in 2-3 days. Lines still pending after this many days are shown as overdue.</p>
           </div>
         </div>

@@ -3,7 +3,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { buildInsights, normalizeFilters, pct, sizeOfLine, sizeRank } from "../analytics.js"
-import { canReceiveIron, ironStateOf, receiveProblem } from "../iron.js"
+import { canDispatchIron, canReceiveIron, ironBatchNumber, ironBatchStateOf, ironStateOf, receiveProblem } from "../iron.js"
 import { changeVisibleTo } from "../live.js"
 import { countsAsReturnIssue, scanStatusFor } from "../register-rules.js"
 
@@ -92,4 +92,22 @@ test("a live change reaches only the users whose accounts include it", () => {
   assert.equal(changeVisibleTo({ all: false, marketplaceIds: [3] }, { marketplaceId: 3 }), true)
   assert.equal(changeVisibleTo({ all: false, marketplaceIds: [2] }, { marketplaceId: 3 }), false)
   assert.equal(changeVisibleTo({ all: false, marketplaceIds: [] }, { marketplaceId: null }), true, "a setting change has no account")
+})
+
+test("Iron batches: numbered by IST day, overdue after their own date, made by the Return Team only", () => {
+  assert.equal(ironBatchNumber("2026-10-14", 1), "IRN-261014-001")
+  assert.equal(ironBatchNumber("2026-10-14", 27), "IRN-261014-027")
+  const due = new Date(now.getTime() + 2 * 24 * 3600_000)
+  assert.equal(ironBatchStateOf({ qtySent: 5, qtyReceived: 0, expectedReturnAt: due, now }), "open")
+  assert.equal(ironBatchStateOf({ qtySent: 5, qtyReceived: 2, expectedReturnAt: due, now }), "partial")
+  assert.equal(ironBatchStateOf({ qtySent: 5, qtyReceived: 2, expectedReturnAt: daysAgo(1), now }), "overdue")
+  assert.equal(ironBatchStateOf({ qtySent: 5, qtyReceived: 5, expectedReturnAt: daysAgo(1), now }), "received")
+  // A line in a 5-day batch is not overdue on day 4, even though the general setting is 3 days.
+  const base = { status: "open" as const, qtySent: 1, qtyReceived: 0, sentAt: daysAgo(4), now, overdueAfterDays: 3 }
+  assert.equal(ironStateOf({ ...base, dueAt: new Date(now.getTime() + 24 * 3600_000) }), "pending")
+  assert.equal(ironStateOf(base), "overdue")
+  assert.equal(canDispatchIron("Scanner"), true)
+  assert.equal(canDispatchIron("Supervisor"), true)
+  assert.equal(canDispatchIron("Admin"), true)
+  assert.equal(canDispatchIron("Inward"), false, "the Inward Team receives; it does not make batches")
 })
