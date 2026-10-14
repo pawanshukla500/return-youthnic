@@ -19,15 +19,15 @@ export type MobileReleaseInfo = {
 }
 
 const DEFAULT_RELEASE: MobileReleaseInfo = {
-  versionCode: 10028,
-  versionName: "1.0.28",
+  versionCode: 10030,
+  versionName: "1.0.30",
   minRequiredVersionCode: 10001,
-  sha256: "188b000d2d747e9e01de1cd4b1982492b074d35df2f065b090aaaa190f9e8a4a",
-  sizeBytes: 3306898,
-  notes: "Youthnic Native Android Return Scanner · Release v1.0.28\n- Iron Send issue fully integrated into multi-item/multi-order return verification workflow\n- Category-specific vibrant color chips & buttons (Clear Return, Iron Send, Damaged, Wrong Product, Missing, SKU Change, Size Change, Other)\n- Dynamic frequency-based issue button prioritization: frequently used issues automatically move forward (with Clear Return always first)\n- Synchronized frequency weighting and state persistence across warehouse scanning devices",
-  publishedAt: "2026-10-14T08:03:38Z",
-  downloadUrl: "https://github.com/pawanshukla500/return-youthnic/releases/download/v1.0.28/ReturnScan-v1.0.28.apk",
-  pageUrl: "https://github.com/pawanshukla500/return-youthnic/releases/tag/v1.0.28",
+  sha256: "d292b01fcd975715b31416bd2cb9e613968f82243edab236f4d37bc3044fe7f8",
+  sizeBytes": 3306977,
+  notes: "Youthnic Native Android Return Scanner · Release v1.0.30\n- Enforced persistent warehouse release keystore: guarantees consistent signature across all builds and eliminates package conflict errors\n- Iron Send issue fully integrated into multi-item/multi-order return verification workflow\n- Category-specific vibrant color chips & buttons (Clear Return, Iron Send, Damaged, Wrong Product, Missing, SKU Change, Size Change, Other)\n- Dynamic frequency-based issue button prioritization: frequently used issues automatically move forward (with Clear Return always first)\n- Synchronized frequency weighting and state persistence across warehouse scanning devices",
+  publishedAt: "2026-10-14T09:38:04Z",
+  downloadUrl: "https://github.com/pawanshukla500/return-youthnic/releases/download/v1.0.30/ReturnScan-v1.0.30.apk",
+  pageUrl: "https://github.com/pawanshukla500/return-youthnic/releases/tag/v1.0.30",
 }
 
 let cachedRelease: MobileReleaseInfo | null = null
