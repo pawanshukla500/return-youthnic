@@ -11,6 +11,9 @@
 // - Configurable schedules and authorized Admin/Supervisor recipient list in Admin settings.
 
 import type pg from "pg"
+import { ALL_ACCOUNTS } from "./access.js"
+import { loadAnalytics } from "./analytics.js"
+import { ironSummary } from "./iron.js"
 
 export const SENDER_EMAIL = process.env.RESEND_FROM_EMAIL?.trim() || "return.scan@youthnic.shop"
 
@@ -111,6 +114,20 @@ export type WeeklyReportData = {
   topIssues: IssueCategoryStat[]
   managementSummary: string
   warnings: string[]
+  // Insights from server/analytics.ts (same figures as the Reports screen). Empty when they could not be computed.
+  insights?: string[]
+  topSkus?: { sku: string; size: string; units: number; issueUnits: number; topReason: string }[]
+  sizes?: { size: string; units: number; sharePct: number; issueUnits: number }[]
+  topReasons?: { reason: string; units: number }[]
+  iron?: WeeklyIronStat | null
+}
+
+export type WeeklyIronStat = {
+  sentThisWeek: number
+  receivedThisWeek: number
+  pending: number
+  overdue: number
+  overdueAfterDays: number
 }
 
 // Convert Date to IST string representation (YYYY-MM-DD, HH:mm, etc.)
@@ -274,12 +291,12 @@ export async function generateDailyReportData(
   const totalsRes = await db.query(
     `SELECT
        COUNT(DISTINCT s.id)::int AS total_shipments,
-       COALESCE(SUM(i.quantity_received), 0)::int AS total_units,
-       COUNT(DISTINCT s.id) FILTER (WHERE s.status IN ('clear', 'completed_clean'))::int AS clear_returns,
-       COUNT(DISTINCT s.id) FILTER (WHERE s.status IN ('with_issues', 'issue_reported'))::int AS returns_with_issues
+       COALESCE(SUM(i.received_qty), 0)::int AS total_units,
+       COUNT(DISTINCT s.id) FILTER (WHERE s.outcome = 'clear')::int AS clear_returns,
+       COUNT(DISTINCT s.id) FILTER (WHERE s.outcome = 'issue')::int AS returns_with_issues
      FROM receipt_scans s
      LEFT JOIN receipt_scan_items i ON i.receipt_scan_id = s.id
-     WHERE s.created_at >= $1::timestamptz AND s.created_at <= $2::timestamptz`,
+     WHERE s.scanned_at >= $1::timestamptz AND s.scanned_at <= $2::timestamptz`,
     [periodStart, periodEnd],
   )
   const totalRow = totalsRes.rows[0] || {}
@@ -292,10 +309,10 @@ export async function generateDailyReportData(
   const prevRes = await db.query(
     `SELECT
        COUNT(DISTINCT s.id)::int AS total_shipments,
-       COALESCE(SUM(i.quantity_received), 0)::int AS total_units
+       COALESCE(SUM(i.received_qty), 0)::int AS total_units
      FROM receipt_scans s
      LEFT JOIN receipt_scan_items i ON i.receipt_scan_id = s.id
-     WHERE s.created_at >= $1::timestamptz AND s.created_at <= $2::timestamptz`,
+     WHERE s.scanned_at >= $1::timestamptz AND s.scanned_at <= $2::timestamptz`,
     [prevPeriodStart, prevPeriodEnd],
   )
   const prevRow = prevRes.rows[0] || {}
@@ -307,12 +324,16 @@ export async function generateDailyReportData(
     `SELECT
        m.name AS marketplace,
        COUNT(DISTINCT s.id)::int AS shipments,
-       COALESCE(SUM(i.quantity_received), 0)::int AS units,
-       COUNT(DISTINCT s.id) FILTER (WHERE s.status IN ('with_issues', 'issue_reported'))::int AS with_issues,
-       COUNT(DISTINCT s.id) FILTER (WHERE s.status IN ('clear', 'completed_clean'))::int AS clear_returns
+       COALESCE(SUM(i.received_qty), 0)::int AS units,
+       COUNT(DISTINCT s.id) FILTER (WHERE s.outcome = 'issue')::int AS with_issues,
+       COUNT(DISTINCT s.id) FILTER (WHERE s.outcome = 'clear')::int AS clear_returns
      FROM marketplaces m
-     LEFT JOIN receipt_scans s ON s.marketplace_id = m.id
-       AND s.created_at >= $1::timestamptz AND s.created_at <= $2::timestamptz
+     LEFT JOIN (
+       SELECT s0.id, s0.outcome, er0.marketplace_id
+       FROM receipt_scans s0
+       JOIN expected_returns er0 ON er0.id = s0.expected_return_id
+       WHERE s0.scanned_at >= $1::timestamptz AND s0.scanned_at <= $2::timestamptz
+     ) s ON s.marketplace_id = m.id
      LEFT JOIN receipt_scan_items i ON i.receipt_scan_id = s.id
      GROUP BY m.name, m.sort_order
      ORDER BY m.sort_order, m.name`,
@@ -337,13 +358,13 @@ export async function generateDailyReportData(
     `SELECT
        COALESCE(u.name, 'Unknown Operator') AS operator,
        COUNT(DISTINCT s.id)::int AS shipments,
-       COALESCE(SUM(i.quantity_received), 0)::int AS units,
-       MIN(s.created_at) AS first_scan,
-       MAX(s.created_at) AS last_scan
+       COALESCE(SUM(i.received_qty), 0)::int AS units,
+       MIN(s.scanned_at) AS first_scan,
+       MAX(s.scanned_at) AS last_scan
      FROM receipt_scans s
-     LEFT JOIN users u ON u.id = s.created_by
+     LEFT JOIN users u ON u.id = s.scanned_by
      LEFT JOIN receipt_scan_items i ON i.receipt_scan_id = s.id
-     WHERE s.created_at >= $1::timestamptz AND s.created_at <= $2::timestamptz
+     WHERE s.scanned_at >= $1::timestamptz AND s.scanned_at <= $2::timestamptz
      GROUP BY u.name
      ORDER BY shipments DESC`,
     [periodStart, periodEnd],
@@ -440,12 +461,12 @@ export async function generateWeeklyReportData(
   const totalsRes = await db.query(
     `SELECT
        COUNT(DISTINCT s.id)::int AS total_shipments,
-       COALESCE(SUM(i.quantity_received), 0)::int AS total_units,
-       COUNT(DISTINCT s.id) FILTER (WHERE s.status IN ('clear', 'completed_clean'))::int AS clear_returns,
-       COUNT(DISTINCT s.id) FILTER (WHERE s.status IN ('with_issues', 'issue_reported'))::int AS returns_with_issues
+       COALESCE(SUM(i.received_qty), 0)::int AS total_units,
+       COUNT(DISTINCT s.id) FILTER (WHERE s.outcome = 'clear')::int AS clear_returns,
+       COUNT(DISTINCT s.id) FILTER (WHERE s.outcome = 'issue')::int AS returns_with_issues
      FROM receipt_scans s
      LEFT JOIN receipt_scan_items i ON i.receipt_scan_id = s.id
-     WHERE s.created_at >= $1::timestamptz AND s.created_at <= $2::timestamptz`,
+     WHERE s.scanned_at >= $1::timestamptz AND s.scanned_at <= $2::timestamptz`,
     [periodStart, periodEnd],
   )
   const totalRow = totalsRes.rows[0] || {}
@@ -458,10 +479,10 @@ export async function generateWeeklyReportData(
   const prevRes = await db.query(
     `SELECT
        COUNT(DISTINCT s.id)::int AS total_shipments,
-       COALESCE(SUM(i.quantity_received), 0)::int AS total_units
+       COALESCE(SUM(i.received_qty), 0)::int AS total_units
      FROM receipt_scans s
      LEFT JOIN receipt_scan_items i ON i.receipt_scan_id = s.id
-     WHERE s.created_at >= $1::timestamptz AND s.created_at <= $2::timestamptz`,
+     WHERE s.scanned_at >= $1::timestamptz AND s.scanned_at <= $2::timestamptz`,
     [prevStartStr, prevEndStr],
   )
   const prevRow = prevRes.rows[0] || {}
@@ -471,14 +492,14 @@ export async function generateWeeklyReportData(
   // 3. Daily Trend across 7 days
   const trendRes = await db.query(
     `SELECT
-       to_char(s.created_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS day_date,
-       to_char(s.created_at AT TIME ZONE 'Asia/Kolkata', 'Dy') AS day_name,
+       to_char(s.scanned_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS day_date,
+       to_char(s.scanned_at AT TIME ZONE 'Asia/Kolkata', 'Dy') AS day_name,
        COUNT(DISTINCT s.id)::int AS shipments,
-       COALESCE(SUM(i.quantity_received), 0)::int AS units,
-       COUNT(DISTINCT s.id) FILTER (WHERE s.status IN ('with_issues', 'issue_reported'))::int AS with_issues
+       COALESCE(SUM(i.received_qty), 0)::int AS units,
+       COUNT(DISTINCT s.id) FILTER (WHERE s.outcome = 'issue')::int AS with_issues
      FROM receipt_scans s
      LEFT JOIN receipt_scan_items i ON i.receipt_scan_id = s.id
-     WHERE s.created_at >= $1::timestamptz AND s.created_at <= $2::timestamptz
+     WHERE s.scanned_at >= $1::timestamptz AND s.scanned_at <= $2::timestamptz
      GROUP BY day_date, day_name
      ORDER BY day_date`,
     [periodStart, periodEnd],
@@ -497,12 +518,16 @@ export async function generateWeeklyReportData(
     `SELECT
        m.name AS marketplace,
        COUNT(DISTINCT s.id)::int AS shipments,
-       COALESCE(SUM(i.quantity_received), 0)::int AS units,
-       COUNT(DISTINCT s.id) FILTER (WHERE s.status IN ('with_issues', 'issue_reported'))::int AS with_issues,
-       COUNT(DISTINCT s.id) FILTER (WHERE s.status IN ('clear', 'completed_clean'))::int AS clear_returns
+       COALESCE(SUM(i.received_qty), 0)::int AS units,
+       COUNT(DISTINCT s.id) FILTER (WHERE s.outcome = 'issue')::int AS with_issues,
+       COUNT(DISTINCT s.id) FILTER (WHERE s.outcome = 'clear')::int AS clear_returns
      FROM marketplaces m
-     LEFT JOIN receipt_scans s ON s.marketplace_id = m.id
-       AND s.created_at >= $1::timestamptz AND s.created_at <= $2::timestamptz
+     LEFT JOIN (
+       SELECT s0.id, s0.outcome, er0.marketplace_id
+       FROM receipt_scans s0
+       JOIN expected_returns er0 ON er0.id = s0.expected_return_id
+       WHERE s0.scanned_at >= $1::timestamptz AND s0.scanned_at <= $2::timestamptz
+     ) s ON s.marketplace_id = m.id
      LEFT JOIN receipt_scan_items i ON i.receipt_scan_id = s.id
      GROUP BY m.name, m.sort_order
      ORDER BY m.sort_order, m.name`,
@@ -527,11 +552,11 @@ export async function generateWeeklyReportData(
     `SELECT
        COALESCE(u.name, 'Unknown Operator') AS operator,
        COUNT(DISTINCT s.id)::int AS shipments,
-       COALESCE(SUM(i.quantity_received), 0)::int AS units
+       COALESCE(SUM(i.received_qty), 0)::int AS units
      FROM receipt_scans s
-     LEFT JOIN users u ON u.id = s.created_by
+     LEFT JOIN users u ON u.id = s.scanned_by
      LEFT JOIN receipt_scan_items i ON i.receipt_scan_id = s.id
-     WHERE s.created_at >= $1::timestamptz AND s.created_at <= $2::timestamptz
+     WHERE s.scanned_at >= $1::timestamptz AND s.scanned_at <= $2::timestamptz
      GROUP BY u.name
      ORDER BY shipments DESC`,
     [periodStart, periodEnd],
@@ -551,9 +576,11 @@ export async function generateWeeklyReportData(
        COALESCE(c.label, rsi.category_code) AS category,
        COUNT(*)::int AS count
      FROM receipt_scan_issues rsi
-     JOIN receipt_scans s ON s.id = rsi.receipt_scan_id
+     JOIN receipt_scan_items si ON si.id = rsi.receipt_scan_item_id
+     JOIN receipt_scans s ON s.id = si.receipt_scan_id
      LEFT JOIN receipt_issue_categories c ON c.code = rsi.category_code
-     WHERE s.created_at >= $1::timestamptz AND s.created_at <= $2::timestamptz
+     WHERE s.scanned_at >= $1::timestamptz AND s.scanned_at <= $2::timestamptz
+       AND NOT COALESCE(c.is_operational, false)
      GROUP BY category
      ORDER BY count DESC
      LIMIT 5`,
@@ -599,6 +626,57 @@ export async function generateWeeklyReportData(
     topIssues,
     managementSummary,
     warnings,
+    ...(await weeklyInsights(db, startMondayStr, endSundayStr, periodStart, periodEnd)),
+  }
+}
+
+// The insight sections of the weekly email: the same figures as the Reports screen (server/analytics.ts), for every
+// account, and the Iron Send figures. A failure here never stops the email: the sections are left out.
+async function weeklyInsights(
+  db: pg.Pool,
+  fromDay: string,
+  toDay: string,
+  periodStart: string,
+  periodEnd: string,
+): Promise<Pick<WeeklyReportData, "insights" | "topSkus" | "sizes" | "topReasons" | "iron">> {
+  try {
+    const ironNow = await ironSummary(db, ALL_ACCOUNTS)
+    const week = await db.query(
+      `SELECT
+         COALESCE((SELECT SUM(r.qty_sent) FROM iron_send_records r
+                   WHERE r.status = 'open' AND r.sent_at >= $1::timestamptz AND r.sent_at <= $2::timestamptz), 0)::int AS sent,
+         COALESCE((SELECT SUM(e.qty) FROM iron_receive_events e
+                   WHERE e.received_at >= $1::timestamptz AND e.received_at <= $2::timestamptz), 0)::int AS received`,
+      [periodStart, periodEnd],
+    )
+    const report = await loadAnalytics(
+      db,
+      ALL_ACCOUNTS,
+      { dateFrom: fromDay, dateTo: toDay },
+      { today: toDay, iron: { pending: ironNow.units.pending, overdue: ironNow.units.overdue } },
+    )
+    return {
+      insights: report.insights,
+      topSkus: report.bySku.slice(0, 10).map((row) => ({
+        sku: row.sku,
+        size: row.size,
+        units: row.units,
+        issueUnits: row.issueUnits,
+        topReason: row.topReason,
+      })),
+      sizes: report.bySize.map((row) => ({ size: row.size, units: row.units, sharePct: row.sharePct, issueUnits: row.issueUnits })),
+      topReasons: report.byReason.slice(0, 8).map((row) => ({ reason: row.reason, units: row.units })),
+      iron: {
+        sentThisWeek: Number(week.rows[0]?.sent || 0),
+        receivedThisWeek: Number(week.rows[0]?.received || 0),
+        pending: ironNow.units.pending,
+        overdue: ironNow.units.overdue,
+        overdueAfterDays: ironNow.overdueAfterDays,
+      },
+    }
+  } catch (error) {
+    console.error("[Reports] Weekly insights could not be computed:", error instanceof Error ? error.message : error)
+    return { insights: [], topSkus: [], sizes: [], topReasons: [], iron: null }
   }
 }
 
@@ -794,6 +872,7 @@ ${data.topIssues.map((i) => `- ${i.category}: ${fmt(i.count)} occurrences (${i.r
 
 Operator Productivity:
 ${data.operators.map((o) => `- ${o.operator}: ${fmt(o.shipments)} shipments | ${fmt(o.units)} units`).join("\n")}
+${weeklyInsightsText(data)}
 ----------------------------------------
 Sent automatically by Return App (return.scan@youthnic.shop)
 `.trim()
@@ -938,6 +1017,7 @@ Sent automatically by Return App (return.scan@youthnic.shop)
             .join("")}
         </tbody>
       </table>` : ""}
+      ${weeklyInsightsHtml(data)}
     </div>
     <div class="footer">
       Generated automatically by Return App · Weekly schedule Mondays 9:00 AM IST<br />
@@ -949,6 +1029,89 @@ Sent automatically by Return App (return.scan@youthnic.shop)
 `.trim()
 
   return { html, text }
+}
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[ch] ?? ch)
+}
+
+export function weeklyInsightsText(data: WeeklyReportData): string {
+  const out: string[] = []
+  if (data.insights?.length) out.push("", "Insights:", ...data.insights.map((line) => `- ${line}`))
+  if (data.iron) {
+    out.push(
+      "",
+      "Iron Send (operational, not an issue, never sent to OMSGuru):",
+      `- Sent this week: ${fmt(data.iron.sentThisWeek)} units | Received back this week: ${fmt(data.iron.receivedThisWeek)} units`,
+      `- Pending now: ${fmt(data.iron.pending)} units | Overdue (over ${data.iron.overdueAfterDays} days): ${fmt(data.iron.overdue)} units`,
+    )
+  }
+  if (data.sizes?.length) {
+    out.push("", "Size-wise returns:", ...data.sizes.map((s) => `- ${s.size}: ${fmt(s.units)} units (${s.sharePct}%)`))
+  }
+  if (data.topSkus?.length) {
+    out.push("", "Most returned SKUs:", ...data.topSkus.map((s) => `- ${s.sku} (${s.size}): ${fmt(s.units)} units, ${fmt(s.issueUnits)} with issues`))
+  }
+  if (data.topReasons?.length) {
+    out.push("", "Top return reasons:", ...data.topReasons.map((r) => `- ${r.reason}: ${fmt(r.units)} units`))
+  }
+  return out.join("\n")
+}
+
+export function weeklyInsightsHtml(data: WeeklyReportData): string {
+  const parts: string[] = []
+  if (data.insights?.length) {
+    parts.push(`
+      <div class="section-title">Insights</div>
+      <ul style="margin: 0 0 20px; padding-left: 18px; font-size: 13px; line-height: 1.6; color: #334155;">
+        ${data.insights.map((line) => `<li>${escapeHtml(line)}</li>`).join("")}
+      </ul>`)
+  }
+  if (data.iron) {
+    parts.push(`
+      <div class="section-title">Iron Send</div>
+      <p style="margin: 0 0 8px; font-size: 12px; color: #64748b;">Operational category: not counted as an issue and never sent to OMSGuru. The Inward Team records units that come back.</p>
+      <table>
+        <thead><tr><th>Sent this week</th><th>Received back this week</th><th>Pending now</th><th>Overdue (&gt; ${data.iron.overdueAfterDays} days)</th></tr></thead>
+        <tbody><tr>
+          <td>${fmt(data.iron.sentThisWeek)}</td>
+          <td>${fmt(data.iron.receivedThisWeek)}</td>
+          <td>${fmt(data.iron.pending)}</td>
+          <td><span class="${data.iron.overdue > 0 ? "badge-alert" : ""}">${fmt(data.iron.overdue)}</span></td>
+        </tr></tbody>
+      </table>`)
+  }
+  if (data.sizes?.length) {
+    parts.push(`
+      <div class="section-title">Size-wise Returns</div>
+      <table>
+        <thead><tr><th>Size</th><th style="text-align: right;">Units</th><th style="text-align: right;">Share</th><th style="text-align: right;">Issue units</th></tr></thead>
+        <tbody>${data.sizes
+          .map((s) => `<tr><td><strong>${escapeHtml(s.size)}</strong></td><td style="text-align: right;">${fmt(s.units)}</td><td style="text-align: right;">${s.sharePct}%</td><td style="text-align: right;">${fmt(s.issueUnits)}</td></tr>`)
+          .join("")}</tbody>
+      </table>`)
+  }
+  if (data.topSkus?.length) {
+    parts.push(`
+      <div class="section-title">Most Returned SKUs</div>
+      <table>
+        <thead><tr><th>SKU</th><th>Size</th><th style="text-align: right;">Units</th><th style="text-align: right;">Issue units</th><th>Top reason</th></tr></thead>
+        <tbody>${data.topSkus
+          .map((s) => `<tr><td><strong>${escapeHtml(s.sku)}</strong></td><td>${escapeHtml(s.size)}</td><td style="text-align: right;">${fmt(s.units)}</td><td style="text-align: right;">${fmt(s.issueUnits)}</td><td style="color: #64748b;">${escapeHtml(s.topReason || "—")}</td></tr>`)
+          .join("")}</tbody>
+      </table>`)
+  }
+  if (data.topReasons?.length) {
+    parts.push(`
+      <div class="section-title">Top Return Reasons</div>
+      <table>
+        <thead><tr><th>Reason</th><th style="text-align: right;">Units</th></tr></thead>
+        <tbody>${data.topReasons
+          .map((r) => `<tr><td>${escapeHtml(r.reason)}</td><td style="text-align: right;">${fmt(r.units)}</td></tr>`)
+          .join("")}</tbody>
+      </table>`)
+  }
+  return parts.join("")
 }
 
 // Send an email via the official Resend API (HTTP POST https://api.resend.com/emails)

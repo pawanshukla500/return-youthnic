@@ -194,6 +194,16 @@ class ApiClient(private val sessionManager: SessionManager) {
         }
     }
 
+    /** The sync cursor (GET /api/sync/state). LiveSync polls it while the WebSocket is not connected. */
+    suspend fun getSyncCursor(): Result<Long> = withContext(Dispatchers.IO) {
+        try {
+            val req = authorizedRequestBuilder("/api/sync/state").get().build()
+            execute(req) { json -> json.optLong("cursor", 0L) }
+        } catch (e: Exception) {
+            Result.failure(mapException(e))
+        }
+    }
+
     suspend fun logout(): Result<Unit> = withContext(Dispatchers.IO) {
         try {
             val req = authorizedRequestBuilder("/api/auth/logout")

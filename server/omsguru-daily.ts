@@ -159,7 +159,7 @@ export async function calculateGoodReturnsForDay(
     SELECT
       rsi.id AS item_id,
       rs.scanned_at,
-      COALESCE(rs.scanned_awb, er.tracking_id, '') AS tracking_id,
+      COALESCE(NULLIF(rs.scanned_tracking, ''), rs.tracking_id_snapshot, er.tracking_id, '') AS tracking_id,
       COALESCE(er.order_number, '') AS order_number,
       COALESCE(m.name, rs.marketplace_snapshot, 'Unknown') AS marketplace,
       COALESCE(rsi.marketplace_sku, '') AS marketplace_sku,
@@ -173,10 +173,15 @@ export async function calculateGoodReturnsForDay(
     LEFT JOIN marketplaces m ON m.id = er.marketplace_id
     LEFT JOIN expected_return_items eri ON eri.id = rsi.expected_return_item_id
     LEFT JOIN skus s ON s.id = eri.sku_id
+    -- Units of a received line that are not good stock. Missing-item issues are left out, because a missing unit is
+    -- already not in received_qty. Damaged, wrong and other issues are counted, and so is Iron Send: an ironed unit is
+    -- never sent to OMSGuru (it is operational, and the Inward Team handles it when it comes back).
     LEFT JOIN (
-      SELECT receipt_scan_item_id, SUM(qty)::int AS issue_qty
-      FROM receipt_scan_issues
-      GROUP BY receipt_scan_item_id
+      SELECT x.receipt_scan_item_id, SUM(x.qty)::int AS issue_qty
+      FROM receipt_scan_issues x
+      LEFT JOIN receipt_issue_categories c ON c.code = x.category_code
+      WHERE NOT COALESCE(c.is_missing, false)
+      GROUP BY x.receipt_scan_item_id
     ) issues ON issues.receipt_scan_item_id = rsi.id
     WHERE rs.scanned_at >= $1::timestamptz AND rs.scanned_at <= $2::timestamptz
     ORDER BY rs.scanned_at ASC, rsi.id ASC

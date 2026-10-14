@@ -37,6 +37,7 @@ import {
   type ScanSubmission,
 } from "./register-rules.js"
 import { actorOf, requireAdmin, scopeOf, sendError } from "./http.js"
+import { publishChange } from "./live.js"
 
 const COLUMN_MODES: readonly string[] = ["approved", "extended", "operational"]
 
@@ -201,6 +202,15 @@ export function mountRegisterRoutes(app: Express, requireUser: RequestHandler): 
         scopeOf(req),
       )
       res.json(receipt)
+      if (!receipt.replayed) {
+        publishChange({
+          kind: "scan.saved",
+          marketplaceId: receipt.scan.marketplaceId,
+          shipmentId: receipt.scan.shipmentId,
+          scanId: receipt.scan.id,
+          actorId: actorOf(req).id,
+        })
+      }
     } catch (error) {
       sendError(res, error, next)
     }
@@ -211,6 +221,13 @@ export function mountRegisterRoutes(app: Express, requireUser: RequestHandler): 
       const body = (req.body ?? {}) as Record<string, unknown>
       const receipt = await correctScanIssue(getPool(), actorOf(req), submissionFrom(body), scopeOf(req))
       res.json(receipt)
+      publishChange({
+        kind: "scan.corrected",
+        marketplaceId: receipt.scan.marketplaceId,
+        shipmentId: receipt.scan.shipmentId,
+        scanId: receipt.scan.id,
+        actorId: actorOf(req).id,
+      })
     } catch (error) {
       sendError(res, error, next)
     }
@@ -287,6 +304,7 @@ export function mountRegisterRoutes(app: Express, requireUser: RequestHandler): 
         scopeOf(req),
       )
       res.json({ ticket })
+      publishChange({ kind: "ticket.updated", marketplaceId: null, actorId: actorOf(req).id })
     } catch (error) {
       sendError(res, error, next)
     }

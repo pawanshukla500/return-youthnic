@@ -18,3 +18,12 @@ export function isSupervisorOrAdminUser(user: Pick<SessionUser, "role">): boolea
   const r = String(user.role || "").trim().toLowerCase()
   return r === "admin" || r === "supervisor"
 }
+
+// The Inward Team records ironed units that came back. The server checks the same rule (server/iron.ts).
+export function isInwardUser(user: Pick<SessionUser, "role">): boolean {
+  return String(user.role || "").trim().toLowerCase() === "inward"
+}
+
+export function canReceiveIron(user: Pick<SessionUser, "role">): boolean {
+  return isInwardUser(user) || isAdminUser(user)
+}

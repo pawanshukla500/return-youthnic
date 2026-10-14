@@ -11,6 +11,7 @@
 import type pg from "pg"
 import { istDay } from "./dates.js"
 import { formatCount, formatDay, formatScanTime, headerDateLabel, percentOf } from "./format.js"
+import { syncIronRecordsForScan } from "./iron.js"
 import { masterSkusForListings } from "./lookup-import.js"
 import {
   ALL_ACCOUNTS,
@@ -22,6 +23,7 @@ import {
 } from "./access.js"
 import {
   TICKET_STATUSES,
+  countsAsReturnIssue,
   decideLookup,
   describeIssues,
   isValidClientKey,
@@ -102,23 +104,36 @@ export async function accessibleAccounts(db: pg.Pool, scope: AccountScope): Prom
   })
 }
 
-export type ShiftCounts = { scanned: number; correct: number; issues: number }
+export type ShiftCounts = { scanned: number; correct: number; issues: number; ironSendUnits: number }
 
 async function shiftCounts(client: pg.PoolClient, scope: AccountScope): Promise<ShiftCounts> {
   const params: unknown[] = []
   const condition = accountCondition(scope, "er.marketplace_id", params)
   const result = await client.query(
-    `SELECT COUNT(*)::int AS scanned,
-            (COUNT(*) FILTER (WHERE rs.outcome = 'clear'))::int AS correct,
-            (COUNT(*) FILTER (WHERE rs.outcome = 'issue'))::int AS issues
-     FROM receipt_scans rs
-     JOIN expected_returns er ON er.id = rs.expected_return_id
-     WHERE (rs.scanned_at AT TIME ZONE 'Asia/Kolkata')::date = (now() AT TIME ZONE 'Asia/Kolkata')::date
-       AND ${condition}`,
+    `WITH today AS (
+       SELECT rs.id, rs.outcome
+       FROM receipt_scans rs
+       JOIN expected_returns er ON er.id = rs.expected_return_id
+       WHERE (rs.scanned_at AT TIME ZONE 'Asia/Kolkata')::date = (now() AT TIME ZONE 'Asia/Kolkata')::date
+         AND ${condition}
+     )
+     SELECT COUNT(*)::int AS scanned,
+            (COUNT(*) FILTER (WHERE today.outcome = 'clear'))::int AS correct,
+            (COUNT(*) FILTER (WHERE today.outcome = 'issue'))::int AS issues,
+            COALESCE((
+              SELECT SUM(r.qty_sent) FROM iron_send_records r
+              WHERE r.status = 'open' AND r.receipt_scan_id IN (SELECT id FROM today)
+            ), 0)::int AS iron_send_units
+     FROM today`,
     params,
   )
   const row = result.rows[0]
-  return { scanned: Number(row.scanned), correct: Number(row.correct), issues: Number(row.issues) }
+  return {
+    scanned: Number(row.scanned),
+    correct: Number(row.correct),
+    issues: Number(row.issues),
+    ironSendUnits: Number(row.iron_send_units || 0),
+  }
 }
 
 export function presentShift(shift: ShiftCounts) {
@@ -126,6 +141,8 @@ export function presentShift(shift: ShiftCounts) {
     scanned: formatCount(shift.scanned),
     correct: formatCount(shift.correct),
     issues: formatCount(shift.issues),
+    // Units sent for ironing today. Iron Send is operational: these returns are counted as correct, not as issues.
+    ironSend: formatCount(shift.ironSendUnits),
     // The clear rate of today's scans. The shift has no target, so the progress stays at zero.
     accuracy: percentOf(shift.correct, shift.scanned),
     progress: 0,
@@ -159,7 +176,8 @@ export async function workspaceUi(
 
 async function loadCategoryRules(client: pg.PoolClient): Promise<CategoryRule[]> {
   const result = await client.query(
-    `SELECT code, label, is_clear, is_missing, requires_ticket, allows_sub_issue, requires_sub_issue, active
+    `SELECT code, label, is_clear, is_missing, requires_ticket, allows_sub_issue, requires_sub_issue, active,
+            COALESCE(is_operational, false) AS is_operational
      FROM receipt_issue_categories
      ORDER BY sort_order, code`,
   )
@@ -172,6 +190,7 @@ async function loadCategoryRules(client: pg.PoolClient): Promise<CategoryRule[]>
     allowsSubIssue: Boolean(row.allows_sub_issue),
     requiresSubIssue: Boolean(row.requires_sub_issue),
     active: Boolean(row.active),
+    isOperational: Boolean(row.is_operational),
   }))
 }
 
@@ -213,6 +232,7 @@ export async function scanSession(db: pg.Pool, scope: AccountScope = ALL_ACCOUNT
           requiresTicket: category.requiresTicket,
           allowsSubIssue: category.allowsSubIssue,
           requiresSubIssue: category.requiresSubIssue,
+          isOperational: Boolean(category.isOperational),
         })),
       subIssues: subIssues
         .filter((sub) => sub.active)
@@ -223,7 +243,8 @@ export async function scanSession(db: pg.Pool, scope: AccountScope = ALL_ACCOUNT
 
 export async function listCategories(db: pg.Pool) {
   const result = await db.query(
-    `SELECT code, label, is_clear, is_missing, requires_ticket, allows_sub_issue, requires_sub_issue, active, sort_order
+    `SELECT code, label, is_clear, is_missing, requires_ticket, allows_sub_issue, requires_sub_issue, active, sort_order,
+            COALESCE(is_operational, false) AS is_operational
      FROM receipt_issue_categories
      ORDER BY sort_order, code`,
   )
@@ -236,6 +257,7 @@ export async function listCategories(db: pg.Pool) {
     allowsSubIssue: Boolean(row.allows_sub_issue),
     requiresSubIssue: Boolean(row.requires_sub_issue),
     active: Boolean(row.active),
+    isOperational: Boolean(row.is_operational),
   }))
 }
 
@@ -704,6 +726,9 @@ export type ScanReceipt = {
   replayed: boolean
   scan: {
     id: number
+    marketplaceId: number
+    shipmentId: number
+    outcome: string
     scannedAt: string
     timeLabel: string
     status: string
@@ -720,7 +745,9 @@ export type ScanReceipt = {
     sourceBatchId: number | null
   }
   itemCount: number
+  // Return issues only. Iron Send is not an issue and is counted in ironSendQty.
   issueCount: number
+  ironSendQty: number
   shift: ReturnType<typeof presentShift>
   claimsBadge: string
 }
@@ -777,6 +804,7 @@ async function loadReceipt(db: pg.Pool, scanId: number, replayed: boolean, scope
   const scan = await withClient(db, async (client) => {
     const result = await client.query(
       `SELECT rs.id, rs.scanned_at, rs.scanned_time_label, rs.status, m.name AS marketplace,
+              er.marketplace_id, rs.expected_return_id, rs.outcome,
               COALESCE(rs.tracking_id_snapshot, er.tracking_id) AS tracking_id,
               COALESCE(NULLIF(rs.csv_tracking_snapshot, ''), rs.tracking_id_snapshot, er.tracking_id) AS csv_tracking,
               rs.url_tracking_snapshot AS url_tracking,
@@ -786,7 +814,10 @@ async function loadReceipt(db: pg.Pool, scanId: number, replayed: boolean, scope
               (SELECT COUNT(*)::int FROM receipt_scan_items x WHERE x.receipt_scan_id = rs.id) AS item_count,
               (SELECT COUNT(*)::int FROM receipt_scan_issues y
                  JOIN receipt_scan_items x ON x.id = y.receipt_scan_item_id
-                WHERE x.receipt_scan_id = rs.id) AS issue_count
+                 LEFT JOIN receipt_issue_categories c ON c.code = y.category_code
+                WHERE x.receipt_scan_id = rs.id AND NOT COALESCE(c.is_operational, false)) AS issue_count,
+              (SELECT COALESCE(SUM(r.qty_sent), 0)::int FROM iron_send_records r
+                WHERE r.receipt_scan_id = rs.id AND r.status = 'open') AS iron_send_qty
        FROM receipt_scans rs
        JOIN expected_returns er ON er.id = rs.expected_return_id
        JOIN marketplaces m ON m.id = er.marketplace_id
@@ -802,6 +833,9 @@ async function loadReceipt(db: pg.Pool, scanId: number, replayed: boolean, scope
     replayed,
     scan: {
       id: Number(scan.id),
+      marketplaceId: Number(scan.marketplace_id),
+      shipmentId: Number(scan.expected_return_id),
+      outcome: String(scan.outcome),
       scannedAt: new Date(scan.scanned_at).toISOString(),
       timeLabel: String(scan.scanned_time_label),
       status: String(scan.status),
@@ -819,9 +853,32 @@ async function loadReceipt(db: pg.Pool, scanId: number, replayed: boolean, scope
     },
     itemCount: Number(scan.item_count),
     issueCount: Number(scan.issue_count),
+    ironSendQty: Number(scan.iron_send_qty || 0),
     shift: presentShift(shift),
     claimsBadge: ui.claimsBadge,
   }
+}
+
+// The parts of the short issue text kept on the scan. When the scan has return issues, only those are named, so an
+// Iron Send on the same parcel does not change the issue reason. A scan with only Iron Send is named "Iron Send".
+function issueLabelParts(
+  items: ScanSubmission["items"],
+  categoryByCode: Map<string, CategoryRule>,
+  subById: Map<number, SubIssueRule>,
+): IssuePart[] {
+  const all: { part: IssuePart; real: boolean }[] = []
+  for (const item of items) {
+    for (const issue of item.issues) {
+      const category = categoryByCode.get(issue.categoryCode)
+      const sub = issue.subIssueId === null ? undefined : subById.get(issue.subIssueId)
+      all.push({
+        part: { categoryLabel: category?.label ?? issue.categoryCode, subIssueLabel: sub ? sub.label : "", qty: issue.qty },
+        real: countsAsReturnIssue(category),
+      })
+    }
+  }
+  const real = all.filter((entry) => entry.real)
+  return (real.length ? real : all).map((entry) => entry.part)
 }
 
 // Saves one physical scan of one return, with every expected line verified.
@@ -934,18 +991,11 @@ export async function recordScan(
     const submittedById = new Map<number, ScanSubmission["items"][number]>()
     for (const item of submission.items) submittedById.set(item.itemId, item)
 
-    const hasIssue = submission.items.some((item) => item.issues.length > 0)
-    const parts: IssuePart[] = []
-    for (const item of submission.items) {
-      for (const issue of item.issues) {
-        const sub = issue.subIssueId === null ? undefined : subById.get(issue.subIssueId)
-        parts.push({
-          categoryLabel: categoryByCode.get(issue.categoryCode)?.label ?? issue.categoryCode,
-          subIssueLabel: sub ? sub.label : "",
-          qty: issue.qty,
-        })
-      }
-    }
+    // Iron Send (an operational category) is recorded, but it does not make the scan an issue return.
+    const hasIssue = submission.items.some((item) =>
+      item.issues.some((issue) => countsAsReturnIssue(categoryByCode.get(issue.categoryCode))),
+    )
+    const parts = issueLabelParts(submission.items, categoryByCode, subById)
 
     const itemOrderIds = itemRows
       .flatMap((r) => [String(r.display_order_item_id || ""), String(r.order_line_id || "")])
@@ -977,7 +1027,7 @@ export async function recordScan(
         formatScanTime(),
         hasIssue ? "issue" : "clear",
         describeIssues(parts),
-        scanStatusFor(hasIssue, ticketCodes.length > 0),
+        scanStatusFor(hasIssue, hasIssue && ticketCodes.length > 0),
         submission.notes || null,
         submission.clientScanKey,
         storedTracking,
@@ -1078,6 +1128,7 @@ export async function recordScan(
       }
     }
 
+    const iron = await syncIronRecordsForScan(client, scanId, actor.id, "")
     await client.query("INSERT INTO evidence_events (receipt_scan_id, photo_count, has_video) VALUES ($1, $2, $3)", [
       scanId,
       Math.max(0, Math.floor(input.photoCount) || 0),
@@ -1088,6 +1139,7 @@ export async function recordScan(
       marketplace: String(shipment.marketplace),
       items: itemRows.length,
       issues: issueCount,
+      ironSendRecords: iron.opened,
       matchedTrackingField: matched.field,
       matchedLeg: matched.leg,
     })
@@ -1142,6 +1194,34 @@ export async function correctScanIssue(
     ).rows[0]
     if (!scan || Number(scan.scanned_by) !== actor.id) throw new ServiceError(404, "Return not found")
 
+    // The bench replaces the issues of a scan it has just saved. What is replaced is written to the audit log first, so
+    // the earlier issues, tickets and ticket history stay on record.
+    const previous = await client.query(
+      `SELECT x.category_code, x.category_label, x.sub_issue_label, x.qty, x.notes, i.line_no,
+              ct.ticket_code, ct.status AS ticket_status
+       FROM receipt_scan_issues x
+       JOIN receipt_scan_items i ON i.id = x.receipt_scan_item_id
+       LEFT JOIN claim_tickets ct ON ct.id = x.claim_ticket_id
+       WHERE i.receipt_scan_id = $1
+       ORDER BY x.id`,
+      [found.scanId],
+    )
+    if (previous.rows.length) {
+      await writeAudit(client, actor.id, "scan.issues_replaced", "receipt_scan", String(found.scanId), {
+        previousOutcome: String(scan.outcome),
+        previousIssues: previous.rows.map((row) => ({
+          line: Number(row.line_no),
+          categoryCode: String(row.category_code),
+          categoryLabel: String(row.category_label),
+          subIssue: String(row.sub_issue_label || ""),
+          qty: Number(row.qty),
+          notes: String(row.notes || ""),
+          ticketCode: row.ticket_code ? String(row.ticket_code) : null,
+          ticketStatus: row.ticket_status ? String(row.ticket_status) : null,
+        })),
+      })
+    }
+
     // Clean up any previously attached claim tickets, history, and scan issues for this scan so issues can be replaced or reverted
     await client.query(
       `DELETE FROM claim_ticket_history WHERE claim_ticket_id IN (SELECT id FROM claim_tickets WHERE receipt_scan_id = $1)`,
@@ -1174,6 +1254,7 @@ export async function correctScanIssue(
         `UPDATE receipt_scans SET outcome = 'clear', issue_label = '', status = 'Clear' WHERE id = $1`,
         [found.scanId],
       )
+      await syncIronRecordsForScan(client, found.scanId, actor.id, "Changed to a normal return at the scan bench")
       await writeAudit(client, actor.id, "scan.revert_clear", "receipt_scan", String(found.scanId), {
         shipmentId: submission.shipmentId,
       })
@@ -1195,7 +1276,10 @@ export async function correctScanIssue(
     const subById = new Map<number, SubIssueRule>()
     for (const sub of subIssues) subById.set(sub.id, sub)
 
-    const parts: IssuePart[] = []
+    const parts = issueLabelParts(submission.items, categoryByCode, subById)
+    const realIssue = submission.items.some((item) =>
+      item.issues.some((issue) => countsAsReturnIssue(categoryByCode.get(issue.categoryCode))),
+    )
     const ticketCodes: string[] = []
     for (const item of submission.items) {
       const scanItemId = scanItemByExpected.get(item.itemId)
@@ -1203,11 +1287,6 @@ export async function correctScanIssue(
       await client.query(`UPDATE receipt_scan_items SET received_qty = $2 WHERE id = $1`, [scanItemId, item.receivedQty])
       for (const issue of item.issues) {
         const sub = issue.subIssueId === null ? undefined : subById.get(issue.subIssueId)
-        parts.push({
-          categoryLabel: categoryByCode.get(issue.categoryCode)?.label ?? issue.categoryCode,
-          subIssueLabel: sub ? sub.label : "",
-          qty: issue.qty,
-        })
         const code = normalizeTicketCode(issue.ticketCode)
         let ticketId: number | null = null
         if (code) {
@@ -1246,12 +1325,21 @@ export async function correctScanIssue(
     }
 
     await client.query(
-      `UPDATE receipt_scans SET outcome = 'issue', issue_label = $2, status = $3 WHERE id = $1`,
-      [found.scanId, describeIssues(parts), scanStatusFor(true, ticketCodes.length > 0)],
+      `UPDATE receipt_scans SET outcome = $4, issue_label = $2, status = $3 WHERE id = $1`,
+      [
+        found.scanId,
+        describeIssues(parts),
+        scanStatusFor(realIssue, realIssue && ticketCodes.length > 0),
+        realIssue ? "issue" : "clear",
+      ],
     )
+    const iron = await syncIronRecordsForScan(client, found.scanId, actor.id, "Changed at the scan bench")
     await writeAudit(client, actor.id, "scan.correct", "receipt_scan", String(found.scanId), {
       shipmentId: submission.shipmentId,
       issues: parts.length,
+      outcome: realIssue ? "issue" : "clear",
+      ironSendRecordsOpened: iron.opened,
+      ironSendRecordsCancelled: iron.cancelled,
     })
     await client.query("COMMIT")
     open = false

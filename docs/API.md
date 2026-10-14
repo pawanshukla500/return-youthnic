@@ -812,6 +812,23 @@ Returns: `{ "rows": ShopifyRecord[], "total": number }`.
 ### GET `/api/shopify/export`
 Generates and downloads a CSV export of Shopify returns and RTOs matching the current filters.
 
+## Iron Send tracking, analytics and live sync
+
+Iron Send is an operational category (`receipt_issue_categories.is_operational`). It is recorded with the scan, but it never makes a scan an issue return (outcome stays `clear`, status `Clear`, no claim), it is never counted in issue figures, and its units are never in the OMSGuru file. The Inward Team records ironed units that came back. Nothing marks them received automatically. Tables: `iron_send_records`, `iron_receive_events`, `iron_settings` (`server/schema-iron.sql`).
+
+| Method | Path | Who | What |
+|---|---|---|---|
+| GET | `/api/iron?state=open\|pending\|overdue\|partial\|received\|cancelled\|all&marketplaceId=&search=&dateFrom=&dateTo=` | Any signed-in user (scoped) | `{rows: IronRecord[], summary}`. `summary.units` has `sent`, `received`, `pending`, `overdue` separately. |
+| GET | `/api/iron/summary?marketplaceId=` | Any signed-in user (scoped) | The summary only. |
+| GET | `/api/iron/:id` | Any signed-in user (scoped) | One record with every receive entry. 404 outside scope. |
+| POST | `/api/iron/:id/receive` `{qty, notes?, clientKey?}` | Role `Inward` or `Admin` | Records units received back. 403 for any other role (the Return Team only sends). 400 when `qty` is not 1..pending. A repeated `clientKey` returns the first result (`replayed: true`). 409 when the record was cancelled at the bench. |
+| PATCH | `/api/admin/iron/settings` `{overdueAfterDays}` | Admin | 1-30 days, default 3. Audited. |
+| GET | `/api/reports/analytics?dateFrom=&dateTo=&marketplaceId=&category=&format=csv` | Any signed-in user (scoped) | Size-, SKU-, marketplace-, date-, week- and reason-wise figures, received issues (Iron Send flagged `operational`), the previous period and insights. Days are IST. Default: last 30 days; at most 366 days. |
+| GET | `/api/sync/state` | Any signed-in user | `{cursor, serverTime, liveClients}`. The cursor is the newest `register_audit_log` id. |
+| WS | `/api/live` | Session cookie (browser) or `Authorization: Bearer` (Android) | Messages: `hello` and `tick` (every 15 s) with `cursor`; `change` with `cursor`, `kind` (`scan.saved`, `scan.corrected`, `ticket.updated`, `upload.activated`, `iron.received`, `iron.settings`), `marketplaceId`, `shipmentId`, `scanId`, `actorId`. A change is sent only to users whose scope includes its account. 401 without a session. Clients reload through the normal routes; they poll `/api/sync/state` every 3.5-4 s when the socket is down. |
+
+A bench correction (`POST /api/scan/correct`) writes the issues it replaces to `register_audit_log` (`scan.issues_replaced`) before replacing them, and is refused with 409 when the Inward Team has already received ironed units for that return. `POST /api/scan/complete` and `/correct` now also return `scan.marketplaceId`, `scan.shipmentId`, `scan.outcome` and `ironSendQty`; `issueCount` counts return issues only. `shift.ironSend` is today's Iron Send units.
+
 ## Routes outside `/api`
 
 When `dist/` exists (after `npm run build`), every path that does not start with `/api` returns `dist/index.html`, so the web app's own routes work when it is served by the API. The web app is otherwise served by Vite on port 5173, which proxies `/api` to the API.

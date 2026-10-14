@@ -13,6 +13,8 @@ import {
   setSessionCookie,
   clearSessionCookie,
   extractSessionToken,
+  parseCookies,
+  SESSION_COOKIE_NAME,
   validateSessionToken,
   listActiveSessions,
   revokeSessionById,
@@ -47,6 +49,9 @@ import { mountPaymentRoutes } from "./payment/routes.js"
 import { mountReturnReasonsRoutes } from "./return-reasons-routes.js"
 import { runScheduledPaymentSync } from "./payment/sync.js"
 import { closePaymentPool, paymentDatabaseUrl } from "./payment/db.js"
+import { mountIronRoutes } from "./iron-routes.js"
+import { attachLiveServer, closeLiveServer } from "./live.js"
+import type { IncomingMessage } from "node:http"
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 dotenv.config({ path: path.join(root, ".env") })
@@ -227,6 +232,23 @@ async function requireUser(req: Request, res: Response, next: NextFunction) {
   } catch (error) {
     next(error)
   }
+}
+
+// The same session check as requireUser, for the WebSocket upgrade request of /api/live (server/live.ts). The browser
+// sends its session cookie; the Android app sends its Authorization header.
+async function authenticateUpgrade(req: IncomingMessage): Promise<{ userId: number; scope: AccountScope } | null> {
+  if (!ready) return null
+  const header = String(req.headers.authorization || "")
+  let token = header.startsWith("Bearer ") ? header.slice(7).trim() : ""
+  if (!token) {
+    const cookies = parseCookies(req.headers.cookie)
+    token = (cookies[SESSION_COOKIE_NAME] || cookies.return_token || "").trim()
+  }
+  if (!token) return null
+  const validated = await validateSessionToken(getPool(), token, userSelect)
+  if (!validated) return null
+  const row = validated.user as UserRow
+  return { userId: row.id, scope: scopeOfRow(row) }
 }
 
 // Administrator changes to configuration are written to the audit log, with the user who made them.
@@ -446,6 +468,9 @@ mountPaymentRoutes(app, requireUser)
 // Return reason standardization & sizing intelligence routes live in return-reasons-routes.ts.
 mountReturnReasonsRoutes(app, requireUser)
 
+// Iron Send tracking, return analytics and the live sync cursor live in iron-routes.ts.
+mountIronRoutes(app, requireUser)
+
 // ---- Administrator pages. Every route here needs the Admin role. ----
 
 app.get("/api/admin/users", requireUser, requireAdmin, async (_req, res, next) => {
@@ -493,6 +518,7 @@ app.post("/api/admin/users", requireUser, requireAdmin, async (req, res, next) =
     if (roleInput.toLowerCase() === "admin") role = "Admin"
     else if (roleInput.toLowerCase() === "supervisor") role = "Supervisor"
     else if (roleInput.toLowerCase() === "scanner") role = "Scanner"
+    else if (roleInput.toLowerCase() === "inward") role = "Inward"
 
     const existing = await getPool().query(
       "SELECT id FROM users WHERE lower(email) = $1 OR ($2::text IS NOT NULL AND lower(login_alias) = $2)",
@@ -625,6 +651,7 @@ app.patch("/api/admin/users/:id/role", requireUser, requireAdmin, async (req, re
     if (roleInput.toLowerCase() === "admin") role = "Admin"
     else if (roleInput.toLowerCase() === "supervisor") role = "Supervisor"
     else if (roleInput.toLowerCase() === "scanner") role = "Scanner"
+    else if (roleInput.toLowerCase() === "inward") role = "Inward"
 
     const client = await getPool().connect()
     try {
@@ -1048,6 +1075,9 @@ initDatabase()
     dbMessage = result.message
     console.log(result.ok ? "PostgreSQL connected. Workspace data is ready." : result.message)
     if (result.ok) {
+      // Live updates over WebSocket (/api/live). Clients that cannot connect poll /api/sync/state instead.
+      attachLiveServer(server, getPool(), authenticateUpgrade)
+
       // Background worker for idempotent Resend email reports, OMSGuru daily updates, and payment sync (checked every 60s)
       schedulerInterval = setInterval(() => {
         runScheduledReports(getPool()).catch((err) => console.error("[Report Scheduler Error]", err))
@@ -1084,6 +1114,7 @@ function handleGracefulShutdown(signal: string) {
     clearInterval(shopifySyncInterval)
     shopifySyncInterval = null
   }
+  closeLiveServer()
   server.close(() => {
     console.log("HTTP server closed.")
     closePaymentPool().catch((err) => console.error("Error closing payment pool:", err))

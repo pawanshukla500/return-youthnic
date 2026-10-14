@@ -1,4 +1,4 @@
-export type Page = "dashboard" | "scan" | "reports" | "claims" | "uploads" | "admin"
+export type Page = "dashboard" | "scan" | "reports" | "iron" | "claims" | "uploads" | "admin"
 
 export type IconName =
   | "grid"
@@ -20,6 +20,8 @@ export type IconName =
   | "settings"
   | "logout"
   | "video"
+  | "iron"
+  | "wifi"
 
 export type SessionUser = {
   id: number
@@ -104,6 +106,8 @@ export type ShiftCard = {
   scanned: string
   correct: string
   issues: string
+  // Units sent for ironing today. Iron Send is operational, so these returns are counted as correct.
+  ironSend?: string
   accuracy: string
   progress: number
   targetLabel: string
@@ -117,6 +121,8 @@ export type IssueCategory = {
   requiresTicket: boolean
   allowsSubIssue: boolean
   requiresSubIssue: boolean
+  // Iron Send: recorded, but not a return issue (not in the issue figures, the claims or OMSGuru).
+  isOperational?: boolean
 }
 
 export type SubIssue = { id: number; label: string; categoryCode: string }
@@ -196,6 +202,9 @@ export type ScanReceipt = {
   replayed: boolean
   scan: {
     id: number
+    marketplaceId?: number
+    shipmentId?: number
+    outcome?: string
     scannedAt: string
     timeLabel: string
     status: string
@@ -213,8 +222,69 @@ export type ScanReceipt = {
   }
   itemCount: number
   issueCount: number
+  ironSendQty?: number
   shift: ShiftCard
   claimsBadge: string
+}
+
+// ---- Iron Send tracking (server/iron.ts) ----
+
+export type IronState = "pending" | "partial" | "overdue" | "received" | "cancelled"
+
+export type IronRecord = {
+  id: number
+  scanId: number
+  state: IronState
+  marketplace: string
+  marketplaceId: number | null
+  trackingId: string
+  orderId: string
+  marketplaceSku: string
+  productSku: string
+  productName: string
+  size: string
+  imageUrl: string
+  qtySent: number
+  qtyReceived: number
+  qtyPending: number
+  sentAt: string
+  sentBy: string
+  ageDays: number
+  lastReceivedAt: string | null
+  notes: string
+  receipts: { id: number; qty: number; receivedAt: string; receivedBy: string; notes: string }[]
+}
+
+export type IronSummary = {
+  overdueAfterDays: number
+  records: { open: number; pending: number; partial: number; overdue: number; received: number }
+  units: { sent: number; received: number; pending: number; overdue: number }
+  receivedToday: number
+}
+
+// ---- Return analytics (server/analytics.ts) ----
+
+export type AnalyticsCounts = { scans: number; issueScans: number; units: number; issueUnits: number; ironUnits: number }
+
+export type AnalyticsReport = {
+  filters: { dateFrom: string; dateTo: string; marketplaceId: number | null; categoryCode: string }
+  totals: AnalyticsCounts & {
+    clearScans: number
+    expectedUnits: number
+    missingUnits: number
+    issueRatePct: number
+    skus: number
+  }
+  previous: AnalyticsCounts & { dateFrom: string; dateTo: string }
+  byDay: (AnalyticsCounts & { day: string })[]
+  byWeek: (AnalyticsCounts & { weekStart: string })[]
+  byMarketplace: (AnalyticsCounts & { marketplaceId: number; marketplace: string; issueRatePct: number })[]
+  bySku: (AnalyticsCounts & { sku: string; marketplaceSku: string; productName: string; size: string; topReason: string })[]
+  bySize: (AnalyticsCounts & { size: string; sharePct: number })[]
+  byIssueCategory: { code: string; label: string; units: number; lines: number; operational: boolean }[]
+  byReason: { reason: string; canonical: string; units: number; scans: number; issueUnits: number }[]
+  insights: string[]
+  iron: IronSummary
 }
 
 export type RegisterTicket = {

@@ -1,4 +1,5 @@
 import { isAdminUser } from "./access"
+import { LiveSyncBadge } from "./live"
 import { PAGE_PATH } from "./routes"
 import type { Page } from "./types"
 import { Icon, ReturnLogo } from "./ui"
@@ -24,12 +25,13 @@ export function PageError({ message }: { message: string }) {
 const navItems: {
   id: Page
   label: string
-  icon: "grid" | "scan" | "report" | "claim" | "upload" | "users"
+  icon: "grid" | "scan" | "report" | "claim" | "upload" | "users" | "iron"
   adminOnly: boolean
 }[] = [
   { id: "dashboard", label: "Overview", icon: "grid", adminOnly: false },
   { id: "scan", label: "Scan returns", icon: "scan", adminOnly: false },
   { id: "reports", label: "Return register", icon: "report", adminOnly: false },
+  { id: "iron", label: "Iron tracking", icon: "iron", adminOnly: false },
   { id: "claims", label: "Claims", icon: "claim", adminOnly: false },
   { id: "uploads", label: "Data uploads", icon: "upload", adminOnly: false },
   { id: "admin", label: "Admin", icon: "users", adminOnly: true },
@@ -105,6 +107,7 @@ export function Header({ page }: { page: Page }) {
     dashboard: ["Good morning, " + firstName, "Here’s what’s happening with your returns today."],
     scan: ["Scan returns", "Verify every item of a received return, then record its issues."],
     reports: ["Return register", "Every verified return, item by item, with its issues, tickets and scanner."],
+    iron: ["Iron tracking", "Units sent for ironing at the scan bench, and what the Inward Team received back."],
     claims: ["Claim overview", "Track claim tickets and their status by marketplace."],
     uploads: ["Data uploads", "Load a marketplace return file as the active lookup data for that account."],
     admin: ["Admin settings", "Manage users, issue categories, logistics partners and marketplace accounts."],
@@ -116,6 +119,7 @@ export function Header({ page }: { page: Page }) {
         <p>{titles[page][1]}</p>
       </div>
       <div className="header-actions">
+        <LiveSyncBadge />
         {/* The date comes from the server. It is shown, not chosen, so it is not a button. */}
         <div className="date-button">
           <Icon name="calendar" />

@@ -37,7 +37,7 @@ function skipReason(): string {
 }
 
 const skip = skipReason()
-const run = Date.now().toString(36)
+const run = Date.now().toString(36).toUpperCase()
 const KEY_PREFIX = `SYN-${run}`
 
 let pool: pg.Pool
@@ -123,6 +123,14 @@ const TRACK = {
   fresh: `SYN-${run}-NEW`,
 }
 
+// These checks exercise the ticket rules. Production switches the ticket requirement off at the bench on every start
+// (schema-import.sql), so a ticket check turns it back on in the test database first. A later schema run turns it off.
+async function ticketRulesOn(): Promise<void> {
+  await pool.query(
+    "UPDATE receipt_issue_categories SET requires_ticket = true WHERE code IN ('missing_component', 'wrong_product', 'damaged_product')",
+  )
+}
+
 before(async () => {
   if (skip) return
   const settings = connectionSettingsFor(rawUrl)
@@ -142,7 +150,7 @@ after(async () => {
   if (pool) await pool.end()
 })
 
-test("the same AWB can exist in Myntra EJ and Myntra VB without touching each other", { skip }, async () => {
+test("the same AWB can exist in Myntra EJ and Myntra VB without touching each other", { skip: skip || false }, async () => {
   await upload(
     "Myntra EJ",
     [row({ trackingId: TRACK.shared, marketplace: "Myntra EJ", channelListingId: "SYN-EJ-A", sku: "SYN-EJ-A", orderLineId: "SYN-EJ-L1" })],
@@ -165,7 +173,7 @@ test("the same AWB can exist in Myntra EJ and Myntra VB without touching each ot
   assert.notEqual(ej.shipmentId, vb.shipmentId)
 })
 
-test("a return with two lines lists every line with its own order item and quantity", { skip }, async () => {
+test("a return with two lines lists every line with its own order item and quantity", { skip: skip || false }, async () => {
   await upload(
     "Myntra EJ",
     [
@@ -174,6 +182,8 @@ test("a return with two lines lists every line with its own order item and quant
       row({ trackingId: TRACK.scan, marketplace: "Myntra EJ", channelListingId: "SYN-EJ-D", sku: "SYN-EJ-D", orderLineId: "SYN-EJ-L4", qty: 2 }),
       row({ trackingId: TRACK.gone, marketplace: "Myntra EJ", channelListingId: "SYN-EJ-E", sku: "SYN-EJ-E", orderLineId: "SYN-EJ-L5", qty: 1 }),
       row({ trackingId: TRACK.concurrent, marketplace: "Myntra EJ", channelListingId: "SYN-EJ-F", sku: "SYN-EJ-F", orderLineId: "SYN-EJ-L6", qty: 1 }),
+      // An activation replaces the account's whole active lookup, so the file keeps the shared AWB from EJ-1.
+      row({ trackingId: TRACK.shared, marketplace: "Myntra EJ", channelListingId: "SYN-EJ-A", sku: "SYN-EJ-A", orderLineId: "SYN-EJ-L1" }),
     ],
     "EJ-2",
   )
@@ -184,7 +194,7 @@ test("a return with two lines lists every line with its own order item and quant
   assert.equal(multi.isMulti, true)
 })
 
-test("a clean scan is saved once, a retry with the same key is idempotent, and a second scan is refused", { skip }, async () => {
+test("a clean scan is saved once, a retry with the same key is idempotent, and a second scan is refused", { skip: skip || false }, async () => {
   const shipment = await found(TRACK.scan, "Myntra EJ")
   const key = `${KEY_PREFIX}-CLEAN`
   const items = shipment.items.map((item) => ({
@@ -215,7 +225,7 @@ test("a clean scan is saved once, a retry with the same key is idempotent, and a
   assert.equal(looked.status, "duplicate")
 })
 
-test("concurrent saves of one return: exactly one scan is kept, and the other save is refused", { skip }, async () => {
+test("concurrent saves of one return: exactly one scan is kept, and the other save is refused", { skip: skip || false }, async () => {
   const shipment = await found(TRACK.concurrent, "Myntra EJ")
   const items = shipment.items.map((item) => ({ itemId: item.itemId, receivedQty: item.expectedQty, verified: true, issues: [] }))
   const results = await Promise.allSettled([
@@ -231,7 +241,8 @@ test("concurrent saves of one return: exactly one scan is kept, and the other sa
   assert.equal(await countScans(shipment.shipmentId), 1)
 })
 
-test("a partly received return needs a sub-issue for the missing unit, and then saves with a ticket", { skip }, async () => {
+test("a partly received return needs a sub-issue for the missing unit, and then saves with a ticket", { skip: skip || false }, async () => {
+  await ticketRulesOn()
   const shipment = await found(TRACK.multi, "Myntra EJ")
   const [lineOne, lineTwo] = shipment.items
   const refused: unknown = await recordScan(pool, actor, {
@@ -284,7 +295,8 @@ test("a partly received return needs a sub-issue for the missing unit, and then 
   assert.equal(missingLine.issues[0].ticket?.status, "Raised")
 })
 
-test("a ticket is created with its first history row, a rejection needs a reason, and a used ticket cannot be reused", { skip }, async () => {
+test("a ticket is created with its first history row, a rejection needs a reason, and a used ticket cannot be reused", { skip: skip || false }, async () => {
+  await ticketRulesOn()
   const shipment = await found(TRACK.shared, "Myntra VB")
   const ticketCode = `SYN-${run}-TKT-V`
   // One unit, received, with a damaged issue that needs a ticket. Every unit is accounted for, so this must save.
@@ -335,7 +347,7 @@ test("a ticket is created with its first history row, a rejection needs a reason
   assert.equal(history[1].reason, "SYN photo does not match the order")
 })
 
-test("invalid lookup references are refused and nothing is written", { skip }, async () => {
+test("invalid lookup references are refused and nothing is written", { skip: skip || false }, async () => {
   // Myntra EJ TRACK.shared has not been scanned, so it is the right return to test the references against.
   const shipment = await found(TRACK.shared, "Myntra EJ")
   const before = await pool.query("SELECT COUNT(*)::int AS n FROM receipt_scans")
@@ -356,14 +368,14 @@ test("invalid lookup references are refused and nothing is written", { skip }, a
       photoCount: 0,
       hasVideo: false,
     }),
-    409,
-    /no longer in the active lookup data/,
+    404,
+    /Return not found/,
   )
   const after = await pool.query("SELECT COUNT(*)::int AS n FROM receipt_scans")
   assert.equal(after.rows[0].n, before.rows[0].n, "refused saves must not change the scan history")
 })
 
-test("a new upload replaces only its own account's active lookup data, and the scan history stays", { skip }, async () => {
+test("a new upload replaces only its own account's active lookup data, and the scan history stays", { skip: skip || false }, async () => {
   const scanned = await pool.query("SELECT er.id AS shipment_id FROM expected_returns er WHERE er.tracking_id = $1 ORDER BY er.id", [TRACK.scan])
   const scannedShipment = Number(scanned.rows[0].shipment_id)
 
@@ -380,7 +392,8 @@ test("a new upload replaces only its own account's active lookup data, and the s
         channelListingId: "SYN-EJ-G",
         sku: "SYN-EJ-G",
         orderLineId: "SYN-EJ-L7",
-        raw: { fsn: "SYN-FSN-1" },
+        marketplaceSkuIdentifier: "SYN-FSN-1",
+        marketplaceSkuIdentifierKind: "fsn",
       }),
       row({ trackingId: TRACK.concurrent, marketplace: "Myntra EJ", channelListingId: "SYN-EJ-F", sku: "SYN-EJ-F", orderLineId: "SYN-EJ-L6" }),
     ],
@@ -416,7 +429,7 @@ test("a new upload replaces only its own account's active lookup data, and the s
   assert.equal(snapshot.rows[0].tracking_id_snapshot, TRACK.scan)
 })
 
-test("a failed upload rolls back, and the previous active lookup data stays in place", { skip }, async () => {
+test("a failed upload rolls back, and the previous active lookup data stays in place", { skip: skip || false }, async () => {
   const before = await found(TRACK.fresh, "Myntra EJ")
   await assert.rejects(
     upload(
@@ -433,7 +446,7 @@ test("a failed upload rolls back, and the previous active lookup data stays in p
   assert.equal(staged.rows[0].n, 0, "no staging rows may be left behind")
 })
 
-test("the register lists item rows with their issues, and the export matches the filters", { skip }, async () => {
+test("the register lists item rows with their issues, and the export matches the filters", { skip: skip || false }, async () => {
   const marketplace = await pool.query("SELECT id FROM marketplaces WHERE name = 'Myntra EJ'")
   const list = await listRegister(pool, { marketplaceId: Number(marketplace.rows[0].id), scannerId: actor.id }, 1, 200)
   assert.ok(list.total >= 3)
@@ -443,11 +456,11 @@ test("the register lists item rows with their issues, and the export matches the
   const csv = await exportRegister(pool, { tracking: TRACK.multi })
   const lines = csv.trimEnd().split("\n")
   assert.equal(lines.length, 3, "one header and two item rows for the multi-line return")
-  assert.match(lines[0], /"Return Received Sub Issue"/)
+  assert.match(lines[0], /"Return Received Sub Issue/)
   assert.ok(csv.includes(`"SYN-${run}-TKT-P"`))
 })
 
-test("persistence: a new connection and a second schema run keep every scan", { skip }, async () => {
+test("persistence: a new connection and a second schema run keep every scan", { skip: skip || false }, async () => {
   const before = await listRegister(pool, { tracking: TRACK.multi }, 1, 50)
   await pool.end()
   const settings = connectionSettingsFor(rawUrl)

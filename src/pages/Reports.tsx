@@ -6,6 +6,8 @@ import { Badge, Icon, MarketplaceBadge, Modal, PartnerBadge } from "../ui"
 import { ShopifyReport } from "../ShopifyReport"
 import { OmsguruDailyReport } from "../OmsguruDailyReport"
 import { ReturnReasonsReport } from "../ReturnReasonsReport"
+import { AnalyticsReport } from "../AnalyticsReport"
+import { useLiveChanges } from "../live"
 
 // The return register. Each row is one verified item of a return, or one line of a legacy scan. The default export is the
 // 19 columns of the approved mapping, in that order. The operational export adds the service and traceability columns.
@@ -458,18 +460,20 @@ export function Reports() {
   const [detail, setDetail] = useState<Row | null>(null)
   const [hidden, setHidden] = useState<Set<string>>(new Set())
   const [showColumns, setShowColumns] = useState(false)
-  const [viewMode, setViewMode] = useState<"register" | "shopify" | "omsguru" | "reasons">(() => {
+  const [viewMode, setViewMode] = useState<"register" | "shopify" | "omsguru" | "reasons" | "analytics">(() => {
     const tab = new URLSearchParams(window.location.search).get("tab")
+    if (tab === "analytics") return "analytics"
     if (tab === "reasons" || tab === "sizing") return "reasons"
     if (tab === "omsguru") return "omsguru"
     if (tab === "shopify") return "shopify"
     return "register"
   })
 
-  const changeView = (mode: "register" | "shopify" | "omsguru" | "reasons") => {
+  const changeView = (mode: "register" | "shopify" | "omsguru" | "reasons" | "analytics") => {
     setViewMode(mode)
     const url = new URL(window.location.href)
-    if (mode === "reasons") url.searchParams.set("tab", "reasons")
+    if (mode === "analytics") url.searchParams.set("tab", "analytics")
+    else if (mode === "reasons") url.searchParams.set("tab", "reasons")
     else if (mode === "shopify") url.searchParams.set("tab", "shopify")
     else if (mode === "omsguru") url.searchParams.set("tab", "omsguru")
     else url.searchParams.delete("tab")
@@ -502,6 +506,11 @@ export function Reports() {
       window.clearTimeout(timer)
     }
   }, [filters, sort, page, refreshKey])
+
+  // A scan saved on another screen or phone shows up in the register without a manual refresh.
+  useLiveChanges(() => {
+    if (viewMode === "register") setRefreshKey((key) => key + 1)
+  }, 1000)
 
   const update = (patch: Partial<Filters>) => {
     setFilters((current) => ({ ...current, ...patch }))
@@ -548,6 +557,15 @@ export function Reports() {
       </button>
       <button
         type="button"
+        className={`report-view-tab ${viewMode === "analytics" ? "active" : ""}`}
+        onClick={() => changeView("analytics")}
+      >
+        <Icon name="grid" size={16} />
+        <span>Return Analytics</span>
+        <span className="shopify-live-indicator" title="Size, SKU, marketplace, date and reason figures from stored scans">● Live</span>
+      </button>
+      <button
+        type="button"
         className={`report-view-tab ${viewMode === "shopify" ? "active" : ""}`}
         onClick={() => changeView("shopify")}
       >
@@ -577,6 +595,15 @@ export function Reports() {
       </button>
     </div>
   )
+
+  if (viewMode === "analytics") {
+    return (
+      <div className="page-content">
+        {switcher}
+        <AnalyticsReport />
+      </div>
+    )
+  }
 
   if (viewMode === "reasons") {
     return (

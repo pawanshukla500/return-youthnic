@@ -17,6 +17,7 @@ import { commitLookupUpload, resolveProductSkus, type ProductSource } from "./lo
 import { UNKNOWN_PARTNER_LABEL } from "./register-rules.js"
 import { inspectLayout, isScannableRow, parseSpreadsheet, templateCsv, type ParsedRow } from "./sheets.js"
 import { scopeOf, userOf } from "./http.js"
+import { publishChange } from "./live.js"
 import { activationBlockers, canActivate, confirmationsNeeded, countPreview, type PreviewCounts } from "./upload-policy.js"
 
 const PREVIEW_TTL_MS = 15 * 60 * 1000
@@ -368,6 +369,7 @@ export function mountUploadRoutes(app: Express, requireUser: RequestHandler): vo
         cancelledRows: result.cancelledRows,
         confirmed: confirmations,
       }
+      publishChange({ kind: "upload.activated", marketplaceId: null, actorId: user.id })
 
       if (isStream) {
         res.write(`data: ${JSON.stringify({ phase: "complete", percent: 100, result: responsePayload })}\n\n`)

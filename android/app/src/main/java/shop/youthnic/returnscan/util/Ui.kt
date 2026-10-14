@@ -50,18 +50,21 @@ object Ui {
 
     fun megabytes(bytes: Long): String = String.format(Locale.US, "%.1f MB", bytes / 1048576.0)
 
-    fun parseIsoUtc(iso: String?): Date? {
-        if (iso.isNullOrBlank() || iso.length < 19) return null
-        return try {
-            SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US).apply {
-                timeZone = TimeZone.getTimeZone("UTC")
-            }.parse(iso.substring(0, 19))
-        } catch (_: Exception) {
-            null
-        }
-    }
+    // Times: see ServerTime (no Android classes, so it is unit tested on the JVM).
+    val IST: TimeZone get() = ServerTime.IST
 
-    fun shortDateTime(date: Date): String = SimpleDateFormat("d MMM, h:mm a", indian).format(date)
+    fun parseServerTime(value: String?): Date? = ServerTime.parse(value)
 
-    fun shortDate(date: Date): String = SimpleDateFormat("d MMM", indian).format(date)
+    @Deprecated("Ignored the offset of the server time. Use parseServerTime.", ReplaceWith("parseServerTime(iso)"))
+    fun parseIsoUtc(iso: String?): Date? = ServerTime.parse(iso)
+
+    fun shortDateTime(date: Date): String = ServerTime.format("d MMM, h:mm a", date)
+
+    fun shortDate(date: Date): String = ServerTime.format("d MMM", date)
+
+    fun istTime(date: Date): String = ServerTime.istTime(date)
+
+    fun istClock(date: Date): String = ServerTime.istClock(date)
+
+    fun ageLabel(atMillis: Long, nowMillis: Long = System.currentTimeMillis()): String = ServerTime.ageLabel(atMillis, nowMillis)
 }

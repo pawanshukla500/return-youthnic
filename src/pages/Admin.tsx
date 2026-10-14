@@ -926,6 +926,7 @@ export function Admin() {
                   >
                     <option value="Scanner">Scanner (Scanning & return inspection only)</option>
                     <option value="Supervisor">Supervisor (Operations, reports, uploads, claims)</option>
+                    <option value="Inward">Inward Team (Records ironed units received back)</option>
                     <option value="Admin">Admin (Full system and user access)</option>
                   </select>
                 </label>

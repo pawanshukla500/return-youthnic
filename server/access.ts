@@ -29,6 +29,11 @@ export function isScannerRole(role: string): boolean {
   return String(role || "").trim().toLowerCase() === "scanner"
 }
 
+// The Inward Team records ironed units that came back (server/iron.ts). It does not scan returns.
+export function isInwardRole(role: string): boolean {
+  return String(role || "").trim().toLowerCase() === "inward"
+}
+
 export function isSupervisorOrAdminRole(role: string): boolean {
   const r = String(role || "").trim().toLowerCase()
   return r === "admin" || r === "supervisor"

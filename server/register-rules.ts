@@ -167,6 +167,15 @@ export type CategoryRule = {
   allowsSubIssue: boolean
   requiresSubIssue: boolean
   active: boolean
+  // An operational category (Iron Send) is recorded with the scan but is not a return issue: it is not counted in the
+  // issue figures or the claims, and its units are never sent to OMSGuru. See server/schema-iron.sql.
+  isOperational?: boolean
+}
+
+// True when an issue in this category makes the scan an issue return. Unknown codes count as issues, so a category
+// that is missing from the rules is never hidden from the issue figures.
+export function countsAsReturnIssue(category: Pick<CategoryRule, "isOperational"> | undefined): boolean {
+  return !category?.isOperational
 }
 
 export type SubIssueRule = { id: number; label: string; categoryCode: string; active: boolean }

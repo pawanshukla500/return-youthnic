@@ -159,6 +159,11 @@
     <string name="ticket_hint">Ticket ID</string>
     <string name="affected_units_label">Units affected:</string>
     <string name="banner_just_now">Just now</string>
+    <!-- Live sync pill and today's figures. Times are IST. Counts are formatted text (Ui.count), so %1$s, never %d. -->
+    <string name="sync_live_format">LIVE · %1$s</string>
+    <string name="sync_polling_format">AUTO-SYNC · %1$s</string>
+    <string name="sync_offline_format">OFFLINE · last %1$s</string>
+    <string name="today_issue_iron_format">Issues %1$s · Iron %2$s</string>
     <string name="torch_needs_camera">The camera is not running, so the torch is not available.</string>
     <string name="torch_unavailable">This device has no torch.</string>
 </resources>
