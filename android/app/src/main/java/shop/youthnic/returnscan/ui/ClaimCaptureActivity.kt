@@ -44,6 +44,7 @@ class ClaimCaptureActivity : AppCompatActivity() {
     private lateinit var binding: ActivityClaimCaptureBinding
     private val api get() = (application as ReturnScanApp).apiClient
     private val imageCache get() = (application as ReturnScanApp).imageCache
+    private val sessionManager get() = (application as ReturnScanApp).sessionManager
 
     private var lookupData: ClaimReturnLookup? = null
     private var selectedTemplate: ClaimTemplate? = null
@@ -110,8 +111,14 @@ class ClaimCaptureActivity : AppCompatActivity() {
                         binding.etClaimSearch.setText(code)
                         searchReturn(code)
                     }
-                    TARGET_PACKET_ID -> binding.etPacketId.setText(code)
-                    TARGET_AWB -> binding.etAwbNumber.setText(code)
+                    TARGET_PACKET_ID -> {
+                        binding.etPacketId.setText(code)
+                        updateDescriptionAndTitle(selectedIssueCode)
+                    }
+                    TARGET_AWB -> {
+                        binding.etAwbNumber.setText(code)
+                        updateDescriptionAndTitle(selectedIssueCode)
+                    }
                 }
             }
         }
@@ -127,10 +134,86 @@ class ClaimCaptureActivity : AppCompatActivity() {
         setupMarketplaceDropdown()
         setupListeners()
 
-        val initialAwb = intent.getStringExtra(EXTRA_TRACKING_AWB).orEmpty()
-        val initialOrder = intent.getStringExtra(EXTRA_ORDER_ID).orEmpty()
-        val query = initialAwb.ifBlank { initialOrder }
+        // Initialize evidence cards immediately with standard Meesho evidence slots
+        buildDynamicEvidenceCards(getMeeshoStandardEvidenceFields())
 
+        // 1. Extract values from Intent extras with fallback to SessionManager's cached last-scanned return
+        val extraAwb = intent.getStringExtra(EXTRA_TRACKING_AWB).orEmpty().trim()
+        val extraOrder = intent.getStringExtra(EXTRA_ORDER_ID).orEmpty().trim()
+        val extraSubOrder = intent.getStringExtra(EXTRA_SUB_ORDER_ID).orEmpty().trim()
+        val extraPacketId = intent.getStringExtra(EXTRA_PACKET_ID).orEmpty().trim()
+        val extraMarketplace = intent.getStringExtra(EXTRA_MARKETPLACE).orEmpty().trim()
+        val extraTitle = intent.getStringExtra(EXTRA_PRODUCT_TITLE).orEmpty().trim()
+        val extraSku = intent.getStringExtra(EXTRA_PRODUCT_SKU).orEmpty().trim()
+        val extraMasterSku = intent.getStringExtra(EXTRA_MASTER_SKU).orEmpty().trim()
+        val extraImage = intent.getStringExtra(EXTRA_IMAGE_URL).orEmpty().trim()
+        val extraIssue = intent.getStringExtra(EXTRA_ISSUE_CODE).orEmpty().trim()
+
+        val awb = extraAwb.ifBlank { sessionManager.lastScannedAwb }
+        val order = extraOrder.ifBlank { sessionManager.lastScannedOrderId }
+        val subOrder = extraSubOrder.ifBlank { sessionManager.lastScannedSubOrderId }.ifBlank { order }
+        val packetId = extraPacketId.ifBlank { sessionManager.lastScannedFlyerId }
+        val title = extraTitle.ifBlank { sessionManager.lastScannedProductTitle }
+        val sku = extraSku.ifBlank { sessionManager.lastScannedSku }
+        val masterSku = extraMasterSku.ifBlank { sessionManager.lastScannedMasterSku }
+        val imageUrl = extraImage.ifBlank { sessionManager.lastScannedImageUrl }
+        val issueCode = extraIssue.ifBlank { sessionManager.lastScannedIssueCode }
+
+        // 2. Prefill Return Details IMMEDIATELY in UI
+        if (awb.isNotBlank()) binding.etAwbNumber.setText(awb)
+        if (subOrder.isNotBlank()) binding.etSubOrderNumber.setText(subOrder)
+        binding.etPacketId.setText(if (packetId.isNotBlank()) packetId else "NA")
+
+        val displayOrder = subOrder.ifBlank { order.ifBlank { awb } }
+        if (displayOrder.isNotBlank()) {
+            binding.tvOrderNumber.text = displayOrder
+        }
+
+        // Product preview card
+        if (title.isNotBlank() || masterSku.isNotBlank() || sku.isNotBlank()) {
+            binding.tvProductTitle.text = title.ifBlank { masterSku.ifBlank { sku } }
+            binding.tvProductSku.text = "Master SKU: ${masterSku.ifBlank { sku }} · Listing: $sku"
+            binding.tvItemQtyBadge.text = "Ordered: 1"
+            binding.tvBadQtyBadge.text = "Bad Qty: 1 (Issue Claim)"
+        }
+
+        if (imageUrl.isNotBlank()) {
+            lifecycleScope.launch {
+                val bmp = imageCache.getOrFetch(imageUrl)
+                if (bmp != null) {
+                    binding.ivProductThumb.setImageBitmap(bmp)
+                } else {
+                    binding.ivProductThumb.setImageResource(android.R.drawable.ic_menu_gallery)
+                }
+            }
+            binding.ivProductThumb.setOnClickListener {
+                startActivity(Intent(this, ImageViewerActivity::class.java).apply {
+                    putExtra(ImageViewerActivity.EXTRA_IMAGE_URL, imageUrl)
+                    putExtra(ImageViewerActivity.EXTRA_TITLE, "${title.ifBlank { masterSku }} · $masterSku")
+                })
+            }
+        }
+
+        // Match issue dropdown if issueCode is known
+        val mappedIssueIdx = when (issueCode.lowercase()) {
+            "missing", "missing_items", "missing_component" -> meeshoIssues.indexOfFirst { it.first == "missing_items" }
+            "wrong", "wrong_return", "wrong_product" -> meeshoIssues.indexOfFirst { it.first == "wrong_return" }
+            "damaged", "damaged_return", "damaged_product" -> meeshoIssues.indexOfFirst { it.first == "damaged_return" }
+            "used", "used_product" -> meeshoIssues.indexOfFirst { it.first == "used_product" }
+            "sku_change", "wrong_barcode_rto" -> meeshoIssues.indexOfFirst { it.first == "wrong_barcode_rto" }
+            else -> 0
+        }
+        if (mappedIssueIdx >= 0) {
+            binding.spinnerMeeshoIssue.setSelection(mappedIssueIdx)
+            selectedIssueCode = meeshoIssues[mappedIssueIdx].first
+            selectedIssueLabel = meeshoIssues[mappedIssueIdx].second
+        }
+
+        // 3. Immediately prefill Description and Claim Title from local data
+        updateDescriptionAndTitle(selectedIssueCode)
+
+        // 4. In background, fire searchReturn to enrich TAT, templates, customer info, etc.
+        val query = subOrder.ifBlank { awb.ifBlank { order } }
         if (query.isNotBlank()) {
             binding.etClaimSearch.setText(query)
             searchReturn(query)
@@ -289,7 +372,8 @@ class ClaimCaptureActivity : AppCompatActivity() {
         binding.layoutStepReturnDetails.visibility = View.VISIBLE
 
         // Top Order Summary Card
-        binding.tvOrderNumber.text = data.orderId.ifBlank { data.trackingNumber }
+        val displayOrder = data.orderId.ifBlank { data.subOrderId.ifBlank { data.trackingNumber } }
+        binding.tvOrderNumber.text = displayOrder
         binding.tvCustomerName.text = data.customerName
         val totalQty = data.items.sumOf { it.quantity }.coerceAtLeast(1)
         binding.tvOrderTotalAndQty.text = String.format("₹ %.2f · Qty: %d", data.totalPrice, totalQty)
@@ -299,8 +383,10 @@ class ClaimCaptureActivity : AppCompatActivity() {
         // Item Card
         val item = data.items.firstOrNull()
         if (item != null) {
-            binding.tvProductTitle.text = item.title.ifBlank { item.masterSku.ifBlank { item.sku } }
-            binding.tvProductSku.text = "Master SKU: ${item.masterSku.ifBlank { item.sku }} · Listing: ${item.sku}"
+            val title = item.title.ifBlank { item.masterSku.ifBlank { item.sku } }
+            val masterSku = item.masterSku.ifBlank { item.sku }
+            binding.tvProductTitle.text = title
+            binding.tvProductSku.text = "Master SKU: $masterSku · Listing: ${item.sku}"
             binding.tvItemQtyBadge.text = "Ordered: ${item.quantity}"
             binding.tvBadQtyBadge.text = "Bad Qty: 1 (Issue Claim)"
 
@@ -325,9 +411,13 @@ class ClaimCaptureActivity : AppCompatActivity() {
         }
 
         // Pre-fill Meesho Support Form Inputs (Sub Order Number = Order Item ID, AWB = Tracking ID, Packet ID = Flyer ID or NA)
-        binding.etSubOrderNumber.setText(data.subOrderId.ifBlank { data.orderId })
-        binding.etAwbNumber.setText(data.awb.ifBlank { data.trackingNumber })
-        binding.etPacketId.setText(data.packetId.ifBlank { "NA" })
+        val resolvedSubOrder = data.subOrderId.ifBlank { data.orderId }
+        val resolvedAwb = data.awb.ifBlank { data.trackingNumber }
+        val resolvedPacketId = data.packetId.ifBlank { "NA" }
+
+        binding.etSubOrderNumber.setText(resolvedSubOrder)
+        binding.etAwbNumber.setText(resolvedAwb)
+        binding.etPacketId.setText(resolvedPacketId)
 
         // Pre-select matching issue if detected in scan
         val detectedIssue = data.standardReasons.firstOrNull()?.code
@@ -367,7 +457,23 @@ class ClaimCaptureActivity : AppCompatActivity() {
             binding.tvTatSubtitle.setTextColor(0xFF15803D.toInt())
         }
 
+        // Update Title & Description with all loaded details
         updateDescriptionAndTitle(selectedIssueCode)
+
+        // Save fresh details to SessionManager
+        sessionManager.saveLastScannedReturn(
+            awb = resolvedAwb,
+            orderId = data.orderId,
+            subOrderId = resolvedSubOrder,
+            flyerId = if (resolvedPacketId != "NA") resolvedPacketId else "",
+            marketplace = data.marketplace,
+            productTitle = item?.title.orEmpty(),
+            sku = item?.sku.orEmpty(),
+            masterSku = item?.masterSku.orEmpty(),
+            imageUrl = item?.imageUrl.orEmpty(),
+            customerName = data.customerName,
+            totalPrice = data.totalPrice
+        )
 
         // Select or create Meesho Evidence Template
         selectedTemplate = data.templates.firstOrNull { it.name.contains("Meesho", ignoreCase = true) }
@@ -384,25 +490,40 @@ class ClaimCaptureActivity : AppCompatActivity() {
     }
 
     private fun updateDescriptionAndTitle(code: String) {
-        val data = lookupData ?: return
-        val subOrder = binding.etSubOrderNumber.text?.toString()?.trim().orEmpty().ifBlank { data.subOrderId.ifBlank { data.orderId } }
-        val awb = binding.etAwbNumber.text?.toString()?.trim().orEmpty().ifBlank { data.awb.ifBlank { data.trackingNumber } }
-        val packetId = binding.etPacketId.text?.toString()?.trim().orEmpty().ifBlank { data.packetId.ifBlank { "NA" } }
-        val item = data.items.firstOrNull()
-        val masterSku = item?.masterSku?.ifBlank { item.sku }.orEmpty()
+        val data = lookupData
+        val subOrder = binding.etSubOrderNumber.text?.toString()?.trim().orEmpty()
+            .ifBlank { data?.subOrderId?.ifBlank { data.orderId } ?: "" }
+            .ifBlank { sessionManager.lastScannedSubOrderId.ifBlank { sessionManager.lastScannedOrderId } }
 
-        binding.etClaimTitle.setText("$selectedIssueLabel - Sub Order $subOrder")
+        val awb = binding.etAwbNumber.text?.toString()?.trim().orEmpty()
+            .ifBlank { data?.awb?.ifBlank { data.trackingNumber } ?: "" }
+            .ifBlank { sessionManager.lastScannedAwb }
+
+        val packetId = binding.etPacketId.text?.toString()?.trim().orEmpty()
+            .ifBlank { data?.packetId ?: "" }
+            .ifBlank { sessionManager.lastScannedFlyerId }
+            .ifBlank { "NA" }
+
+        val item = data?.items?.firstOrNull()
+        val masterSku = item?.masterSku?.ifBlank { item.sku }.orEmpty()
+            .ifBlank { sessionManager.lastScannedMasterSku.ifBlank { sessionManager.lastScannedSku } }
+
+        if (subOrder.isNotBlank()) {
+            binding.etClaimTitle.setText("$selectedIssueLabel - Sub Order $subOrder")
+        } else {
+            binding.etClaimTitle.setText(selectedIssueLabel)
+        }
 
         val desc = when (code) {
             "missing_items" -> {
-                val missingDetails = if (data.missingItems.isNotEmpty()) {
-                    data.missingItems.joinToString(", ") { "${it.label} (${it.quantity} × ₹${String.format("%.2f", it.amountEach)} = ₹${String.format("%.2f", it.amount)})" }
+                val missingDetails = if (data != null && data.missingItems.isNotEmpty()) {
+                    ": " + data.missingItems.joinToString(", ") { "${it.label} (${it.quantity} × ₹${String.format("%.2f", it.amountEach)} = ₹${String.format("%.2f", it.amount)})" }
                 } else {
-                    "Missing item / component"
+                    ""
                 }
-                val amountStr = if (data.missingAmount > 0) "Total claim amount: ₹${String.format("%.2f", data.missingAmount)}.\n" else ""
+                val amountStr = if (data != null && data.missingAmount > 0) "Total claim amount: ₹${String.format("%.2f", data.missingAmount)}.\n" else ""
                 "Team,\n\n" +
-                "Please Note This Sub Order ID $subOrder has item/s missing in the return package: $missingDetails.\n" +
+                "Please Note This Sub Order ID $subOrder has item/s missing in the return package$missingDetails.\n" +
                 amountStr +
                 "Please check attached all proof and video and make sure our claim will be approved.\n\n" +
                 "Sub Order ID: $subOrder\n" +
@@ -413,8 +534,9 @@ class ClaimCaptureActivity : AppCompatActivity() {
                 "Return Team Tullipprints"
             }
             "wrong_barcode_rto" -> {
+                val itemStr = if (masterSku.isNotBlank()) " ($masterSku)" else ""
                 "Team,\n\n" +
-                "Please Note This Sub Order ID $subOrder has received a wrong barcoded package in RTO instead of ordered item ($masterSku). Outer package barcode label does not match our return manifest. Please check attached proof and video and make sure our claim will be approved.\n\n" +
+                "Please Note This Sub Order ID $subOrder has received a wrong barcoded package in RTO instead of ordered item$itemStr. Outer package barcode label does not match our return manifest. Please check attached proof and video and make sure our claim will be approved.\n\n" +
                 "Sub Order ID: $subOrder\n" +
                 "AWB Number: $awb\n" +
                 "State of the packet: Tampered\n" +
@@ -630,10 +752,6 @@ class ClaimCaptureActivity : AppCompatActivity() {
     }
 
     private fun validateStep1(): Boolean {
-        if (lookupData == null) {
-            showMessage("Please find and select a return first.")
-            return false
-        }
         val subOrder = binding.etSubOrderNumber.text?.toString()?.trim().orEmpty()
         if (subOrder.isBlank()) {
             showMessage("Sub Order Number is required.")
@@ -684,7 +802,9 @@ class ClaimCaptureActivity : AppCompatActivity() {
     }
 
     private fun submitCompleteClaim() {
-        val data = lookupData ?: return
+        val subOrder = binding.etSubOrderNumber.text?.toString()?.trim().orEmpty()
+        val awb = binding.etAwbNumber.text?.toString()?.trim().orEmpty()
+        val packetId = binding.etPacketId.text?.toString()?.trim().orEmpty().ifBlank { "NA" }
 
         // Validate required evidence fields (Product images, Reverse Waybill, Unpacking Video)
         val requiredKeys = listOf(
@@ -700,16 +820,37 @@ class ClaimCaptureActivity : AppCompatActivity() {
             }
         }
 
-        val subOrder = binding.etSubOrderNumber.text?.toString()?.trim().orEmpty()
-        val awb = binding.etAwbNumber.text?.toString()?.trim().orEmpty()
-        val packetId = binding.etPacketId.text?.toString()?.trim().orEmpty().ifBlank { "NA" }
-
         binding.progressClaim.visibility = View.VISIBLE
         binding.btnSubmitClaim.isEnabled = false
 
-        val item = data.items.firstOrNull()
-
         lifecycleScope.launch {
+            var data = lookupData
+            if (data == null) {
+                val query = subOrder.ifBlank { awb }
+                val lookupResult = api.lookupClaimReturn(query)
+                data = lookupResult.getOrNull()
+                if (data == null) {
+                    data = ClaimReturnLookup(
+                        found = true,
+                        expectedReturnId = 0,
+                        subOrderId = subOrder,
+                        orderId = subOrder,
+                        trackingNumber = awb,
+                        awb = awb,
+                        packetId = packetId,
+                        marketplace = "Meesho",
+                        marketplaceId = 1,
+                        customerName = sessionManager.lastScannedCustomerName.ifBlank { "Customer" },
+                        totalPrice = sessionManager.lastScannedTotalPrice
+                    )
+                }
+                lookupData = data
+            }
+
+            val item = data.items.firstOrNull()
+            val masterSku = item?.masterSku?.ifBlank { item.sku }.orEmpty()
+                .ifBlank { sessionManager.lastScannedMasterSku.ifBlank { sessionManager.lastScannedSku } }
+
             val body = JSONObject().apply {
                 if (data.scanId != null && data.scanId > 0) {
                     put("receiptScanId", data.scanId)
@@ -725,7 +866,7 @@ class ClaimCaptureActivity : AppCompatActivity() {
                 put("customerName", data.customerName)
                 put("totalPrice", data.totalPrice)
                 put("shippedDate", data.shippedDate ?: "")
-                put("sku", item?.masterSku ?: item?.sku ?: "")
+                put("sku", masterSku)
                 put("subOrderId", subOrder)
                 put("packetState", "Tampered")
                 put("packetId", packetId)
@@ -797,9 +938,16 @@ class ClaimCaptureActivity : AppCompatActivity() {
     companion object {
         const val EXTRA_TRACKING_AWB = "extra_tracking_awb"
         const val EXTRA_ORDER_ID = "extra_order_id"
+        const val EXTRA_SUB_ORDER_ID = "extra_sub_order_id"
+        const val EXTRA_PACKET_ID = "extra_packet_id"
         const val EXTRA_MARKETPLACE = "extra_marketplace"
         const val EXTRA_MARKETPLACE_ID = "extra_marketplace_id"
         const val EXTRA_SCAN_ID = "extra_scan_id"
+        const val EXTRA_PRODUCT_TITLE = "extra_product_title"
+        const val EXTRA_PRODUCT_SKU = "extra_product_sku"
+        const val EXTRA_MASTER_SKU = "extra_master_sku"
+        const val EXTRA_IMAGE_URL = "extra_image_url"
+        const val EXTRA_ISSUE_CODE = "extra_issue_code"
 
         private const val TARGET_SEARCH = 0
         private const val TARGET_PACKET_ID = 1

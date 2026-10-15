@@ -1836,4 +1836,35 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
   - Drop or truncate any database tables or columns.
   - Remove the 25MB file size limit on unboxing video uploads.
 
+### 2026-10-15, Antigravity, Fix Scanned Details Auto-Prefill for Claims (Mobile App & Server Lookup)
+
+- **Overview:** Fixed the issue where return details (`Sub Order Number`, `AWB Number`, `Packet ID`, `Claim Title`, `Description`, and Product Reference SKU/Image) failed to auto-prefill on the Claim screen after scanning a return in the mobile app.
+- **Root Cause Analysis:**
+  1. `server/claim-automation-service.ts` had a broken SQL query in `lookupReturnForClaim` querying non-existent columns (`eri.sku`, `eri.master_sku`, `eri.product_title`, `eri.quantity`, `eri.catalog_image_url`) on `expected_return_items` without joining the `skus` table, causing PostgreSQL to fail with a column error on lookup. Furthermore, `scanQuery` did not search `expected_return_items.display_order_item_id` / `order_line_id` or `receipt_scan_items.order_item_id`.
+  2. `ReturnVerificationBottomSheet.kt` only passed `EXTRA_TRACKING_AWB` and `EXTRA_ORDER_ID` when `btnFileClaim` was tapped, dropping Sub Order ID, Packet/Flyer ID, and product metadata.
+  3. `ClaimCaptureActivity.kt` did not prefill fields in `onCreate` from intent extras or cached scans; `updateDescriptionAndTitle` had an early exit `val data = lookupData ?: return` that kept title and description empty whenever the server lookup was delayed or errored.
+- **Changes Applied:**
+  - **Backend (`server/claim-automation-service.ts`, `server/claim-automation-routes.ts`):**
+    - Corrected `scanQuery` in `lookupReturnForClaim` to match `display_order_item_id`, `order_line_id`, and `receipt_scan_items.order_item_id`.
+    - Joined `expected_return_items` with `skus s ON s.id = eri.sku_id` to reliably resolve `product_title`, `master_sku`, `sku`, `catalog_image_url`, and `sub_order_id`.
+    - Enhanced `POST /api/claims/unified-create` to auto-resolve `expectedReturnId` from `subOrderId` / `awb` if not explicitly provided.
+  - **Mobile Client (`android/app/`):**
+    - `SessionManager.kt`: Added caching properties (`lastScannedAwb`, `lastScannedOrderId`, `lastScannedSubOrderId`, `lastScannedFlyerId`, `lastScannedMarketplace`, `lastScannedProductTitle`, `lastScannedSku`, `lastScannedMasterSku`, `lastScannedImageUrl`, `lastScannedIssueCode`) and helper method `saveLastScannedReturn(...)`.
+    - `ScannerActivity.kt`: Caches scanned return details to `SessionManager` on scan and verification save.
+    - `ReturnVerificationBottomSheet.kt`: Passes all return fields (`EXTRA_SUB_ORDER_ID`, `EXTRA_PACKET_ID`, `EXTRA_PRODUCT_TITLE`, `EXTRA_PRODUCT_SKU`, `EXTRA_MASTER_SKU`, `EXTRA_IMAGE_URL`, `EXTRA_ISSUE_CODE`) in the Intent to `ClaimCaptureActivity`, and updates `SessionManager`.
+    - `ChannelActivity.kt`: Passes cached return details from `SessionManager` when the Claims card is opened from the home screen.
+    - `ClaimCaptureActivity.kt`:
+      - In `onCreate()`, immediately extracts all fields from Intent extras (falling back to `SessionManager`) and populates `etAwbNumber`, `etSubOrderNumber`, `etPacketId`, product preview card, and product reference image via `ImageCache`.
+      - Decoupled `updateDescriptionAndTitle` from `lookupData`, allowing the Tullipprints team claim template and title to generate immediately from available EditText values and local state.
+      - Removed rigid `lookupData == null` blocker in `validateStep1()`.
+      - Added fallback in `submitCompleteClaim()` to construct a minimal record if offline or un-synced.
+      - Automatically updates title and description if Packet ID or AWB barcodes are re-scanned.
+- **Verification:**
+  - `npm.cmd run typecheck`: Passed (0 errors).
+  - `npm.cmd run build`: Passed (Vite production bundle in 1.66s, server dist bundled in 30ms).
+  - `npm.cmd test`: 388 tests — 352 passed, 0 failed, 36 skipped (`TEST_DATABASE_URL`).
+- **The next agent must not:**
+  - Bypass `SessionManager` fallback or re-introduce early return barriers in `ClaimCaptureActivity`.
+
+
 

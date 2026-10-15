@@ -52,7 +52,22 @@ class ChannelActivity : AppCompatActivity() {
         }
 
         binding.cardClaims.setOnClickListener {
-            startActivity(Intent(this, ClaimCaptureActivity::class.java))
+            val sm = (application as ReturnScanApp).sessionManager
+            val intent = Intent(this, ClaimCaptureActivity::class.java).apply {
+                if (sm.lastScannedAwb.isNotBlank()) {
+                    putExtra(ClaimCaptureActivity.EXTRA_TRACKING_AWB, sm.lastScannedAwb)
+                    putExtra(ClaimCaptureActivity.EXTRA_ORDER_ID, sm.lastScannedOrderId)
+                    putExtra(ClaimCaptureActivity.EXTRA_SUB_ORDER_ID, sm.lastScannedSubOrderId)
+                    putExtra(ClaimCaptureActivity.EXTRA_PACKET_ID, sm.lastScannedFlyerId)
+                    putExtra(ClaimCaptureActivity.EXTRA_MARKETPLACE, sm.lastScannedMarketplace)
+                    putExtra(ClaimCaptureActivity.EXTRA_PRODUCT_TITLE, sm.lastScannedProductTitle)
+                    putExtra(ClaimCaptureActivity.EXTRA_PRODUCT_SKU, sm.lastScannedSku)
+                    putExtra(ClaimCaptureActivity.EXTRA_MASTER_SKU, sm.lastScannedMasterSku)
+                    putExtra(ClaimCaptureActivity.EXTRA_IMAGE_URL, sm.lastScannedImageUrl)
+                    putExtra(ClaimCaptureActivity.EXTRA_ISSUE_CODE, sm.lastScannedIssueCode)
+                }
+            }
+            startActivity(intent)
         }
 
         binding.cardContinueLast.setOnClickListener {

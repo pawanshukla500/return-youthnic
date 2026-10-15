@@ -78,6 +78,85 @@ class SessionManager(private val context: Context) {
         get() = prefs.getString("last_color", "") ?: ""
         set(value) = prefs.edit().putString("last_color", value).apply()
 
+    // Last Scanned Return Details (for pre-filling Claims and seamless offline/instant form population)
+    var lastScannedAwb: String
+        get() = prefs.getString("last_scanned_awb", "") ?: ""
+        set(value) = prefs.edit().putString("last_scanned_awb", value.trim()).apply()
+
+    var lastScannedOrderId: String
+        get() = prefs.getString("last_scanned_order_id", "") ?: ""
+        set(value) = prefs.edit().putString("last_scanned_order_id", value.trim()).apply()
+
+    var lastScannedSubOrderId: String
+        get() = prefs.getString("last_scanned_sub_order_id", "") ?: ""
+        set(value) = prefs.edit().putString("last_scanned_sub_order_id", value.trim()).apply()
+
+    var lastScannedFlyerId: String
+        get() = prefs.getString("last_scanned_flyer_id", "") ?: ""
+        set(value) = prefs.edit().putString("last_scanned_flyer_id", value.trim()).apply()
+
+    var lastScannedMarketplace: String
+        get() = prefs.getString("last_scanned_marketplace", "") ?: ""
+        set(value) = prefs.edit().putString("last_scanned_marketplace", value.trim()).apply()
+
+    var lastScannedProductTitle: String
+        get() = prefs.getString("last_scanned_product_title", "") ?: ""
+        set(value) = prefs.edit().putString("last_scanned_product_title", value.trim()).apply()
+
+    var lastScannedSku: String
+        get() = prefs.getString("last_scanned_sku", "") ?: ""
+        set(value) = prefs.edit().putString("last_scanned_sku", value.trim()).apply()
+
+    var lastScannedMasterSku: String
+        get() = prefs.getString("last_scanned_master_sku", "") ?: ""
+        set(value) = prefs.edit().putString("last_scanned_master_sku", value.trim()).apply()
+
+    var lastScannedImageUrl: String
+        get() = prefs.getString("last_scanned_image_url", "") ?: ""
+        set(value) = prefs.edit().putString("last_scanned_image_url", value.trim()).apply()
+
+    var lastScannedIssueCode: String
+        get() = prefs.getString("last_scanned_issue_code", "") ?: ""
+        set(value) = prefs.edit().putString("last_scanned_issue_code", value.trim()).apply()
+
+    var lastScannedCustomerName: String
+        get() = prefs.getString("last_scanned_customer_name", "") ?: ""
+        set(value) = prefs.edit().putString("last_scanned_customer_name", value.trim()).apply()
+
+    var lastScannedTotalPrice: Double
+        get() = prefs.getFloat("last_scanned_total_price", 0f).toDouble()
+        set(value) = prefs.edit().putFloat("last_scanned_total_price", value.toFloat()).apply()
+
+    fun saveLastScannedReturn(
+        awb: String,
+        orderId: String = "",
+        subOrderId: String = "",
+        flyerId: String = "",
+        marketplace: String = "",
+        productTitle: String = "",
+        sku: String = "",
+        masterSku: String = "",
+        imageUrl: String = "",
+        issueCode: String = "",
+        customerName: String = "",
+        totalPrice: Double = 0.0
+    ) {
+        val editor = prefs.edit()
+        if (awb.isNotBlank()) editor.putString("last_scanned_awb", awb.trim())
+        if (orderId.isNotBlank()) editor.putString("last_scanned_order_id", orderId.trim())
+        if (subOrderId.isNotBlank()) editor.putString("last_scanned_sub_order_id", subOrderId.trim())
+        if (flyerId.isNotBlank()) editor.putString("last_scanned_flyer_id", flyerId.trim())
+        if (marketplace.isNotBlank()) editor.putString("last_scanned_marketplace", marketplace.trim())
+        if (productTitle.isNotBlank()) editor.putString("last_scanned_product_title", productTitle.trim())
+        if (sku.isNotBlank()) editor.putString("last_scanned_sku", sku.trim())
+        if (masterSku.isNotBlank()) editor.putString("last_scanned_master_sku", masterSku.trim())
+        if (imageUrl.isNotBlank()) editor.putString("last_scanned_image_url", imageUrl.trim())
+        if (issueCode.isNotBlank()) editor.putString("last_scanned_issue_code", issueCode.trim())
+        if (customerName.isNotBlank()) editor.putString("last_scanned_customer_name", customerName.trim())
+        if (totalPrice > 0.0) editor.putFloat("last_scanned_total_price", totalPrice.toFloat())
+        editor.apply()
+    }
+
     var askedNotificationPermission: Boolean
         get() = prefs.getBoolean("asked_notification_permission", false)
         set(value) = prefs.edit().putBoolean("asked_notification_permission", value).apply()

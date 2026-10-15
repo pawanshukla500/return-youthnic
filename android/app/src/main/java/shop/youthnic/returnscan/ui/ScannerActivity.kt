@@ -630,6 +630,18 @@ class ScannerActivity : AppCompatActivity() {
     private fun showVerificationSheet(lookup: LookupResult) {
         val idempotencyKey = BarcodeRules.generateClientScanKey(accountId, lookup.trackingNumber)
 
+        val firstItem = lookup.items.firstOrNull()
+        sessionManager.saveLastScannedReturn(
+            awb = lookup.trackingNumber,
+            orderId = lookup.orderId,
+            subOrderId = firstItem?.orderItemId?.ifBlank { lookup.orderId }.orEmpty(),
+            marketplace = lookup.marketplace,
+            productTitle = firstItem?.title.orEmpty(),
+            sku = firstItem?.marketplaceSku.orEmpty(),
+            masterSku = firstItem?.masterSku.orEmpty(),
+            imageUrl = firstItem?.imageUrl.orEmpty()
+        )
+
         val sheet = ReturnVerificationBottomSheet(
             activity = this,
             lookup = lookup,
@@ -729,6 +741,22 @@ class ScannerActivity : AppCompatActivity() {
             else -> scannedCountToday + 1
         }
         updateCountsUi()
+
+        // Also update session manager with saved flyer ID and issue code if present
+        val firstIssue = data.items.firstOrNull { it.hasIssue }
+        val firstItem = lookup.items.firstOrNull()
+        sessionManager.saveLastScannedReturn(
+            awb = lookup.trackingNumber,
+            orderId = lookup.orderId,
+            subOrderId = firstItem?.orderItemId?.ifBlank { lookup.orderId }.orEmpty(),
+            flyerId = data.flyerId,
+            marketplace = lookup.marketplace,
+            productTitle = firstItem?.title.orEmpty(),
+            sku = firstItem?.marketplaceSku.orEmpty(),
+            masterSku = firstItem?.masterSku.orEmpty(),
+            imageUrl = firstItem?.imageUrl.orEmpty(),
+            issueCode = firstIssue?.category?.code ?: ""
+        )
 
         // Record recent scan
         val issueLabels = data.items.filter { it.hasIssue }.map { it.category.label }.distinct()
