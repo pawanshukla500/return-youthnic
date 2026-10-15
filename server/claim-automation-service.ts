@@ -1031,6 +1031,7 @@ export type ClaimReturnLookupResult = {
   awb: string
   packetState: string
   packetId: string
+  detectedIssueCode: string | null
   customerName: string
   totalPrice: number
   totalAmount: number
@@ -1112,7 +1113,18 @@ export async function lookupReturnForClaim(
   const scanQuery = `
     SELECT rs.id AS scan_id, er.id AS expected_return_id, er.marketplace_id, m.name AS marketplace,
            er.order_number, er.tracking_id, er.alt_tracking_id, rs.flyer_id, rs.scanned_at,
-           er.customer_name, er.total_price, er.return_status, er.shipped_date,
+           COALESCE(er.shopify_order_name, er.customer_city, 'Customer') AS customer_name,
+           COALESCE((SELECT SUM(eri.sales_amount) FROM expected_return_items eri WHERE eri.expected_return_id = er.id), 0)::numeric AS total_price,
+           COALESCE(er.lookup_status, er.return_type, 'Return Initiated') AS return_status,
+           COALESCE(rs.scanned_at, er.created_at) AS shipped_date,
+           (
+             SELECT rsi_issue.category_code
+             FROM receipt_scan_items rsi
+             JOIN receipt_scan_issues rsi_issue ON rsi_issue.receipt_scan_item_id = rsi.id
+             WHERE rsi.receipt_scan_id = rs.id
+             ORDER BY rsi.line_no, rsi_issue.id
+             LIMIT 1
+           ) AS detected_issue_code,
            c.id AS claim_id, c.status AS claim_status, c.claim_reason, c.claim_title,
            (SELECT COUNT(*)::int FROM claim_media cm WHERE cm.claim_id = c.id AND cm.is_active = true) AS media_count
     FROM expected_returns er
@@ -1121,21 +1133,25 @@ export async function lookupReturnForClaim(
     LEFT JOIN claims c ON c.receipt_scan_id = rs.id
     WHERE ${scopeCondition} ${mktCondition}
       AND (
-        er.tracking_id = $1::text OR er.alt_tracking_id = $1::text OR UPPER(er.order_number) = UPPER($1::text)
-        OR rs.flyer_id = $1::text OR rs.scanned_tracking = $1::text
-        OR er.tracking_id ILIKE $2 OR er.order_number ILIKE $2
+        UPPER(er.tracking_id) = UPPER($1::text)
+        OR UPPER(COALESCE(er.alt_tracking_id, '')) = UPPER($1::text)
+        OR UPPER(COALESCE(er.forward_tracking_id, '')) = UPPER($1::text)
+        OR UPPER(COALESCE(er.return_event_id, '')) = UPPER($1::text)
+        OR UPPER(er.order_number) = UPPER($1::text)
+        OR UPPER(COALESCE(rs.flyer_id, '')) = UPPER($1::text)
+        OR UPPER(COALESCE(rs.scanned_tracking, '')) = UPPER($1::text)
+        OR er.tracking_id ILIKE $2
+        OR er.order_number ILIKE $2
         OR (
           LENGTH(REPLACE(REPLACE($1::text, '-', ''), ' ', '')) >= 8
           AND REPLACE(REPLACE(UPPER(er.order_number), '-', ''), ' ', '') = REPLACE(REPLACE(UPPER($1::text), '-', ''), ' ', '')
         )
-        OR UPPER(COALESCE(er.forward_tracking_id, '')) = UPPER($1::text)
-        OR UPPER(COALESCE(er.return_event_id, '')) = UPPER($1::text)
         OR EXISTS (
           SELECT 1 FROM expected_return_items eri
           WHERE eri.expected_return_id = er.id
             AND (
-              UPPER(eri.display_order_item_id) = UPPER($1::text)
-              OR UPPER(eri.order_line_id) = UPPER($1::text)
+              UPPER(COALESCE(eri.display_order_item_id, '')) = UPPER($1::text)
+              OR UPPER(COALESCE(eri.order_line_id, '')) = UPPER($1::text)
               OR UPPER(COALESCE(eri.shipment_id, '')) = UPPER($1::text)
               OR (
                 LENGTH(REPLACE(REPLACE($1::text, '-', ''), ' ', '')) >= 8
@@ -1146,7 +1162,7 @@ export async function lookupReturnForClaim(
         OR EXISTS (
           SELECT 1 FROM receipt_scan_items rsi
           WHERE rsi.receipt_scan_id = rs.id
-            AND (UPPER(rsi.order_item_id) = UPPER($1::text) OR rsi.order_item_id ILIKE $2)
+            AND (UPPER(COALESCE(rsi.order_item_id, '')) = UPPER($1::text) OR rsi.order_item_id ILIKE $2)
         )
       )
     ORDER BY (rs.id IS NOT NULL) DESC, rs.scanned_at DESC NULLS LAST
@@ -1269,15 +1285,34 @@ export async function lookupReturnForClaim(
     suggestedContent: string
   }> = []
 
+  let normalizedDetected: string | null = null
   if (isMeesho) {
+    const rawCodes = Object.keys(MEESHO_ISSUES) as MeeshoIssueCode[]
+    const detectedRaw = row.detected_issue_code ? String(row.detected_issue_code).toLowerCase() : null
+    normalizedDetected =
+      detectedRaw === "wrong_product" || detectedRaw === "wrong_return" ? "wrong_return" :
+      detectedRaw === "missing_component" || detectedRaw === "missing_items" || detectedRaw === "missing_product" ? "missing_items" :
+      detectedRaw === "damaged_product" || detectedRaw === "damaged_return" ? "damaged_return" :
+      detectedRaw === "used_product" ? "used_product" :
+      detectedRaw === "wrong_barcode_rto" || detectedRaw === "sku_change" ? "wrong_barcode_rto" :
+      null
+
+    const sortedCodes = rawCodes.slice().sort((a, b) => {
+      if (normalizedDetected && a === normalizedDetected) return -1
+      if (normalizedDetected && b === normalizedDetected) return 1
+      return 0
+    })
+
     const meeshoBase = {
       subOrderId,
       awb: trackingNumber,
       packetId,
+      masterSku: items[0]?.masterSku || items[0]?.sku,
+      productNames: items.map((i) => i.title),
       missingItems,
       missingAmount,
     }
-    standardReasons = (Object.keys(MEESHO_ISSUES) as MeeshoIssueCode[]).map((code) => ({
+    standardReasons = sortedCodes.map((code) => ({
       code,
       label: MEESHO_ISSUES[code],
       suggestedTitle: `${MEESHO_ISSUES[code]} - Sub Order ${subOrderId}`,
@@ -1342,6 +1377,7 @@ export async function lookupReturnForClaim(
     awb: trackingNumber,
     packetState: MEESHO_PACKET_STATE,
     packetId,
+    detectedIssueCode: normalizedDetected || (row.detected_issue_code ? String(row.detected_issue_code) : null),
     customerName: String(row.customer_name || "Customer"),
     totalPrice: Number(row.total_price || 0),
     totalAmount: Number(row.total_price || 0),

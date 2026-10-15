@@ -118,10 +118,10 @@ export function mountClaimsRoutes(app: Express, requireUser: RequestHandler): vo
     }
   })
 
-  app.get("/api/claims/:id", requireUser, async (req, res, next) => {
+  app.get("/api/claims/:id(\\d+)", requireUser, async (req, res, next) => {
     try {
       const id = positiveId(req.params.id)
-      if (!id) throw new ServiceError(404, "Claim not found.")
+      if (!id) return next()
       res.json({ claim: await getClaim(getPool(), scopeOf(req), id) })
     } catch (error) {
       sendError(res, error, next)
@@ -146,10 +146,10 @@ export function mountClaimsRoutes(app: Express, requireUser: RequestHandler): vo
     }
   })
 
-  app.patch("/api/claims/:id/status", requireUser, requireSupervisorOrAdmin, async (req, res, next) => {
+  app.patch("/api/claims/:id(\\d+)/status", requireUser, requireSupervisorOrAdmin, async (req, res, next) => {
     try {
       const id = positiveId(req.params.id)
-      if (!id) throw new ServiceError(404, "Claim not found.")
+      if (!id) return next()
       const body = (req.body ?? {}) as Record<string, unknown>
       const result = await updateClaimStatus(getPool(), actorOf(req), scopeOf(req), id, {
         status: text(body.status),
@@ -163,10 +163,10 @@ export function mountClaimsRoutes(app: Express, requireUser: RequestHandler): vo
 
   // ---- Claim media ----
 
-  app.post("/api/claims/:id/media/upload", requireUser, uploadEvidence.single("file"), async (req, res, next) => {
+  app.post("/api/claims/:id(\\d+)/media/upload", requireUser, uploadEvidence.single("file"), async (req, res, next) => {
     try {
       const id = positiveId(req.params.id)
-      if (!id) throw new ServiceError(404, "Claim not found.")
+      if (!id) return next()
       if (!req.file) throw new ServiceError(400, "Choose an evidence file to upload.")
       if (!isEvidenceStorageConfigured()) {
         throw new ServiceError(503, "Evidence storage is not configured. Set up Firebase credentials before uploading evidence.")
@@ -202,11 +202,11 @@ export function mountClaimsRoutes(app: Express, requireUser: RequestHandler): vo
   })
 
   // Secure scoped file retrieval: streams the file from Firebase Storage. No direct public link.
-  app.get("/api/claims/:id/media/:mediaId", requireUser, async (req, res, next) => {
+  app.get("/api/claims/:id(\\d+)/media/:mediaId(\\d+)", requireUser, async (req, res, next) => {
     try {
       const claimId = positiveId(req.params.id)
       const mediaId = positiveId(req.params.mediaId)
-      if (!claimId || !mediaId) throw new ServiceError(404, "Media not found.")
+      if (!claimId || !mediaId) return next()
 
       const meta = await getClaimMediaMeta(getPool(), scopeOf(req), claimId, mediaId)
 
@@ -229,11 +229,11 @@ export function mountClaimsRoutes(app: Express, requireUser: RequestHandler): vo
     }
   })
 
-  app.patch("/api/claims/:id/media/:mediaId/deactivate", requireUser, async (req, res, next) => {
+  app.patch("/api/claims/:id(\\d+)/media/:mediaId(\\d+)/deactivate", requireUser, async (req, res, next) => {
     try {
       const claimId = positiveId(req.params.id)
       const mediaId = positiveId(req.params.mediaId)
-      if (!claimId || !mediaId) throw new ServiceError(404, "Media not found.")
+      if (!claimId || !mediaId) return next()
       await deactivateClaimMedia(getPool(), actorOf(req), scopeOf(req), claimId, mediaId)
       res.json({ ok: true })
     } catch (error) {
