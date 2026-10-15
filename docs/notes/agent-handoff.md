@@ -1866,5 +1866,41 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
 - **The next agent must not:**
   - Bypass `SessionManager` fallback or re-introduce early return barriers in `ClaimCaptureActivity`.
 
+### 2026-10-15, Antigravity, Fix Tracking Search "Claim not found" & Prefill for Scanned Returns (R2633913412MEO)
+
+- **Overview:** Fixed an issue where searching a tracking ID (e.g. `R2633913412MEO`) on the mobile Claim screen failed with `"Claim not found."`, leaving `Sub Order Number`, `AWB Number`, `Packet ID`, product image, and descriptions unpopulated, and preventing the user from advancing to image/video capture.
+- **Root Cause Analysis:**
+  1. **Express Route Shadowing:** In `server/index.ts`, `mountClaimsRoutes` was mounted before `mountClaimAutomationRoutes`. In `server/claims-routes.ts`, `app.get("/api/claims/:id")` caught `GET /api/claims/return-lookup?query=...` because `:id` matched `"return-lookup"`. `positiveId("return-lookup")` evaluated to `null`, throwing 404 `"Claim not found."` before the lookup endpoint could ever execute.
+  2. **Invalid Column Selections in SQL Query:** In `server/claim-automation-service.ts`, `scanQuery` attempted to select `er.customer_name`, `er.total_price`, `er.return_status`, and `er.shipped_date`, which do not exist on `expected_returns`, causing PostgreSQL to fail with `column er.customer_name does not exist`.
+  3. **Case Sensitivity & Flyer ID Matching:** `scanQuery` exact matches were case-sensitive (`er.tracking_id = $1::text`); `UPPER(COALESCE(...)) = UPPER($1::text)` was needed across `er.tracking_id`, `er.alt_tracking_id`, `er.forward_tracking_id`, `er.order_number`, `rs.flyer_id`, `rs.scanned_tracking`, and item line IDs.
+  4. **Detected Issue Sorting:** When a return was scanned with an issue (e.g. `wrong_product`), `scanQuery` did not extract `receipt_scan_issues.category_code`, and `standardReasons` did not prioritize the scanned issue to the front.
+- **Changes Applied:**
+  - **Server Routing (`server/claims-routes.ts`, `server/index.ts`):**
+    - Constrained claim detail routes in `claims-routes.ts` to strictly numeric IDs using `:id(\\d+)` and `:mediaId(\\d+)`, and added `if (!id) return next()`.
+    - In `server/index.ts`, mounted `mountClaimAutomationRoutes` before `mountClaimsRoutes`.
+  - **Server Lookup Service (`server/claim-automation-service.ts`):**
+    - Corrected column expressions in `scanQuery`:
+      - `customer_name` -> `COALESCE(er.shopify_order_name, er.customer_city, 'Customer')`
+      - `total_price` -> `COALESCE((SELECT SUM(eri.sales_amount) FROM expected_return_items eri WHERE eri.expected_return_id = er.id), 0)::numeric`
+      - `return_status` -> `COALESCE(er.lookup_status, er.return_type, 'Return Initiated')`
+      - `shipped_date` -> `COALESCE(rs.scanned_at, er.created_at)`
+      - `detected_issue_code` -> subquery extracting `receipt_scan_issues.category_code`
+    - Made tracking ID, order number, flyer ID, and item ID matches case-insensitive with `UPPER(...) = UPPER(...)` and `COALESCE`.
+    - Added `detectedIssueCode` to `ClaimReturnLookupResult` and sorted `standardReasons` so the detected scan issue (e.g. `wrong_product` -> `wrong_return`) appears at index 0.
+  - **Android Client (`android/app/`):**
+    - `ClaimModels.kt`: Added `detectedIssueCode: String?` to `ClaimReturnLookup` and parsed it in `fromJson`.
+    - `ClaimCaptureActivity.kt`:
+      - Mapped `detectedIssueCode` to Meesho issues (`wrong_product` -> `wrong_return`, `missing_component` -> `missing_items`, etc.) and pre-selected it in `spinnerMeeshoIssue`.
+      - Cleared error message banner on lookup success.
+      - Utilized `ImageCache.load` for smooth thumbnail rendering and gallery inspection.
+- **Verification:**
+  - Verified live database query for `R2633913412MEO`: successfully resolved order `335416420152467072`, sub-order `335416420152467072_1`, flyer ID `RMGS001587112`, image URL, and prefilled description.
+  - `npm.cmd run typecheck`: Passed (0 errors on client and server).
+  - `npm.cmd run build`: Passed (Vite production bundle built in 1.76s, server dist in 15ms).
+  - `npm.cmd test`: 388 tests — 352 passed, 0 failed, 36 skipped (`TEST_DATABASE_URL`).
+- **The next agent must not:**
+  - Use unconstrained `:id` route parameters on `/api/claims/` that shadow literal routes like `/return-lookup`.
+  - Re-introduce non-existent columns on `expected_returns`.
+
 
 

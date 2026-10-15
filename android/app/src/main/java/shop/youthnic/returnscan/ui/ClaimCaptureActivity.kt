@@ -178,14 +178,7 @@ class ClaimCaptureActivity : AppCompatActivity() {
         }
 
         if (imageUrl.isNotBlank()) {
-            lifecycleScope.launch {
-                val bmp = imageCache.getOrFetch(imageUrl)
-                if (bmp != null) {
-                    binding.ivProductThumb.setImageBitmap(bmp)
-                } else {
-                    binding.ivProductThumb.setImageResource(android.R.drawable.ic_menu_gallery)
-                }
-            }
+            imageCache.load(imageUrl, binding.ivProductThumb, android.R.drawable.ic_menu_gallery)
             binding.ivProductThumb.setOnClickListener {
                 startActivity(Intent(this, ImageViewerActivity::class.java).apply {
                     putExtra(ImageViewerActivity.EXTRA_IMAGE_URL, imageUrl)
@@ -357,6 +350,7 @@ class ClaimCaptureActivity : AppCompatActivity() {
 
             result.onSuccess { lookup ->
                 if (lookup != null && lookup.found) {
+                    binding.tvClaimMessage.visibility = View.GONE
                     populateReturnDetails(lookup)
                 } else {
                     showMessage("No matching return found for that tracking number or order.")
@@ -391,14 +385,7 @@ class ClaimCaptureActivity : AppCompatActivity() {
             binding.tvBadQtyBadge.text = "Bad Qty: 1 (Issue Claim)"
 
             if (item.imageUrl.isNotBlank()) {
-                lifecycleScope.launch {
-                    val bmp = imageCache.getOrFetch(item.imageUrl)
-                    if (bmp != null) {
-                        binding.ivProductThumb.setImageBitmap(bmp)
-                    } else {
-                        binding.ivProductThumb.setImageResource(android.R.drawable.ic_menu_gallery)
-                    }
-                }
+                imageCache.load(item.imageUrl, binding.ivProductThumb, android.R.drawable.ic_menu_gallery)
                 binding.ivProductThumb.setOnClickListener {
                     startActivity(Intent(this, ImageViewerActivity::class.java).apply {
                         putExtra(ImageViewerActivity.EXTRA_IMAGE_URL, item.imageUrl)
@@ -420,14 +407,19 @@ class ClaimCaptureActivity : AppCompatActivity() {
         binding.etPacketId.setText(resolvedPacketId)
 
         // Pre-select matching issue if detected in scan
-        val detectedIssue = data.standardReasons.firstOrNull()?.code
-        if (!detectedIssue.isNullOrBlank()) {
-            val idx = meeshoIssues.indexOfFirst { it.first == detectedIssue }
-            if (idx >= 0) {
-                binding.spinnerMeeshoIssue.setSelection(idx)
-                selectedIssueCode = meeshoIssues[idx].first
-                selectedIssueLabel = meeshoIssues[idx].second
-            }
+        val detectedIssue = data.detectedIssueCode ?: data.standardReasons.firstOrNull()?.code
+        val mappedIssueIdx = when (detectedIssue?.lowercase()) {
+            "missing", "missing_items", "missing_component" -> meeshoIssues.indexOfFirst { it.first == "missing_items" }
+            "wrong", "wrong_return", "wrong_product" -> meeshoIssues.indexOfFirst { it.first == "wrong_return" }
+            "damaged", "damaged_return", "damaged_product" -> meeshoIssues.indexOfFirst { it.first == "damaged_return" }
+            "used", "used_product" -> meeshoIssues.indexOfFirst { it.first == "used_product" }
+            "sku_change", "wrong_barcode_rto" -> meeshoIssues.indexOfFirst { it.first == "wrong_barcode_rto" }
+            else -> meeshoIssues.indexOfFirst { it.first == detectedIssue }
+        }
+        if (mappedIssueIdx >= 0) {
+            binding.spinnerMeeshoIssue.setSelection(mappedIssueIdx)
+            selectedIssueCode = meeshoIssues[mappedIssueIdx].first
+            selectedIssueLabel = meeshoIssues[mappedIssueIdx].second
         }
 
         // Display Turnaround Time (TAT) Banner (7 Calendar Days Inclusive for Meesho)

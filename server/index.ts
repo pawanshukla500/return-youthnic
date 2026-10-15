@@ -473,11 +473,11 @@ mountReturnReasonsRoutes(app, requireUser)
 // Iron Send tracking, return analytics and the live sync cursor live in iron-routes.ts.
 mountIronRoutes(app, requireUser)
 
-// Claims foundation: claim lifecycle, evidence media, templates live in claims-routes.ts.
-mountClaimsRoutes(app, requireUser)
-
 // Claim automation: desktop agent sync, marketplace portal credentials, return lookup live in claim-automation-routes.ts.
 mountClaimAutomationRoutes(app, requireUser)
+
+// Claims foundation: claim lifecycle, evidence media, templates live in claims-routes.ts.
+mountClaimsRoutes(app, requireUser)
 
 // ---- Administrator pages. Every route here needs the Admin role. ----
 
