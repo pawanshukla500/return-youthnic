@@ -699,7 +699,7 @@ app.patch("/api/admin/users/:id/role", requireUser, requireAdmin, async (req, re
 app.get("/api/admin/issue-options", requireUser, requireAdmin, async (_req, res, next) => {
   try {
     const result = await getPool().query(
-      `SELECT id, label, category_code AS "categoryCode"
+      `SELECT id, label, category_code AS "categoryCode", claim_amount::float8 AS "claimAmount"
        FROM missing_component_options
        WHERE active = true
        ORDER BY sort_order, id`,
@@ -724,7 +724,7 @@ app.post("/api/admin/issue-options", requireUser, requireAdmin, async (req, res,
     const result = await getPool().query(
       `INSERT INTO missing_component_options (label, active, sort_order, category_code)
        VALUES ($1, true, (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM missing_component_options), $2)
-       RETURNING id, label, category_code AS "categoryCode"`,
+       RETURNING id, label, category_code AS "categoryCode", claim_amount::float8 AS "claimAmount"`,
       [label, categoryCode],
     )
     const option = result.rows[0]
@@ -735,6 +735,32 @@ app.post("/api/admin/issue-options", requireUser, requireAdmin, async (req, res,
       { label, categoryCode },
     )
     res.json({ option })
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.patch("/api/admin/issue-options/:id/claim-amount", requireUser, requireAdmin, async (req, res, next) => {
+  try {
+    const id = Number(req.params.id)
+    const amount = Number(req.body?.claimAmount)
+    if (!Number.isInteger(id) || id < 1) return res.status(400).json({ error: "That option does not exist." })
+    if (!Number.isFinite(amount) || amount < 0 || amount > 1_000_000) {
+      return res.status(400).json({ error: "Enter a claim amount from 0 to 1000000." })
+    }
+    const result = await getPool().query(
+      `UPDATE missing_component_options
+       SET claim_amount = $1
+       WHERE id = $2 AND active
+       RETURNING id, label, category_code AS "categoryCode", claim_amount::float8 AS "claimAmount"`,
+      [amount, id],
+    )
+    if (!result.rows[0]) return res.status(404).json({ error: "That option does not exist." })
+    await auditAdminChange((req as SessionRequest).user.id, "sub_issue.claim_amount", String(id), {
+      label: String(result.rows[0].label),
+      claimAmount: amount,
+    })
+    res.json({ option: result.rows[0] })
   } catch (error) {
     next(error)
   }
