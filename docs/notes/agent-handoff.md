@@ -1730,3 +1730,37 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
   - Store unencrypted marketplace portal credentials in the database.
   - Expose direct public URLs to Firebase Storage objects.
   - Delete or bypass the permission approval check before final marketplace claim submission.
+
+### 2026-10-15, Factory Droid, Product SKU Mapping Upsert/Merge & Unmapped SKUs Segregation
+
+- **Overview:** Implemented non-destructive Product SKU Mapping upsert/merge workflow alongside marketplace-segregated unmapped listing SKU resolution, resolving the "Loading..." UI state and preventing catalog wipeout.
+- **Backend Services & Schema (`server/product-master.ts`):**
+  - Added `upsertProductMaster`: Executes additive `INSERT INTO product_master ... ON CONFLICT (marketplace, listing_sku) DO UPDATE SET master_sku = EXCLUDED.master_sku, category = ..., image_url = ..., updated_at = now()`. Automatically resolves matching entries in `unmapped_listing_skus` (marks `status = 'mapped'`).
+  - Added `listUnmappedListingSkus`: Provides paginated, searchable, marketplace-filterable unmapped SKU queries.
+  - Enhanced `refreshUnmappedListingSkus`: Uses `DISTINCT ON (item_sku, marketplace)` to extract sample order number and tracking ID directly from `expected_returns` so warehouse operators can trace unmapped items back to specific packages.
+  - Updated `generateUnmappedSkusTemplateCsv`: Emits 5 columns (`Channel Listing SKU Code,Product SkuCode,Product Category,Channel Image URL,Marketplace`) pre-filled with missing items.
+- **Backend Routes (`server/product-master-routes.ts`):**
+  - Updated `POST /api/admin/product-master/import`: Added `mode: "merge" | "replace"` support (defaulting to safe `merge`). `replace` mode requires explicit `confirm: true`.
+  - Fixed `GET /api/admin/product-master/unmapped`: Returns `{ unmapped: summary, summary }` matching frontend contract.
+  - Added `GET /api/admin/product-master/unmapped/list`: Endpoint for paginated unmapped SKU table.
+  - Updated `GET /api/admin/product-master/unmapped/download`: Supports `?marketplace=` filter.
+- **Frontend Types (`src/types.ts`):**
+  - Added `UnmappedSkuSummary`, `UnmappedSkuItem`, and `UnmappedListResult`.
+- **Frontend Web UI (`src/pages/Admin.tsx`, `src/index.css`):**
+  - Fixed the "Loading..." badge on the Unmapped card by normalizing summary contract and auto-fetching upon tab switch.
+  - Added Import Mode selector to Admin Product Master tab: "Append / Merge (Keep existing) [Recommended]" vs "Replace Entire Catalog (Destructive)" with clear safety callouts.
+  - Overhauled "Unmapped Listing SKUs (Missing Product SKU Linkup)" card:
+    - Interactive marketplace filter pills (All Channels, Myntra, Flipkart, Amazon, Meesho, Ajio) with live unmapped counts.
+    - Pre-filled CSV download button tailored to the selected channel.
+    - Interactive `DataTable` showing unmapped SKUs with Marketplace badge, Channel Listing SKU, Sample Order #, Sample Tracking #, Last Seen, and Status badge.
+    - Pagination controls for browsing large unmapped sets.
+    - Dedicated quick-resolve dropzone inside the unmapped card allowing users to drag and drop filled missing SKUs CSV to immediately merge and link without fear of losing previous catalog entries.
+- **Verification:**
+  - `npm run typecheck` passed (0 errors).
+  - `npm run build` passed (Vite 1.60s, esbuild 14ms).
+  - `npm test` finished: 377 tests, 341 pass, 0 fail, 36 skipped (`TEST_DATABASE_URL`).
+- **The next agent must not:**
+  - Change default import mode from `merge` to `replace`.
+  - Drop or truncate `product_master` or `unmapped_listing_skus`.
+  - Remove `ON CONFLICT (marketplace, listing_sku) DO UPDATE` in `upsertProductMaster`.
+

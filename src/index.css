@@ -1299,6 +1299,62 @@ button.catalog-image-wrap { width: 100%; padding: 0; border: 0; display: block; 
   line-height: 1.45;
 }
 
+/* Unmapped Listing SKUs pill filter & dropzone */
+.unmapped-filter-pill {
+  border: 1px solid #e2e8f0;
+  background: #f8fafc;
+  color: #334155;
+  border-radius: 20px;
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.unmapped-filter-pill:hover {
+  background: #f1f5f9;
+  border-color: #cbd5e1;
+}
+
+.unmapped-filter-pill.active {
+  background: #0f6b56;
+  border-color: #0f6b56;
+  color: #ffffff;
+}
+
+.unmapped-filter-pill.active span {
+  background: rgba(255, 255, 255, 0.25);
+  color: #ffffff;
+}
+
+.unmapped-filter-pill span {
+  background: #e2e8f0;
+  color: #475569;
+  padding: 1px 6px;
+  border-radius: 10px;
+  font-size: 11px;
+}
+
+.unmapped-quick-drop {
+  border: 2px dashed #cbd5e1;
+  border-radius: 8px;
+  padding: 12px 16px;
+  text-align: center;
+  background: #f8fafc;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  margin-top: 12px;
+}
+
+.unmapped-quick-drop:hover {
+  border-color: #0f6b56;
+  background: #f0fdf4;
+}
+
 /* Redesigned Marketplace Accounts Grid & Cards */
 .account-grid-v2 {
   display: grid;
