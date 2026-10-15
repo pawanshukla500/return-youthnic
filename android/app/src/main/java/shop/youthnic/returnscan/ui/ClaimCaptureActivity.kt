@@ -851,9 +851,10 @@ class ClaimCaptureActivity : AppCompatActivity() {
             val masterSku = item?.masterSku?.ifBlank { item.sku }.orEmpty()
                 .ifBlank { sessionManager.lastScannedMasterSku.ifBlank { sessionManager.lastScannedSku } }
 
+            val currentScanId = data.scanId
             val body = JSONObject().apply {
-                if (data.scanId != null && data.scanId > 0) {
-                    put("receiptScanId", data.scanId)
+                if (currentScanId != null && currentScanId > 0) {
+                    put("receiptScanId", currentScanId)
                 }
                 put("expectedReturnId", data.expectedReturnId)
                 put("claimReason", selectedIssueLabel)
