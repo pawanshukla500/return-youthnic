@@ -1599,6 +1599,18 @@ Append new entries at the end. Do not edit earlier entries, except to correct a 
   - Rule 10: Screen controls tested and enabled.
   - Rule 11: Reported only commands executed with their exact outputs.
 
+### 2026-10-14, OpenCode, VMS catalogue sync (read-only source → product_master images)
+
+- **Answer to the user's question: yes, but image-only.** The VMS database (`VMS_DATABASE_URL`) holds `sku_photos(sku, title, image_url, marketplace, updated_at)`: 3,387 rows, all with an image, scopes Shopify/Flipkart/Meesho/Amazon Flex/Amazon Direct Fulfillment. It has **no product/master SKU column**, so it can supply channel-listing SKU + image + scope, but not the listing→product mapping — that still comes from the product master file / OMSGuru flow. The sync fills blank `product_master.image_url` values (matched by listing SKU) so manual image work goes away; it never creates mappings.
+- **VMS is strictly read-only by construction** (`server/vms/db.ts`): single-statement SELECT/WITH allowlist + `;`/INTO rejection runs before any connection, every query inside `BEGIN READ ONLY`. Nothing in `server/vms/` can edit or delete VMS data. TLS verified (`sslmode=no-verify` refused); self-signed server cert pinned once via `--fetch-ca` to git-ignored `certs/vms-ca.pem` (hostname check relaxed, same precedent as Shopify). The URL/credentials are never printed, logged or returned — probe output is masked (image hosts only).
+- **Merge-only locally** (`server/vms/catalog.ts`): `--apply` updates blank image links in chunks, never creates rows, never deletes, never touches product SKUs/categories/existing images. Each run writes one `vms_catalog_sync_runs` row (`server/schema-vms.sql`, additive, in `SCHEMA_FILES`). CLI: `--help/--fetch-ca/--probe/--dry-run/--apply` (`npm run sync:vms-catalog`); dry-run writes nothing anywhere. Schedule `--apply` daily via Task Scheduler.
+- **Measured read-only 2026-10-14:** local master 4,363 rows (2 imageless) vs VMS 3,387 SKUs → 46 exact listing matches, 0 blanks to fill locally; ~3,340 VMS SKUs not in the local master (local looks partial vs production's ~34.8k rows — the meaningful dry-run is against production data). `--apply` not run anywhere: needs the user's approval as a production-data write.
+- **Review:** two parallel agents (security APPROVE-WITH-NITS, logic NEEDS-FIX) — fixed: SELECT/WITH allowlist replacing the keyword blocklist, `;`/INTO rejection, URL no longer exported (presence check only), static connection/probe error messages (no host leak), deterministic ORDER BY dedup, one shared image-map for dry+apply, overlong URLs blanked not sliced, `--help` before any connection, pure tests for dedup/chunks, SYN- uppercase, pool cleanup, probe-schema hint.
+- **Ran:** `npm.cmd run typecheck` pass, `npm.cmd run build` pass, `npm.cmd test` → 388 tests: 352 pass, 0 fail, 36 skipped (DB-gated; 7 new VMS tests pass). Live VMS `--probe`/`--dry-run` read-only: connected, schema + counts only.
+- **Changed:** `server/vms/db.ts` + `server/vms/catalog.ts` (new), `server/scripts/sync-vms-catalog.ts` (new), `server/schema-vms.sql` (new), `server/tests/vms-catalog.test.ts` (new), `server/db.ts`, `package.json`, `.env.example`, `docs/notes/vms-catalog.md` (new).
+- **Next agent must not:** widen the VMS allowlist past SELECT/WITH, log the VMS URL/host, create product_master rows from VMS SKUs, overwrite existing images, or run `--apply` against production without the user's explicit approval.
+- **Open for the user:** approve `--apply` (first a `--dry-run` where production data lives) + daily scheduling; confirm whether VMS-only SKUs should later auto-create listing rows (needs mapping decision first).
+
 ## STOP — needs the user to resume
 
 
