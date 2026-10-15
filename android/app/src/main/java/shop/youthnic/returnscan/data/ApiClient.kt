@@ -8,10 +8,13 @@ import okhttp3.HttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.MultipartBody
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.RequestBody.Companion.asRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
+import java.io.File
 import java.util.concurrent.TimeUnit
 
 class ApiClient(private val sessionManager: SessionManager) {
@@ -21,7 +24,7 @@ class ApiClient(private val sessionManager: SessionManager) {
     val okHttpClient = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(20, TimeUnit.SECONDS)
-        .writeTimeout(20, TimeUnit.SECONDS)
+        .writeTimeout(2, TimeUnit.MINUTES)
         .cookieJar(object : CookieJar {
             override fun saveFromResponse(url: HttpUrl, cookies: List<Cookie>) {
                 val host = url.host
@@ -201,6 +204,85 @@ class ApiClient(private val sessionManager: SessionManager) {
         try {
             val req = authorizedRequestBuilder("/api/sync/state").get().build()
             execute(req) { json -> json.optLong("cursor", 0L) }
+        } catch (e: Exception) {
+            Result.failure(mapException(e))
+        }
+    }
+
+    suspend fun searchClaimScans(search: String): Result<List<ClaimScanResult>> = withContext(Dispatchers.IO) {
+        try {
+            val encoded = java.net.URLEncoder.encode(search.trim(), Charsets.UTF_8.name())
+            val request = authorizedRequestBuilder("/api/claims/scan-search?search=$encoded").get().build()
+            execute(request) { json ->
+                val rows = json.optJSONArray("rows") ?: JSONArray()
+                buildList {
+                    for (index in 0 until rows.length()) {
+                        rows.optJSONObject(index)?.let { add(ClaimScanResult.fromJson(it)) }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(mapException(e))
+        }
+    }
+
+    suspend fun getMeeshoClaimDraft(scanId: Int): Result<MeeshoClaimDraft> = withContext(Dispatchers.IO) {
+        try {
+            val request = authorizedRequestBuilder("/api/claims/meesho/draft/$scanId").get().build()
+            execute(request) { json ->
+                MeeshoClaimDraft.fromJson(json.optJSONObject("draft") ?: JSONObject())
+            }
+        } catch (e: Exception) {
+            Result.failure(mapException(e))
+        }
+    }
+
+    suspend fun createMeeshoClaim(scanId: Int, issueCode: String): Result<Int> = withContext(Dispatchers.IO) {
+        try {
+            val json = JSONObject().apply {
+                put("receiptScanId", scanId)
+                put("marketplaceIssueCode", issueCode)
+                put("claimReason", "")
+                put("claimTitle", "")
+                put("claimDescription", "")
+                put("remarks", "")
+            }
+            val request = authorizedRequestBuilder("/api/claims")
+                .post(json.toString().toRequestBody(jsonMediaType))
+                .build()
+            execute(request) { response ->
+                response.optJSONObject("claim")?.optInt("id", 0) ?: 0
+            }
+        } catch (e: Exception) {
+            Result.failure(mapException(e))
+        }
+    }
+
+    suspend fun uploadClaimEvidence(
+        claimId: Int,
+        fieldKey: String,
+        file: File,
+        mimeType: String
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            if (!file.exists() || file.length() == 0L) {
+                return@withContext Result.failure(IOException("Captured evidence file is missing."))
+            }
+            val body = MultipartBody.Builder()
+                .setType(MultipartBody.FORM)
+                .addFormDataPart("fieldKey", fieldKey)
+                .addFormDataPart(
+                    "capturedAt",
+                    java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", java.util.Locale.US).apply {
+                        timeZone = java.util.TimeZone.getTimeZone("UTC")
+                    }.format(java.util.Date(file.lastModified()))
+                )
+                .addFormDataPart("file", file.name, file.asRequestBody(mimeType.toMediaType()))
+                .build()
+            val request = authorizedRequestBuilder("/api/claims/$claimId/media/upload")
+                .post(body)
+                .build()
+            execute(request) { Unit }
         } catch (e: Exception) {
             Result.failure(mapException(e))
         }

@@ -11,6 +11,7 @@ import {
   type ClaimScanSearchRow,
   type ClaimStatus,
   type ClaimTemplate,
+  type MeeshoClaimDraft,
   type Stat,
 } from "../types"
 import { DataTable, Icon, MarketplaceBadge, Modal, StatCard, Badge } from "../ui"
@@ -259,6 +260,16 @@ function ClaimQueue() {
             { key: "tracking", header: "Tracking", render: (row) => row.trackingId },
             { key: "order", header: "Order", render: (row) => row.orderId },
             { key: "media", header: "Media", render: (row) => String(row.mediaCount) },
+            {
+              key: "tat",
+              header: "Claim TAT",
+              render: (row) =>
+                row.dueDate ? (
+                  <Badge tone={row.overdue ? "danger" : row.daysRemaining !== null && row.daysRemaining <= 2 ? "warning" : "success"}>
+                    {row.overdue ? `Overdue ${Math.abs(row.daysRemaining || 0)}d` : `Due ${row.dueDate}`}
+                  </Badge>
+                ) : "—",
+            },
             { key: "created", header: "Created", render: (row) => new Date(row.createdAt).toLocaleDateString("en-IN") },
             {
               key: "actions",
@@ -414,6 +425,21 @@ function ClaimDetailModal({
               <span className="label">Order</span>
               <span>{claim.orderId}</span>
             </div>
+            {claim.marketplaceIssueLabel && (
+              <>
+                <div className="detail-row"><span className="label">Marketplace issue</span><strong>{claim.marketplaceIssueLabel}</strong></div>
+                <div className="detail-row"><span className="label">Sub Order ID</span><span>{claim.subOrderId || "—"}</span></div>
+                <div className="detail-row"><span className="label">State of packet</span><span>{claim.packetState || "—"}</span></div>
+                <div className="detail-row"><span className="label">Packet ID</span><span>{claim.packetId || "—"}</span></div>
+                <div className="detail-row"><span className="label">Return type</span><span>{claim.returnType || "—"}</span></div>
+                <div className="detail-row">
+                  <span className="label">Claim deadline</span>
+                  <Badge tone={claim.overdue ? "danger" : "success"}>
+                    {claim.dueDate || "—"}{claim.daysRemaining !== null ? ` · ${claim.overdue ? `${Math.abs(claim.daysRemaining)} day(s) overdue` : `${claim.daysRemaining} day(s) left`}` : ""}
+                  </Badge>
+                </div>
+              </>
+            )}
             <div className="detail-row">
               <span className="label">Scan ID</span>
               <span>{claim.receiptScanId}</span>
@@ -605,6 +631,8 @@ function CreateClaimModal({
   const [templateId, setTemplateId] = useState("")
   const [creating, setCreating] = useState(false)
   const [formError, setFormError] = useState("")
+  const [meeshoDraft, setMeeshoDraft] = useState<MeeshoClaimDraft | null>(null)
+  const [marketplaceIssueCode, setMarketplaceIssueCode] = useState("")
 
   const selectedScan = scanRows.find((row) => row.scanId === Number(scanId))
   const filteredTemplates = templates.filter(
@@ -631,6 +659,22 @@ function CreateClaimModal({
   useEffect(() => {
     const first = filteredTemplates[0]
     setTemplateId(first ? String(first.id) : "")
+    setMeeshoDraft(null)
+    setMarketplaceIssueCode("")
+    if (selectedScan?.marketplace.toLowerCase() === "meesho") {
+      api<{ draft: MeeshoClaimDraft }>(`/api/claims/meesho/draft/${selectedScan.scanId}`)
+        .then(({ draft }) => {
+          setMeeshoDraft(draft)
+          const firstIssue = draft.issueOptions[0]
+          if (firstIssue) {
+            setMarketplaceIssueCode(firstIssue.code)
+            setReason(firstIssue.label)
+            setTitle(firstIssue.label)
+            setDescription(firstIssue.description)
+          }
+        })
+        .catch((err: Error) => setFormError(err.message))
+    }
   }, [scanId])
 
   const create = async () => {
@@ -645,6 +689,7 @@ function CreateClaimModal({
         remarks,
       }
       if (templateId) body.claimTemplateId = Number(templateId)
+      if (marketplaceIssueCode) body.marketplaceIssueCode = marketplaceIssueCode
       const result = await api<{ claim: ClaimDetail }>("/api/claims", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -706,40 +751,61 @@ function CreateClaimModal({
           )}
           {selectedScan && <small>Selected scan #{selectedScan.scanId}. The claim stays linked to this scan.</small>}
         </div>
-        <div className="form-field">
-          <label>Claim reason <span className="required">*</span></label>
-          <input
-            type="text"
-            value={reason}
-            onChange={(e) => setReason(e.target.value)}
-            list="claim-reasons"
-            placeholder="Wrong Product, Missing Product, Damaged Product…"
-            maxLength={200}
-          />
-          <datalist id="claim-reasons">
-            <option value="Wrong Product" />
-            <option value="Missing Product" />
-            <option value="Damaged Product" />
-            <option value="Used Product" />
-            <option value="Quantity Mismatch" />
-            <option value="Other" />
-          </datalist>
-        </div>
-        <div className="form-field">
-          <label>Claim title <span className="required">*</span></label>
-          <input
-            type="text"
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            placeholder="Short marketplace claim title"
-            maxLength={200}
-          />
-        </div>
+        {meeshoDraft ? (
+          <>
+            <div className="form-field">
+              <label>Meesho issue <span className="required">*</span></label>
+              <select
+                value={marketplaceIssueCode}
+                onChange={(event) => {
+                  const selected = meeshoDraft.issueOptions.find((option) => option.code === event.target.value)
+                  setMarketplaceIssueCode(event.target.value)
+                  if (selected) {
+                    setReason(selected.label)
+                    setTitle(selected.label)
+                    setDescription(selected.description)
+                  }
+                }}
+              >
+                {meeshoDraft.issueOptions.map((option) => <option key={option.code} value={option.code}>{option.label}</option>)}
+              </select>
+            </div>
+            <div className="detail-grid">
+              <div className="detail-section">
+                <div className="detail-row"><span className="label">Sub Order ID</span><strong>{meeshoDraft.subOrderId}</strong></div>
+                <div className="detail-row"><span className="label">AWB Number</span><strong>{meeshoDraft.awb}</strong></div>
+                <div className="detail-row"><span className="label">State of packet</span><strong>{meeshoDraft.packetState}</strong></div>
+                <div className="detail-row"><span className="label">Packet ID</span><strong>{meeshoDraft.packetId || "Missing flyer ID"}</strong></div>
+              </div>
+              <div className="detail-section">
+                <div className="detail-row"><span className="label">Received</span><span>{meeshoDraft.receivedDate}</span></div>
+                <div className="detail-row"><span className="label">File claim by</span><Badge tone={meeshoDraft.overdue ? "danger" : "success"}>{meeshoDraft.dueDate}</Badge></div>
+                {meeshoDraft.missingAmount > 0 && <div className="detail-row"><span className="label">Missing amount</span><strong>₹{meeshoDraft.missingAmount.toFixed(2)}</strong></div>}
+              </div>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="form-field">
+              <label>Claim reason <span className="required">*</span></label>
+              <input type="text" value={reason} onChange={(e) => setReason(e.target.value)} list="claim-reasons" placeholder="Wrong Product, Missing Product, Damaged Product…" maxLength={200} />
+              <datalist id="claim-reasons">
+                <option value="Wrong Product" /><option value="Missing Product" /><option value="Damaged Product" />
+                <option value="Used Product" /><option value="Quantity Mismatch" /><option value="Other" />
+              </datalist>
+            </div>
+            <div className="form-field">
+              <label>Claim title <span className="required">*</span></label>
+              <input type="text" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Short marketplace claim title" maxLength={200} />
+            </div>
+          </>
+        )}
         <div className="form-field">
           <label>Description</label>
           <textarea
             value={description}
             onChange={(e) => setDescription(e.target.value)}
+            readOnly={Boolean(meeshoDraft)}
             placeholder="What happened with this return"
             maxLength={2000}
             rows={3}
@@ -773,7 +839,7 @@ function CreateClaimModal({
         </div>
         <div className="form-actions">
           <button className="btn secondary" onClick={onClose}>Cancel</button>
-          <button className="btn primary" disabled={!scanId || !reason.trim() || !title.trim() || !templateId || creating} onClick={create}>
+          <button className="btn primary" disabled={!scanId || !reason.trim() || !title.trim() || !templateId || (Boolean(meeshoDraft) && !marketplaceIssueCode) || creating} onClick={create}>
             {creating ? "Creating…" : "Create claim"}
           </button>
         </div>

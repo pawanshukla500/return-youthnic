@@ -33,7 +33,7 @@ type DeviceSession = {
   isCurrent?: boolean
 }
 
-type IssueOption = { id: number; label: string; categoryCode: string }
+type IssueOption = { id: number; label: string; categoryCode: string; claimAmount: number }
 
 type PartnerAlias = { id: number; alias: string; aliasKey: string; marketplace: string; active: boolean }
 type PartnerDomain = { id: number; host: string; active: boolean }
@@ -598,6 +598,24 @@ export function Admin() {
     }
   }
 
+  const updateOptionClaimAmount = async (option: IssueOption, value: string) => {
+    const claimAmount = Number(value)
+    if (!Number.isFinite(claimAmount) || claimAmount < 0) {
+      setOptionError("Claim amount must be zero or more.")
+      return
+    }
+    setOptionError("")
+    try {
+      const updated = await api<{ option: IssueOption }>(
+        `/api/admin/issue-options/${option.id}/claim-amount`,
+        { method: "PATCH", body: JSON.stringify({ claimAmount }) },
+      )
+      setIssues((current) => current.map((item) => item.id === option.id ? updated.option : item))
+    } catch (err) {
+      setOptionError(err instanceof Error ? err.message : "Could not save the claim amount")
+    }
+  }
+
   const changeCategory = async (code: string, changes: { active?: boolean; requiresTicket?: boolean }) => {
     setCategoryError("")
     try {
@@ -1119,6 +1137,18 @@ export function Admin() {
               {issues.map((option) => (
                 <div key={option.id}>
                   <strong>{option.label}</strong>
+                  <label style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                    ₹
+                    <input
+                      aria-label={`${option.label} claim amount`}
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      defaultValue={option.claimAmount}
+                      onBlur={(event) => void updateOptionClaimAmount(option, event.target.value)}
+                      style={{ width: 92, height: 32 }}
+                    />
+                  </label>
                   <Badge tone="success">Active</Badge>
                   <button aria-label={`Remove ${option.label}`} onClick={() => void removeOption(option)}>
                     <Icon name="close" />

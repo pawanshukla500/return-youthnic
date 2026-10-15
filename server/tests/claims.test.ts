@@ -29,6 +29,7 @@ import {
   statusReasonError,
   templateNameError,
 } from "../claims-service.js"
+import { meeshoClaimDescription, meeshoClaimDueDate, MEESHO_PACKET_STATE } from "../meesho-claims.js"
 
 test("the seven claim lifecycle statuses are defined in order", () => {
   assert.deepEqual([...CLAIM_STATUSES], [
@@ -164,4 +165,23 @@ test("max constants are sensible", () => {
   assert.equal(MAX_FIELD_KEY, 60)
   assert.equal(MAX_FIELD_LABEL, 100)
   assert.equal(MAX_ORIGINAL_FILENAME, 255)
+})
+
+test("Meesho TAT is seven calendar days inclusive", () => {
+  assert.equal(meeshoClaimDueDate("2026-01-01T06:30:00.000Z"), "2026-01-07")
+  assert.equal(MEESHO_PACKET_STATE, "Tampered")
+})
+
+test("Meesho missing-item description includes the saved sub-issue and configured amount", () => {
+  const description = meeshoClaimDescription("missing_items", {
+    subOrderId: "SYN-SUB-1",
+    awb: "SYN-AWB-1",
+    packetId: "SYN-PACKET-1",
+    missingItems: [{ label: "SYN-Dupatta", quantity: 1, amountEach: 100, amount: 100 }],
+    missingAmount: 100,
+  })
+  assert.match(description, /SYN-Dupatta/)
+  assert.match(description, /₹100\.00/)
+  assert.match(description, /Tampered/)
+  assert.match(description, /SYN-PACKET-1/)
 })

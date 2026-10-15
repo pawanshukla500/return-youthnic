@@ -139,7 +139,7 @@
 
     <!-- Camera permission (asked at sign-in; the scanner shows the same help if it is still missing) -->
     <string name="camera_permission_title">Allow camera access</string>
-    <string name="camera_permission_message">Return Scanner uses the camera only to read the AWB barcode on a return parcel. It does not take or store photos or video. You can change this later in Android Settings.</string>
+    <string name="camera_permission_message">Return Scanner uses the camera to read AWB barcodes and to capture claim evidence photos and unpacking video. Photos and video are uploaded securely and kept only while a claim is open. You can change this later in Android Settings.</string>
     <string name="camera_permission_allow">Allow camera</string>
     <string name="camera_permission_not_now">Not now</string>
     <string name="camera_needed_title">Camera access is off</string>

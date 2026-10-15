@@ -695,6 +695,18 @@ export type ClaimRow = {
   trackingId: string
   orderId: string
   mediaCount: number
+  marketplaceIssueCode: string
+  marketplaceIssueLabel: string
+  subOrderId: string
+  awb: string
+  packetState: string
+  packetId: string
+  returnType: string
+  receivedDate: string
+  dueDate: string
+  daysRemaining: number | null
+  overdue: boolean
+  missingAmount: number
 }
 
 export type ClaimDetail = ClaimRow & {
@@ -712,6 +724,36 @@ export type ClaimScanSearchRow = {
   orderId: string
   scannedAt: string
   hasClaim: boolean
+  claimId: number | null
+}
+
+export type MeeshoClaimIssueOption = {
+  code: "wrong_return" | "missing_items" | "wrong_barcode_rto"
+  label: string
+  description: string
+}
+
+export type MeeshoClaimDraft = {
+  scanId: number
+  marketplaceId: number
+  marketplace: string
+  subOrderId: string
+  orderId: string
+  awb: string
+  packetState: string
+  packetId: string
+  flyerState: string
+  returnType: string
+  receivedAt: string
+  receivedDate: string
+  dueDate: string
+  tatDays: number
+  daysRemaining: number
+  overdue: boolean
+  productNames: string[]
+  missingItems: Array<{ label: string; quantity: number; amountEach: number; amount: number }>
+  missingAmount: number
+  issueOptions: MeeshoClaimIssueOption[]
 }
 
 export type ClaimListResult = {

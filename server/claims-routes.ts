@@ -43,6 +43,7 @@ import {
   updateClaimTemplate,
 } from "./claims-service.js"
 import { ServiceError } from "./register-service.js"
+import { getMeeshoClaimDraft } from "./meesho-claims.js"
 
 function text(value: unknown): string {
   return typeof value === "string" ? value : ""
@@ -107,6 +108,16 @@ export function mountClaimsRoutes(app: Express, requireUser: RequestHandler): vo
     }
   })
 
+  app.get("/api/claims/meesho/draft/:scanId", requireUser, async (req, res, next) => {
+    try {
+      const scanId = positiveId(req.params.scanId)
+      if (!scanId) throw new ServiceError(404, "Meesho scanned return not found.")
+      res.json({ draft: await getMeeshoClaimDraft(getPool(), scopeOf(req), scanId) })
+    } catch (error) {
+      sendError(res, error, next)
+    }
+  })
+
   app.get("/api/claims/:id", requireUser, async (req, res, next) => {
     try {
       const id = positiveId(req.params.id)
@@ -127,6 +138,7 @@ export function mountClaimsRoutes(app: Express, requireUser: RequestHandler): vo
         claimDescription: text(body.claimDescription),
         remarks: text(body.remarks),
         claimTemplateId: positiveId(body.claimTemplateId),
+        marketplaceIssueCode: text(body.marketplaceIssueCode),
       })
       res.status(201).json({ claim: result })
     } catch (error) {

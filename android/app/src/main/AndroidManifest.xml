@@ -55,6 +55,17 @@
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode" />
 
         <activity
+            android:name=".ui.ClaimCaptureActivity"
+            android:exported="false"
+            android:screenOrientation="portrait" />
+
+        <activity
+            android:name=".ui.ClaimVideoCaptureActivity"
+            android:exported="false"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.ReturnScan.Scanner" />
+
+        <activity
             android:name=".ui.ImageViewerActivity"
             android:exported="false"
             android:theme="@style/Theme.ReturnScan.Scanner" />

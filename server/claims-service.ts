@@ -12,6 +12,7 @@ import type pg from "pg"
 import { accountCondition, allowsAccount, type AccountScope } from "./access.js"
 import { ServiceError, type Actor } from "./register-service.js"
 import { isFirebaseConfigured } from "./firebase-storage.js"
+import { prepareMeeshoClaim } from "./meesho-claims.js"
 
 export const CLAIM_STATUSES = [
   "pending_evidence",
@@ -99,6 +100,18 @@ export type ClaimRow = {
   trackingId: string
   orderId: string
   mediaCount: number
+  marketplaceIssueCode: string
+  marketplaceIssueLabel: string
+  subOrderId: string
+  awb: string
+  packetState: string
+  packetId: string
+  returnType: string
+  receivedDate: string
+  dueDate: string
+  daysRemaining: number | null
+  overdue: boolean
+  missingAmount: number
 }
 
 export type ClaimDetail = ClaimRow & {
@@ -588,7 +601,13 @@ export async function listClaims(
     `SELECT c.id, c.receipt_scan_id, c.marketplace_id, m.name AS marketplace,
             c.claim_template_id, c.claim_reason, c.claim_title, c.claim_description, c.remarks, c.status,
             u.name AS created_by, c.created_at, c.updated_at,
-            er.tracking_id, er.order_number,
+            COALESCE(NULLIF(c.awb_snapshot, ''), NULLIF(rs.scanned_tracking, ''), er.tracking_id) AS tracking_id,
+            COALESCE(NULLIF(rs.order_number_snapshot, ''), er.order_number) AS order_number,
+            c.marketplace_issue_code, c.marketplace_issue_label, c.sub_order_id_snapshot,
+            c.packet_state_snapshot, c.packet_id_snapshot, c.return_type_snapshot,
+            c.received_date, c.claim_due_date, c.missing_item_amount,
+            CASE WHEN c.claim_due_date IS NULL THEN NULL
+                 ELSE c.claim_due_date - (now() AT TIME ZONE 'Asia/Kolkata')::date END AS days_remaining,
             (SELECT COUNT(*)::int FROM claim_media cm WHERE cm.claim_id = c.id AND cm.is_active = true) AS media_count
      FROM claims c
      JOIN marketplaces m ON m.id = c.marketplace_id
@@ -619,6 +638,18 @@ export async function listClaims(
       trackingId: String(row.tracking_id || ""),
       orderId: String(row.order_number || ""),
       mediaCount: Number(row.media_count || 0),
+      marketplaceIssueCode: String(row.marketplace_issue_code || ""),
+      marketplaceIssueLabel: String(row.marketplace_issue_label || ""),
+      subOrderId: String(row.sub_order_id_snapshot || ""),
+      awb: String(row.tracking_id || ""),
+      packetState: String(row.packet_state_snapshot || ""),
+      packetId: String(row.packet_id_snapshot || ""),
+      returnType: String(row.return_type_snapshot || ""),
+      receivedDate: row.received_date ? String(row.received_date).slice(0, 10) : "",
+      dueDate: row.claim_due_date ? String(row.claim_due_date).slice(0, 10) : "",
+      daysRemaining: row.days_remaining === null || row.days_remaining === undefined ? null : Number(row.days_remaining),
+      overdue: row.days_remaining !== null && row.days_remaining !== undefined && Number(row.days_remaining) < 0,
+      missingAmount: Number(row.missing_item_amount || 0),
     })),
     total,
     page,
@@ -633,7 +664,13 @@ export async function getClaim(db: pg.Pool, scope: AccountScope, claimId: number
     `SELECT c.id, c.receipt_scan_id, c.marketplace_id, m.name AS marketplace,
             c.claim_template_id, c.claim_reason, c.claim_title, c.claim_description, c.remarks, c.status,
             u.name AS created_by, c.created_at, c.updated_at,
-            er.tracking_id, er.order_number
+            COALESCE(NULLIF(c.awb_snapshot, ''), NULLIF(rs.scanned_tracking, ''), er.tracking_id) AS tracking_id,
+            COALESCE(NULLIF(rs.order_number_snapshot, ''), er.order_number) AS order_number,
+            c.marketplace_issue_code, c.marketplace_issue_label, c.sub_order_id_snapshot,
+            c.packet_state_snapshot, c.packet_id_snapshot, c.return_type_snapshot,
+            c.received_date, c.claim_due_date, c.missing_item_amount,
+            CASE WHEN c.claim_due_date IS NULL THEN NULL
+                 ELSE c.claim_due_date - (now() AT TIME ZONE 'Asia/Kolkata')::date END AS days_remaining
      FROM claims c
      JOIN marketplaces m ON m.id = c.marketplace_id
      JOIN receipt_scans rs ON rs.id = c.receipt_scan_id
@@ -705,6 +742,18 @@ export async function getClaim(db: pg.Pool, scope: AccountScope, claimId: number
     trackingId: String(row.tracking_id || ""),
     orderId: String(row.order_number || ""),
     mediaCount: mediaResult.rows.filter((r: Record<string, unknown>) => Boolean(r.is_active)).length,
+    marketplaceIssueCode: String(row.marketplace_issue_code || ""),
+    marketplaceIssueLabel: String(row.marketplace_issue_label || ""),
+    subOrderId: String(row.sub_order_id_snapshot || ""),
+    awb: String(row.tracking_id || ""),
+    packetState: String(row.packet_state_snapshot || ""),
+    packetId: String(row.packet_id_snapshot || ""),
+    returnType: String(row.return_type_snapshot || ""),
+    receivedDate: row.received_date ? String(row.received_date).slice(0, 10) : "",
+    dueDate: row.claim_due_date ? String(row.claim_due_date).slice(0, 10) : "",
+    daysRemaining: row.days_remaining === null || row.days_remaining === undefined ? null : Number(row.days_remaining),
+    overdue: row.days_remaining !== null && row.days_remaining !== undefined && Number(row.days_remaining) < 0,
+    missingAmount: Number(row.missing_item_amount || 0),
     media: mediaResult.rows.map((r: Record<string, unknown>) => ({
       id: Number(r.id),
       fieldKey: String(r.field_key || ""),
@@ -738,6 +787,7 @@ export type ClaimScanSearchRow = {
   orderId: string
   scannedAt: string
   hasClaim: boolean
+  claimId: number | null
 }
 
 export async function searchClaimScans(
@@ -758,7 +808,7 @@ export async function searchClaimScans(
   }
   const result = await db.query(
     `SELECT rs.id AS scan_id, er.marketplace_id, m.name AS marketplace, er.tracking_id,
-            er.order_number, rs.scanned_at, (c.id IS NOT NULL) AS has_claim
+            er.order_number, rs.scanned_at, (c.id IS NOT NULL) AS has_claim, c.id AS claim_id
      FROM receipt_scans rs
      JOIN expected_returns er ON er.id = rs.expected_return_id
      JOIN marketplaces m ON m.id = er.marketplace_id
@@ -776,6 +826,7 @@ export async function searchClaimScans(
     orderId: String(row.order_number || ""),
     scannedAt: row.scanned_at instanceof Date ? row.scanned_at.toISOString() : String(row.scanned_at || ""),
     hasClaim: Boolean(row.has_claim),
+    claimId: row.claim_id ? Number(row.claim_id) : null,
   }))
 }
 
@@ -794,14 +845,9 @@ export async function createClaim(
     claimDescription: string
     remarks: string
     claimTemplateId?: number | null
+    marketplaceIssueCode?: string
   },
 ): Promise<ClaimDetail> {
-  const reasonErr = claimReasonError(input.claimReason)
-  if (reasonErr) throw new ServiceError(400, reasonErr)
-  const titleErr = claimTitleError(input.claimTitle)
-  if (titleErr) throw new ServiceError(400, titleErr)
-  const descErr = claimDescriptionError(input.claimDescription)
-  if (descErr) throw new ServiceError(400, descErr)
   const remarksErr = claimRemarksError(input.remarks)
   if (remarksErr) throw new ServiceError(400, remarksErr)
 
@@ -811,9 +857,10 @@ export async function createClaim(
 
     // Find the scan and verify it is in scope. The scan links to an expected_return which has the marketplace_id.
     const scanResult = await client.query(
-      `SELECT rs.id, er.marketplace_id, er.tracking_id, er.order_number
+      `SELECT rs.id, er.marketplace_id, er.tracking_id, er.order_number, m.name AS marketplace
        FROM receipt_scans rs
        JOIN expected_returns er ON er.id = rs.expected_return_id
+       JOIN marketplaces m ON m.id = er.marketplace_id
        WHERE rs.id = $1`,
       [input.receiptScanId],
     )
@@ -823,6 +870,42 @@ export async function createClaim(
     if (!allowsAccount(scope, marketplaceId)) {
       throw new ServiceError(404, "Scanned return not found.")
     }
+
+    let claimReason = input.claimReason.trim()
+    let claimTitle = input.claimTitle.trim()
+    let claimDescription = input.claimDescription.trim()
+    let marketplaceIssueCode = ""
+    let marketplaceIssueLabel = ""
+    let subOrderId = ""
+    let awb = ""
+    let packetState = ""
+    let packetId = ""
+    let returnType = ""
+    let receivedDate: string | null = null
+    let dueDate: string | null = null
+    let missingAmount = 0
+    if (String(scan.marketplace || "").toLowerCase() === "meesho") {
+      const prepared = await prepareMeeshoClaim(client, scope, input.receiptScanId, input.marketplaceIssueCode || "")
+      claimReason = prepared.reason
+      claimTitle = prepared.title
+      claimDescription = prepared.description
+      marketplaceIssueCode = prepared.issueCode
+      marketplaceIssueLabel = prepared.issueLabel
+      subOrderId = prepared.subOrderId
+      awb = prepared.awb
+      packetState = prepared.packetState
+      packetId = prepared.packetId
+      returnType = prepared.returnType
+      receivedDate = prepared.receivedDate
+      dueDate = prepared.dueDate
+      missingAmount = prepared.missingAmount
+    }
+    const reasonErr = claimReasonError(claimReason)
+    if (reasonErr) throw new ServiceError(400, reasonErr)
+    const titleErr = claimTitleError(claimTitle)
+    if (titleErr) throw new ServiceError(400, titleErr)
+    const descErr = claimDescriptionError(claimDescription)
+    if (descErr) throw new ServiceError(400, descErr)
 
     // Duplicate prevention: one claim per scan.
     const existing = await client.query("SELECT id FROM claims WHERE receipt_scan_id = $1", [input.receiptScanId])
@@ -851,18 +934,31 @@ export async function createClaim(
     if (templateId === null) throw new ServiceError(409, "No active claim template is configured for this marketplace.")
 
     const result = await client.query<{ id: number }>(
-      `INSERT INTO claims (receipt_scan_id, marketplace_id, claim_template_id, claim_reason, claim_title, claim_description, remarks, status, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending_evidence', $8)
+      `INSERT INTO claims
+        (receipt_scan_id, marketplace_id, claim_template_id, claim_reason, claim_title, claim_description, remarks,
+         status, created_by, marketplace_issue_code, marketplace_issue_label, sub_order_id_snapshot, awb_snapshot,
+         packet_state_snapshot, packet_id_snapshot, return_type_snapshot, received_date, claim_due_date, missing_item_amount)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending_evidence', $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
        RETURNING id`,
       [
         input.receiptScanId,
         marketplaceId,
         templateId,
-        input.claimReason.trim(),
-        input.claimTitle.trim(),
-        input.claimDescription.trim(),
+        claimReason,
+        claimTitle,
+        claimDescription,
         input.remarks.trim(),
         actor.id,
+        marketplaceIssueCode,
+        marketplaceIssueLabel,
+        subOrderId,
+        awb,
+        packetState,
+        packetId,
+        returnType,
+        receivedDate,
+        dueDate,
+        missingAmount,
       ],
     )
     const claimId = result.rows[0].id
@@ -877,7 +973,9 @@ export async function createClaim(
     await auditClaimChange(client, actor.id, "claim.create", String(claimId), {
       receiptScanId: input.receiptScanId,
       marketplaceId,
-      claimReason: input.claimReason.trim(),
+      claimReason,
+      marketplaceIssueCode,
+      dueDate,
     })
 
     await client.query("COMMIT")

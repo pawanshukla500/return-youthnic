@@ -51,6 +51,10 @@ class ChannelActivity : AppCompatActivity() {
             loadAccounts()
         }
 
+        binding.cardClaims.setOnClickListener {
+            startActivity(Intent(this, ClaimCaptureActivity::class.java))
+        }
+
         binding.cardContinueLast.setOnClickListener {
             val sm = (application as ReturnScanApp).sessionManager
             if (sm.lastAccountId.isNotBlank()) {

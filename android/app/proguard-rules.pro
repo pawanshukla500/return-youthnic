@@ -11,7 +11,9 @@
 
 # CameraX
 -keep class androidx.camera.core.** { *; }
+-keep class androidx.camera.video.** { *; }
 -dontwarn androidx.camera.core.**
+-dontwarn androidx.camera.video.**
 
 # ML Kit Barcode
 -keep class com.google.mlkit.vision.barcode.** { *; }
