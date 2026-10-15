@@ -23,6 +23,7 @@ const SCHEMA_VERSION = 1
 //  schema-payment.sql       Payment and sales amount synchronization and sync runs
 //  schema-iron.sql          Iron Send tracking (operational category, sent and received quantities, overdue setting)
 //  schema-flyer.sql         Meesho flyer ID capture for issue returns (permanent claim evidence)
+//  schema-claims.sql       Claims foundation: templates, claim records, media metadata, status history
 const SCHEMA_FILES = [
   "schema.sql",
   "schema-import.sql",
@@ -34,6 +35,7 @@ const SCHEMA_FILES = [
   "schema-return-reasons.sql",
   "schema-iron.sql",
   "schema-flyer.sql",
+  "schema-claims.sql",
 ] as const
 
 // History tables whose rows must never be destroyed by any code path. Listed here so they cannot silently
@@ -56,6 +58,9 @@ const HISTORY_TABLES = [
   "iron_send_records",
   "iron_receive_events",
   "iron_batches",
+  "claims",
+  "claim_media",
+  "claim_status_history",
 ] as const
 
 // Reads every schema file and refuses to apply them if any contain a destructive statement against a

@@ -1530,6 +1530,47 @@ Append new entries at the end. Do not edit earlier entries, except to correct a 
 - **Next agent must not:** store a flyer for non-Meesho, clear or Iron-only scans; treat `unavailable` as a stored ID; delete scan/upload/audit history; bump `SCHEMA_VERSION`; weaken TLS; read `.env` or print secrets; invent AWBs (tests use `SYN-` only).
 - **Open for the user:** merge + CI publish of v1.0.34 (then sync manifest sha/size from the published APK); warehouse test of normal/issue/Meesho-flyer/missing-flyer/duplicate/consecutive scans on desktop + phone; confirm Meesho flyer ID format if stricter validation is wanted.
 
+### 2026-10-15, Antigravity Agent, OMSGuru Daily Update Scheduled Time (11:00 PM IST) & TaskFlow Pro Email Layout Redesign
+
+- **Features & Enhancements Delivered:**
+  - **Schedule Shift from 7:45 PM to 11:00 PM IST (23:00):**
+    - Updated `DEFAULT_OMSGURU_CONFIG.dailyTime` to `"23:00"` in `server/omsguru-daily.ts`.
+    - Added automatic database migration in `getOmsguruConfig` and safe additive SQL `UPDATE app_system_settings SET setting_value = jsonb_set(setting_value, '{dailyTime}', '"23:00"') WHERE setting_key = 'omsguru_config' AND setting_value->>'dailyTime' = '19:45';` in `server/schema-register.sql`.
+    - Updated UI indicators, default placeholder, and descriptions in `src/OmsguruDailyReport.tsx` and `src/pages/Reports.tsx` (`● 11:00 PM IST`).
+  - **App Logo Asset Creation & Visibility Fix:**
+    - Diagnosed `public/logos/youthnic-icon.png` (previously an empty 264-pixel blank mask) and fixed it with clean 128x128 white squircle badge with solid dark slate monogram (`#0f172a`), generating `public/logos/youthnic-badge.png` and updating `public/logos/youthnic-icon.png`.
+    - Copied assets to `dist/logos/` and added static file serving for `public/` in `server/index.ts` to ensure logo accessibility across dev and production.
+  - **Rich Email Template Redesign (Matching Attached Screenshot):**
+    - Redesigned `renderOmsguruUpdateEmail` in `server/omsguru-daily.ts` to match the TaskFlow Pro briefing layout.
+    - Deep emerald gradient header banner (`#06382c` to `#0f5c49`), white squircle logo badge, `TaskFlow Pro · Return Scan` with `YOUTHNIC · VB EXPORTS` branding, and `● 23:00 IST DISPATCH` badge.
+    - Prominent headline: `Your evening inventory briefing` with formatted IST date and schedule.
+    - Universal 4-card horizontal KPI grid (`GOOD UNITS`, `MASTER SKUS`, `CHANNELS`, `WAREHOUSE`) using table layout for universal email client compatibility.
+    - `Priority focus` card with orange accent left border (`border-left: 4px solid #ea580c;`), displaying marketplace channel breakdown.
+    - OMSGuru Bulk Inventory Adjustment instructions, Request ID traceability badge, direct download button, and Master SKU breakdown table.
+- **Changed:**
+  - `server/omsguru-daily.ts`
+  - `server/schema-register.sql`
+  - `server/index.ts`
+  - `server/tests/omsguru-daily.test.ts`
+  - `src/OmsguruDailyReport.tsx`
+  - `src/pages/Reports.tsx`
+  - `public/logos/youthnic-badge.png` (new)
+  - `public/logos/youthnic-badge.svg` (new)
+  - `public/logos/youthnic-icon.png`
+  - `dist/logos/youthnic-badge.png` (new)
+  - `dist/logos/youthnic-icon.png`
+- **Ran:**
+  - `npm.cmd run typecheck` → Passed (0 errors).
+  - `npm.cmd run build` → Passed (Vite built in 1.51s, server bundled in 16ms).
+  - `npm.cmd test` → 354 tests: 318 passed, 0 failed, 36 skipped (`TEST_DATABASE_URL`).
+  - `node --import tsx --test server/tests/omsguru-daily.test.ts` → 6 passed, 0 failed.
+- **Invariants preserved:**
+  - Rule 1 & Rule 2: Account scope and Admin checks intact.
+  - Rule 6: Schema changes strictly additive (UPDATE migration with no table drops).
+  - Rule 8: Zero secrets printed or committed.
+  - Rule 10: Screen controls tested and enabled.
+  - Rule 11: Reported only commands executed with their exact outputs.
+
 ## STOP — needs the user to resume
 
 
@@ -1615,3 +1656,24 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
 - **"TEST_DATABASE_URL must point to a database whose name contains 'test'."** The guard refused the URL. Do not change the guard. Point the variable at a test database.
 - **"Set NEW_USER_PASSWORD ..."** Set the variable in the same terminal, then run the command again.
 - **TLS or certificate errors.** See [CONFIGURATION.md](../CONFIGURATION.md#database-ssl). Never disable TLS.
+
+### 2026-10-14, Factory Droid, claims foundation (FIRST PR)
+
+- Changed: `server/firebase-storage.ts` (removed the prohibited `.env` fallback in `loadFirebaseConfig` step 4; added `downloadFromFirebaseStorage` for secure scoped file retrieval; safe env/cert credential paths preserved); `server/db.ts` (added `schema-claims.sql` to `SCHEMA_FILES`; added `claims`, `claim_media`, `claim_status_history` to `HISTORY_TABLES`); `server/schema-claims.sql` (new: `claim_templates`, `claim_template_fields`, `claims`, `claim_media`, `claim_status_history`; seeded editable defaults for Myntra VB/EJ, Meesho, Ajio with images+unpacking video, Flipkart with images only); `server/claims-service.ts` (new: lifecycle validation, scoped list/detail/create/status-update/media-metadata/media-deactivation, template CRUD); `server/claims-routes.ts` (new: `GET /api/claims/queue`, `GET /api/claims/:id`, `POST /api/claims`, `PATCH /api/claims/:id/status`, `POST /api/claims/:id/media`, `GET /api/claims/:id/media/:mediaId`, `PATCH /api/claims/:id/media/:mediaId/deactivate`, `GET /api/claims/templates`, Admin template CRUD); `server/index.ts` (mount claims routes); `src/types.ts` (added `ClaimStatus`, `CLAIM_STATUS_LABELS`, `CLAIM_STATUS_TONES`, `ClaimTemplate`, `ClaimTemplateField`, `ClaimMediaRow`, `ClaimStatusHistoryRow`, `ClaimRow`, `ClaimDetail`, `ClaimListResult`); `src/pages/Claims.tsx` (extended: Overview tab + Claim Queue tab with filters, detail modal, create-claim modal, status update, media list, status history); `src/pages/Admin.tsx` (added "Claim templates" tab with template CRUD, field add/deactivate); `server/tests/claims.test.ts` (new: 13 pure tests for lifecycle statuses, validation rules, constants); `package.json` (added `claims.test.ts` to test script).
+- Ran: `npm run typecheck` -> pass (0 errors); `npm run build` -> pass (Vite 1.87s, esbuild 14ms); `npm test` -> 367 tests: 331 pass, 0 fail, 36 skipped (`TEST_DATABASE_URL` not set); `node --import tsx --test server/tests/claims.test.ts` -> 13 pass, 0 fail; `node --import tsx --test server/tests/database-ssl.test.ts` -> 15 pass, 0 fail (schema safety, FK integrity, history table guard all pass with the new schema file).
+- Not run or not verified: the browser (no UI runner); the database tests (need `TEST_DATABASE_URL`); the Firebase upload/download round trip (needs configured Firebase credentials); end-to-end claim creation/status flow against a live database.
+- What was implemented: configurable marketplace claim templates (additive schema, seeded editable defaults, no code-level rules); claim lifecycle with 7 statuses (Pending Evidence, Ready for Claim, Waiting for Approval, Processing, Submitted, Failed, Manual Action Required); immutable scanned-return snapshot linkage via `claims.receipt_scan_id` with `ON DELETE RESTRICT` and a unique index (duplicate prevention); audit history in `claim_status_history` and `register_audit_log`; media metadata with storage object path, hash, size, MIME type, capture/upload time/user, active marker, 24-month retention date; secure Firebase-backed scoped file retrieval (no direct public links); React Claims page with queue/detail/capture; Admin template management tab.
+- What was NOT built (per task scope): no Electron or Android agent; no inventory changes; no SCHEMA_VERSION bump; no destructive schema changes.
+- The `.env` fallback in `firebase-storage.ts` step 4 (which read the `.env` file directly to parse unquoted multiline JSON) was removed. Safe credential paths are preserved: `FIREBASE_SERVICE_ACCOUNT_JSON` env var, `certs/firebase-service-account.json`, and `FIREBASE_SERVICE_ACCOUNT_FILE` env path. The `loadFirebaseConfig` function now returns null when none of these provide valid credentials, instead of reading `.env`.
+- The next agent must not: drop or rewrite the new `claims`/`claim_media`/`claim_status_history` tables (they are in `HISTORY_TABLES`); re-introduce the `.env` fallback in `firebase-storage.ts`; bump `SCHEMA_VERSION`; remove the `schema-claims.sql` entry from `SCHEMA_FILES`; or add direct public download URLs to claim media responses.
+- Open for the user: configure Firebase credentials (via `FIREBASE_SERVICE_ACCOUNT_JSON` env var or `certs/firebase-service-account.json`) to enable evidence media storage and retrieval; run database tests with `TEST_DATABASE_URL` to verify scoped reads, duplicate prevention, and audit against a real PostgreSQL; verify the Claims Queue UI and Admin template management in a browser.
+
+### 2026-10-15, Factory Droid, claims foundation review and correction
+
+- Corrected the first implementation before PR: claim list/detail queries now join `claims.receipt_scan_id` to `receipt_scans.id` and then to `expected_returns`; the server now accepts multipart evidence bytes, validates template type/count/size and file signatures, hashes files for retry-safe duplicate prevention, uploads to Firebase Storage, and stores only scoped metadata. Internal Firebase object paths are not returned to the browser.
+- Added independent scanned-return search by AWB/order, separate claim reason and title fields, editable required/optional evidence slots with min/max counts and 1-100 MB file limits, automatic evidence readiness, and 24-month retention dates. The approval path is enforced as Ready for Claim → Waiting for Approval → Processing → Submitted; only Supervisor/Admin can change status.
+- The Claims page now selects an existing scan instead of requiring operators to know a numeric ID, uploads evidence into template slots, shows missing requirements, and hides approval controls from unauthorized roles. The Admin page configures field type, required/optional state, counts, and file-size limits.
+- Changed files for this task: `server/schema-claims.sql`, `server/claims-service.ts`, `server/claims-routes.ts`, `server/tests/claims.test.ts`, `server/db.ts`, `server/firebase-storage.ts`, `server/index.ts`, `src/pages/Claims.tsx`, `src/pages/Admin.tsx`, `src/types.ts`, `package.json`, `docs/API.md`, `docs/ARCHITECTURE.md`, and this handoff.
+- Ran after correction: `npm run typecheck` passed; focused claims and schema-safety tests passed (31/31); `npm run build` passed (Vite 1.72 s, server bundle 17 ms); `npm test` finished with 370 tests, 334 pass, 0 fail, 36 skipped because `TEST_DATABASE_URL` is not set. The local server connected to PostgreSQL and the unauthenticated sign-in screen rendered at `/claims`; authenticated Claims/Admin screens were not exercised because no test login was supplied.
+- Not verified: PostgreSQL database tests, Firebase upload/download round trip, authenticated browser flow. Android capture and the Electron desktop agent are intentionally deferred to later releases. No Android release files changed in this PR.
+- The next agent must not expose Firebase public URLs, bypass required-evidence or approval transitions, couple claims to inventory quantity changes, delete claim/evidence history, or reintroduce the `.env` file fallback in `server/firebase-storage.ts`.

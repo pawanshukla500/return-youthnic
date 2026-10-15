@@ -50,6 +50,7 @@ import { mountReturnReasonsRoutes } from "./return-reasons-routes.js"
 import { runScheduledPaymentSync } from "./payment/sync.js"
 import { closePaymentPool, paymentDatabaseUrl } from "./payment/db.js"
 import { mountIronRoutes } from "./iron-routes.js"
+import { mountClaimsRoutes } from "./claims-routes.js"
 import { attachLiveServer, closeLiveServer } from "./live.js"
 import type { IncomingMessage } from "node:http"
 
@@ -470,6 +471,9 @@ mountReturnReasonsRoutes(app, requireUser)
 
 // Iron Send tracking, return analytics and the live sync cursor live in iron-routes.ts.
 mountIronRoutes(app, requireUser)
+
+// Claims foundation: claim lifecycle, evidence media, templates live in claims-routes.ts.
+mountClaimsRoutes(app, requireUser)
 
 // ---- Administrator pages. Every route here needs the Admin role. ----
 

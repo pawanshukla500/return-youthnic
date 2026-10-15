@@ -49,27 +49,6 @@ export function loadFirebaseConfig(): FirebaseConfig | null {
     }
   }
 
-  // 4. Fallback: Parse unquoted multiline JSON from .env if present
-  if (!raw || raw === "{" || raw.length < 10) {
-    const envPath = path.join(root, ".env")
-    if (fs.existsSync(envPath)) {
-      try {
-        const content = fs.readFileSync(envPath, "utf8")
-        const idx = content.indexOf("FIREBASE_SERVICE_ACCOUNT_JSON")
-        if (idx !== -1) {
-          const sub = content.slice(idx)
-          const start = sub.indexOf("{")
-          const end = sub.indexOf("}")
-          if (start !== -1 && end !== -1) {
-            raw = sub.slice(start, end + 1).trim()
-          }
-        }
-      } catch {
-        // ignore
-      }
-    }
-  }
-
   if (!raw || raw.length < 10) return null
 
   try {
@@ -196,6 +175,27 @@ export async function uploadToFirebaseStorage(
     directUrl,
     size: Number(data.size || 0),
   }
+}
+
+// Downloads a file from Firebase Storage. Returns the content as a Buffer with its content type and size.
+// Used by the claims media route for secure scoped retrieval: the client never receives a direct public link.
+export async function downloadFromFirebaseStorage(
+  objectPath: string,
+): Promise<{ content: Buffer; contentType: string; size: number } | null> {
+  const config = loadFirebaseConfig()
+  if (!config) return null
+
+  const token = await getGoogleAccessToken(config)
+  const encodedName = encodeURIComponent(objectPath)
+  const url = `https://storage.googleapis.com/storage/v1/b/${encodeURIComponent(config.bucket)}/o/${encodedName}?alt=media`
+  const response = await fetch(url, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  if (!response.ok) return null
+
+  const contentType = response.headers.get("content-type") || "application/octet-stream"
+  const content = Buffer.from(await response.arrayBuffer())
+  return { content, contentType, size: content.length }
 }
 
 // Deletes a file from Firebase Storage

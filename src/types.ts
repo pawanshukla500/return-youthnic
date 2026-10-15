@@ -600,3 +600,123 @@ export type ProductMasterPreview = {
   scopes: { marketplace: string; rows: number }[]
   sample: { listingSku: string; masterSku: string; category: string; imageUrl: string }[]
 }
+
+// ---- Claims foundation (server/claims-service.ts) ----
+
+export type ClaimStatus =
+  | "pending_evidence"
+  | "ready_for_claim"
+  | "waiting_for_approval"
+  | "processing"
+  | "submitted"
+  | "failed"
+  | "manual_action_required"
+
+export const CLAIM_STATUS_LABELS: Record<ClaimStatus, string> = {
+  pending_evidence: "Pending Evidence",
+  ready_for_claim: "Ready for Claim",
+  waiting_for_approval: "Waiting for Approval",
+  processing: "Processing",
+  submitted: "Submitted",
+  failed: "Failed",
+  manual_action_required: "Manual Action Required",
+}
+
+export const CLAIM_STATUS_TONES: Record<ClaimStatus, string> = {
+  pending_evidence: "warning",
+  ready_for_claim: "blue",
+  waiting_for_approval: "purple",
+  processing: "orange",
+  submitted: "green",
+  failed: "danger",
+  manual_action_required: "danger",
+}
+
+export type ClaimTemplateField = {
+  id: number
+  fieldKey: string
+  fieldLabel: string
+  fieldType: string
+  required: boolean
+  minCount: number
+  maxCount: number
+  maxFileSizeMb: number
+  sortOrder: number
+  active: boolean
+}
+
+export type ClaimTemplate = {
+  id: number
+  marketplaceId: number | null
+  marketplaceName: string
+  name: string
+  description: string
+  active: boolean
+  sortOrder: number
+  fields: ClaimTemplateField[]
+}
+
+export type ClaimMediaRow = {
+  id: number
+  fieldKey: string
+  contentHash: string
+  sizeBytes: number
+  mimeType: string
+  originalFilename: string
+  capturedAt: string | null
+  uploadedBy: string
+  uploadedAt: string
+  active: boolean
+  retentionUntil: string
+}
+
+export type ClaimStatusHistoryRow = {
+  fromStatus: string
+  toStatus: string
+  reason: string
+  changedBy: string
+  changedAt: string
+}
+
+export type ClaimRow = {
+  id: number
+  receiptScanId: number
+  marketplaceId: number
+  marketplace: string
+  claimTemplateId: number | null
+  claimReason: string
+  claimTitle: string
+  claimDescription: string
+  remarks: string
+  status: string
+  createdBy: string
+  createdAt: string
+  updatedAt: string
+  trackingId: string
+  orderId: string
+  mediaCount: number
+}
+
+export type ClaimDetail = ClaimRow & {
+  media: ClaimMediaRow[]
+  history: ClaimStatusHistoryRow[]
+  evidenceComplete: boolean
+  missingEvidence: string[]
+}
+
+export type ClaimScanSearchRow = {
+  scanId: number
+  marketplaceId: number
+  marketplace: string
+  trackingId: string
+  orderId: string
+  scannedAt: string
+  hasClaim: boolean
+}
+
+export type ClaimListResult = {
+  rows: ClaimRow[]
+  total: number
+  page: number
+  pageSize: number
+}

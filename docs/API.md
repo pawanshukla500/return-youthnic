@@ -69,6 +69,15 @@ No rate limiting is configured. No rate-limit package is in `package.json`. CORS
 | POST | `/api/auth/logout` | Yes | Ends the session. |
 | GET | `/api/dashboard` | Yes | Overview figures for the user's accounts. |
 | GET | `/api/claims` | Yes | Claim figures for the user's accounts. |
+| GET | `/api/claims/queue` | Yes | Lifecycle claim queue, account-scoped and filterable. |
+| GET | `/api/claims/scan-search` | Yes | Finds scanned returns by AWB or order for independent claim capture. |
+| GET | `/api/claims/templates` | Yes | Active and inactive claim templates in the user's account scope. |
+| POST | `/api/claims` | Yes | Creates one claim linked immutably to a scanned return. |
+| GET | `/api/claims/:id` | Yes | Claim details, evidence readiness, media metadata, and status history. |
+| PATCH | `/api/claims/:id/status` | Supervisor/Admin | Advances the approval-controlled claim lifecycle. |
+| POST | `/api/claims/:id/media/upload` | Yes | Validates and uploads one evidence file to Firebase Storage. |
+| GET | `/api/claims/:id/media/:mediaId` | Yes | Securely streams scoped evidence without exposing a public URL. |
+| PATCH | `/api/claims/:id/media/:mediaId/deactivate` | Yes | Deactivates an evidence record without deleting history. |
 | GET | `/api/accounts` | Yes | The accounts the user may use. |
 | GET | `/api/uploads` | Yes | Upload history for the user's accounts. |
 | GET | `/api/uploads/template` | Yes | The generic template, a header row only. |
@@ -174,6 +183,18 @@ The scan, upload and register screens fill their account lists from this route. 
 `chartBars` covers the last seven IST days, oldest first. `weekday` is the day name, `d` is the day of the month, and `received` and `issues` are the counts. `v` and `i` are those counts as percentages of the busiest day, used only to draw the bars. A day with no scans is zero, not a minimum bar. `share` on each marketplace slice is the percentage used to draw the ring. `dailyAvg` is the seven-day total divided by seven. `recent` has the four latest scans, with the first ticket of each scan. The `recent` rows use the field names shown above, not the register's.
 
 `GET /api/claims` returns `{ "stats", "total", "slices", "rows" }`. Each slice has `name`, `count`, `pct` and `tone`. Each row has `market`, `raised`, `approved`, `review` (tickets with status `Review` or `Raised`), `rejected`, `value` (always `—`) and `rate`, which is approved as a whole-number percentage of raised. A claim is open until it is approved or rejected.
+
+### Claim management
+
+Claim management is separate from return inventory. A claim links to one saved `receipt_scans` row and never changes received or accepted quantities.
+
+`POST /api/claims` accepts `receiptScanId`, `claimReason`, `claimTitle`, `claimDescription`, `remarks`, and `claimTemplateId`. One claim is allowed per scan. The template must be active for that marketplace.
+
+Evidence uploads are multipart forms with `fieldKey` and `file`. The server enforces the template's type, minimum/maximum count, and per-file size limit, verifies common file signatures, hashes the content for duplicate prevention, and stores it under `claim-evidence/<marketplace>/<order>/claim-<id>/`. Required evidence automatically moves a claim from `pending_evidence` to `ready_for_claim`.
+
+Only a Supervisor or Admin may change lifecycle status. The allowed path requires approval before submission: `ready_for_claim` → `waiting_for_approval` → `processing` → `submitted`. Failed and manual-action states keep their complete status history.
+
+Admin-only endpoints under `/api/admin/claims/templates` create, activate/deactivate, and add/deactivate configurable template fields. Template rows and evidence history are never deleted.
 
 ## Uploads
 

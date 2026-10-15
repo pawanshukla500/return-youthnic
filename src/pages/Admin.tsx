@@ -91,6 +91,7 @@ const TABS = [
   "Logistics partners",
   "Product SKU master",
   "Marketplace accounts",
+  "Claim templates",
   "System",
 ]
 
@@ -1727,7 +1728,10 @@ export function Admin() {
         </section>
       )}
 
-      {/* -------------------- TAB 6: SYSTEM & RESEND EMAIL REPORTS -------------------- */}
+      {/* -------------------- TAB 6: CLAIM TEMPLATES -------------------- */}
+      {tab === "Claim templates" && <ClaimTemplatesTab />}
+
+      {/* -------------------- TAB 7: SYSTEM & RESEND EMAIL REPORTS -------------------- */}
       {tab === "System" && (
         <section className="panel admin-panel">
           <div className="panel-head">
@@ -2083,5 +2087,339 @@ export function Admin() {
         </section>
       )}
     </div>
+  )
+}
+
+// ---- Claim templates tab ----
+
+type ClaimTemplateFieldDTO = {
+  id: number
+  fieldKey: string
+  fieldLabel: string
+  fieldType: string
+  required: boolean
+  minCount: number
+  maxCount: number
+  maxFileSizeMb: number
+  sortOrder: number
+  active: boolean
+}
+
+type ClaimTemplateDTO = {
+  id: number
+  marketplaceId: number | null
+  marketplaceName: string
+  name: string
+  description: string
+  active: boolean
+  sortOrder: number
+  fields: ClaimTemplateFieldDTO[]
+}
+
+function ClaimTemplatesTab() {
+  const [templates, setTemplates] = useState<ClaimTemplateDTO[]>([])
+  const [accounts, setAccounts] = useState<AccountRow[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState("")
+  const [newName, setNewName] = useState("")
+  const [newDescription, setNewDescription] = useState("")
+  const [newMarketplace, setNewMarketplace] = useState("")
+  const [creating, setCreating] = useState(false)
+  const [createFormError, setCreateFormError] = useState("")
+
+  // Field creation state
+  const [fieldDrafts, setFieldDrafts] = useState<Record<number, { key: string; label: string; type: string; required: boolean; min: number; max: number; maxMb: number }>>({})
+  const [fieldErrors, setFieldErrors] = useState<Record<number, string>>({})
+
+  const load = () => {
+    setLoading(true)
+    Promise.all([
+      api<{ templates: ClaimTemplateDTO[] }>("/api/claims/templates"),
+      api<{ accounts: AccountRow[] }>("/api/admin/accounts"),
+    ])
+      .then(([tplData, acctData]) => {
+        setTemplates(tplData.templates)
+        setAccounts(acctData.accounts)
+      })
+      .catch((err: Error) => setError(err.message))
+      .finally(() => setLoading(false))
+  }
+
+  useEffect(() => { load() }, [])
+
+  const createTemplate = async () => {
+    setCreating(true)
+    setCreateFormError("")
+    try {
+      const body: Record<string, unknown> = { name: newName, description: newDescription }
+      if (newMarketplace) body.marketplaceId = Number(newMarketplace)
+      await api("/api/admin/claims/templates", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      })
+      setNewName("")
+      setNewDescription("")
+      setNewMarketplace("")
+      load()
+    } catch (err) {
+      setCreateFormError(err instanceof Error ? err.message : "Failed to create template")
+    } finally {
+      setCreating(false)
+    }
+  }
+
+  const toggleActive = async (tpl: ClaimTemplateDTO) => {
+    try {
+      await api(`/api/admin/claims/templates/${tpl.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ isActive: !tpl.active }),
+      })
+      load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update template")
+    }
+  }
+
+  const addField = async (templateId: number) => {
+    const draft = fieldDrafts[templateId]
+    if (!draft || !draft.key.trim() || !draft.label.trim()) return
+    setFieldErrors({ ...fieldErrors, [templateId]: "" })
+    try {
+      await api(`/api/admin/claims/templates/${templateId}/fields`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          fieldKey: draft.key,
+          fieldLabel: draft.label,
+          fieldType: draft.type,
+          required: draft.required,
+          minCount: draft.min,
+          maxCount: draft.max,
+          maxFileSizeMb: draft.maxMb,
+        }),
+      })
+      setFieldDrafts({ ...fieldDrafts, [templateId]: { key: "", label: "", type: "image", required: true, min: 1, max: 10, maxMb: 25 } })
+      load()
+    } catch (err) {
+      setFieldErrors({ ...fieldErrors, [templateId]: err instanceof Error ? err.message : "Failed to add field" })
+    }
+  }
+
+  const deactivateField = async (fieldId: number, templateId: number) => {
+    try {
+      await api(`/api/admin/claims/template-fields/${fieldId}/deactivate`, { method: "PATCH" })
+      load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to deactivate field")
+    }
+  }
+
+  if (loading) return <p className="boot-copy">Loading claim templates…</p>
+  if (error) return <div className="form-error page-error">{error}</div>
+
+  return (
+    <section className="panel admin-panel">
+      <div className="panel-head">
+        <div>
+          <h2>Claim templates ({templates.length})</h2>
+          <p>Configurable marketplace claim evidence templates. Editable; no code-level rules.</p>
+        </div>
+      </div>
+
+      {/* Create new template */}
+      <div style={{ padding: 16, borderBottom: "1px solid var(--line)" }}>
+        <h4 style={{ margin: "0 0 8px" }}>Create template</h4>
+        {createFormError && <div className="form-error" style={{ marginBottom: 8 }}>{createFormError}</div>}
+        <div className="filter-row">
+          <input
+            type="text"
+            placeholder="Template name"
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            maxLength={120}
+            style={{ flex: 1 }}
+          />
+          <select value={newMarketplace} onChange={(e) => setNewMarketplace(e.target.value)}>
+            <option value="">All marketplaces</option>
+            {accounts.map((a) => (
+              <option key={a.id} value={a.id}>{a.name}</option>
+            ))}
+          </select>
+          <input
+            type="text"
+            placeholder="Description (optional)"
+            value={newDescription}
+            onChange={(e) => setNewDescription(e.target.value)}
+            style={{ flex: 1 }}
+          />
+          <button className="btn primary" disabled={!newName.trim() || creating} onClick={createTemplate}>
+            {creating ? "Creating…" : "Create"}
+          </button>
+        </div>
+      </div>
+
+      {/* Template list */}
+      <div style={{ padding: 16 }}>
+        {templates.length === 0 ? (
+          <p className="muted">No claim templates configured. Create one above.</p>
+        ) : (
+          <div className="account-grid-v2">
+            {templates.map((tpl) => (
+              <div className="account-card-v2" key={tpl.id}>
+                <div className="account-card-header">
+                  <div>
+                    <h4>{tpl.name}</h4>
+                    <p style={{ fontSize: 11, color: "#64748b" }}>{tpl.marketplaceName}</p>
+                  </div>
+                  <Badge tone={tpl.active ? "success" : "neutral"}>{tpl.active ? "Active" : "Inactive"}</Badge>
+                </div>
+                {tpl.description && <p style={{ fontSize: 12, color: "#475569", margin: "4px 0 8px" }}>{tpl.description}</p>}
+
+                {/* Fields */}
+                <div style={{ marginTop: 8 }}>
+                  <strong style={{ fontSize: 11, textTransform: "uppercase", color: "#64748b" }}>Fields</strong>
+                  {tpl.fields.length === 0 ? (
+                    <p className="muted" style={{ fontSize: 12 }}>No fields defined.</p>
+                  ) : (
+                    <table className="media-table" style={{ marginTop: 6 }}>
+                      <thead>
+                        <tr>
+                          <th>Key</th>
+                          <th>Label</th>
+                          <th>Type</th>
+                          <th>Required</th>
+                          <th>Limits</th>
+                          <th></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {tpl.fields.map((f) => (
+                          <tr key={f.id} className={f.active ? "" : "inactive"}>
+                            <td>{f.fieldKey}</td>
+                            <td>{f.fieldLabel}</td>
+                            <td>{f.fieldType}</td>
+                            <td>{f.required ? "Yes" : "No"}</td>
+                            <td>{f.minCount}-{f.maxCount} files, {f.maxFileSizeMb} MB each</td>
+                            <td>
+                              {f.active && (
+                                <button className="btn secondary small" onClick={() => deactivateField(f.id, tpl.id)}>
+                                  Deactivate
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+
+                {/* Add field */}
+                <div style={{ marginTop: 8, borderTop: "1px solid var(--line)", paddingTop: 8 }}>
+                  {fieldErrors[tpl.id] && <div className="form-error" style={{ marginBottom: 4 }}>{fieldErrors[tpl.id]}</div>}
+                  <div className="filter-row" style={{ flexWrap: "wrap", gap: 4 }}>
+                    <input
+                      type="text"
+                      placeholder="field_key"
+                      value={fieldDrafts[tpl.id]?.key || ""}
+                      onChange={(e) => setFieldDrafts({
+                        ...fieldDrafts,
+                        [tpl.id]: { ...(fieldDrafts[tpl.id] || { key: "", label: "", type: "image", required: true, min: 1, max: 10, maxMb: 25 }), key: e.target.value },
+                      })}
+                      style={{ width: 120 }}
+                    />
+                    <input
+                      type="text"
+                      placeholder="Field label"
+                      value={fieldDrafts[tpl.id]?.label || ""}
+                      onChange={(e) => setFieldDrafts({
+                        ...fieldDrafts,
+                        [tpl.id]: { ...(fieldDrafts[tpl.id] || { key: "", label: "", type: "image", required: true, min: 1, max: 10, maxMb: 25 }), label: e.target.value },
+                      })}
+                      style={{ width: 120 }}
+                    />
+                    <select
+                      value={fieldDrafts[tpl.id]?.type || "image"}
+                      onChange={(e) => setFieldDrafts({
+                        ...fieldDrafts,
+                        [tpl.id]: { ...(fieldDrafts[tpl.id] || { key: "", label: "", type: "image", required: true, min: 1, max: 10, maxMb: 25 }), type: e.target.value },
+                      })}
+                      style={{ width: 90 }}
+                    >
+                      <option value="image">Image</option>
+                      <option value="video">Video</option>
+                      <option value="document">Document</option>
+                    </select>
+                    <label style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12 }}>
+                      <input
+                        type="checkbox"
+                        checked={fieldDrafts[tpl.id]?.required ?? true}
+                        onChange={(e) => setFieldDrafts({
+                          ...fieldDrafts,
+                          [tpl.id]: { ...(fieldDrafts[tpl.id] || { key: "", label: "", type: "image", required: true, min: 1, max: 10, maxMb: 25 }), required: e.target.checked },
+                        })}
+                      />
+                      Required
+                    </label>
+                    <input
+                      type="number"
+                      min={0}
+                      max={20}
+                      title="Minimum required files"
+                      value={fieldDrafts[tpl.id]?.min ?? 1}
+                      onChange={(e) => setFieldDrafts({
+                        ...fieldDrafts,
+                        [tpl.id]: { ...(fieldDrafts[tpl.id] || { key: "", label: "", type: "image", required: true, min: 1, max: 10, maxMb: 25 }), min: Number(e.target.value) },
+                      })}
+                      style={{ width: 64 }}
+                    />
+                    <input
+                      type="number"
+                      min={1}
+                      max={20}
+                      title="Maximum files"
+                      value={fieldDrafts[tpl.id]?.max ?? 10}
+                      onChange={(e) => setFieldDrafts({
+                        ...fieldDrafts,
+                        [tpl.id]: { ...(fieldDrafts[tpl.id] || { key: "", label: "", type: "image", required: true, min: 1, max: 10, maxMb: 25 }), max: Number(e.target.value) },
+                      })}
+                      style={{ width: 64 }}
+                    />
+                    <input
+                      type="number"
+                      min={1}
+                      max={100}
+                      title="Maximum megabytes per file"
+                      value={fieldDrafts[tpl.id]?.maxMb ?? 25}
+                      onChange={(e) => setFieldDrafts({
+                        ...fieldDrafts,
+                        [tpl.id]: { ...(fieldDrafts[tpl.id] || { key: "", label: "", type: "image", required: true, min: 1, max: 10, maxMb: 25 }), maxMb: Number(e.target.value) },
+                      })}
+                      style={{ width: 70 }}
+                    />
+                    <button
+                      className="btn secondary small"
+                      disabled={!(fieldDrafts[tpl.id]?.key?.trim()) || !(fieldDrafts[tpl.id]?.label?.trim())}
+                      onClick={() => addField(tpl.id)}
+                    >
+                      Add field
+                    </button>
+                  </div>
+                </div>
+
+                {/* Toggle active */}
+                <div style={{ marginTop: 8 }}>
+                  <button className="btn secondary small" onClick={() => toggleActive(tpl)}>
+                    {tpl.active ? "Deactivate template" : "Activate template"}
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </section>
   )
 }
