@@ -1,6 +1,13 @@
 import { type FormEvent, useEffect, useRef, useState } from "react"
 import { ApiError, api, downloadFile } from "../api"
-import type { AdminIssueCategory, ProductMasterPreview, ProductMasterState } from "../types"
+import type {
+  AdminIssueCategory,
+  ProductMasterPreview,
+  ProductMasterState,
+  UnmappedSkuSummary,
+  UnmappedSkuItem,
+  UnmappedListResult,
+} from "../types"
 import { Badge, DataTable, Icon, MarketplaceBadge, PartnerBadge, Modal } from "../ui"
 
 type AdminUser = {
@@ -174,12 +181,16 @@ export function Admin() {
   const [paymentNotice, setPaymentNotice] = useState("")
   const [paymentError, setPaymentError] = useState("")
 
+  // Product master import mode: "merge" (upsert - safe default) or "replace" (destructive)
+  const [pmImportMode, setPmImportMode] = useState<"merge" | "replace">("merge")
+
   // Unmapped Listing SKUs state
-  const [unmappedSummary, setUnmappedSummary] = useState<{
-    totalUnmapped: number
-    pendingResolution: number
-    byMarketplace: Array<{ marketplace: string; count: number }>
-  } | null>(null)
+  const [unmappedSummary, setUnmappedSummary] = useState<UnmappedSkuSummary | null>(null)
+  const [unmappedList, setUnmappedList] = useState<UnmappedSkuItem[]>([])
+  const [unmappedTotal, setUnmappedTotal] = useState(0)
+  const [unmappedPage, setUnmappedPage] = useState(1)
+  const [loadingUnmappedList, setLoadingUnmappedList] = useState(false)
+  const [unmappedFilterMp, setUnmappedFilterMp] = useState("")
   const [refreshingUnmapped, setRefreshingUnmapped] = useState(false)
   const [unmappedNotice, setUnmappedNotice] = useState("")
 
@@ -371,6 +382,13 @@ export function Admin() {
       .catch((err: Error) => setError(err.message))
   }, [])
 
+  useEffect(() => {
+    if (tab === "Product SKU master") {
+      void loadUnmappedSummary()
+      void loadUnmappedList(1, unmappedFilterMp)
+    }
+  }, [tab, unmappedFilterMp])
+
   // User actions
   const toggleUserReport = async (user: AdminUser) => {
     const nextVal = !user.canReceiveReports
@@ -518,28 +536,47 @@ export function Admin() {
   // Unmapped Listing SKUs actions
   const loadUnmappedSummary = () =>
     api<{
-      summary: {
-        totalUnmapped: number
-        pendingResolution: number
-        byMarketplace: Array<{ marketplace: string; count: number }>
-      }
+      summary?: UnmappedSkuSummary
+      unmapped?: UnmappedSkuSummary
     }>("/api/admin/product-master/unmapped")
-      .then((data) => setUnmappedSummary(data.summary))
+      .then((data) => {
+        const sum = data.summary || data.unmapped
+        if (sum) setUnmappedSummary(sum)
+      })
       .catch(() => undefined)
+
+  const loadUnmappedList = (page = 1, mp = unmappedFilterMp) => {
+    setLoadingUnmappedList(true)
+    const query = new URLSearchParams({
+      page: String(page),
+      pageSize: "15",
+    })
+    if (mp) query.set("marketplace", mp)
+    return api<UnmappedListResult>(`/api/admin/product-master/unmapped/list?${query.toString()}`)
+      .then((data) => {
+        setUnmappedList(data.items || [])
+        setUnmappedTotal(data.total || 0)
+        setUnmappedPage(data.page || 1)
+      })
+      .catch(() => undefined)
+      .finally(() => setLoadingUnmappedList(false))
+  }
 
   const handleRefreshUnmapped = async () => {
     setRefreshingUnmapped(true)
     setUnmappedNotice("")
     try {
       const data = await api<{
-        summary: {
-          totalUnmapped: number
-          pendingResolution: number
-          byMarketplace: Array<{ marketplace: string; count: number }>
-        }
+        count: number
+        summary?: UnmappedSkuSummary
+        unmapped?: UnmappedSkuSummary
       }>("/api/admin/product-master/unmapped/refresh", { method: "POST" })
-      setUnmappedSummary(data.summary)
-      setUnmappedNotice("Unmapped listing SKUs scanned and refreshed successfully.")
+      const sum = data.summary || data.unmapped
+      if (sum) setUnmappedSummary(sum)
+      setUnmappedNotice(
+        `Unmapped listing SKUs scanned and refreshed. Found ${data.count} unmapped item(s) across return listings.`,
+      )
+      await loadUnmappedList(1, unmappedFilterMp)
     } catch (err) {
       setPmError(err instanceof Error ? err.message : "Failed to refresh unmapped listing SKUs.")
     } finally {
@@ -742,20 +779,36 @@ export function Admin() {
       const body = new FormData()
       body.append("file", file)
       body.append("marketplace", pmMarketplace)
-      body.append("confirm", "true")
-      const data = await api<{ result: { inserted: number; removed: number }; state: ProductMasterState }>(
-        "/api/admin/product-master/import",
-        { method: "POST", body },
-      )
+      body.append("mode", pmImportMode)
+      if (pmImportMode === "replace") {
+        body.append("confirm", "true")
+      }
+      const data = await api<{
+        result: { inserted: number; updated?: number; removed?: number; resolvedUnmapped?: number }
+        state: ProductMasterState
+        mode: "merge" | "replace"
+      }>("/api/admin/product-master/import", { method: "POST", body })
+
       setProductMaster(data.state)
-      setPmNotice(
-        `Loaded ${data.result.inserted.toLocaleString("en-US")} listing SKUs. Replaced ${data.result.removed.toLocaleString("en-US")} earlier rows.`,
-      )
+      if (data.mode === "replace") {
+        setPmNotice(
+          `Replaced product master with ${data.result.inserted.toLocaleString("en-US")} listing SKUs. Removed ${data.result.removed?.toLocaleString("en-US") ?? 0} earlier rows.`,
+        )
+      } else {
+        const resolvedText = data.result.resolvedUnmapped
+          ? ` Resolved and linked ${data.result.resolvedUnmapped.toLocaleString("en-US")} previously unmapped return items!`
+          : ""
+        setPmNotice(
+          `Successfully merged ${data.result.inserted.toLocaleString("en-US")} new and updated ${data.result.updated?.toLocaleString("en-US") ?? 0} listing SKUs.${resolvedText} All previous catalog mappings were preserved intact.`,
+        )
+      }
       setPmPreview(null)
       setPmConfirmed(false)
       setPmFilename("")
       setPmFile(null)
       if (pmFileRef.current) pmFileRef.current.value = ""
+      void loadUnmappedSummary()
+      void loadUnmappedList(1, unmappedFilterMp)
     } catch (err) {
       setPmError(err instanceof ApiError ? err.message : "The product master was not loaded.")
     } finally {
@@ -763,7 +816,11 @@ export function Admin() {
     }
   }
 
-  const pmReady = Boolean(pmPreview) && !pmPreview?.fatal && (pmPreview?.rows ?? 0) > 0 && pmConfirmed
+  const pmReady =
+    Boolean(pmPreview) &&
+    !pmPreview?.fatal &&
+    (pmPreview?.rows ?? 0) > 0 &&
+    (pmImportMode === "merge" || pmConfirmed)
 
   return (
     <div className="page-content">
@@ -1418,39 +1475,64 @@ export function Admin() {
             </div>
           )}
 
-          {/* Action panels: Scope selector, template download, and replacement dropzone */}
+          {/* Action panels: Scope selector, import mode, template download, and replacement/merge dropzone */}
           <div className="master-action-grid">
             <div className="master-panel-card">
-              <h4>1. Select Scope & Upload Replacement File</h4>
+              <h4>1. Select Scope, Import Mode & Upload File</h4>
               <p>
-                Leave scope at <strong>All marketplaces</strong> to apply rows globally, or choose a specific marketplace
-                to override mappings for that channel only.
+                Upload your product master mapping file. Choose <strong>Append / Merge</strong> to safely add or update SKUs without touching existing catalog rows.
               </p>
-              <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                <span style={{ fontSize: 11, fontWeight: 700, color: "#475569" }}>TARGET MARKETPLACE SCOPE</span>
-                <select
-                  value={pmMarketplace}
-                  aria-label="Marketplace scope for product master"
-                  onChange={(event) => {
-                    setPmMarketplace(event.target.value)
-                    setPmPreview(null)
-                    setPmConfirmed(false)
-                    setPmError("")
-                    setPmNotice("")
-                    setPmFilename("")
-                    setPmFile(null)
-                    if (pmFileRef.current) pmFileRef.current.value = ""
-                  }}
-                  style={{ height: 38, borderRadius: 6, border: "1px solid var(--line)" }}
-                >
-                  <option value="">All marketplaces (Global)</option>
-                  {accounts.map((account) => (
-                    <option key={account.id} value={account.name}>
-                      {account.name} ({account.code || account.name})
-                    </option>
-                  ))}
-                </select>
-              </label>
+
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 8 }}>
+                <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: "#475569" }}>IMPORT MODE</span>
+                  <select
+                    value={pmImportMode}
+                    aria-label="Product master import mode"
+                    onChange={(event) => setPmImportMode(event.target.value as "merge" | "replace")}
+                    style={{ height: 38, borderRadius: 6, border: "1px solid var(--line)", background: "#fff", fontWeight: 600 }}
+                  >
+                    <option value="merge">Append / Merge (Keep existing) [Recommended]</option>
+                    <option value="replace">Replace Entire Catalog (Destructive)</option>
+                  </select>
+                </label>
+
+                <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: "#475569" }}>TARGET MARKETPLACE SCOPE</span>
+                  <select
+                    value={pmMarketplace}
+                    aria-label="Marketplace scope for product master"
+                    onChange={(event) => {
+                      setPmMarketplace(event.target.value)
+                      setPmPreview(null)
+                      setPmConfirmed(false)
+                      setPmError("")
+                      setPmNotice("")
+                      setPmFilename("")
+                      setPmFile(null)
+                      if (pmFileRef.current) pmFileRef.current.value = ""
+                    }}
+                    style={{ height: 38, borderRadius: 6, border: "1px solid var(--line)", background: "#fff" }}
+                  >
+                    <option value="">All marketplaces (Global)</option>
+                    {accounts.map((account) => (
+                      <option key={account.id} value={account.name}>
+                        {account.name} ({account.code || account.name})
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+
+              {pmImportMode === "merge" ? (
+                <div style={{ padding: "8px 12px", background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 6, fontSize: 12, color: "#166534" }}>
+                  ✓ <strong>Safe Merge Mode:</strong> Adds new listing SKUs, updates matched records, and resolves missing SKU linkups. Your existing catalog remains intact.
+                </div>
+              ) : (
+                <div style={{ padding: "8px 12px", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 6, fontSize: 12, color: "#991b1b" }}>
+                  ⚠️ <strong>Replace Mode:</strong> Deletes existing records in this scope and replaces them with this file. Requires explicit confirmation.
+                </div>
+              )}
 
               <div
                 className={`drop-zone ${pmFilename ? "done" : ""}`}
@@ -1479,7 +1561,7 @@ export function Admin() {
                   <Icon name={pmFilename ? "check" : "upload"} size={22} />
                 </span>
                 <h3 style={{ fontSize: 13, margin: "8px 0 2px" }}>
-                  {pmBusy ? "Analyzing catalog file…" : pmFilename || "Drop new product master file here"}
+                  {pmBusy ? "Analyzing catalog file…" : pmFilename || "Drop product master or unmapped SKUs file here"}
                 </h3>
                 <p style={{ margin: 0 }}>.CSV or .XLSX, up to 25 MB</p>
               </div>
@@ -1505,6 +1587,7 @@ export function Admin() {
                 <li><strong>Product SkuCode</strong> (VB Exports internal item code)</li>
                 <li><strong>Product Category</strong> (e.g. Kurta, Suit Set, Dress)</li>
                 <li><strong>Channel Image URL</strong> (Public HTTP/HTTPS catalog photo)</li>
+                <li><strong>Marketplace</strong> (Optional in file, overrides scope if provided)</li>
               </ul>
               <div style={{ marginTop: "auto", display: "flex", gap: 10 }}>
                 <button
@@ -1530,12 +1613,12 @@ export function Admin() {
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <h4 style={{ margin: 0, fontSize: 15, fontWeight: 700 }}>Unmapped Listing SKUs (Missing Product SKU Linkup)</h4>
                   <Badge tone={(unmappedSummary?.pendingResolution ?? 0) > 0 ? "warning" : "success"}>
-                    {unmappedSummary ? `${unmappedSummary.pendingResolution} Pending` : "Loading..."}
+                    {unmappedSummary ? `${unmappedSummary.pendingResolution} Pending` : "0 Pending"}
                   </Badge>
                 </div>
                 <p style={{ margin: "6px 0 0", color: "#64748b", fontSize: 12 }}>
                   When scanned returns or uploaded reports contain marketplace listing SKUs that have not yet been linked to a VB Export Product SKU,
-                  they are stored here. Download the pre-filled template with missing SKUs, fill in the Product SkuCode, and re-upload above to link them.
+                  they are segregated here. Download the pre-filled template with missing SKUs, fill in the Product SkuCode & Category, and upload with <strong>Append / Merge</strong> mode to link them seamlessly without affecting previous mappings.
                 </p>
               </div>
 
@@ -1554,40 +1637,167 @@ export function Admin() {
                   className="btn primary"
                   onClick={() =>
                     downloadFile(
-                      "/api/admin/product-master/unmapped/download" + (pmMarketplace ? `?marketplace=${encodeURIComponent(pmMarketplace)}` : ""),
-                      pmMarketplace ? `unmapped-skus-${pmMarketplace.toLowerCase().replace(/[^a-z0-9]/g, "-")}.csv` : "unmapped-listing-skus.csv"
+                      "/api/admin/product-master/unmapped/download" + (unmappedFilterMp ? `?marketplace=${encodeURIComponent(unmappedFilterMp)}` : ""),
+                      unmappedFilterMp ? `unmapped-skus-${unmappedFilterMp.toLowerCase().replace(/[^a-z0-9]/g, "-")}.csv` : "unmapped-listing-skus.csv"
                     ).catch((err: Error) => setPmError(err.message))
                   }
-                  title="Download CSV containing all unmapped listing SKUs ready to be filled and uploaded"
+                  title="Download pre-filled CSV with all unmapped listing SKUs ready to be mapped and merged"
                 >
-                  <Icon name="file" size={13} /> Download Missing SKUs CSV
+                  <Icon name="file" size={13} /> Download Missing SKUs CSV {unmappedFilterMp ? `(${unmappedFilterMp})` : ""}
                 </button>
               </div>
             </div>
 
             {unmappedNotice && <div className="form-success" style={{ marginTop: 10 }}>{unmappedNotice}</div>}
 
-            {unmappedSummary && unmappedSummary.byMarketplace.length > 0 && (
-              <div style={{ marginTop: 14, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-                <span style={{ fontSize: 11, fontWeight: 700, color: "#64748b", textTransform: "uppercase" }}>By Marketplace:</span>
-                {unmappedSummary.byMarketplace.map((mp) => (
-                  <span
+            {/* Marketplace Filter Pills */}
+            <div style={{ marginTop: 14, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: "#64748b", textTransform: "uppercase" }}>Filter by Channel:</span>
+              <button
+                type="button"
+                className={`unmapped-filter-pill ${unmappedFilterMp === "" ? "active" : ""}`}
+                onClick={() => {
+                  setUnmappedFilterMp("")
+                  void loadUnmappedList(1, "")
+                }}
+              >
+                All Channels <span>{unmappedSummary?.pendingResolution ?? 0}</span>
+              </button>
+              {unmappedSummary &&
+                unmappedSummary.byMarketplace.map((mp) => (
+                  <button
+                    type="button"
                     key={mp.marketplace}
-                    style={{
-                      background: "#f1f5f9",
-                      padding: "4px 8px",
-                      borderRadius: 6,
-                      fontSize: 12,
-                      border: "1px solid #e2e8f0",
-                      fontWeight: 600,
-                      color: "#334155"
+                    className={`unmapped-filter-pill ${unmappedFilterMp === mp.marketplace ? "active" : ""}`}
+                    onClick={() => {
+                      const nextMp = unmappedFilterMp === mp.marketplace ? "" : mp.marketplace
+                      setUnmappedFilterMp(nextMp)
+                      void loadUnmappedList(1, nextMp)
                     }}
                   >
-                    {mp.marketplace}: <span style={{ color: "#0f6b56" }}>{mp.count}</span>
-                  </span>
+                    {mp.marketplace} <span>{mp.count}</span>
+                  </button>
                 ))}
+            </div>
+
+            {/* Unmapped SKUs Table */}
+            <div style={{ marginTop: 16 }}>
+              {loadingUnmappedList ? (
+                <div style={{ padding: 20, textAlign: "center", color: "#64748b" }}>Loading unmapped listing SKUs…</div>
+              ) : unmappedList.length === 0 ? (
+                <div style={{ padding: "16px 20px", background: "#f8fafc", borderRadius: 8, border: "1px dashed #cbd5e1", textAlign: "center", color: "#0f766e", fontSize: 13, fontWeight: 600 }}>
+                  ✓ All marketplace listing SKUs in returns are mapped to VB Export product SKUs! Zero unmapped items.
+                </div>
+              ) : (
+                <>
+                  <DataTable
+                    columns={[
+                      {
+                        key: "channel",
+                        header: "Marketplace",
+                        render: (item) => <MarketplaceBadge name={item.marketplace} />,
+                      },
+                      {
+                        key: "sku",
+                        header: "Channel Listing SKU",
+                        render: (item) => <strong style={{ fontFamily: "monospace", fontSize: 13 }}>{item.listingSku}</strong>,
+                      },
+                      {
+                        key: "sampleOrder",
+                        header: "Sample Order #",
+                        render: (item) => (
+                          <span style={{ fontFamily: "monospace", fontSize: 12, color: "#334155" }}>
+                            {item.sampleOrderNumber || "—"}
+                          </span>
+                        ),
+                      },
+                      {
+                        key: "sampleTracking",
+                        header: "Sample Tracking #",
+                        render: (item) => (
+                          <span style={{ fontFamily: "monospace", fontSize: 12, color: "#64748b" }}>
+                            {item.sampleTrackingId || "—"}
+                          </span>
+                        ),
+                      },
+                      {
+                        key: "lastSeen",
+                        header: "Last Seen",
+                        render: (item) => (
+                          <span style={{ fontSize: 12, color: "#64748b" }}>
+                            {item.lastSeenAt ? new Date(item.lastSeenAt).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" }) : "—"}
+                          </span>
+                        ),
+                      },
+                      {
+                        key: "status",
+                        header: "Status",
+                        render: (item) => (
+                          <Badge tone={item.status === "mapped" ? "success" : "warning"}>
+                            {item.status === "mapped" ? "Mapped ✓" : "Pending Linkup"}
+                          </Badge>
+                        ),
+                      },
+                    ]}
+                    rows={unmappedList}
+                    rowKey={(item) => `${item.id}-${item.marketplace}-${item.listingSku}`}
+                  />
+
+                  {unmappedTotal > 15 && (
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 12, padding: "0 4px" }}>
+                      <span style={{ fontSize: 12, color: "#64748b" }}>
+                        Showing {Math.min(unmappedList.length, 15)} of {unmappedTotal} unmapped SKUs (Page {unmappedPage} of {Math.ceil(unmappedTotal / 15)})
+                      </span>
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <button
+                          type="button"
+                          className="btn secondary"
+                          disabled={unmappedPage <= 1}
+                          onClick={() => void loadUnmappedList(unmappedPage - 1, unmappedFilterMp)}
+                          style={{ padding: "4px 10px", fontSize: 12 }}
+                        >
+                          Previous
+                        </button>
+                        <button
+                          type="button"
+                          className="btn secondary"
+                          disabled={unmappedPage >= Math.ceil(unmappedTotal / 15)}
+                          onClick={() => void loadUnmappedList(unmappedPage + 1, unmappedFilterMp)}
+                          style={{ padding: "4px 10px", fontSize: 12 }}
+                        >
+                          Next
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+
+              {/* Quick-resolve dropzone inside the unmapped card */}
+              <div
+                className="unmapped-quick-drop"
+                role="button"
+                tabIndex={pmBusy ? -1 : 0}
+                onClick={() => {
+                  setPmImportMode("merge")
+                  if (!pmBusy) pmFileRef.current?.click()
+                }}
+                onDragOver={(event) => event.preventDefault()}
+                onDrop={(event) => {
+                  event.preventDefault()
+                  setPmImportMode("merge")
+                  const file = event.dataTransfer.files?.[0]
+                  if (file && !pmBusy) void previewProductMasterFile(file)
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+                  <Icon name="upload" size={16} />
+                  <span style={{ fontSize: 12, fontWeight: 600, color: "#0f6b56" }}>
+                    Filled the missing SKUs CSV? Drop it here to Append & Merge with existing catalog mappings
+                  </span>
+                </div>
               </div>
-            )}
+            </div>
           </div>
 
           {pmError && <div className="form-error" style={{ margin: "0 20px 12px" }}>{pmError}</div>}
@@ -1601,7 +1811,12 @@ export function Admin() {
               ) : (
                 <>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-                    <h4 style={{ margin: 0, fontSize: 14 }}>File Validation Summary: {pmFilename}</h4>
+                    <div>
+                      <h4 style={{ margin: 0, fontSize: 14 }}>File Validation Summary: {pmFilename}</h4>
+                      <small style={{ color: pmImportMode === "merge" ? "#166534" : "#991b1b", fontWeight: 700 }}>
+                        {pmImportMode === "merge" ? "Mode: Safe Append & Merge (Preserves existing catalog)" : "Mode: Destructive Replace"}
+                      </small>
+                    </div>
                     <Badge tone="success">{count(pmPreview.rows)} rows scannable</Badge>
                   </div>
 
@@ -1633,7 +1848,7 @@ export function Admin() {
                   {pmPreview.conflictCount > 0 && (
                     <div className="upload-warnings" style={{ marginBottom: 12 }}>
                       <strong>{count(pmPreview.conflictCount)} listing SKUs have multiple product SKU mappings in this file.</strong>
-                      <p>The last row for each is kept. Check these rows before confirming replacement.</p>
+                      <p>The last row for each is kept. Check these rows before confirming import.</p>
                     </div>
                   )}
 
@@ -1650,27 +1865,43 @@ export function Admin() {
                     />
                   )}
 
-                  <div style={{ marginTop: 14, display: "flex", flexDirection: "column", gap: 10 }}>
-                    <label style={{ display: "flex", gap: 8, alignItems: "center", cursor: "pointer" }}>
-                      <input
-                        type="checkbox"
-                        checked={pmConfirmed}
-                        onChange={(e) => setPmConfirmed(e.target.checked)}
-                      />
-                      <span style={{ fontSize: 13, fontWeight: 600, color: "#1e293b" }}>
-                        I confirm that loading this file replaces the current product master catalog
-                      </span>
-                    </label>
+                  {pmImportMode === "merge" ? (
+                    <div style={{ marginTop: 14, display: "flex", flexDirection: "column", gap: 10 }}>
+                      <div style={{ fontSize: 13, color: "#166534", fontWeight: 600 }}>
+                        ✓ Ready to merge {count(pmPreview.rows)} mapping rows into the database. All existing catalog mappings will be preserved intact.
+                      </div>
+                      <button
+                        className="btn primary"
+                        disabled={!pmReady || pmBusy}
+                        onClick={() => void loadProductMaster()}
+                        style={{ alignSelf: "flex-start", background: "#0f6b56" }}
+                      >
+                        {pmBusy ? "Merging catalog…" : `Merge & Append ${count(pmPreview.rows)} rows`} <Icon name="arrow" />
+                      </button>
+                    </div>
+                  ) : (
+                    <div style={{ marginTop: 14, display: "flex", flexDirection: "column", gap: 10 }}>
+                      <label style={{ display: "flex", gap: 8, alignItems: "center", cursor: "pointer" }}>
+                        <input
+                          type="checkbox"
+                          checked={pmConfirmed}
+                          onChange={(e) => setPmConfirmed(e.target.checked)}
+                        />
+                        <span style={{ fontSize: 13, fontWeight: 600, color: "#991b1b" }}>
+                          I confirm that loading this file deletes and replaces the current product master catalog
+                        </span>
+                      </label>
 
-                    <button
-                      className="btn primary"
-                      disabled={!pmReady || pmBusy}
-                      onClick={() => void loadProductMaster()}
-                      style={{ alignSelf: "flex-start" }}
-                    >
-                      {pmBusy ? "Loading catalog…" : `Commit & Replace with ${count(pmPreview.rows)} rows`} <Icon name="arrow" />
-                    </button>
-                  </div>
+                      <button
+                        className="btn primary"
+                        disabled={!pmReady || pmBusy}
+                        onClick={() => void loadProductMaster()}
+                        style={{ alignSelf: "flex-start", background: "#dc2626" }}
+                      >
+                        {pmBusy ? "Replacing catalog…" : `Commit & Replace with ${count(pmPreview.rows)} rows`} <Icon name="arrow" />
+                      </button>
+                    </div>
+                  )}
                 </>
               )}
             </div>

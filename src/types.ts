@@ -601,6 +601,32 @@ export type ProductMasterPreview = {
   sample: { listingSku: string; masterSku: string; category: string; imageUrl: string }[]
 }
 
+export type UnmappedSkuSummary = {
+  total: number
+  totalUnmapped: number
+  pendingResolution: number
+  byMarketplace: { marketplace: string; count: number }[]
+  sample: { marketplace: string; listingSku: string; lastSeenAt: string; sampleOrderNumber?: string; sampleTrackingId?: string }[]
+}
+
+export type UnmappedSkuItem = {
+  id: number
+  marketplace: string
+  listingSku: string
+  sampleOrderNumber: string
+  sampleTrackingId: string
+  firstSeenAt: string
+  lastSeenAt: string
+  status: string
+}
+
+export type UnmappedListResult = {
+  items: UnmappedSkuItem[]
+  total: number
+  page: number
+  pageSize: number
+}
+
 // ---- Claims foundation (server/claims-service.ts) ----
 
 export type ClaimStatus =
