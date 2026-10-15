@@ -25,6 +25,7 @@ const SCHEMA_VERSION = 1
 //  schema-flyer.sql         Meesho flyer ID capture for issue returns (permanent claim evidence)
 //  schema-claims.sql        Claims foundation: templates, claim records, media metadata, status history
 //  schema-meesho-claims.sql Meesho ticket snapshots, TAT, sub-issue values, and evidence requirements
+//  schema-claim-automation.sql Desktop EXE automation, marketplace credentials, jobs, and template fields
 const SCHEMA_FILES = [
   "schema.sql",
   "schema-import.sql",
@@ -38,6 +39,7 @@ const SCHEMA_FILES = [
   "schema-flyer.sql",
   "schema-claims.sql",
   "schema-meesho-claims.sql",
+  "schema-claim-automation.sql",
 ] as const
 
 // History tables whose rows must never be destroyed by any code path. Listed here so they cannot silently
@@ -63,6 +65,7 @@ const HISTORY_TABLES = [
   "claims",
   "claim_media",
   "claim_status_history",
+  "claim_automation_jobs",
 ] as const
 
 // Reads every schema file and refuses to apply them if any contain a destructive statement against a

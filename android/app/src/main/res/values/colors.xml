@@ -7,6 +7,13 @@
     <color name="brand_mint">#34D399</color>
     <color name="brand_soft">#E6F4F0</color>
 
+    <!-- Claim Screen Theme (matching screenshots) -->
+    <color name="claim_primary">#0284C7</color>
+    <color name="claim_primary_dark">#0369A1</color>
+    <color name="claim_primary_soft">#E0F2FE</color>
+    <color name="claim_badge_green">#16A34A</color>
+    <color name="claim_badge_green_bg">#DCFCE7</color>
+
     <!-- Scan Verdicts & Signals (OK = Green, DUPLICATE = Blue, NOT FOUND = Purple, CHECK = Amber, STOP = Red) -->
     <color name="verdict_ok">#059669</color>
     <color name="verdict_ok_bg">#F0FDF4</color>

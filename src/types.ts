@@ -762,3 +762,109 @@ export type ClaimListResult = {
   page: number
   pageSize: number
 }
+
+// ---- Desktop Claim Automation & Agent Sync ----
+
+export type AutomationAgent = {
+  id: number
+  agentUuid: string
+  agentName: string
+  hostname: string
+  platform: string
+  version: string
+  status: "online" | "busy" | "offline" | "error"
+  lastHeartbeatAt: string
+  currentTaskInfo: Record<string, unknown>
+  isAuthorized: boolean
+}
+
+export type AutomationJob = {
+  id: number
+  claimId: number
+  marketplace: string
+  accountName: string
+  orderNumber: string
+  trackingId: string
+  claimReason: string
+  claimTitle: string
+  stage: string
+  browserMode: string
+  attempts: number
+  maxAttempts: number
+  marketplaceClaimId: string
+  submissionScreenshotPath: string
+  manualActionReason: string
+  logs: Array<{ timestamp: string; level: string; message: string }>
+  agentName: string | null
+  startedAt: string | null
+  completedAt: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export type MarketplaceCredential = {
+  id: number
+  marketplaceId: number | null
+  marketplaceName: string
+  accountName: string
+  portalUrl: string
+  usernameMasked: string
+  automationMode: string
+  requireApprovalBeforeSubmit: boolean
+  autoPrepare: boolean
+  isActive: boolean
+  lastLoginAt: string | null
+}
+
+export type ClaimReturnLookup = {
+  found: boolean
+  scanId: number | null
+  expectedReturnId: number
+  marketplace: string
+  marketplaceId: number
+  orderId: string
+  trackingNumber: string
+  packetId: string
+  customerName: string
+  totalPrice: number
+  totalAmount: number
+  returnStatus: string
+  shippedDate: string | null
+  daysSinceShipped: number
+  existingClaim: {
+    id: number
+    status: string
+    reason: string
+    title: string
+    mediaCount: number
+  } | null
+  items: Array<{
+    itemId: number
+    sku: string
+    masterSku: string
+    title: string
+    quantity: number
+    imageUrl: string
+  }>
+  templates: Array<{
+    id: number
+    name: string
+    description: string
+    fields: Array<{
+      fieldKey: string
+      fieldLabel: string
+      fieldType: string
+      required: boolean
+      minCount: number
+      maxCount: number
+      maxFileSizeMb: number
+    }>
+  }>
+  standardReasons: Array<{
+    code: string
+    label: string
+    suggestedTitle: string
+    suggestedContent: string
+  }>
+}
+

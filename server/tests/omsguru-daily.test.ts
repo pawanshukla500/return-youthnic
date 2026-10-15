@@ -115,6 +115,16 @@ test("renderOmsguruUpdateEmail creates styled HTML and plain text with correct s
 
   // Verify HTML contents
   assert.ok(email.html.includes("Youthnic"))
+  assert.ok(email.html.includes("TaskFlow Pro"))
+  assert.ok(email.html.includes("YOUTHNIC · VB EXPORTS"))
+  assert.ok(email.html.includes("youthnic-badge.png"))
+  assert.ok(email.html.includes("Your evening inventory briefing"))
+  assert.ok(email.html.includes("23:00 IST"))
+  assert.ok(email.html.includes("GOOD UNITS"))
+  assert.ok(email.html.includes("MASTER SKUS"))
+  assert.ok(email.html.includes("CHANNELS"))
+  assert.ok(email.html.includes("WAREHOUSE"))
+  assert.ok(email.html.includes("Priority focus"))
   assert.ok(email.html.includes("REQ-20261013-1945-TEST01"))
   assert.ok(email.html.includes("Dropship Warehouse ID"))
   assert.ok(email.html.includes("6688"))
@@ -126,6 +136,14 @@ test("renderOmsguruUpdateEmail creates styled HTML and plain text with correct s
   assert.ok(email.text.includes("OMSGuru Daily Inventory Update"))
   assert.ok(email.text.includes("REQ-20261013-1945-TEST01"))
   assert.ok(email.text.includes("Total Good Received Units: 15"))
+  assert.ok(email.text.includes("23:00 IST"))
+})
+
+test("DEFAULT_OMSGURU_CONFIG sets daily schedule to 23:00 IST (11:00 PM)", () => {
+  assert.equal(DEFAULT_OMSGURU_CONFIG.dailyTime, "23:00")
+  assert.equal(DEFAULT_OMSGURU_CONFIG.dailyEnabled, true)
+  assert.equal(DEFAULT_OMSGURU_CONFIG.dropshipWarehouseId, "6688")
+  assert.equal(DEFAULT_OMSGURU_CONFIG.retentionDays, 180)
 })
 
 test("isFirebaseConfigured returns valid status without throwing error", () => {

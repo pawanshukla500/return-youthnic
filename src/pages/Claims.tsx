@@ -6,11 +6,15 @@ import {
   CLAIM_STATUS_LABELS,
   CLAIM_STATUS_TONES,
   type AccountOption,
+  type AutomationAgent,
+  type AutomationJob,
   type ClaimDetail,
   type ClaimListResult,
+  type ClaimReturnLookup,
   type ClaimScanSearchRow,
   type ClaimStatus,
   type ClaimTemplate,
+  type MarketplaceCredential,
   type MeeshoClaimDraft,
   type Stat,
 } from "../types"
@@ -46,28 +50,44 @@ const NEXT_STATUSES: Record<ClaimStatus, ClaimStatus[]> = {
 }
 
 export function Claims() {
-  const [tab, setTab] = useState<"overview" | "queue">("overview")
+  const [tab, setTab] = useState<"overview" | "queue" | "automation">("queue")
 
-  // Overview data (existing)
+  // Overview data
   const [data, setData] = useState<ClaimsData | null>(null)
   const [error, setError] = useState("")
+
   useEffect(() => {
     api<ClaimsData>("/api/claims").then(setData).catch((err: Error) => setError(err.message))
   }, [])
 
-  if (error) return <PageError message={error} />
+  if (error && tab === "overview") return <PageError message={error} />
 
   return (
     <div className="page-content">
-      <div className="claims-tabs">
-        <button className={tab === "overview" ? "active" : ""} onClick={() => setTab("overview")}>
-          Overview
+      <div className="claims-tabs" style={{ display: "flex", gap: 10, marginBottom: 20 }}>
+        <button
+          className={tab === "queue" ? "active btn primary" : "btn secondary"}
+          onClick={() => setTab("queue")}
+        >
+          <Icon name="box" size={16} /> Claim Queue
         </button>
-        <button className={tab === "queue" ? "active" : ""} onClick={() => setTab("queue")}>
-          Claim Queue
+        <button
+          className={tab === "automation" ? "active btn primary" : "btn secondary"}
+          onClick={() => setTab("automation")}
+        >
+          <Icon name="check" size={16} /> Desktop EXE Automation
+        </button>
+        <button
+          className={tab === "overview" ? "active btn primary" : "btn secondary"}
+          onClick={() => setTab("overview")}
+        >
+          <Icon name="claim" size={16} /> Overview & Analytics
         </button>
       </div>
-      {tab === "overview" ? <Overview data={data} /> : <ClaimQueue />}
+
+      {tab === "queue" && <ClaimQueue />}
+      {tab === "automation" && <DesktopAutomationTab />}
+      {tab === "overview" && <Overview data={data} />}
     </div>
   )
 }
@@ -213,18 +233,20 @@ function ClaimQueue() {
   return (
     <>
       <section className="panel">
-        <div className="panel-head">
+        <div className="panel-head" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div>
             <h2>Claim queue</h2>
-            <p>Lifecycle claims with evidence and status tracking</p>
+            <p>Lifecycle claims with evidence capture and desktop automation tracking</p>
           </div>
           <button className="btn primary" onClick={() => setShowCreate(true)}>
-            <Icon name="claim" /> Create claim
+            <Icon name="file" /> Capture Claim Evidence
           </button>
         </div>
-        <div className="filter-row">
+
+        {/* Filter row */}
+        <div className="filter-row" style={{ display: "flex", gap: 12, flexWrap: "wrap", margin: "16px 0" }}>
           <select value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value); setPage(1) }}>
-            <option value="">All statuses</option>
+            <option value="">All statuses ({STATUS_VALUES.length})</option>
             {STATUS_VALUES.map((s) => (
               <option key={s} value={s}>{CLAIM_STATUS_LABELS[s]}</option>
             ))}
@@ -236,16 +258,17 @@ function ClaimQueue() {
             ))}
           </select>
           <input
-            type="text"
-            placeholder="Search reason, tracking, order…"
+            type="search"
+            placeholder="Search AWB, order ID, packet ID, reason…"
             value={search}
             onChange={(e) => { setSearch(e.target.value); setPage(1) }}
-            style={{ maxWidth: 260 }}
+            style={{ flex: 1, minWidth: 200 }}
           />
         </div>
+
+        {/* Claims Table */}
         <DataTable
           columns={[
-            { key: "id", header: "ID", render: (row) => <strong>#{row.id}</strong> },
             {
               key: "status",
               header: "Status",
@@ -255,63 +278,93 @@ function ClaimQueue() {
                 </Badge>
               ),
             },
-            { key: "marketplace", header: "Marketplace", render: (row) => <MarketplaceBadge name={row.marketplace} /> },
-            { key: "reason", header: "Reason", render: (row) => row.claimReason },
-            { key: "tracking", header: "Tracking", render: (row) => row.trackingId },
-            { key: "order", header: "Order", render: (row) => row.orderId },
-            { key: "media", header: "Media", render: (row) => String(row.mediaCount) },
             {
-              key: "tat",
-              header: "Claim TAT",
-              render: (row) =>
-                row.dueDate ? (
-                  <Badge tone={row.overdue ? "danger" : row.daysRemaining !== null && row.daysRemaining <= 2 ? "warning" : "success"}>
-                    {row.overdue ? `Overdue ${Math.abs(row.daysRemaining || 0)}d` : `Due ${row.dueDate}`}
-                  </Badge>
-                ) : "—",
+              key: "marketplace",
+              header: "Marketplace",
+              render: (row) => <MarketplaceBadge name={row.marketplace} />,
             },
-            { key: "created", header: "Created", render: (row) => new Date(row.createdAt).toLocaleDateString("en-IN") },
+            {
+              key: "trackingId",
+              header: "AWB / Packet ID",
+              render: (row) => (
+                <div>
+                  <strong style={{ display: "block" }}>{row.trackingId}</strong>
+                  {row.packetId && row.packetId !== row.trackingId && (
+                    <small style={{ color: "var(--muted)" }}>Packet: {row.packetId}</small>
+                  )}
+                </div>
+              ),
+            },
+            { key: "orderId", header: "Order ID", render: (row) => row.orderId || "—" },
+            {
+              key: "claimReason",
+              header: "Claim Reason & Title",
+              render: (row) => (
+                <div>
+                  <strong>{row.claimReason}</strong>
+                  {row.claimTitle && <div style={{ fontSize: 12, color: "var(--muted)" }}>{row.claimTitle}</div>}
+                </div>
+              ),
+            },
+            {
+              key: "mediaCount",
+              header: "Evidence",
+              render: (row) => (
+                <span className="badge neutral">
+                  📎 {row.mediaCount} file{row.mediaCount === 1 ? "" : "s"}
+                </span>
+              ),
+            },
+            {
+              key: "createdAt",
+              header: "Created",
+              render: (row) => new Date(row.createdAt).toLocaleDateString("en-IN"),
+            },
             {
               key: "actions",
               header: "",
               render: (row) => (
                 <button className="btn secondary small" onClick={() => setDetailId(row.id)}>
-                  <Icon name="chevron" /> View
+                  View Details
                 </button>
               ),
             },
           ]}
           rows={claims?.rows || []}
           rowKey={(row) => String(row.id)}
-          empty="No claims found. Create one to start tracking evidence."
         />
-        {claims && claims.total > 25 && (
-          <div className="pagination">
-            <button
-              className="btn secondary"
-              disabled={page <= 1}
-              onClick={() => setPage(page - 1)}
-            >
-              Previous
-            </button>
-            <span>
-              Page {page} of {Math.ceil(claims.total / 25)}
-            </span>
-            <button
-              className="btn secondary"
-              disabled={page * 25 >= claims.total}
-              onClick={() => setPage(page + 1)}
-            >
-              Next
-            </button>
+
+        {/* Pagination */}
+        {claims && claims.total > claims.pageSize && (
+          <div className="pagination" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 16 }}>
+            <span>Total: {claims.total} claims</span>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button className="btn secondary small" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
+                Previous
+              </button>
+              <span style={{ alignSelf: "center", fontSize: 13 }}>Page {page} of {Math.ceil(claims.total / claims.pageSize)}</span>
+              <button
+                className="btn secondary small"
+                disabled={page >= Math.ceil(claims.total / claims.pageSize)}
+                onClick={() => setPage((p) => p + 1)}
+              >
+                Next
+              </button>
+            </div>
           </div>
         )}
       </section>
 
+      {/* Detail Modal */}
       {detailId !== null && (
-        <ClaimDetailModal claimId={detailId} templates={templates} onClose={() => setDetailId(null)} />
+        <ClaimDetailModal
+          claimId={detailId}
+          templates={templates}
+          onClose={() => { setDetailId(null); loadClaims() }}
+        />
       )}
 
+      {/* Create Claim Modal */}
       {showCreate && (
         <CreateClaimModal
           accounts={accounts}
@@ -345,14 +398,36 @@ function ClaimDetailModal({
   const [newStatus, setNewStatus] = useState("")
   const [statusReason, setStatusReason] = useState("")
   const [uploadingField, setUploadingField] = useState("")
+  const [refImage, setRefImage] = useState<string | null>(null)
+  const [automationJob, setAutomationJob] = useState<AutomationJob | null>(null)
+  const [manualModalOpen, setManualModalOpen] = useState(false)
+  const [manualClaimRef, setManualClaimRef] = useState("")
+  const [approving, setApproving] = useState(false)
 
   const load = () => {
     api<{ claim: ClaimDetail }>(`/api/claims/${claimId}`)
       .then((d) => {
         setClaim(d.claim)
         setError("")
+
+        // Fetch reference catalog image if available
+        if (d.claim.trackingId) {
+          api<ClaimReturnLookup>(`/api/claims/return-lookup?query=${encodeURIComponent(d.claim.trackingId)}`)
+            .then((l) => {
+              if (l.items?.[0]?.imageUrl) setRefImage(l.items[0].imageUrl)
+            })
+            .catch(() => {})
+        }
       })
       .catch((err: Error) => setError(err.message))
+
+    // Fetch matching automation job
+    api<{ rows: AutomationJob[] }>(`/api/automation/jobs?search=${claimId}`)
+      .then((d) => {
+        const matching = d.rows.find((j) => j.claimId === claimId)
+        if (matching) setAutomationJob(matching)
+      })
+      .catch(() => {})
   }
 
   useEffect(() => {
@@ -395,184 +470,220 @@ function ClaimDetailModal({
     }
   }
 
-  if (error) return <Modal onClose={onClose}><PageError message={error} /></Modal>
+  const handleApproveAutomation = async () => {
+    if (!automationJob) return
+    setApproving(true)
+    try {
+      await api(`/api/automation/jobs/${automationJob.id}/approve`, { method: "POST" })
+      load()
+    } catch (err: any) {
+      setError(err.message || "Failed to approve automation submission.")
+    } finally {
+      setApproving(false)
+    }
+  }
+
+  const handleRetryAutomation = async () => {
+    if (!automationJob) return
+    try {
+      await api(`/api/automation/jobs/${automationJob.id}/retry`, { method: "POST" })
+      load()
+    } catch (err: any) {
+      setError(err.message || "Failed to retry automation.")
+    }
+  }
+
+  const handleManualResolve = async () => {
+    if (!automationJob || !manualClaimRef.trim()) return
+    try {
+      await api(`/api/automation/jobs/${automationJob.id}/manual-resolve`, {
+        method: "POST",
+        body: JSON.stringify({ marketplaceClaimId: manualClaimRef.trim() }),
+      })
+      setManualModalOpen(false)
+      load()
+    } catch (err: any) {
+      setError(err.message || "Failed to resolve claim manually.")
+    }
+  }
+
+  if (error && !claim) return <Modal onClose={onClose}><PageError message={error} /></Modal>
   if (!claim) return <Modal onClose={onClose}><Loading label="Loading claim…" /></Modal>
 
   return (
     <Modal onClose={onClose} wide>
-      <div className="modal-head">
-        <h2>Claim #{claim.id}</h2>
+      <div className="modal-head" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <h2>Claim #{claim.id} · {claim.marketplace}</h2>
         <button className="btn-icon" onClick={onClose}><Icon name="close" /></button>
       </div>
-      <div className="modal-body">
-        <div className="detail-grid">
-          <div className="detail-section">
-            <div className="detail-row">
-              <span className="label">Status</span>
-              <Badge tone={CLAIM_STATUS_TONES[claim.status as ClaimStatus] || "neutral"}>
-                {CLAIM_STATUS_LABELS[claim.status as ClaimStatus] || claim.status}
-              </Badge>
-            </div>
-            <div className="detail-row">
-              <span className="label">Marketplace</span>
-              <MarketplaceBadge name={claim.marketplace} />
-            </div>
-            <div className="detail-row">
-              <span className="label">Tracking ID</span>
-              <span>{claim.trackingId}</span>
-            </div>
-            <div className="detail-row">
-              <span className="label">Order</span>
-              <span>{claim.orderId}</span>
-            </div>
-            {claim.marketplaceIssueLabel && (
-              <>
-                <div className="detail-row"><span className="label">Marketplace issue</span><strong>{claim.marketplaceIssueLabel}</strong></div>
-                <div className="detail-row"><span className="label">Sub Order ID</span><span>{claim.subOrderId || "—"}</span></div>
-                <div className="detail-row"><span className="label">State of packet</span><span>{claim.packetState || "—"}</span></div>
-                <div className="detail-row"><span className="label">Packet ID</span><span>{claim.packetId || "—"}</span></div>
-                <div className="detail-row"><span className="label">Return type</span><span>{claim.returnType || "—"}</span></div>
-                <div className="detail-row">
-                  <span className="label">Claim deadline</span>
-                  <Badge tone={claim.overdue ? "danger" : "success"}>
-                    {claim.dueDate || "—"}{claim.daysRemaining !== null ? ` · ${claim.overdue ? `${Math.abs(claim.daysRemaining)} day(s) overdue` : `${claim.daysRemaining} day(s) left`}` : ""}
-                  </Badge>
-                </div>
-              </>
+      <div className="modal-body" style={{ display: "grid", gap: 20 }}>
+        {error && <div className="form-error">{error}</div>}
+
+        {/* Top Details Grid */}
+        <div className="detail-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+          <div className="detail-section" style={{ background: "#f8fafc", padding: 16, borderRadius: 8 }}>
+            <div className="detail-row"><span className="label">Status</span><Badge tone={CLAIM_STATUS_TONES[claim.status as ClaimStatus] || "neutral"}>{CLAIM_STATUS_LABELS[claim.status as ClaimStatus] || claim.status}</Badge></div>
+            <div className="detail-row"><span className="label">Marketplace</span><MarketplaceBadge name={claim.marketplace} /></div>
+            <div className="detail-row"><span className="label">Tracking ID / AWB</span><strong>{claim.trackingId}</strong></div>
+            <div className="detail-row"><span className="label">Order ID</span><span>{claim.orderId}</span></div>
+            {claim.subOrderId && <div className="detail-row"><span className="label">Sub Order ID</span><span>{claim.subOrderId}</span></div>}
+            {claim.packetId && <div className="detail-row"><span className="label">Packet ID</span><span>{claim.packetId}</span></div>}
+            {claim.dueDate && (
+              <div className="detail-row">
+                <span className="label">Claim Due Date</span>
+                <Badge tone={claim.overdue ? "danger" : "success"}>
+                  {claim.dueDate} {claim.daysRemaining !== null ? `(${claim.overdue ? `${Math.abs(claim.daysRemaining)}d overdue` : `${claim.daysRemaining}d left`})` : ""}
+                </Badge>
+              </div>
             )}
-            <div className="detail-row">
-              <span className="label">Scan ID</span>
-              <span>{claim.receiptScanId}</span>
-            </div>
-            <div className="detail-row">
-              <span className="label">Created by</span>
-              <span>{claim.createdBy}</span>
-            </div>
-            <div className="detail-row">
-              <span className="label">Created</span>
-              <span>{new Date(claim.createdAt).toLocaleString("en-IN")}</span>
-            </div>
           </div>
-          <div className="detail-section">
-            <div className="detail-row">
-              <span className="label">Claim reason</span>
-              <strong>{claim.claimReason}</strong>
-            </div>
-            <div className="detail-row">
-              <span className="label">Claim title</span>
-              <strong>{claim.claimTitle}</strong>
-            </div>
-            <div className="detail-row">
-              <span className="label">Description</span>
-              <span>{claim.claimDescription || "—"}</span>
-            </div>
-            <div className="detail-row">
-              <span className="label">Remarks</span>
-              <span>{claim.remarks || "—"}</span>
-            </div>
+
+          <div className="detail-section" style={{ background: "#f8fafc", padding: 16, borderRadius: 8 }}>
+            <div className="detail-row"><span className="label">Claim Reason</span><strong>{claim.claimReason}</strong></div>
+            <div className="detail-row"><span className="label">Claim Title</span><span>{claim.claimTitle}</span></div>
+            <div className="detail-row"><span className="label">Description</span><span style={{ fontSize: 13 }}>{claim.claimDescription || "—"}</span></div>
+            {claim.remarks && <div className="detail-row"><span className="label">Remarks</span><span style={{ fontSize: 12, color: "var(--muted)" }}>{claim.remarks}</span></div>}
+            <div className="detail-row"><span className="label">Created By</span><span>{claim.createdBy} · {new Date(claim.createdAt).toLocaleDateString("en-IN")}</span></div>
           </div>
         </div>
 
-        {/* Status update */}
-        {canApprove && (
-          <div className="panel-sub">
-            <h3>Update status</h3>
-            <div className="filter-row">
-              <select value={newStatus} onChange={(e) => setNewStatus(e.target.value)}>
-                <option value="">Select status…</option>
-                {(NEXT_STATUSES[claim.status as ClaimStatus] || []).map((s) => (
-                  <option key={s} value={s}>{CLAIM_STATUS_LABELS[s]}</option>
-                ))}
-              </select>
-              <input
-                type="text"
-                placeholder="Reason (optional, max 500 chars)"
-                value={statusReason}
-                onChange={(e) => setStatusReason(e.target.value)}
-                maxLength={500}
-                style={{ flex: 1 }}
-              />
-              <button className="btn primary" disabled={!newStatus || statusUpdating} onClick={updateStatus}>
-                {statusUpdating ? "Updating…" : "Update"}
-              </button>
+        {/* Desktop Automation Status Card */}
+        {automationJob && (
+          <div style={{ background: "#eff6ff", border: "1px solid #bfdbfe", padding: 16, borderRadius: 8 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <span style={{ fontSize: 18 }}>🤖</span>
+                <div>
+                  <h4 style={{ margin: 0 }}>Windows Desktop EXE Claim Automation</h4>
+                  <small style={{ color: "#1e40af" }}>
+                    Stage: <strong>{automationJob.stage}</strong> · Mode: {automationJob.browserMode} · Attempts: {automationJob.attempts}/{automationJob.maxAttempts}
+                  </small>
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                {(automationJob.stage === "prepared" || automationJob.stage === "waiting_approval") && canApprove && (
+                  <button className="btn primary" onClick={handleApproveAutomation} disabled={approving}>
+                    {approving ? "Approving…" : "✓ Approve for Submission"}
+                  </button>
+                )}
+                {(automationJob.stage === "failed" || automationJob.stage === "manual_intervention_required") && (
+                  <>
+                    <button className="btn secondary small" onClick={handleRetryAutomation}>Retry Automation</button>
+                    <button className="btn secondary small" onClick={() => setManualModalOpen(true)}>Record Manual Claim</button>
+                  </>
+                )}
+              </div>
             </div>
+
+            {automationJob.manualActionReason && (
+              <div style={{ background: "#fef3c7", padding: "8px 12px", borderRadius: 6, fontSize: 13, color: "#92400e", marginBottom: 10 }}>
+                ⚠️ <strong>Manual Action Required:</strong> {automationJob.manualActionReason}
+              </div>
+            )}
+
+            {automationJob.marketplaceClaimId && (
+              <div style={{ background: "#ecfdf5", padding: "8px 12px", borderRadius: 6, fontSize: 13, color: "#065f46" }}>
+                ✅ <strong>Marketplace Claim Reference:</strong> {automationJob.marketplaceClaimId}
+              </div>
+            )}
           </div>
         )}
 
-        <div className="panel-sub">
-          <h3>Evidence requirements</h3>
-          {!claim.evidenceComplete && (
-            <p className="form-error">Missing: {claim.missingEvidence.join(", ") || "select a claim template"}</p>
-          )}
-          <div className="account-grid-v2">
-            {(templates.find((template) => template.id === claim.claimTemplateId)?.fields || [])
-              .filter((field) => field.active)
-              .map((field) => {
-                const count = claim.media.filter((media) => media.active && media.fieldKey === field.fieldKey).length
-                const accept =
-                  field.fieldType === "image"
-                    ? "image/*"
-                    : field.fieldType === "video"
-                      ? "video/*"
-                      : "application/pdf,image/*"
-                return (
-                  <div className="account-card-v2" key={field.id}>
-                    <strong>{field.fieldLabel}{field.required ? " *" : ""}</strong>
-                    <p>{count} / {field.maxCount} uploaded, minimum {field.minCount}</p>
-                    <label className="btn secondary small">
-                      {uploadingField === field.fieldKey ? "Uploading…" : `Add ${field.fieldType}`}
-                      <input
-                        type="file"
-                        accept={accept}
-                        hidden
-                        disabled={Boolean(uploadingField) || count >= field.maxCount}
-                        onChange={(event) => void uploadEvidence(field.fieldKey, event.target.files?.[0] || null)}
-                      />
-                    </label>
-                  </div>
-                )
-              })}
+        {/* Product Reference vs Evidence Section */}
+        <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: 16 }}>
+          <h3 style={{ margin: "0 0 14px", display: "flex", alignItems: "center", gap: 8 }}>
+            <Icon name="box" size={18} /> Product Reference & Captured Evidence
+          </h3>
+          <div style={{ display: "flex", gap: 20, flexWrap: "wrap", alignItems: "flex-start" }}>
+            {/* Original reference image */}
+            <div style={{ width: 140, textAlign: "center" }}>
+              <span style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)", display: "block", marginBottom: 6 }}>
+                Catalog Reference
+              </span>
+              {refImage ? (
+                <img
+                  src={refImage}
+                  alt="Original Product"
+                  style={{ width: 130, height: 130, objectFit: "cover", borderRadius: 8, border: "1px solid var(--border)" }}
+                />
+              ) : (
+                <div style={{ width: 130, height: 130, background: "#f1f5f9", borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, color: "var(--muted)" }}>
+                  No Catalog Photo
+                </div>
+              )}
+            </div>
+
+            {/* Evidence fields grid */}
+            <div style={{ flex: 1 }}>
+              <div className="account-grid-v2" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 12 }}>
+                {(templates.find((t) => t.id === claim.claimTemplateId)?.fields || [])
+                  .filter((f) => f.active)
+                  .map((field) => {
+                    const count = claim.media.filter((m) => m.active && m.fieldKey === field.fieldKey).length
+                    const accept =
+                      field.fieldType === "image"
+                        ? "image/*"
+                        : field.fieldType === "video"
+                          ? "video/*"
+                          : "application/pdf,image/*"
+                    return (
+                      <div className="account-card-v2" key={field.id} style={{ padding: 12, border: "1px solid var(--border)", borderRadius: 8, background: count >= field.minCount ? "#f0fdf4" : "#fff" }}>
+                        <strong style={{ fontSize: 13 }}>{field.fieldLabel}{field.required ? " *" : ""}</strong>
+                        <p style={{ margin: "4px 0 8px", fontSize: 12, color: "var(--muted)" }}>
+                          {count} / {field.maxCount} uploaded (min {field.minCount})
+                        </p>
+                        <label className="btn secondary small" style={{ display: "inline-block", cursor: "pointer" }}>
+                          {uploadingField === field.fieldKey ? "Uploading…" : `+ Add ${field.fieldType}`}
+                          <input
+                            type="file"
+                            accept={accept}
+                            hidden
+                            disabled={Boolean(uploadingField) || count >= field.maxCount}
+                            onChange={(e) => void uploadEvidence(field.fieldKey, e.target.files?.[0] || null)}
+                          />
+                        </label>
+                      </div>
+                    )
+                  })}
+              </div>
+            </div>
           </div>
         </div>
 
-        {/* Media list */}
+        {/* Media List Table */}
         <div className="panel-sub">
-          <h3>Evidence media ({claim.media.length})</h3>
+          <h3>Uploaded Evidence Media ({claim.media.length})</h3>
           {claim.media.length === 0 ? (
-            <p className="muted">No media uploaded yet.</p>
+            <p className="muted">No evidence media uploaded yet.</p>
           ) : (
-            <table className="media-table">
+            <table className="media-table" style={{ width: "100%", fontSize: 13 }}>
               <thead>
-                <tr>
-                  <th>Field</th>
-                  <th>Filename</th>
+                <tr style={{ textAlign: "left" }}>
+                  <th>Field Slot</th>
+                  <th>Original Filename</th>
                   <th>Type</th>
                   <th>Size</th>
-                  <th>Uploaded</th>
-                  <th>Retention</th>
+                  <th>Uploaded By</th>
                   <th></th>
                 </tr>
               </thead>
               <tbody>
                 {claim.media.map((m) => (
-                  <tr key={m.id} className={m.active ? "" : "inactive"}>
-                    <td>{m.fieldKey}</td>
+                  <tr key={m.id}>
+                    <td><strong>{m.fieldKey}</strong></td>
                     <td>{m.originalFilename || "—"}</td>
-                    <td>{m.mimeType || "—"}</td>
-                    <td>{m.sizeBytes > 0 ? `${(m.sizeBytes / 1024).toFixed(1)} KB` : "—"}</td>
+                    <td>{m.mimeType}</td>
+                    <td>{m.sizeBytes > 0 ? `${(m.sizeBytes / (1024 * 1024)).toFixed(2)} MB` : "—"}</td>
                     <td>{m.uploadedBy}</td>
-                    <td>{m.retentionUntil}</td>
                     <td>
-                      {m.active && (
-                        <a
-                          href={`/api/claims/${claim.id}/media/${m.id}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="btn secondary small"
-                        >
-                          View
-                        </a>
-                      )}
+                      <a
+                        href={`/api/claims/${claim.id}/media/${m.id}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="btn secondary small"
+                      >
+                        Preview / Download
+                      </a>
                     </td>
                   </tr>
                 ))}
@@ -581,30 +692,59 @@ function ClaimDetailModal({
           )}
         </div>
 
-        {/* Status history */}
-        <div className="panel-sub">
-          <h3>Status history</h3>
-          {claim.history.length === 0 ? (
-            <p className="muted">No status changes recorded.</p>
-          ) : (
-            <div className="history-list">
-              {claim.history.map((h, i) => (
-                <div key={i} className="history-entry">
-                  <Badge tone={CLAIM_STATUS_TONES[h.fromStatus as ClaimStatus] || "neutral"}>
-                    {CLAIM_STATUS_LABELS[h.fromStatus as ClaimStatus] || h.fromStatus || "—"}
-                  </Badge>
-                  <Icon name="arrow" size={14} />
-                  <Badge tone={CLAIM_STATUS_TONES[h.toStatus as ClaimStatus] || "neutral"}>
-                    {CLAIM_STATUS_LABELS[h.toStatus as ClaimStatus] || h.toStatus}
-                  </Badge>
-                  {h.reason && <span className="reason">{h.reason}</span>}
-                  <span className="meta">{h.changedBy} · {new Date(h.changedAt).toLocaleString("en-IN")}</span>
-                </div>
-              ))}
+        {/* Supervisor Status Transition */}
+        {canApprove && (
+          <div className="panel-sub" style={{ background: "#f8fafc", padding: 14, borderRadius: 8 }}>
+            <h4 style={{ margin: "0 0 10px" }}>Change Claim Lifecycle Status</h4>
+            <div style={{ display: "flex", gap: 10 }}>
+              <select value={newStatus} onChange={(e) => setNewStatus(e.target.value)}>
+                <option value="">Select status…</option>
+                {(NEXT_STATUSES[claim.status as ClaimStatus] || []).map((s) => (
+                  <option key={s} value={s}>{CLAIM_STATUS_LABELS[s]}</option>
+                ))}
+              </select>
+              <input
+                type="text"
+                placeholder="Reason for status change (optional)"
+                value={statusReason}
+                onChange={(e) => setStatusReason(e.target.value)}
+                style={{ flex: 1 }}
+              />
+              <button className="btn primary" disabled={!newStatus || statusUpdating} onClick={updateStatus}>
+                {statusUpdating ? "Updating…" : "Update"}
+              </button>
             </div>
-          )}
-        </div>
+          </div>
+        )}
       </div>
+
+      {/* Manual Claim Submission Dialog */}
+      {manualModalOpen && (
+        <Modal onClose={() => setManualModalOpen(false)}>
+          <div style={{ padding: 10 }}>
+            <h3>Record Marketplace Claim Submission</h3>
+            <p style={{ fontSize: 13, color: "var(--muted)" }}>
+              If you submitted this claim manually through the seller portal, enter the marketplace confirmation number below.
+            </p>
+            <div style={{ margin: "16px 0" }}>
+              <label style={{ fontSize: 13, fontWeight: 600 }}>Marketplace Claim Reference / Ticket ID</label>
+              <input
+                type="text"
+                placeholder="e.g. MCL-8492049, SPF-92049"
+                value={manualClaimRef}
+                onChange={(e) => setManualClaimRef(e.target.value)}
+                style={{ width: "100%", marginTop: 6 }}
+              />
+            </div>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+              <button className="btn secondary" onClick={() => setManualModalOpen(false)}>Cancel</button>
+              <button className="btn primary" disabled={!manualClaimRef.trim()} onClick={handleManualResolve}>
+                Save & Mark Submitted
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </Modal>
   )
 }
@@ -620,88 +760,81 @@ function CreateClaimModal({
   onClose: () => void
   onCreated: (claimId: number) => void
 }) {
-  const [scanId, setScanId] = useState("")
-  const [marketplaceId, setMarketplaceId] = useState("")
-  const [scanSearch, setScanSearch] = useState("")
-  const [scanRows, setScanRows] = useState<ClaimScanSearchRow[]>([])
-  const [reason, setReason] = useState("")
-  const [title, setTitle] = useState("")
-  const [description, setDescription] = useState("")
+  const [query, setQuery] = useState("")
+  const [loadingLookup, setLoadingLookup] = useState(false)
+  const [lookupResult, setLookupResult] = useState<ClaimReturnLookup | null>(null)
+  const [selectedTemplateId, setSelectedTemplateId] = useState("")
+  const [selectedReason, setSelectedReason] = useState("wrong_product")
+  const [claimTitle, setClaimTitle] = useState("")
+  const [claimContent, setClaimContent] = useState("")
   const [remarks, setRemarks] = useState("")
-  const [templateId, setTemplateId] = useState("")
   const [creating, setCreating] = useState(false)
   const [formError, setFormError] = useState("")
-  const [meeshoDraft, setMeeshoDraft] = useState<MeeshoClaimDraft | null>(null)
-  const [marketplaceIssueCode, setMarketplaceIssueCode] = useState("")
 
-  const selectedScan = scanRows.find((row) => row.scanId === Number(scanId))
-  const filteredTemplates = templates.filter(
-    (template) =>
-      template.active &&
-      (!selectedScan || template.marketplaceId === null || template.marketplaceId === selectedScan.marketplaceId),
-  )
-
-  useEffect(() => {
-    if (scanSearch.trim().length < 3) {
-      setScanRows([])
+  const handleSearch = async () => {
+    if (query.trim().length < 3) {
+      setFormError("Enter at least 3 characters of AWB or Order ID.")
       return
     }
-    const timer = window.setTimeout(() => {
-      const params = new URLSearchParams({ search: scanSearch.trim() })
-      if (marketplaceId) params.set("marketplaceId", marketplaceId)
-      api<{ rows: ClaimScanSearchRow[] }>(`/api/claims/scan-search?${params}`)
-        .then((result) => setScanRows(result.rows))
-        .catch((err: Error) => setFormError(err.message))
-    }, 250)
-    return () => window.clearTimeout(timer)
-  }, [scanSearch, marketplaceId])
-
-  useEffect(() => {
-    const first = filteredTemplates[0]
-    setTemplateId(first ? String(first.id) : "")
-    setMeeshoDraft(null)
-    setMarketplaceIssueCode("")
-    if (selectedScan?.marketplace.toLowerCase() === "meesho") {
-      api<{ draft: MeeshoClaimDraft }>(`/api/claims/meesho/draft/${selectedScan.scanId}`)
-        .then(({ draft }) => {
-          setMeeshoDraft(draft)
-          const firstIssue = draft.issueOptions[0]
-          if (firstIssue) {
-            setMarketplaceIssueCode(firstIssue.code)
-            setReason(firstIssue.label)
-            setTitle(firstIssue.label)
-            setDescription(firstIssue.description)
-          }
-        })
-        .catch((err: Error) => setFormError(err.message))
+    setLoadingLookup(true)
+    setFormError("")
+    try {
+      const data = await api<ClaimReturnLookup>(`/api/claims/return-lookup?query=${encodeURIComponent(query.trim())}`)
+      setLookupResult(data)
+      if (data.templates[0]) setSelectedTemplateId(String(data.templates[0].id))
+      if (data.standardReasons[0]) {
+        setSelectedReason(data.standardReasons[0].code)
+        setClaimTitle(data.standardReasons[0].suggestedTitle)
+        setClaimContent(data.standardReasons[0].suggestedContent)
+      }
+    } catch (err: any) {
+      setFormError(err.message || "No matching return found.")
+      setLookupResult(null)
+    } finally {
+      setLoadingLookup(false)
     }
-  }, [scanId])
+  }
 
-  const create = async () => {
+  const handleReasonChange = (code: string) => {
+    setSelectedReason(code)
+    if (!lookupResult) return
+    const match = lookupResult.standardReasons.find((r) => r.code === code)
+    if (match) {
+      setClaimTitle(match.suggestedTitle)
+      setClaimContent(match.suggestedContent)
+    }
+  }
+
+  const handleCreate = async () => {
+    if (!lookupResult) return
     setCreating(true)
     setFormError("")
     try {
-      const body: Record<string, unknown> = {
-        receiptScanId: Number(scanId),
-        claimReason: reason,
-        claimTitle: title,
-        claimDescription: description,
-        remarks,
-      }
-      if (templateId) body.claimTemplateId = Number(templateId)
-      if (marketplaceIssueCode) body.marketplaceIssueCode = marketplaceIssueCode
-      const result = await api<{ claim: ClaimDetail }>("/api/claims", {
+      const res = await api<{ claim: ClaimDetail; jobId: number }>("/api/claims/unified-create", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
+        body: JSON.stringify({
+          receiptScanId: lookupResult.scanId || undefined,
+          expectedReturnId: lookupResult.expectedReturnId,
+          awb: lookupResult.trackingNumber,
+          orderId: lookupResult.orderId,
+          packetId: lookupResult.packetId,
+          customerName: lookupResult.customerName,
+          totalPrice: lookupResult.totalPrice,
+          shippedDate: lookupResult.shippedDate,
+          sku: lookupResult.items[0]?.masterSku || lookupResult.items[0]?.sku || "",
+          claimReason: lookupResult.standardReasons.find((r) => r.code === selectedReason)?.label || "Wrong Product",
+          claimTitle,
+          claimContent,
+          claimDescription: claimContent,
+          remarks,
+          claimTemplateId: selectedTemplateId ? Number(selectedTemplateId) : undefined,
+          marketplaceIssueCode: selectedReason,
+        }),
       })
-      onCreated(result.claim.id)
-    } catch (err) {
-      if (err instanceof ApiError) {
-        setFormError(err.message)
-      } else {
-        setFormError("Failed to create claim")
-      }
+
+      onCreated(res.claim.id)
+    } catch (err: any) {
+      setFormError(err.message || "Failed to create claim.")
     } finally {
       setCreating(false)
     }
@@ -709,141 +842,336 @@ function CreateClaimModal({
 
   return (
     <Modal onClose={onClose} wide>
-      <div className="modal-head">
-        <h2>Create claim</h2>
+      <div className="modal-head" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <h2>Capture Claim Evidence & Queue Automation</h2>
         <button className="btn-icon" onClick={onClose}><Icon name="close" /></button>
       </div>
-      <div className="modal-body">
+      <div className="modal-body" style={{ display: "grid", gap: 16 }}>
         {formError && <div className="form-error">{formError}</div>}
-        <div className="form-field">
-          <label>Marketplace</label>
-          <select value={marketplaceId} onChange={(event) => { setMarketplaceId(event.target.value); setScanId("") }}>
-            <option value="">All marketplaces</option>
-            {accounts.map((account) => <option value={account.id} key={account.id}>{account.name}</option>)}
-          </select>
-        </div>
-        <div className="form-field">
-          <label>Find scanned return <span className="required">*</span></label>
+
+        {/* Search return box */}
+        <div style={{ display: "flex", gap: 10 }}>
           <input
             type="search"
-            value={scanSearch}
-            onChange={(e) => { setScanSearch(e.target.value); setScanId("") }}
-            placeholder="Scan or enter AWB, order ID, or tracking number"
+            placeholder="Scan or enter AWB Number, Order ID, or Packet ID…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && handleSearch()}
+            style={{ flex: 1 }}
           />
-          {scanRows.length > 0 && (
-            <div className="history-list">
-              {scanRows.map((row) => (
-                <button
-                  type="button"
-                  className={`history-entry ${scanId === String(row.scanId) ? "active" : ""}`}
-                  key={row.scanId}
-                  disabled={row.hasClaim}
-                  title={row.hasClaim ? "A claim already exists for this return" : "Select this return"}
-                  onClick={() => setScanId(String(row.scanId))}
-                >
-                  <MarketplaceBadge name={row.marketplace} />
-                  <strong>{row.trackingId}</strong>
-                  <span>{row.orderId || "No order ID"}</span>
-                  {row.hasClaim && <Badge tone="warning">Claim exists</Badge>}
-                </button>
-              ))}
-            </div>
-          )}
-          {selectedScan && <small>Selected scan #{selectedScan.scanId}. The claim stays linked to this scan.</small>}
-        </div>
-        {meeshoDraft ? (
-          <>
-            <div className="form-field">
-              <label>Meesho issue <span className="required">*</span></label>
-              <select
-                value={marketplaceIssueCode}
-                onChange={(event) => {
-                  const selected = meeshoDraft.issueOptions.find((option) => option.code === event.target.value)
-                  setMarketplaceIssueCode(event.target.value)
-                  if (selected) {
-                    setReason(selected.label)
-                    setTitle(selected.label)
-                    setDescription(selected.description)
-                  }
-                }}
-              >
-                {meeshoDraft.issueOptions.map((option) => <option key={option.code} value={option.code}>{option.label}</option>)}
-              </select>
-            </div>
-            <div className="detail-grid">
-              <div className="detail-section">
-                <div className="detail-row"><span className="label">Sub Order ID</span><strong>{meeshoDraft.subOrderId}</strong></div>
-                <div className="detail-row"><span className="label">AWB Number</span><strong>{meeshoDraft.awb}</strong></div>
-                <div className="detail-row"><span className="label">State of packet</span><strong>{meeshoDraft.packetState}</strong></div>
-                <div className="detail-row"><span className="label">Packet ID</span><strong>{meeshoDraft.packetId || "Missing flyer ID"}</strong></div>
-              </div>
-              <div className="detail-section">
-                <div className="detail-row"><span className="label">Received</span><span>{meeshoDraft.receivedDate}</span></div>
-                <div className="detail-row"><span className="label">File claim by</span><Badge tone={meeshoDraft.overdue ? "danger" : "success"}>{meeshoDraft.dueDate}</Badge></div>
-                {meeshoDraft.missingAmount > 0 && <div className="detail-row"><span className="label">Missing amount</span><strong>₹{meeshoDraft.missingAmount.toFixed(2)}</strong></div>}
-              </div>
-            </div>
-          </>
-        ) : (
-          <>
-            <div className="form-field">
-              <label>Claim reason <span className="required">*</span></label>
-              <input type="text" value={reason} onChange={(e) => setReason(e.target.value)} list="claim-reasons" placeholder="Wrong Product, Missing Product, Damaged Product…" maxLength={200} />
-              <datalist id="claim-reasons">
-                <option value="Wrong Product" /><option value="Missing Product" /><option value="Damaged Product" />
-                <option value="Used Product" /><option value="Quantity Mismatch" /><option value="Other" />
-              </datalist>
-            </div>
-            <div className="form-field">
-              <label>Claim title <span className="required">*</span></label>
-              <input type="text" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Short marketplace claim title" maxLength={200} />
-            </div>
-          </>
-        )}
-        <div className="form-field">
-          <label>Description</label>
-          <textarea
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            readOnly={Boolean(meeshoDraft)}
-            placeholder="What happened with this return"
-            maxLength={2000}
-            rows={3}
-          />
-        </div>
-        <div className="form-field">
-          <label>Remarks</label>
-          <textarea
-            value={remarks}
-            onChange={(e) => setRemarks(e.target.value)}
-            placeholder="Additional notes for the claim"
-            maxLength={2000}
-            rows={2}
-          />
-        </div>
-        <div className="form-field">
-          <label>Claim template <span className="required">*</span></label>
-          <select value={templateId} onChange={(e) => setTemplateId(e.target.value)}>
-            <option value="">Select template</option>
-            {filteredTemplates.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.name} ({t.marketplaceName})
-              </option>
-            ))}
-          </select>
-          {templateId && (
-            <small>
-              Fields: {templates.find((t) => t.id === Number(templateId))?.fields.map((f) => f.fieldLabel).join(", ") || "none"}
-            </small>
-          )}
-        </div>
-        <div className="form-actions">
-          <button className="btn secondary" onClick={onClose}>Cancel</button>
-          <button className="btn primary" disabled={!scanId || !reason.trim() || !title.trim() || !templateId || (Boolean(meeshoDraft) && !marketplaceIssueCode) || creating} onClick={create}>
-            {creating ? "Creating…" : "Create claim"}
+          <button className="btn primary" onClick={handleSearch} disabled={loadingLookup}>
+            {loadingLookup ? "Searching…" : "Find Return"}
           </button>
         </div>
+
+        {/* Return Details Card */}
+        {lookupResult && (
+          <div style={{ background: "#f8fafc", border: "1px solid #cbd5e1", borderRadius: 8, padding: 16 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
+              <div>
+                <MarketplaceBadge name={lookupResult.marketplace} />
+                <h3 style={{ margin: "6px 0 2px" }}>Order: {lookupResult.orderId}</h3>
+                <span style={{ fontSize: 13, color: "var(--muted)" }}>AWB: {lookupResult.trackingNumber} · Customer: {lookupResult.customerName}</span>
+              </div>
+              <div style={{ textAlign: "right" }}>
+                <span className="badge green" style={{ fontSize: 12 }}>₹{lookupResult.totalPrice}</span>
+                <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>
+                  {lookupResult.daysSinceShipped > 0 ? `${lookupResult.daysSinceShipped} days since shipped` : lookupResult.returnStatus}
+                </div>
+              </div>
+            </div>
+
+            {/* Product Item with Image */}
+            {lookupResult.items[0] && (
+              <div style={{ display: "flex", gap: 14, background: "#fff", padding: 10, borderRadius: 6, border: "1px solid #e2e8f0" }}>
+                {lookupResult.items[0].imageUrl ? (
+                  <img
+                    src={lookupResult.items[0].imageUrl}
+                    alt="SKU"
+                    style={{ width: 64, height: 64, objectFit: "cover", borderRadius: 6 }}
+                  />
+                ) : (
+                  <div style={{ width: 64, height: 64, background: "#f1f5f9", borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    📷
+                  </div>
+                )}
+                <div>
+                  <strong>{lookupResult.items[0].title}</strong>
+                  <div style={{ fontSize: 12, color: "var(--muted)" }}>
+                    Master SKU: {lookupResult.items[0].masterSku} · Qty: {lookupResult.items[0].quantity}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Form Inputs */}
+            <div style={{ display: "grid", gap: 12, marginTop: 16 }}>
+              <div>
+                <label style={{ fontSize: 13, fontWeight: 600 }}>Claim Reason</label>
+                <select
+                  value={selectedReason}
+                  onChange={(e) => handleReasonChange(e.target.value)}
+                  style={{ width: "100%", marginTop: 4 }}
+                >
+                  {lookupResult.standardReasons.map((r) => (
+                    <option key={r.code} value={r.code}>{r.label}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label style={{ fontSize: 13, fontWeight: 600 }}>Claim Template</label>
+                <select
+                  value={selectedTemplateId}
+                  onChange={(e) => setSelectedTemplateId(e.target.value)}
+                  style={{ width: "100%", marginTop: 4 }}
+                >
+                  {lookupResult.templates.map((t) => (
+                    <option key={t.id} value={t.id}>{t.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label style={{ fontSize: 13, fontWeight: 600 }}>Claim Title</label>
+                <input
+                  type="text"
+                  value={claimTitle}
+                  onChange={(e) => setClaimTitle(e.target.value)}
+                  style={{ width: "100%", marginTop: 4 }}
+                />
+              </div>
+
+              <div>
+                <label style={{ fontSize: 13, fontWeight: 600 }}>Claim Content / Description</label>
+                <textarea
+                  rows={3}
+                  value={claimContent}
+                  onChange={(e) => setClaimContent(e.target.value)}
+                  style={{ width: "100%", marginTop: 4 }}
+                />
+              </div>
+
+              <div>
+                <label style={{ fontSize: 13, fontWeight: 600 }}>Internal Remarks (Optional)</label>
+                <input
+                  type="text"
+                  value={remarks}
+                  onChange={(e) => setRemarks(e.target.value)}
+                  placeholder="Notes for warehouse or supervisor…"
+                  style={{ width: "100%", marginTop: 4 }}
+                />
+              </div>
+            </div>
+
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 16 }}>
+              <button className="btn secondary" onClick={onClose} disabled={creating}>Cancel</button>
+              <button className="btn primary" onClick={handleCreate} disabled={creating}>
+                {creating ? "Creating Claim & Queueing…" : "Create Claim & Proceed to Evidence"}
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </Modal>
+  )
+}
+
+function DesktopAutomationTab() {
+  const [agents, setAgents] = useState<AutomationAgent[]>([])
+  const [jobs, setJobs] = useState<AutomationJob[]>([])
+  const [credentials, setCredentials] = useState<MarketplaceCredential[]>([])
+  const [loading, setLoading] = useState(true)
+  const [selectedJob, setSelectedJob] = useState<AutomationJob | null>(null)
+
+  const loadData = () => {
+    setLoading(true)
+    Promise.all([
+      api<{ agents: AutomationAgent[] }>("/api/automation/agents"),
+      api<{ rows: AutomationJob[] }>("/api/automation/jobs"),
+      api<{ credentials: MarketplaceCredential[] }>("/api/automation/credentials"),
+    ])
+      .then(([a, j, c]) => {
+        setAgents(a.agents)
+        setJobs(j.rows)
+        setCredentials(c.credentials)
+      })
+      .finally(() => setLoading(false))
+  }
+
+  useEffect(() => {
+    loadData()
+    const timer = setInterval(loadData, 8000)
+    return () => clearInterval(timer)
+  }, [])
+
+  if (loading && !agents.length) return <Loading label="Loading desktop automation dashboard…" />
+
+  return (
+    <div style={{ display: "grid", gap: 24 }}>
+      {/* Agents Overview Card */}
+      <section className="panel">
+        <div className="panel-head" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            <h2>Connected Windows Desktop Claim Agents</h2>
+            <p>Background EXE daemons performing browser automation across warehouse terminals</p>
+          </div>
+          <button className="btn secondary small" onClick={loadData}>↻ Refresh</button>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 16, margin: "16px 0" }}>
+          {agents.length === 0 ? (
+            <div style={{ padding: 20, textAlign: "center", background: "#f8fafc", borderRadius: 8, gridColumn: "1 / -1" }}>
+              <p style={{ margin: 0, color: "var(--muted)" }}>
+                No desktop agents currently connected. Run <code>TaskFlowClaimAgent.exe</code> on a warehouse Windows PC.
+              </p>
+            </div>
+          ) : (
+            agents.map((ag) => (
+              <div key={ag.id} style={{ border: "1px solid var(--border)", borderRadius: 8, padding: 14, background: ag.status === "online" ? "#f0fdf4" : "#fff" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <strong>{ag.agentName}</strong>
+                  <Badge tone={ag.status === "online" ? "success" : ag.status === "busy" ? "warning" : "neutral"}>
+                    {ag.status}
+                  </Badge>
+                </div>
+                <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 6 }}>
+                  Host: {ag.hostname} · OS: {ag.platform} · v{ag.version}
+                </div>
+                <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>
+                  Last Heartbeat: {new Date(ag.lastHeartbeatAt).toLocaleTimeString("en-IN")}
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      </section>
+
+      {/* Marketplace Credentials & Settings */}
+      <section className="panel">
+        <div className="panel-head">
+          <div>
+            <h2>Marketplace Portals & Automation Configuration</h2>
+            <p>Seller portal login endpoints, automation modes, and submission approval rules</p>
+          </div>
+        </div>
+
+        <DataTable
+          columns={[
+            {
+              key: "marketplaceName",
+              header: "Marketplace",
+              render: (row) => <MarketplaceBadge name={row.marketplaceName} />,
+            },
+            { key: "accountName", header: "Account Name", render: (row) => <strong>{row.accountName}</strong> },
+            {
+              key: "portalUrl",
+              header: "Portal Endpoint",
+              render: (row) => <span style={{ fontSize: 12, fontFamily: "monospace" }}>{row.portalUrl}</span>,
+            },
+            { key: "usernameMasked", header: "Portal Username", render: (row) => row.usernameMasked || "—" },
+            {
+              key: "automationMode",
+              header: "Browser Mode",
+              render: (row) => (
+                <span className="badge neutral">{row.automationMode}</span>
+              ),
+            },
+            {
+              key: "requireApprovalBeforeSubmit",
+              header: "Approval Required",
+              render: (row) => (
+                <Badge tone={row.requireApprovalBeforeSubmit ? "warning" : "neutral"}>
+                  {row.requireApprovalBeforeSubmit ? "Yes (Pre-Approval)" : "Direct Submit"}
+                </Badge>
+              ),
+            },
+          ]}
+          rows={credentials}
+          rowKey={(row) => String(row.id)}
+        />
+      </section>
+
+      {/* Automation Jobs Queue */}
+      <section className="panel">
+        <div className="panel-head">
+          <div>
+            <h2>Automated Claims Processing Queue</h2>
+            <p>Live marketplace submission tasks and execution status</p>
+          </div>
+        </div>
+
+        <DataTable
+          columns={[
+            {
+              key: "stage",
+              header: "Stage",
+              render: (row) => (
+                <Badge tone={row.stage === "completed" ? "success" : row.stage === "failed" ? "danger" : row.stage === "prepared" ? "purple" : "blue"}>
+                  {row.stage}
+                </Badge>
+              ),
+            },
+            { key: "marketplace", header: "Marketplace", render: (row) => <MarketplaceBadge name={row.marketplace} /> },
+            { key: "trackingId", header: "AWB / Order", render: (row) => <div><strong>{row.trackingId}</strong><small style={{ display: "block", color: "var(--muted)" }}>{row.orderNumber}</small></div> },
+            { key: "claimReason", header: "Reason", render: (row) => row.claimReason },
+            {
+              key: "marketplaceClaimId",
+              header: "Marketplace Ref ID",
+              render: (row) => (row.marketplaceClaimId ? <span style={{ fontFamily: "monospace", fontWeight: 700, color: "#065f46" }}>{row.marketplaceClaimId}</span> : "—"),
+            },
+            { key: "attempts", header: "Attempts", render: (row) => `${row.attempts}/${row.maxAttempts}` },
+            {
+              key: "actions",
+              header: "",
+              render: (row) => (
+                <button className="btn secondary small" onClick={() => setSelectedJob(row)}>
+                  Inspect Job
+                </button>
+              ),
+            },
+          ]}
+          rows={jobs}
+          rowKey={(row) => String(row.id)}
+        />
+      </section>
+
+      {/* Job Details Modal */}
+      {selectedJob && (
+        <Modal onClose={() => setSelectedJob(null)} wide>
+          <div className="modal-head" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <h2>Automation Job #{selectedJob.id} · {selectedJob.marketplace}</h2>
+            <button className="btn-icon" onClick={() => setSelectedJob(null)}><Icon name="close" /></button>
+          </div>
+          <div className="modal-body" style={{ display: "grid", gap: 16 }}>
+            <div style={{ background: "#f8fafc", padding: 14, borderRadius: 8, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <div><strong>Stage:</strong> {selectedJob.stage}</div>
+              <div><strong>Order:</strong> {selectedJob.orderNumber}</div>
+              <div><strong>AWB:</strong> {selectedJob.trackingId}</div>
+              <div><strong>Marketplace Claim ID:</strong> {selectedJob.marketplaceClaimId || "Pending"}</div>
+            </div>
+
+            {selectedJob.manualActionReason && (
+              <div style={{ background: "#fef3c7", padding: 12, borderRadius: 6, color: "#92400e" }}>
+                ⚠️ <strong>Intervention reason:</strong> {selectedJob.manualActionReason}
+              </div>
+            )}
+
+            <div>
+              <h4>Execution Timeline & Agent Logs</h4>
+              <div style={{ background: "#0f172a", color: "#e2e8f0", padding: 12, borderRadius: 6, maxHeight: 200, overflowY: "auto", fontFamily: "monospace", fontSize: 12 }}>
+                {selectedJob.logs.map((l, i) => (
+                  <div key={i} style={{ marginBottom: 4 }}>
+                    <span style={{ color: "#94a3b8" }}>[{l.timestamp.split("T")[1]?.slice(0, 8)}]</span>{" "}
+                    <span style={{ color: l.level === "error" ? "#f87171" : "#34d399" }}>[{l.level.toUpperCase()}]</span>{" "}
+                    {l.message}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </div>
   )
 }

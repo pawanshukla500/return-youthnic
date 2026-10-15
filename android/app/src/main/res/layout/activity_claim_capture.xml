@@ -1,16 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@color/background"
     android:orientation="vertical">
 
+    <!-- Top Action Bar (Blue matching screenshots) -->
     <LinearLayout
+        android:id="@+id/layoutClaimHeader"
         android:layout_width="match_parent"
-        android:layout_height="64dp"
-        android:background="@color/surface"
-        android:elevation="2dp"
+        android:layout_height="56dp"
+        android:background="@color/claim_primary"
+        android:elevation="4dp"
         android:gravity="center_vertical"
         android:orientation="horizontal"
         android:paddingHorizontal="8dp">
@@ -22,17 +25,37 @@
             android:background="?attr/selectableItemBackgroundBorderless"
             android:contentDescription="Back"
             android:src="@drawable/ic_arrow_back"
-            app:tint="@color/text_primary" />
+            app:tint="#FFFFFF" />
 
         <TextView
+            android:id="@+id/tvClaimScreenTitle"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
+            android:layout_marginStart="4dp"
             android:layout_weight="1"
-            android:text="Meesho Claim Details"
-            android:textColor="@color/text_primary"
-            android:textSize="19sp"
+            android:text="Return Details"
+            android:textColor="#FFFFFF"
+            android:textSize="18sp"
             android:textStyle="bold" />
+
+        <ImageButton
+            android:id="@+id/btnClaimInfo"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Info"
+            android:src="@drawable/ic_info"
+            app:tint="#FFFFFF" />
     </LinearLayout>
+
+    <ProgressBar
+        android:id="@+id/progressClaim"
+        style="?android:attr/progressBarStyleHorizontal"
+        android:layout_width="match_parent"
+        android:layout_height="4dp"
+        android:indeterminate="true"
+        android:indeterminateTint="@color/claim_primary_dark"
+        android:visibility="gone" />
 
     <ScrollView
         android:layout_width="match_parent"
@@ -46,199 +69,732 @@
             android:orientation="vertical"
             android:padding="16dp">
 
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="Scan or enter an AWB / Sub Order ID"
-                android:textColor="@color/text_primary"
-                android:textStyle="bold" />
-
-            <LinearLayout
+            <!-- Search Bar for independent claim capture -->
+            <com.google.android.material.card.MaterialCardView
+                android:id="@+id/cardSearchReturn"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:orientation="horizontal">
+                android:layout_marginBottom="12dp"
+                app:cardBackgroundColor="@color/surface"
+                app:cardCornerRadius="10dp"
+                app:cardElevation="1dp"
+                app:strokeColor="@color/border"
+                app:strokeWidth="1dp">
 
-                <EditText
-                    android:id="@+id/etClaimSearch"
-                    android:layout_width="0dp"
-                    android:layout_height="52dp"
-                    android:layout_weight="1"
-                    android:hint="AWB or order ID"
-                    android:inputType="text"
-                    android:maxLines="1" />
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:padding="6dp">
 
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/btnClaimSearch"
-                    android:layout_width="wrap_content"
-                    android:layout_height="52dp"
-                    android:layout_marginStart="8dp"
-                    android:text="Find"
-                    android:textAllCaps="false" />
-            </LinearLayout>
+                    <EditText
+                        android:id="@+id/etClaimSearch"
+                        android:layout_width="0dp"
+                        android:layout_height="44dp"
+                        android:layout_marginStart="8dp"
+                        android:layout_weight="1"
+                        android:background="@null"
+                        android:hint="Scan or enter AWB / Order ID"
+                        android:imeOptions="actionSearch"
+                        android:inputType="text"
+                        android:maxLines="1"
+                        android:textSize="14sp" />
 
-            <ProgressBar
-                android:id="@+id/progressClaim"
-                android:layout_width="match_parent"
-                android:layout_height="3dp"
-                android:indeterminate="true"
-                android:visibility="gone" />
+                    <ImageButton
+                        android:id="@+id/btnScanSearchAwb"
+                        android:layout_width="40dp"
+                        android:layout_height="40dp"
+                        android:background="?attr/selectableItemBackgroundBorderless"
+                        android:contentDescription="Scan Barcode"
+                        android:src="@drawable/ic_camera"
+                        app:tint="@color/claim_primary" />
 
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnClaimSearch"
+                        android:layout_width="wrap_content"
+                        android:layout_height="40dp"
+                        android:layout_marginStart="4dp"
+                        android:backgroundTint="@color/claim_primary"
+                        android:text="Find"
+                        android:textAllCaps="false"
+                        app:cornerRadius="8dp" />
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+
+            <!-- Status Message / Alerts -->
             <TextView
                 android:id="@+id/tvClaimMessage"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
+                android:layout_marginBottom="8dp"
                 android:textColor="@color/text_secondary"
-                android:textSize="13sp" />
+                android:textSize="13sp"
+                android:visibility="gone" />
 
+            <!-- ================================================================================= -->
+            <!-- STEP 1: RETURN DETAILS CONTAINER (Matching Screenshot 1)                           -->
+            <!-- ================================================================================= -->
             <LinearLayout
-                android:id="@+id/layoutClaimDraft"
+                android:id="@+id/layoutStepReturnDetails"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="16dp"
-                android:background="@color/surface"
                 android:orientation="vertical"
-                android:padding="16dp"
-                android:visibility="gone">
+                android:visibility="visible">
 
-                <TextView
-                    android:id="@+id/tvClaimReference"
+                <!-- Order Header Card (Screenshot 1 top card) -->
+                <com.google.android.material.card.MaterialCardView
+                    android:id="@+id/cardOrderSummary"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:textColor="@color/text_primary"
-                    android:textSize="15sp"
-                    android:textStyle="bold" />
+                    android:layout_marginBottom="16dp"
+                    app:cardBackgroundColor="@color/surface"
+                    app:cardCornerRadius="12dp"
+                    app:cardElevation="1dp"
+                    app:strokeColor="@color/border"
+                    app:strokeWidth="1dp">
 
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:padding="16dp">
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:gravity="center_vertical"
+                            android:orientation="horizontal">
+
+                            <TextView
+                                android:id="@+id/tvOrderNumber"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:textColor="@color/claim_primary"
+                                android:textSize="18sp"
+                                android:textStyle="bold"
+                                tools:text="11424973311" />
+
+                            <ImageView
+                                android:id="@+id/ivCollapseOrder"
+                                android:layout_width="24dp"
+                                android:layout_height="24dp"
+                                android:contentDescription="Expand"
+                                android:src="@drawable/ic_chevron_right"
+                                app:tint="@color/claim_primary" />
+                        </LinearLayout>
+
+                        <!-- Customer Name, Price and Qty -->
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:gravity="center_vertical"
+                            android:orientation="horizontal">
+
+                            <TextView
+                                android:id="@+id/tvCustomerName"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:textColor="@color/text_primary"
+                                android:textSize="15sp"
+                                android:textStyle="bold"
+                                tools:text="Manorma" />
+
+                            <TextView
+                                android:id="@+id/tvOrderTotalAndQty"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:textColor="@color/text_secondary"
+                                android:textSize="14sp"
+                                tools:text="₹ 603.00 · Qty: 1" />
+                        </LinearLayout>
+
+                        <!-- Status pill & Days since shipped -->
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="10dp"
+                            android:gravity="center_vertical"
+                            android:orientation="horizontal">
+
+                            <TextView
+                                android:id="@+id/tvReturnInitBadge"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:background="@drawable/bg_pill"
+                                android:backgroundTint="@color/claim_badge_green"
+                                android:paddingHorizontal="10dp"
+                                android:paddingVertical="3dp"
+                                android:text="Return Init"
+                                android:textColor="#FFFFFF"
+                                android:textSize="11sp"
+                                android:textStyle="bold" />
+
+                            <TextView
+                                android:id="@+id/tvDaysSinceShipped"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_marginStart="10dp"
+                                android:textColor="@color/text_secondary"
+                                android:textSize="12sp"
+                                tools:text="15 days since shipped" />
+                        </LinearLayout>
+                    </LinearLayout>
+                </com.google.android.material.card.MaterialCardView>
+
+                <!-- Section: ITEMS TO RECEIVE -->
                 <TextView
-                    android:id="@+id/tvClaimPacket"
-                    android:layout_width="match_parent"
+                    android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
+                    android:layout_marginBottom="8dp"
+                    android:text="ITEMS TO RECEIVE"
                     android:textColor="@color/text_secondary"
-                    android:textSize="14sp" />
-
-                <TextView
-                    android:id="@+id/tvClaimTat"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="10dp"
-                    android:background="@color/brand_soft"
-                    android:padding="10dp"
-                    android:textColor="@color/colorPrimary"
+                    android:textSize="12sp"
                     android:textStyle="bold" />
 
+                <!-- Segmented Tabs: Accept Return | File a Claim -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="48dp"
+                    android:layout_marginBottom="16dp"
+                    android:background="@drawable/bg_round_card"
+                    android:backgroundTint="@color/surface_muted"
+                    android:orientation="horizontal"
+                    android:padding="4dp">
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/tabAcceptReturn"
+                        style="@style/Widget.MaterialComponents.Button.TextButton"
+                        android:layout_width="0dp"
+                        android:layout_height="match_parent"
+                        android:layout_weight="1"
+                        android:text="Accept Return"
+                        android:textAllCaps="false"
+                        android:textColor="@color/text_secondary"
+                        app:cornerRadius="8dp" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/tabFileClaim"
+                        android:layout_width="0dp"
+                        android:layout_height="match_parent"
+                        android:layout_weight="1"
+                        android:backgroundTint="@color/surface"
+                        android:elevation="1dp"
+                        android:text="File a Claim"
+                        android:textAllCaps="false"
+                        android:textColor="@color/claim_primary"
+                        android:textStyle="bold"
+                        app:cornerRadius="8dp" />
+                </LinearLayout>
+
+                <!-- Item SKU Card with Product Thumbnail (Screenshot 1) -->
+                <com.google.android.material.card.MaterialCardView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginBottom="16dp"
+                    app:cardBackgroundColor="@color/surface"
+                    app:cardCornerRadius="12dp"
+                    app:cardElevation="1dp"
+                    app:strokeColor="@color/border"
+                    app:strokeWidth="1dp">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:padding="16dp">
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:gravity="center_vertical"
+                            android:orientation="horizontal">
+
+                            <!-- Product Reference Image Thumbnail -->
+                            <ImageView
+                                android:id="@+id/ivProductThumb"
+                                android:layout_width="60dp"
+                                android:layout_height="60dp"
+                                android:background="@drawable/bg_round_card"
+                                android:backgroundTint="@color/surface_muted"
+                                android:contentDescription="Product image"
+                                android:scaleType="centerCrop"
+                                android:src="@android:drawable/ic_menu_gallery" />
+
+                            <LinearLayout
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_marginStart="14dp"
+                                android:layout_weight="1"
+                                android:orientation="vertical">
+
+                                <TextView
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text="SKU"
+                                    android:textColor="@color/text_muted"
+                                    android:textSize="11sp"
+                                    android:textStyle="bold" />
+
+                                <TextView
+                                    android:id="@+id/tvProductSku"
+                                    android:layout_width="match_parent"
+                                    android:layout_height="wrap_content"
+                                    android:layout_marginTop="2dp"
+                                    android:textColor="@color/text_primary"
+                                    android:textSize="15sp"
+                                    android:textStyle="bold"
+                                    tools:text="B160-Naomi-Kattha_L" />
+                            </LinearLayout>
+
+                            <TextView
+                                android:id="@+id/tvItemQtyBadge"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:background="@drawable/bg_pill"
+                                android:backgroundTint="@color/claim_primary"
+                                android:paddingHorizontal="10dp"
+                                android:paddingVertical="4dp"
+                                android:textColor="#FFFFFF"
+                                android:textSize="12sp"
+                                android:textStyle="bold"
+                                tools:text="Qty: 1" />
+                        </LinearLayout>
+
+                        <View
+                            android:layout_width="match_parent"
+                            android:layout_height="1dp"
+                            android:layout_marginVertical="14dp"
+                            android:background="@color/border" />
+
+                        <!-- Received / Accepted Steppers Table -->
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="horizontal">
+
+                            <!-- Left: RECEIVED Column -->
+                            <LinearLayout
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:orientation="vertical">
+
+                                <TextView
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text="RECEIVED"
+                                    android:textColor="@color/text_muted"
+                                    android:textSize="11sp"
+                                    android:textStyle="bold" />
+
+                                <!-- Good Stepper -->
+                                <LinearLayout
+                                    android:layout_width="match_parent"
+                                    android:layout_height="wrap_content"
+                                    android:layout_marginTop="8dp"
+                                    android:gravity="center_vertical"
+                                    android:orientation="horizontal">
+
+                                    <TextView
+                                        android:layout_width="48dp"
+                                        android:layout_height="wrap_content"
+                                        android:text="Good"
+                                        android:textColor="@color/text_secondary"
+                                        android:textSize="13sp" />
+
+                                    <ImageButton
+                                        android:id="@+id/btnGoodMinus"
+                                        android:layout_width="32dp"
+                                        android:layout_height="32dp"
+                                        android:background="@drawable/bg_round_card"
+                                        android:backgroundTint="@color/surface_muted"
+                                        android:contentDescription="Minus"
+                                        android:src="@drawable/ic_remove"
+                                        app:tint="@color/text_primary" />
+
+                                    <TextView
+                                        android:id="@+id/tvGoodCount"
+                                        android:layout_width="36dp"
+                                        android:layout_height="wrap_content"
+                                        android:gravity="center"
+                                        android:text="0"
+                                        android:textColor="@color/text_primary"
+                                        android:textSize="14sp"
+                                        android:textStyle="bold" />
+
+                                    <ImageButton
+                                        android:id="@+id/btnGoodPlus"
+                                        android:layout_width="32dp"
+                                        android:layout_height="32dp"
+                                        android:background="@drawable/bg_round_card"
+                                        android:backgroundTint="@color/surface_muted"
+                                        android:contentDescription="Plus"
+                                        android:src="@drawable/ic_add"
+                                        app:tint="@color/text_primary" />
+                                </LinearLayout>
+
+                                <!-- Bad Stepper -->
+                                <LinearLayout
+                                    android:layout_width="match_parent"
+                                    android:layout_height="wrap_content"
+                                    android:layout_marginTop="8dp"
+                                    android:gravity="center_vertical"
+                                    android:orientation="horizontal">
+
+                                    <TextView
+                                        android:layout_width="48dp"
+                                        android:layout_height="wrap_content"
+                                        android:text="Bad"
+                                        android:textColor="@color/text_secondary"
+                                        android:textSize="13sp" />
+
+                                    <ImageButton
+                                        android:id="@+id/btnBadMinus"
+                                        android:layout_width="32dp"
+                                        android:layout_height="32dp"
+                                        android:background="@drawable/bg_round_card"
+                                        android:backgroundTint="@color/surface_muted"
+                                        android:contentDescription="Minus"
+                                        android:src="@drawable/ic_remove"
+                                        app:tint="@color/text_primary" />
+
+                                    <TextView
+                                        android:id="@+id/tvBadCount"
+                                        android:layout_width="36dp"
+                                        android:layout_height="wrap_content"
+                                        android:gravity="center"
+                                        android:text="0"
+                                        android:textColor="@color/text_primary"
+                                        android:textSize="14sp"
+                                        android:textStyle="bold" />
+
+                                    <ImageButton
+                                        android:id="@+id/btnBadPlus"
+                                        android:layout_width="32dp"
+                                        android:layout_height="32dp"
+                                        android:background="@drawable/bg_round_card"
+                                        android:backgroundTint="@color/surface_muted"
+                                        android:contentDescription="Plus"
+                                        android:src="@drawable/ic_add"
+                                        app:tint="@color/text_primary" />
+                                </LinearLayout>
+                            </LinearLayout>
+
+                            <View
+                                android:layout_width="1dp"
+                                android:layout_height="match_parent"
+                                android:layout_marginHorizontal="12dp"
+                                android:background="@color/border" />
+
+                            <!-- Right: ACCEPTED Column -->
+                            <LinearLayout
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:orientation="vertical">
+
+                                <TextView
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text="ACCEPTED"
+                                    android:textColor="@color/text_muted"
+                                    android:textSize="11sp"
+                                    android:textStyle="bold" />
+
+                                <LinearLayout
+                                    android:layout_width="match_parent"
+                                    android:layout_height="32dp"
+                                    android:layout_marginTop="8dp"
+                                    android:gravity="center_vertical"
+                                    android:orientation="horizontal">
+
+                                    <TextView
+                                        android:layout_width="0dp"
+                                        android:layout_height="wrap_content"
+                                        android:layout_weight="1"
+                                        android:text="Good"
+                                        android:textColor="@color/text_secondary"
+                                        android:textSize="13sp" />
+
+                                    <TextView
+                                        android:id="@+id/tvAcceptedGoodCount"
+                                        android:layout_width="wrap_content"
+                                        android:layout_height="wrap_content"
+                                        android:text="0"
+                                        android:textColor="@color/text_primary"
+                                        android:textSize="14sp"
+                                        android:textStyle="bold" />
+                                </LinearLayout>
+
+                                <LinearLayout
+                                    android:layout_width="match_parent"
+                                    android:layout_height="32dp"
+                                    android:layout_marginTop="8dp"
+                                    android:gravity="center_vertical"
+                                    android:orientation="horizontal">
+
+                                    <TextView
+                                        android:layout_width="0dp"
+                                        android:layout_height="wrap_content"
+                                        android:layout_weight="1"
+                                        android:text="Bad"
+                                        android:textColor="@color/text_secondary"
+                                        android:textSize="13sp" />
+
+                                    <TextView
+                                        android:id="@+id/tvAcceptedBadCount"
+                                        android:layout_width="wrap_content"
+                                        android:layout_height="wrap_content"
+                                        android:text="0"
+                                        android:textColor="@color/text_primary"
+                                        android:textSize="14sp"
+                                        android:textStyle="bold" />
+                                </LinearLayout>
+                            </LinearLayout>
+                        </LinearLayout>
+                    </LinearLayout>
+                </com.google.android.material.card.MaterialCardView>
+
+                <!-- Return Comment (optional) -->
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="14dp"
-                    android:text="Issue"
-                    android:textColor="@color/text_primary"
-                    android:textStyle="bold" />
+                    android:text="Return Comment (optional)"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="13sp" />
 
-                <Spinner
-                    android:id="@+id/spinnerClaimIssue"
-                    android:layout_width="match_parent"
-                    android:layout_height="52dp" />
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="12dp"
-                    android:text="Automatic Meesho description"
-                    android:textColor="@color/text_primary"
-                    android:textStyle="bold" />
-
-                <TextView
-                    android:id="@+id/tvClaimDescription"
+                <com.google.android.material.textfield.TextInputLayout
+                    style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="6dp"
-                    android:background="@color/background"
-                    android:minHeight="84dp"
-                    android:padding="12dp"
-                    android:textColor="@color/text_primary"
-                    android:textIsSelectable="true" />
+                    app:boxCornerRadiusBottomEnd="8dp"
+                    app:boxCornerRadiusBottomStart="8dp"
+                    app:boxCornerRadiusTopEnd="8dp"
+                    app:boxCornerRadiusTopStart="8dp">
 
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/btnCreateClaim"
-                    android:layout_width="match_parent"
-                    android:layout_height="52dp"
-                    android:layout_marginTop="14dp"
-                    android:text="Create claim and capture evidence"
-                    android:textAllCaps="false" />
-            </LinearLayout>
+                    <com.google.android.material.textfield.TextInputEditText
+                        android:id="@+id/etReturnComment"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:hint="Enter comment..."
+                        android:textSize="14sp" />
+                </com.google.android.material.textfield.TextInputLayout>
 
-            <LinearLayout
-                android:id="@+id/layoutClaimEvidence"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="16dp"
-                android:background="@color/surface"
-                android:orientation="vertical"
-                android:padding="16dp"
-                android:visibility="gone">
-
+                <!-- Claim Template Type Dropdown -->
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="Claim evidence"
+                    android:layout_marginTop="14dp"
+                    android:text="Claim Template Type"
                     android:textColor="@color/text_primary"
-                    android:textSize="17sp"
+                    android:textSize="14sp"
                     android:textStyle="bold" />
 
+                <Spinner
+                    android:id="@+id/spinnerClaimTemplateType"
+                    android:layout_width="match_parent"
+                    android:layout_height="50dp"
+                    android:layout_marginTop="6dp"
+                    android:background="@drawable/bg_round_card" />
+
+                <!-- Template Selector -->
                 <TextView
-                    android:id="@+id/tvEvidenceQueue"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="14dp"
+                    android:text="Template"
+                    android:textColor="@color/text_primary"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
+
+                <Spinner
+                    android:id="@+id/spinnerClaimTemplate"
+                    android:layout_width="match_parent"
+                    android:layout_height="50dp"
+                    android:layout_marginTop="6dp"
+                    android:background="@drawable/bg_round_card" />
+
+                <!-- Claim Title -->
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="14dp"
+                    android:text="Claim Title"
+                    android:textColor="@color/text_primary"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
+
+                <com.google.android.material.textfield.TextInputLayout
+                    style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    app:boxCornerRadiusBottomEnd="8dp"
+                    app:boxCornerRadiusBottomStart="8dp"
+                    app:boxCornerRadiusTopEnd="8dp"
+                    app:boxCornerRadiusTopStart="8dp">
+
+                    <com.google.android.material.textfield.TextInputEditText
+                        android:id="@+id/etClaimTitle"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:hint="Enter Claim Title"
+                        android:textSize="14sp" />
+                </com.google.android.material.textfield.TextInputLayout>
+
+                <!-- Claim Content -->
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="14dp"
+                    android:text="Claim Content"
+                    android:textColor="@color/text_primary"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
+
+                <com.google.android.material.textfield.TextInputLayout
+                    style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    app:boxCornerRadiusBottomEnd="8dp"
+                    app:boxCornerRadiusBottomStart="8dp"
+                    app:boxCornerRadiusTopEnd="8dp"
+                    app:boxCornerRadiusTopStart="8dp">
+
+                    <com.google.android.material.textfield.TextInputEditText
+                        android:id="@+id/etClaimContent"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="top"
+                        android:hint="Enter Claim Content"
+                        android:minLines="3"
+                        android:textSize="14sp" />
+                </com.google.android.material.textfield.TextInputLayout>
+
+                <!-- Next Button to Step 2 -->
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnProceedToUpload"
+                    android:layout_width="match_parent"
+                    android:layout_height="52dp"
+                    android:layout_marginTop="20dp"
+                    android:backgroundTint="@color/claim_primary"
+                    android:text="Proceed to Upload Evidence  →"
+                    android:textAllCaps="false"
+                    android:textSize="15sp"
+                    android:textStyle="bold"
+                    app:cornerRadius="10dp" />
+            </LinearLayout>
+
+            <!-- ================================================================================= -->
+            <!-- STEP 2: UPLOAD IMAGES CONTAINER (Matching Screenshot 2)                            -->
+            <!-- ================================================================================= -->
+            <LinearLayout
+                android:id="@+id/layoutStepUploadImages"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:visibility="gone">
+
+                <!-- Packet ID Input + Barcode Scan Button -->
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Packet ID *"
+                    android:textColor="@color/text_primary"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
+
+                <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="4dp"
-                    android:text="Files stay safely on this phone until upload completes."
-                    android:textColor="@color/text_secondary" />
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
 
+                    <EditText
+                        android:id="@+id/etPacketId"
+                        android:layout_width="0dp"
+                        android:layout_height="48dp"
+                        android:layout_weight="1"
+                        android:hint="Enter Packet ID"
+                        android:inputType="text"
+                        android:textSize="14sp" />
+
+                    <ImageButton
+                        android:id="@+id/btnScanPacketId"
+                        android:layout_width="44dp"
+                        android:layout_height="44dp"
+                        android:background="?attr/selectableItemBackgroundBorderless"
+                        android:contentDescription="Scan Packet ID"
+                        android:src="@drawable/ic_barcode_scanner"
+                        app:tint="@color/text_secondary" />
+                </LinearLayout>
+
+                <!-- AWB Number Input + Barcode Scan Button -->
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="14dp"
+                    android:text="AWB Number *"
+                    android:textColor="@color/text_primary"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <EditText
+                        android:id="@+id/etAwbNumber"
+                        android:layout_width="0dp"
+                        android:layout_height="48dp"
+                        android:layout_weight="1"
+                        android:hint="Enter AWB Number"
+                        android:inputType="text"
+                        android:textSize="14sp" />
+
+                    <ImageButton
+                        android:id="@+id/btnScanAwbNumber"
+                        android:layout_width="44dp"
+                        android:layout_height="44dp"
+                        android:background="?attr/selectableItemBackgroundBorderless"
+                        android:contentDescription="Scan AWB"
+                        android:src="@drawable/ic_barcode_scanner"
+                        app:tint="@color/text_secondary" />
+                </LinearLayout>
+
+                <!-- Dynamic Evidence List (Populated with item_claim_evidence_card.xml) -->
+                <LinearLayout
+                    android:id="@+id/layoutDynamicEvidenceCards"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="16dp"
+                    android:orientation="vertical" />
+
+                <!-- Submit Button matching Screenshot 2 -->
                 <com.google.android.material.button.MaterialButton
-                    android:id="@+id/btnBarcodeImage"
-                    style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                    android:id="@+id/btnSubmitClaim"
                     android:layout_width="match_parent"
                     android:layout_height="52dp"
-                    android:layout_marginTop="12dp"
-                    android:text="Barcode image (optional)"
-                    android:textAllCaps="false" />
-
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/btnProductImage"
-                    style="@style/Widget.MaterialComponents.Button.OutlinedButton"
-                    android:layout_width="match_parent"
-                    android:layout_height="52dp"
-                    android:layout_marginTop="8dp"
-                    android:text="Image of product received *"
-                    android:textAllCaps="false" />
-
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/btnReverseWaybill"
-                    style="@style/Widget.MaterialComponents.Button.OutlinedButton"
-                    android:layout_width="match_parent"
-                    android:layout_height="52dp"
-                    android:layout_marginTop="8dp"
-                    android:text="Reverse waybill *"
-                    android:textAllCaps="false" />
-
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/btnUnpackingVideo"
-                    android:layout_width="match_parent"
-                    android:layout_height="52dp"
-                    android:layout_marginTop="8dp"
-                    android:text="Record 720p MP4 unpacking video *"
-                    android:textAllCaps="false" />
-
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/btnAttachments"
-                    style="@style/Widget.MaterialComponents.Button.OutlinedButton"
-                    android:layout_width="match_parent"
-                    android:layout_height="52dp"
-                    android:layout_marginTop="8dp"
-                    android:text="Additional attachments (optional)"
-                    android:textAllCaps="false" />
+                    android:layout_marginTop="20dp"
+                    android:layout_marginBottom="24dp"
+                    android:backgroundTint="@color/claim_primary"
+                    android:text="Submit"
+                    android:textAllCaps="false"
+                    android:textSize="16sp"
+                    android:textStyle="bold"
+                    app:cornerRadius="26dp" />
             </LinearLayout>
+
         </LinearLayout>
     </ScrollView>
 </LinearLayout>

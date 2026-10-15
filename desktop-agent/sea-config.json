@@ -1,0 +1,4 @@
+{
+  "main": "desktop-agent/dist/agent-bundle.cjs",
+  "output": "desktop-agent/dist/sea-prep.blob"
+}

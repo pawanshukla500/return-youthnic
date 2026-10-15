@@ -357,13 +357,18 @@ INSERT INTO app_system_settings (setting_key, setting_value)
 VALUES
   ('omsguru_config', jsonb_build_object(
     'dailyEnabled', true,
-    'dailyTime', '19:45',
+    'dailyTime', '23:00',
     'dropshipWarehouseId', '6688',
     'retentionDays', 180,
     'storageFolder', 'inventory-update-file',
     'ccEmails', jsonb_build_array()
   ))
 ON CONFLICT (setting_key) DO NOTHING;
+
+-- Migrate any existing 19:45 (7:45 PM) schedule to 23:00 (11:00 PM IST)
+UPDATE app_system_settings
+SET setting_value = jsonb_set(setting_value, '{dailyTime}', '"23:00"')
+WHERE setting_key = 'omsguru_config' AND setting_value->>'dailyTime' = '19:45';
 
 -- Seed 'Iron Send' issue category for items needing pressing/ironing before restocking
 INSERT INTO receipt_issue_categories

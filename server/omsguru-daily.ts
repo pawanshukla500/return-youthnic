@@ -27,7 +27,7 @@ export type UnmappedScannedItem = {
 
 export type OmsguruConfig = {
   dailyEnabled: boolean
-  dailyTime: string // "19:45"
+  dailyTime: string // "23:00" (11:00 PM IST)
   dropshipWarehouseId: string // "6688"
   retentionDays: number // 180
   storageFolder: string // "inventory-update-file"
@@ -36,7 +36,7 @@ export type OmsguruConfig = {
 
 export const DEFAULT_OMSGURU_CONFIG: OmsguruConfig = {
   dailyEnabled: true,
-  dailyTime: "19:45",
+  dailyTime: "23:00",
   dropshipWarehouseId: "6688",
   retentionDays: 180,
   storageFolder: "inventory-update-file",
@@ -95,9 +95,17 @@ export async function getOmsguruConfig(db: pg.Pool): Promise<OmsguruConfig> {
     )
     if (result.rows[0]?.setting_value) {
       const stored = result.rows[0].setting_value as Partial<OmsguruConfig>
+      let dailyTime = stored.dailyTime || DEFAULT_OMSGURU_CONFIG.dailyTime
+      // Migrate from old 19:45 (7:45 PM) schedule to 23:00 (11:00 PM IST)
+      if (dailyTime === "19:45") {
+        dailyTime = "23:00"
+        db.query(
+          "UPDATE app_system_settings SET setting_value = jsonb_set(setting_value, '{dailyTime}', '\"23:00\"') WHERE setting_key = 'omsguru_config'",
+        ).catch(() => {})
+      }
       return {
         dailyEnabled: stored.dailyEnabled ?? DEFAULT_OMSGURU_CONFIG.dailyEnabled,
-        dailyTime: stored.dailyTime || DEFAULT_OMSGURU_CONFIG.dailyTime,
+        dailyTime,
         dropshipWarehouseId: stored.dropshipWarehouseId || DEFAULT_OMSGURU_CONFIG.dropshipWarehouseId,
         retentionDays: Number(stored.retentionDays || DEFAULT_OMSGURU_CONFIG.retentionDays),
         storageFolder: stored.storageFolder || DEFAULT_OMSGURU_CONFIG.storageFolder,
@@ -439,24 +447,52 @@ export async function generateOmsguruDailyUpdate(
   }
 }
 
-// Renders rich HTML email template with Youthnic branding & stats summary
+function formatDisplayDate(dateStr: string): string {
+  try {
+    const [y, m, d] = dateStr.split("-").map(Number)
+    if (!y || !m || !d) return dateStr
+    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    return `${d} ${months[m - 1]} ${y}`
+  } catch {
+    return dateStr
+  }
+}
+
+// Renders rich HTML email template matching the modern TaskFlow Pro / Youthnic briefing layout
 export function renderOmsguruUpdateEmail(
   record: OmsguruDailyUpdateRecord,
   config: OmsguruConfig,
 ): { subject: string; html: string; text: string } {
+  const formattedDate = formatDisplayDate(record.updateDate)
   const subject = `OMSGuru Daily Inventory Update — ${record.updateDate} (Req: ${record.requestId}) — ${fmt(record.totalQty)} Units (${fmt(record.totalSkus)} SKUs)`
+
+  // Compute marketplace breakdown metrics
+  const mpTotals: Record<string, number> = {}
+  for (const item of record.skuBreakdown) {
+    for (const [mp, q] of Object.entries(item.marketplaces || {})) {
+      mpTotals[mp] = (mpTotals[mp] || 0) + q
+    }
+  }
+  const mpEntries = Object.entries(mpTotals).sort((a, b) => b[1] - a[1])
+  const mpCount = mpEntries.length
+  const mpSummaryText =
+    mpEntries.length > 0
+      ? mpEntries.map(([mp, q]) => `${mp} (${fmt(q)} units)`).join(" · ")
+      : "No marketplace returns recorded today"
 
   const text = `
 Youthnic Returns — OMSGuru Daily Inventory Update
 ============================================================
 Date: ${record.updateDate} (Asia/Kolkata)
+Scheduled Dispatch: 23:00 IST (11:00 PM)
 Request ID: ${record.requestId}
 Dropship Warehouse ID: ${record.dropshipWarehouseId}
 Total Good Received Units: ${fmt(record.totalQty)}
 Total Master SKUs to Update: ${fmt(record.totalSkus)}
-Storage Archive: ${record.storageUrl || record.storagePath || "Saved in PostgreSQL"}
+Active Marketplaces (${mpCount}): ${mpSummaryText}
+Storage Archive: ${record.storageUrl || record.storagePath || "Saved in PostgreSQL (180 days retention)"}
 ------------------------------------------------------------
-This file includes the combined sum of good physical returns received across all marketplace accounts today. Damaged / issue-marked items are excluded.
+This file includes the combined sum of good physical returns received across all marketplace accounts today. Damaged / issue-marked items and Iron Send units are excluded.
 
 Top SKUs:
 ${record.skuBreakdown
@@ -478,48 +514,113 @@ Generated automatically by Return App: https://return.youthnic.shop
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>${subject}</title>
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background: #f8fafc; color: #0f172a; margin: 0; padding: 24px 12px; }
-    .container { max-width: 680px; margin: 0 auto; background: #ffffff; border-radius: 12px; border: 1px solid #e2e8f0; overflow: hidden; box-shadow: 0 4px 16px rgba(0,0,0,0.06); }
-    .header-table { width: 100%; border-collapse: collapse; background: linear-gradient(135deg, #063b2f 0%, #0d5948 50%, #0f6b56 100%); color: #ffffff; padding: 22px 26px; }
-    .header-table td { padding: 20px 24px; vertical-align: middle; }
-    .content { padding: 24px; }
-    .hero-card { background: #f0fdf4; border: 1.5px solid #86efac; border-radius: 10px; padding: 20px 22px; margin-bottom: 24px; box-shadow: 0 2px 8px rgba(16,185,129,0.06); }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background: #f1f5f9; color: #0f172a; margin: 0; padding: 24px 12px; }
+    .container { max-width: 660px; margin: 0 auto; background: #ffffff; border-radius: 16px; border: 1px solid #e2e8f0; overflow: hidden; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.06), 0 8px 10px -6px rgba(0,0,0,0.02); }
+    .header-banner { background: #093c31; background: linear-gradient(135deg, #06382c 0%, #0c4d3d 50%, #0f5c49 100%); color: #ffffff; padding: 28px 30px; }
+    .content { padding: 30px 30px 24px 30px; }
+    .stat-card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 18px 8px; text-align: center; }
+    .stat-number { font-size: 26px; font-weight: 800; line-height: 1; }
+    .stat-label { font-size: 11px; font-weight: 800; color: #64748b; letter-spacing: 0.8px; text-transform: uppercase; margin-top: 8px; }
+    .priority-focus-card { background: #f8fafc; border: 1px solid #e2e8f0; border-left: 4px solid #ea580c; border-radius: 8px; padding: 14px 18px; margin-bottom: 24px; }
+    .hero-card { background: #f0fdf4; border: 1.5px solid #86efac; border-radius: 12px; padding: 20px 22px; margin-bottom: 24px; box-shadow: 0 2px 8px rgba(16,185,129,0.06); }
     .ref-badge { display: inline-block; padding: 4px 10px; border-radius: 6px; font-size: 11px; font-weight: 700; background: #dcfce7; color: #166534; border: 1px solid #86efac; }
-    .stats-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-bottom: 24px; }
-    .stat-card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; }
-    .stat-label { font-size: 11px; font-weight: 600; text-transform: uppercase; color: #64748b; letter-spacing: 0.5px; }
-    .stat-value { font-size: 24px; font-weight: 700; color: #0f172a; margin: 4px 0 2px; }
-    .stat-sub { font-size: 12px; color: #16a34a; font-weight: 500; }
-    .section-title { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: #334155; margin: 24px 0 12px; border-bottom: 1px solid #e2e8f0; padding-bottom: 6px; }
+    .section-title { font-size: 13px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.6px; color: #334155; margin: 26px 0 12px; border-bottom: 1px solid #e2e8f0; padding-bottom: 6px; }
     table.data-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 20px; }
-    table.data-table th { text-align: left; padding: 8px 10px; background: #f1f5f9; color: #475569; font-weight: 600; font-size: 11px; text-transform: uppercase; }
-    table.data-table td { padding: 10px; border-bottom: 1px solid #f1f5f9; }
-    .badge-mp { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 500; background: #e0f2fe; color: #0369a1; margin-right: 4px; margin-bottom: 2px; }
-    .download-btn { display: inline-block; padding: 10px 18px; border-radius: 6px; font-size: 13px; font-weight: 700; background: #0f6b56; color: #ffffff !important; text-decoration: none; box-shadow: 0 2px 6px rgba(15,107,86,0.3); }
-    .footer { background: #f8fafc; border-top: 1px solid #e2e8f0; padding: 18px 24px; font-size: 12px; color: #64748b; text-align: center; }
+    table.data-table th { text-align: left; padding: 9px 12px; background: #f1f5f9; color: #475569; font-weight: 700; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
+    table.data-table td { padding: 10px 12px; border-bottom: 1px solid #f1f5f9; }
+    .badge-mp { display: inline-block; padding: 2px 7px; border-radius: 4px; font-size: 11px; font-weight: 600; background: #e0f2fe; color: #0369a1; margin-right: 4px; margin-bottom: 2px; }
+    .download-btn { display: inline-block; padding: 10px 18px; border-radius: 8px; font-size: 13px; font-weight: 700; background: #0f6b56; color: #ffffff !important; text-decoration: none; box-shadow: 0 2px 6px rgba(15,107,86,0.3); }
+    .footer { background: #f8fafc; border-top: 1px solid #e2e8f0; padding: 20px 24px; font-size: 12px; color: #64748b; text-align: center; line-height: 1.6; }
   </style>
 </head>
 <body>
   <div class="container">
-    <table class="header-table" role="presentation" border="0" cellpadding="0" cellspacing="0">
-      <tr>
-        <td style="width: 52px; padding-right: 0;">
-          <img src="https://return.youthnic.shop/logos/youthnic-icon.png" width="48" height="48" alt="Youthnic" style="border-radius: 12px; display: block; border: 1.5px solid rgba(255,255,255,0.3); box-shadow: 0 4px 10px rgba(0,0,0,0.25);" />
-        </td>
-        <td style="padding-left: 14px;">
-          <div style="font-size: 10.5px; font-weight: 800; letter-spacing: 1.5px; color: #a7f3d0; text-transform: uppercase;">YOUTHNIC WAREHOUSE OPERATIONS</div>
-          <h1 style="margin: 2px 0 0; font-size: 21px; font-weight: 800; color: #ffffff; letter-spacing: -0.3px;">OMSGuru Daily Inventory Update</h1>
-          <p style="margin: 4px 0 0; font-size: 13px; color: #d1fae5;">Dropship Warehouse ID: <strong style="color: #ffffff;">${record.dropshipWarehouseId}</strong> · Date: <strong style="color: #ffffff;">${record.updateDate}</strong> (IST)</p>
-        </td>
-        <td style="text-align: right;">
-          <span style="display: inline-block; padding: 6px 12px; background: rgba(255,255,255,0.18); border: 1px solid rgba(255,255,255,0.3); border-radius: 20px; font-size: 11.5px; font-weight: 700; color: #ffffff; letter-spacing: 0.5px;">
-            ✅ UPLOAD READY
-          </span>
-        </td>
-      </tr>
-    </table>
+    <!-- Header Banner matching the screenshot design -->
+    <div class="header-banner">
+      <!-- App Brand Row -->
+      <table role="presentation" border="0" cellpadding="0" cellspacing="0" style="width: 100%; margin-bottom: 20px;">
+        <tr>
+          <td style="width: 52px; vertical-align: middle;">
+            <!-- White Squircle Badge with Youthnic Monogram -->
+            <div style="width: 48px; height: 48px; background-color: #ffffff; border-radius: 12px; text-align: center; line-height: 48px; box-shadow: 0 4px 12px rgba(0,0,0,0.22); overflow: hidden; display: block;">
+              <img src="https://return.youthnic.shop/logos/youthnic-badge.png" width="48" height="48" alt="Youthnic" style="display: block; border: 0; width: 48px; height: 48px; border-radius: 12px;" />
+            </div>
+          </td>
+          <td style="padding-left: 14px; vertical-align: middle;">
+            <div style="font-size: 19px; font-weight: 800; color: #ffffff; letter-spacing: -0.2px; line-height: 1.2;">
+              TaskFlow Pro <span style="font-size: 13px; font-weight: 600; color: #a7f3d0; opacity: 0.9;">· Return Scan</span>
+            </div>
+            <div style="font-size: 11px; font-weight: 700; letter-spacing: 1.2px; color: #a7f3d0; text-transform: uppercase; margin-top: 3px;">
+              YOUTHNIC · VB EXPORTS
+            </div>
+          </td>
+          <td style="text-align: right; vertical-align: middle;">
+            <span style="display: inline-block; padding: 6px 14px; background: rgba(255,255,255,0.18); border: 1px solid rgba(255,255,255,0.3); border-radius: 20px; font-size: 11px; font-weight: 700; color: #ffffff; letter-spacing: 0.5px;">
+              ● 23:00 IST DISPATCH
+            </span>
+          </td>
+        </tr>
+      </table>
 
+      <!-- Briefing Headline & Subtitle -->
+      <h1 style="margin: 0 0 6px 0; font-size: 24px; font-weight: 800; color: #ffffff; letter-spacing: -0.4px; line-height: 1.25;">
+        Your evening inventory briefing
+      </h1>
+      <div style="font-size: 13px; font-weight: 500; color: #d1fae5; letter-spacing: 0.1px;">
+        Daily inventory update · ${formattedDate} · 23:00 IST · Mon–Sun
+      </div>
+    </div>
+
+    <!-- Main Content Area -->
     <div class="content">
+      <!-- Greeting and Intro -->
+      <h2 style="margin: 0 0 10px 0; font-size: 21px; font-weight: 800; color: #0f172a; letter-spacing: -0.3px;">
+        Good evening, Team
+      </h2>
+      <p style="margin: 0 0 24px 0; font-size: 14px; line-height: 1.6; color: #475569;">
+        Here is today's verified return inventory update for OMSGuru. Only physical returns scanned in good condition across all marketplace accounts are included — damaged, defective, wrong items, and Iron Send units are excluded from restocking.
+      </p>
+
+      <!-- 4-Card Horizontal Stat Grid (Table layout for universal email client compatibility) -->
+      <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="margin-bottom: 24px;">
+        <tr>
+          <td width="23%" style="padding: 0 4px 0 0; vertical-align: top;">
+            <div class="stat-card">
+              <div class="stat-number" style="color: ${record.totalQty > 0 ? "#0f6b56" : "#dc2626"};">${fmt(record.totalQty)}</div>
+              <div class="stat-label">GOOD UNITS</div>
+            </div>
+          </td>
+          <td width="23%" style="padding: 0 4px; vertical-align: top;">
+            <div class="stat-card">
+              <div class="stat-number" style="color: #ea580c;">${fmt(record.totalSkus)}</div>
+              <div class="stat-label">MASTER SKUS</div>
+            </div>
+          </td>
+          <td width="23%" style="padding: 0 4px; vertical-align: top;">
+            <div class="stat-card">
+              <div class="stat-number" style="color: #0284c7;">${mpCount}</div>
+              <div class="stat-label">CHANNELS</div>
+            </div>
+          </td>
+          <td width="23%" style="padding: 0 0 0 4px; vertical-align: top;">
+            <div class="stat-card">
+              <div class="stat-number" style="color: #334155; font-size: 22px;">${record.dropshipWarehouseId}</div>
+              <div class="stat-label">WAREHOUSE</div>
+            </div>
+          </td>
+        </tr>
+      </table>
+
+      <!-- Priority Focus Card (Accent Left Border from screenshot) -->
+      <div class="priority-focus-card">
+        <div style="font-size: 13px; font-weight: 800; color: #0f172a; margin-bottom: 4px;">
+          Priority focus
+        </div>
+        <div style="font-size: 12.5px; color: #64748b; line-height: 1.5;">
+          0 issue units · <strong>${mpCount}</strong> marketplace channel${mpCount === 1 ? "" : "s"} active · ${mpSummaryText}
+        </div>
+      </div>
+
       <!-- Prominent Request Reference & Upload File Hero Card -->
       <div class="hero-card">
         <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
@@ -528,11 +629,11 @@ Generated automatically by Return App: https://return.youthnic.shop
               <div style="font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; color: #166534; margin-bottom: 4px;">
                 OFFICIAL REQUEST REFERENCE ID
               </div>
-              <div style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 19px; font-weight: 800; color: #064e3b; letter-spacing: 0.5px;">
+              <div style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 18px; font-weight: 800; color: #064e3b; letter-spacing: 0.5px;">
                 ${record.requestId}
               </div>
               <div style="font-size: 12.5px; color: #15803d; margin-top: 3px;">
-                Dropship Warehouse Node: <strong>${record.dropshipWarehouseId}</strong> · Action: <strong>ADD</strong> (Increment Stock)
+                Dropship Warehouse ID: <strong>${record.dropshipWarehouseId}</strong> · Action: <strong>ADD</strong> (Increment Stock)
               </div>
             </td>
             <td style="vertical-align: top; text-align: right;">
@@ -554,7 +655,9 @@ Generated automatically by Return App: https://return.youthnic.shop
               </div>
             </td>
             <td style="vertical-align: middle; padding-left: 12px;">
-              <div style="font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: #166534;">UPLOADED INVENTORY FILE (ATTACHED &amp; ARCHIVED)</div>
+              <div style="font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: #166534;">
+                UPLOAD READY FILE (ATTACHED &amp; ARCHIVED)
+              </div>
               <div style="font-size: 15px; font-weight: 700; color: #0f172a; margin-top: 2px;">
                 <code>UpdateInStockQtyAnd_orLastPurchasePrice.csv</code>
               </div>
@@ -563,46 +666,32 @@ Generated automatically by Return App: https://return.youthnic.shop
               </div>
             </td>
             <td style="vertical-align: middle; text-align: right;">
-              ${record.storageUrl ? `
+              ${
+                record.storageUrl
+                  ? `
               <a href="${record.storageUrl}" target="_blank" rel="noopener noreferrer" class="download-btn">
                 ⬇ Download CSV
-              </a>` : `
+              </a>`
+                  : `
               <span style="font-size: 12px; font-weight: 700; color: #166534;">📎 File Attached</span>
-              `}
+              `
+              }
             </td>
           </tr>
         </table>
 
         <!-- Storage Archive & Upload instructions -->
-        <div style="margin-top: 14px; padding: 10px 14px; background: rgba(255,255,255,0.75); border-radius: 6px; font-size: 12px; color: #166534; line-height: 1.5;">
+        <div style="margin-top: 14px; padding: 12px 14px; background: rgba(255,255,255,0.8); border-radius: 8px; font-size: 12px; color: #166534; line-height: 1.5;">
           <strong>ℹ️ Direct OMSGuru Upload Steps:</strong> Login to OMSGuru &gt; Inventory &gt; <strong>Bulk Inventory Adjustment</strong> &gt; Upload the attached CSV file (<code>UpdateInStockQtyAnd_orLastPurchasePrice.csv</code>) to apply today's stock to Dropship Warehouse <strong>${record.dropshipWarehouseId}</strong>.
-          ${record.storageUrl ? `<br /><span style="color: #475569; font-size: 11.5px;">Cloud Storage: <a href="${record.storageUrl}" style="color: #0f6b56; font-weight: 600;">Download directly from Firebase Storage</a> (stored for 180 days).</span>` : ""}
+          ${
+            record.storageUrl
+              ? `<br /><span style="color: #475569; font-size: 11.5px;">Cloud Storage: <a href="${record.storageUrl}" style="color: #0f6b56; font-weight: 600;">Download directly from Firebase Storage</a> (retained for 180 days).</span>`
+              : `<br /><span style="color: #475569; font-size: 11.5px;">Cloud Archive: Saved permanently with 180 days retention policy.</span>`
+          }
         </div>
       </div>
 
-      <div class="stats-grid">
-        <div class="stat-card">
-          <div class="stat-label">Total Good Units (ADD)</div>
-          <div class="stat-value" style="color: #0f6b56;">${fmt(record.totalQty)}</div>
-          <div class="stat-sub">100% verified physical stock</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-label">Unique Master SKUs</div>
-          <div class="stat-value">${fmt(record.totalSkus)}</div>
-          <div class="stat-sub">Aggregated across all channels</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-label">Request ID Reference</div>
-          <div class="stat-value" style="font-size: 15px; font-family: monospace; padding-top: 6px;">${record.requestId}</div>
-          <div class="stat-sub">Traceability key</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-label">Dropship Warehouse</div>
-          <div class="stat-value" style="font-size: 20px;">${record.dropshipWarehouseId}</div>
-          <div class="stat-sub">Default inventory node</div>
-        </div>
-      </div>
-
+      <!-- Master SKU Breakdown Table -->
       <div class="section-title">Master Product SKUs Breakdown (${record.totalSkus} Total)</div>
       <table class="data-table">
         <thead>
@@ -618,7 +707,7 @@ Generated automatically by Return App: https://return.youthnic.shop
             .map(
               (item) => `
             <tr>
-              <td><strong>${item.sku}</strong></td>
+              <td><strong style="font-family: ui-monospace, SFMono-Regular, monospace;">${item.sku}</strong></td>
               <td style="text-align: right; font-weight: 700; color: #0f6b56;">${fmt(item.qty)}</td>
               <td>
                 ${Object.entries(item.marketplaces)
@@ -631,18 +720,20 @@ Generated automatically by Return App: https://return.youthnic.shop
         </tbody>
       </table>
 
-      ${record.skuBreakdown.length > 30 ? `<p style="font-size: 12px; color: #64748b;">...and ${record.skuBreakdown.length - 30} more SKUs in the attached CSV.</p>` : ""}
+      ${record.skuBreakdown.length > 30 ? `<p style="font-size: 12px; color: #64748b; margin-top: 6px;">...and ${record.skuBreakdown.length - 30} more SKUs in the attached CSV.</p>` : ""}
 
       <div style="background: #f8fafc; border: 1px dashed #cbd5e1; border-radius: 8px; padding: 14px 18px; margin-top: 20px;">
-        <span style="font-size: 12px; font-weight: 600; color: #475569;">📎 Attachment Included in this Email:</span><br />
+        <span style="font-size: 12px; font-weight: 700; color: #475569;">📎 Attachment Included in this Email:</span><br />
         <code style="font-size: 13px; font-weight: 700; color: #0f172a;">UpdateInStockQtyAnd_orLastPurchasePrice.csv</code>
         <br />
-        ${record.storageUrl ? `<small style="color: #64748b;">Archived in Firebase Storage for 180 days: <a href="${record.storageUrl}" style="color: #0f6b56; font-weight: 600;">Download Archive</a></small>` : ""}
+        <small style="color: #64748b;">Archived in Firebase Storage for 180 days${record.storageUrl ? `: <a href="${record.storageUrl}" style="color: #0f6b56; font-weight: 600;">Download Archive</a>` : ""}</small>
       </div>
     </div>
+
+    <!-- Footer -->
     <div class="footer">
-      Generated automatically by Youthnic Return Management App · Scheduled daily at 7:45 PM IST<br />
-      Portal: <a href="https://return.youthnic.shop/register" style="color: #0f6b56; font-weight: 600;">return.youthnic.shop/register</a>
+      Generated automatically by <strong>TaskFlow Pro · Return Scan</strong> (Youthnic · VB Exports)<br />
+      Scheduled daily at <strong>11:00 PM IST (23:00)</strong> · Portal: <a href="https://return.youthnic.shop/register" style="color: #0f6b56; font-weight: 600;">return.youthnic.shop/register</a>
     </div>
   </div>
 </body>
@@ -719,7 +810,7 @@ export async function sendOmsguruDailyEmail(
   return { sent: true, recipients, cc }
 }
 
-// Scheduled runner: triggers daily at configured time (default 19:45 IST)
+// Scheduled runner: triggers daily at configured time (default 23:00 IST / 11:00 PM)
 export async function runScheduledOmsguruUpdate(
   db: pg.Pool,
   options: { force?: boolean } = {},
@@ -736,7 +827,7 @@ export async function runScheduledOmsguruUpdate(
     }
 
     const ist = getIstDateParts()
-    const currentTime = ist.timeStr // e.g. "19:45"
+    const currentTime = ist.timeStr // e.g. "23:00"
     const isDue = options.force || currentTime === config.dailyTime
 
     if (!isDue) {

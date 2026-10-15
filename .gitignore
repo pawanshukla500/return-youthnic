@@ -1,5 +1,6 @@
 node_modules
 dist
+desktop-agent/dist
 server/dist.js
 .env
 .env.*

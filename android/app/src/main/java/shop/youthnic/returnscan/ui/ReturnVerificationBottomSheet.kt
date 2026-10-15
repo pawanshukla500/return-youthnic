@@ -341,6 +341,16 @@ class ReturnVerificationBottomSheet(
 
         binding.btnCancelVerification.setOnClickListener { dismiss() }
 
+        binding.btnFileClaim.setOnClickListener {
+            dismiss()
+            val intent = Intent(activity, ClaimCaptureActivity::class.java).apply {
+                putExtra(ClaimCaptureActivity.EXTRA_TRACKING_AWB, lookup.trackingNumber)
+                putExtra(ClaimCaptureActivity.EXTRA_ORDER_ID, lookup.orderId)
+                putExtra(ClaimCaptureActivity.EXTRA_MARKETPLACE, lookup.marketplace)
+            }
+            activity.startActivity(intent)
+        }
+
         binding.btnSaveVerification.setOnClickListener {
             if (validateInputs()) {
                 binding.btnSaveVerification.isEnabled = false
