@@ -37,7 +37,7 @@ class ClaimVideoCaptureActivity : AppCompatActivity() {
             val file = outputFile ?: return
             val elapsed = System.currentTimeMillis() - startedAt
             val sizeMb = file.length().toDouble() / (1024.0 * 1024.0)
-            binding.tvVideoStatus.text = "Recording 720p MP4 · ${TimeUnit.MILLISECONDS.toSeconds(elapsed)}s"
+            binding.tvVideoStatus.text = "Recording 480p SD MP4 · ${TimeUnit.MILLISECONDS.toSeconds(elapsed)}s"
             binding.tvVideoSize.text = String.format("%.1f / 25 MB", sizeMb)
             if (file.length() >= STOP_AT_BYTES || elapsed >= MAX_DURATION_MS) {
                 recording?.stop()
@@ -65,8 +65,8 @@ class ClaimVideoCaptureActivity : AppCompatActivity() {
             val recorder = Recorder.Builder()
                 .setQualitySelector(
                     QualitySelector.fromOrderedList(
-                        listOf(Quality.HD),
-                        FallbackStrategy.lowerQualityOrHigherThan(Quality.HD)
+                        listOf(Quality.SD, Quality.LOWEST),
+                        FallbackStrategy.lowerQualityOrHigherThan(Quality.SD)
                     )
                 )
                 .build()
@@ -120,6 +120,6 @@ class ClaimVideoCaptureActivity : AppCompatActivity() {
         const val EXTRA_FILE_PATH = "claim_video_file_path"
         const val MAX_BYTES = 25L * 1024L * 1024L
         private const val STOP_AT_BYTES = 24L * 1024L * 1024L
-        private const val MAX_DURATION_MS = 75_000L
+        private const val MAX_DURATION_MS = 150_000L
     }
 }

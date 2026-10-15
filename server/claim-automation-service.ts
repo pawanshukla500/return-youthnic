@@ -701,9 +701,12 @@ export async function syncClaimTicketToRegister(
     )
   }
 
-  // Ensure scan status is 'issue'
+  // Ensure scan outcome is 'issue' and status is 'Draft' or 'Raised'
   await dbOrClient.query(
-    `UPDATE receipt_scans SET status = 'issue' WHERE id = $1 AND status <> 'issue'`,
+    `UPDATE receipt_scans
+     SET outcome = 'issue',
+         status = CASE WHEN status = 'Clear' THEN 'Draft' ELSE status END
+     WHERE id = $1`,
     [scanId],
   )
 
@@ -716,7 +719,11 @@ export async function syncClaimTicketToRegister(
   let itemId: number
   if (!itemRes.rows[0]) {
     const erInfo = await dbOrClient.query(
-      `SELECT eri.id AS eri_id, eri.order_line_id, eri.display_order_item_id, s.code AS sku_code
+      `SELECT eri.id AS eri_id, eri.order_line_id, eri.display_order_item_id,
+              eri.marketplace_sku_identifier, eri.channel_listing_id,
+              COALESCE(NULLIF(eri.label, ''), s.name, 'Returned Product') AS product_name,
+              COALESCE(s.code, '') AS sku_code,
+              eri.qty
        FROM receipt_scans rs
        JOIN expected_returns er ON er.id = rs.expected_return_id
        LEFT JOIN expected_return_items eri ON eri.expected_return_id = er.id
@@ -728,12 +735,18 @@ export async function syncClaimTicketToRegister(
     const orderItemId = erInfo.rows[0]?.display_order_item_id || erInfo.rows[0]?.order_line_id || ""
     const skuCode = erInfo.rows[0]?.sku_code || ""
     const eriId = erInfo.rows[0]?.eri_id ? Number(erInfo.rows[0].eri_id) : null
+    const productName = erInfo.rows[0]?.product_name || "Returned Product"
+    const expectedQty = Math.max(1, Number(erInfo.rows[0]?.qty || 1))
 
     const itemInsert = await dbOrClient.query(
-      `INSERT INTO receipt_scan_items (receipt_scan_id, expected_return_item_id, line_no, order_item_id, sku, scanned_qty, accepted_qty, created_by)
-       VALUES ($1, $2, 1, $3, $4, 1, 0, $5)
+      `INSERT INTO receipt_scan_items (
+         receipt_scan_id, expected_return_item_id, line_no, order_item_id,
+         marketplace_sku, product_sku, product_sku_source, product_name,
+         expected_qty, received_qty, verified
+       )
+       VALUES ($1, $2, 1, $3, $4, $5, 'unrecorded', $6, $7, 1, true)
        RETURNING id`,
-      [scanId, eriId, orderItemId, skuCode, actorId],
+      [scanId, eriId, orderItemId, skuCode, skuCode, productName, expectedQty],
     )
     itemId = Number(itemInsert.rows[0].id)
   } else {
