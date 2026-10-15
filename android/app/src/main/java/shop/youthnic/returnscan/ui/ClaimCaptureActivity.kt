@@ -1,7 +1,10 @@
 package shop.youthnic.returnscan.ui
 
 import android.app.Activity
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Intent
+import android.content.res.ColorStateList
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Bundle
@@ -51,6 +54,17 @@ class ClaimCaptureActivity : AppCompatActivity() {
     private var receivedBad = 0
     private var acceptedGood = 0
     private var acceptedBad = 0
+
+    // Meesho Issue Options
+    private val meeshoIssues = listOf(
+        Pair("wrong_return", "I have received wrong return"),
+        Pair("missing_items", "Item/s are missing in my return"),
+        Pair("wrong_barcode_rto", "I have received a wrong barcoded package in RTO"),
+        Pair("damaged_return", "I have received damaged return"),
+        Pair("used_product", "I have received used product as return")
+    )
+    private var selectedIssueCode = "wrong_return"
+    private var selectedIssueLabel = "I have received wrong return"
 
     // Captured evidence files keyed by fieldKey
     private data class CapturedFile(
@@ -116,6 +130,7 @@ class ClaimCaptureActivity : AppCompatActivity() {
         binding = ActivityClaimCaptureBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
+        setupMarketplaceDropdown()
         setupListeners()
 
         val initialAwb = intent.getStringExtra(EXTRA_TRACKING_AWB).orEmpty()
@@ -125,6 +140,56 @@ class ClaimCaptureActivity : AppCompatActivity() {
         if (query.isNotBlank()) {
             binding.etClaimSearch.setText(query)
             searchReturn(query)
+        }
+    }
+
+    private fun setupMarketplaceDropdown() {
+        val marketplaces = listOf(
+            "Meesho (Active & Configured)",
+            "Flipkart (Upcoming)",
+            "Myntra (Upcoming)",
+            "Amazon (Upcoming)",
+            "Ajio (Upcoming)"
+        )
+        binding.spinnerMarketplace.adapter = ArrayAdapter(
+            this,
+            android.R.layout.simple_spinner_dropdown_item,
+            marketplaces
+        )
+        binding.spinnerMarketplace.setSelection(0)
+        binding.spinnerMarketplace.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                if (position != 0) {
+                    showMessage("Only Meesho claims filing is currently active.")
+                    binding.spinnerMarketplace.setSelection(0)
+                }
+            }
+            override fun onNothingSelected(parent: AdapterView<*>?) {}
+        }
+
+        // Setup fixed State of the Packet (always Tampered)
+        binding.spinnerStateOfPacket.adapter = ArrayAdapter(
+            this,
+            android.R.layout.simple_spinner_dropdown_item,
+            listOf("Tampered")
+        )
+        binding.spinnerStateOfPacket.setSelection(0)
+
+        // Setup Issue Dropdown
+        val issueLabels = meeshoIssues.map { it.second }
+        binding.spinnerMeeshoIssue.adapter = ArrayAdapter(
+            this,
+            android.R.layout.simple_spinner_dropdown_item,
+            issueLabels
+        )
+        binding.spinnerMeeshoIssue.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                val pair = meeshoIssues.getOrNull(position) ?: meeshoIssues[0]
+                selectedIssueCode = pair.first
+                selectedIssueLabel = pair.second
+                updateDescriptionAndTitle(selectedIssueCode)
+            }
+            override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
     }
 
@@ -156,6 +221,15 @@ class ClaimCaptureActivity : AppCompatActivity() {
                 putExtra(BarcodeScanCaptureActivity.EXTRA_TITLE, "Scan AWB / Order Barcode")
             }
             scanBarcodeLauncher.launch(intent)
+        }
+
+        binding.btnCopySubOrder.setOnClickListener {
+            val text = binding.etSubOrderNumber.text?.toString()?.trim().orEmpty()
+            if (text.isNotBlank()) {
+                val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
+                clipboard.setPrimaryClip(ClipData.newPlainText("Sub Order Number", text))
+                showMessage("Sub Order Number copied: $text")
+            }
         }
 
         binding.tabAcceptReturn.setOnClickListener {
@@ -204,7 +278,7 @@ class ClaimCaptureActivity : AppCompatActivity() {
         binding.btnScanPacketId.setOnClickListener {
             targetScanField = TARGET_PACKET_ID
             val intent = Intent(this, BarcodeScanCaptureActivity::class.java).apply {
-                putExtra(BarcodeScanCaptureActivity.EXTRA_TITLE, "Scan Packet Barcode")
+                putExtra(BarcodeScanCaptureActivity.EXTRA_TITLE, "Scan Flyer / Packet Barcode")
             }
             scanBarcodeLauncher.launch(intent)
         }
@@ -261,7 +335,6 @@ class ClaimCaptureActivity : AppCompatActivity() {
             binding.tvProductSku.text = item.masterSku.ifBlank { item.sku }
             binding.tvItemQtyBadge.text = "Qty: ${item.quantity}"
 
-            // Load reference catalog image
             if (item.imageUrl.isNotBlank()) {
                 lifecycleScope.launch {
                     val bmp = imageCache.getOrFetch(item.imageUrl)
@@ -289,13 +362,62 @@ class ClaimCaptureActivity : AppCompatActivity() {
         acceptedBad = 0
         updateSteppersUi()
 
-        // Populate Templates
-        setupTemplates(data)
+        // Pre-fill Meesho Support Form Inputs
+        binding.etSubOrderNumber.setText(data.subOrderId.ifBlank { data.orderId })
+        binding.etAwbNumber.setText(data.awb.ifBlank { data.trackingNumber })
+        binding.etPacketId.setText(data.packetId.ifBlank { "NA" })
 
-        // Pre-fill Step 2 inputs
-        binding.etPacketId.setText(data.packetId)
-        binding.etAwbNumber.setText(data.trackingNumber)
+        // Pre-select matching issue if detected in scan
+        val detectedIssue = data.standardReasons.firstOrNull()?.code
+        if (!detectedIssue.isNullOrBlank()) {
+            val idx = meeshoIssues.indexOfFirst { it.first == detectedIssue }
+            if (idx >= 0) {
+                binding.spinnerMeeshoIssue.setSelection(idx)
+                selectedIssueCode = meeshoIssues[idx].first
+                selectedIssueLabel = meeshoIssues[idx].second
+            }
+        }
 
+        // Display Turnaround Time (TAT) Banner (7 Calendar Days Inclusive for Meesho)
+        binding.cardClaimTatBanner.visibility = View.VISIBLE
+        val daysRem = data.daysRemaining
+        val recDate = data.receivedDate ?: "Today"
+        val dueDate = data.dueDate ?: "In 7 days"
+        if (data.overdue || (daysRem != null && daysRem < 0)) {
+            val overdueBy = if (daysRem != null) -daysRem else 1
+            binding.tvTatTitle.text = "⚠️ Meesho Claim TAT Overdue"
+            binding.tvTatBadge.text = "Overdue"
+            binding.tvTatSubtitle.text = "Received: $recDate · Claim Due: $dueDate · Expired by $overdueBy day(s)"
+            binding.cardClaimTatBanner.setCardBackgroundColor(0xFFFEF2F2.toInt())
+            binding.cardClaimTatBanner.strokeColor = 0xFFFECACA.toInt()
+            binding.tvTatBadge.backgroundTintList = ColorStateList.valueOf(0xFFDC2626.toInt())
+            binding.tvTatTitle.setTextColor(0xFF991B1B.toInt())
+            binding.tvTatSubtitle.setTextColor(0xFFB91C1C.toInt())
+        } else {
+            val remaining = daysRem ?: 7
+            binding.tvTatTitle.text = "⏱️ Meesho Claim TAT: 7 Days Inclusive"
+            binding.tvTatBadge.text = "$remaining days left"
+            binding.tvTatSubtitle.text = "Received: $recDate · File by: $dueDate · $remaining day(s) remaining"
+            binding.cardClaimTatBanner.setCardBackgroundColor(0xFFF0FDF4.toInt())
+            binding.cardClaimTatBanner.strokeColor = 0xFF86EFAC.toInt()
+            binding.tvTatBadge.backgroundTintList = ColorStateList.valueOf(0xFF22C55E.toInt())
+            binding.tvTatTitle.setTextColor(0xFF166534.toInt())
+            binding.tvTatSubtitle.setTextColor(0xFF15803D.toInt())
+        }
+
+        updateDescriptionAndTitle(selectedIssueCode)
+
+        // Select or create Meesho Evidence Template
+        selectedTemplate = data.templates.firstOrNull { it.name.contains("Meesho", ignoreCase = true) }
+            ?: data.templates.firstOrNull()
+            ?: ClaimTemplate(
+                id = 1,
+                name = "Meesho Claim Evidence",
+                description = "Standard 5-slot evidence for Meesho Support tickets",
+                fields = getMeeshoStandardEvidenceFields()
+            )
+
+        buildDynamicEvidenceCards(selectedTemplate?.fields ?: getMeeshoStandardEvidenceFields())
         showStep(1)
     }
 
@@ -306,61 +428,101 @@ class ClaimCaptureActivity : AppCompatActivity() {
         binding.tvAcceptedBadCount.text = acceptedBad.toString()
     }
 
-    private fun setupTemplates(data: ClaimReturnLookup) {
-        val templates = data.templates
-        if (templates.isEmpty()) return
+    private fun updateDescriptionAndTitle(code: String) {
+        val data = lookupData ?: return
+        val subOrder = binding.etSubOrderNumber.text?.toString()?.trim().orEmpty().ifBlank { data.subOrderId.ifBlank { data.orderId } }
+        val awb = binding.etAwbNumber.text?.toString()?.trim().orEmpty().ifBlank { data.awb.ifBlank { data.trackingNumber } }
+        val packetId = binding.etPacketId.text?.toString()?.trim().orEmpty().ifBlank { data.packetId.ifBlank { "NA" } }
+        val item = data.items.firstOrNull()
+        val masterSku = item?.masterSku?.ifBlank { item.sku }.orEmpty()
 
-        val templateTypeLabels = listOf("Standard Return Claim (${templates.size} available)")
-        binding.spinnerClaimTemplateType.adapter = ArrayAdapter(
-            this,
-            android.R.layout.simple_spinner_dropdown_item,
-            templateTypeLabels
-        )
+        binding.etClaimTitle.setText("$selectedIssueLabel - Sub Order $subOrder")
 
-        val templateNames = templates.map { it.name }
-        binding.spinnerClaimTemplate.adapter = ArrayAdapter(
-            this,
-            android.R.layout.simple_spinner_dropdown_item,
-            templateNames
-        )
-
-        binding.spinnerClaimTemplate.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
-                selectedTemplate = templates.getOrNull(position)
-                applyTemplateDefaults(selectedTemplate)
+        val desc = when (code) {
+            "missing_items" -> {
+                val missingDetails = if (data.missingItems.isNotEmpty()) {
+                    data.missingItems.joinToString(", ") { "${it.label} (${it.quantity} × ₹${String.format("%.2f", it.amountEach)} = ₹${String.format("%.2f", it.amount)})" }
+                } else {
+                    "Missing item / component"
+                }
+                val amountStr = if (data.missingAmount > 0) "Total claim amount: ₹${String.format("%.2f", data.missingAmount)}. " else ""
+                "Item/s are missing in my return: $missingDetails. ${amountStr}Sub Order ID: $subOrder. AWB Number: $awb. State of the packet: Tampered. Packet ID: $packetId. We have not received the specified items/components in the return package."
             }
-            override fun onNothingSelected(parent: AdapterView<*>?) {}
+            "wrong_barcode_rto" -> {
+                "I have received a wrong barcoded package in RTO. Sub Order ID: $subOrder. AWB Number: $awb. State of the packet: Tampered. Packet ID: $packetId. Barcode label on RTO package does not match our return manifest. Please check attached barcode image and waybill."
+            }
+            "damaged_return" -> {
+                "I have received damaged return. Sub Order ID: $subOrder. AWB Number: $awb. State of the packet: Tampered. Packet ID: $packetId. Product arrived in physically damaged / torn condition. Please check attached photos and waybill."
+            }
+            "used_product" -> {
+                "I have received used product as return. Sub Order ID: $subOrder. AWB Number: $awb. State of the packet: Tampered. Packet ID: $packetId. Returned item shows evident signs of prior use / wear / odor / missing tags. Evidence attached."
+            }
+            else -> {
+                "I have received the wrong return. Sub Order ID: $subOrder. AWB Number: $awb. State of the packet: Tampered. Packet ID: $packetId. Received completely different product inside package instead of ordered master SKU ($masterSku). Please refer to the attached unboxing video and reverse waybill."
+            }
         }
-
-        selectedTemplate = templates.firstOrNull()
-        applyTemplateDefaults(selectedTemplate)
+        binding.etClaimContent.setText(desc)
     }
 
-    private fun applyTemplateDefaults(tpl: ClaimTemplate?) {
-        if (tpl == null) return
-        val data = lookupData ?: return
-
-        // Set suggested title & content from reason matching template
-        val reason = data.standardReasons.firstOrNull { it.label.contains(tpl.name, ignoreCase = true) }
-            ?: data.standardReasons.firstOrNull()
-
-        if (binding.etClaimTitle.text.isNullOrBlank()) {
-            binding.etClaimTitle.setText(reason?.suggestedTitle ?: "Claim for Order ${data.orderId}")
-        }
-        if (binding.etClaimContent.text.isNullOrBlank()) {
-            binding.etClaimContent.setText(reason?.suggestedContent ?: tpl.description)
-        }
-
-        // Build Step 2 dynamic evidence slots according to template fields
-        buildDynamicEvidenceCards(tpl.fields)
+    private fun getMeeshoStandardEvidenceFields(): List<ClaimFieldTemplate> {
+        return listOf(
+            ClaimFieldTemplate(
+                fieldKey = "barcode_image",
+                fieldLabel = "Barcode Image",
+                fieldType = "image",
+                required = false,
+                minCount = 0,
+                maxCount = 1,
+                maxFileSizeMb = 25
+            ),
+            ClaimFieldTemplate(
+                fieldKey = "product_images",
+                fieldLabel = "Image of product received",
+                fieldType = "image",
+                required = true,
+                minCount = 1,
+                maxCount = 10,
+                maxFileSizeMb = 25
+            ),
+            ClaimFieldTemplate(
+                fieldKey = "reverse_waybill",
+                fieldLabel = "Reverse Waybill",
+                fieldType = "image",
+                required = true,
+                minCount = 1,
+                maxCount = 1,
+                maxFileSizeMb = 25
+            ),
+            ClaimFieldTemplate(
+                fieldKey = "unboxing_video",
+                fieldLabel = "Unpacking Video",
+                fieldType = "video",
+                required = true,
+                minCount = 1,
+                maxCount = 1,
+                maxFileSizeMb = 25
+            ),
+            ClaimFieldTemplate(
+                fieldKey = "attachments",
+                fieldLabel = "Attachments",
+                fieldType = "document",
+                required = false,
+                minCount = 0,
+                maxCount = 5,
+                maxFileSizeMb = 25
+            )
+        )
     }
 
     private fun buildDynamicEvidenceCards(fields: List<ClaimFieldTemplate>) {
         binding.layoutDynamicEvidenceCards.removeAllViews()
         evidenceCardBindings.clear()
 
+        // Ensure all 5 standard Meesho slots exist if template is generic
+        val effectiveFields = if (fields.size < 4) getMeeshoStandardEvidenceFields() else fields
+
         val inflater = LayoutInflater.from(this)
-        for (field in fields) {
+        for (field in effectiveFields) {
             val card = ItemClaimEvidenceCardBinding.inflate(inflater, binding.layoutDynamicEvidenceCards, false)
             val isRequired = field.required
             val reqSuffix = if (isRequired) " *" else ""
@@ -369,7 +531,7 @@ class ClaimCaptureActivity : AppCompatActivity() {
 
             val isVideo = field.fieldType == "video"
             if (isVideo) {
-                card.btnCapturePrimary.text = "Record Video"
+                card.btnCapturePrimary.text = "Record Video (720p HD)"
                 card.btnCapturePrimary.setOnClickListener {
                     pendingFieldKey = field.fieldKey
                     recordVideoLauncher.launch(Intent(this, ClaimVideoCaptureActivity::class.java))
@@ -480,10 +642,28 @@ class ClaimCaptureActivity : AppCompatActivity() {
             showMessage("Please find and select a return first.")
             return false
         }
+        val subOrder = binding.etSubOrderNumber.text?.toString()?.trim().orEmpty()
+        if (subOrder.isBlank()) {
+            showMessage("Sub Order Number is required.")
+            binding.etSubOrderNumber.requestFocus()
+            return false
+        }
+        val awb = binding.etAwbNumber.text?.toString()?.trim().orEmpty()
+        if (awb.isBlank()) {
+            showMessage("AWB Number is required.")
+            binding.etAwbNumber.requestFocus()
+            return false
+        }
         val title = binding.etClaimTitle.text?.toString()?.trim().orEmpty()
         if (title.isBlank()) {
             showMessage("Please enter a Claim Title.")
             binding.etClaimTitle.requestFocus()
+            return false
+        }
+        val desc = binding.etClaimContent.text?.toString()?.trim().orEmpty()
+        if (desc.isBlank()) {
+            showMessage("Please enter a Description.")
+            binding.etClaimContent.requestFocus()
             return false
         }
         return true
@@ -499,33 +679,38 @@ class ClaimCaptureActivity : AppCompatActivity() {
             binding.tvClaimScreenTitle.text = "Upload Images"
             binding.layoutStepReturnDetails.visibility = View.GONE
             binding.layoutStepUploadImages.visibility = View.VISIBLE
+
+            // Update Step 2 summary card from Step 1 values
+            val subOrder = binding.etSubOrderNumber.text?.toString()?.trim().orEmpty()
+            val awb = binding.etAwbNumber.text?.toString()?.trim().orEmpty()
+            val packetId = binding.etPacketId.text?.toString()?.trim().orEmpty().ifBlank { "NA" }
+
+            binding.tvStep2IssueLabel.text = selectedIssueLabel
+            binding.tvStep2SubOrderAwb.text = "Sub Order: $subOrder · AWB: $awb"
+            binding.tvStep2PacketInfo.text = "State: Tampered · Packet ID: $packetId"
         }
     }
 
     private fun submitCompleteClaim() {
         val data = lookupData ?: return
-        val tpl = selectedTemplate
 
-        // Validate required fields
-        if (tpl != null) {
-            for (field in tpl.fields) {
-                if (field.required) {
-                    val files = capturedFiles[field.fieldKey]
-                    if (files.isNullOrEmpty()) {
-                        showMessage("Please provide required evidence: ${field.fieldLabel}")
-                        return
-                    }
-                }
+        // Validate required evidence fields (Product images, Reverse Waybill, Unpacking Video)
+        val requiredKeys = listOf(
+            Pair("product_images", "Image of product received"),
+            Pair("reverse_waybill", "Reverse Waybill"),
+            Pair("unboxing_video", "Unpacking Video")
+        )
+        for ((key, label) in requiredKeys) {
+            val files = capturedFiles[key]
+            if (files.isNullOrEmpty()) {
+                showMessage("Please provide required evidence: $label")
+                return
             }
         }
 
-        val packetId = binding.etPacketId.text?.toString()?.trim().orEmpty()
+        val subOrder = binding.etSubOrderNumber.text?.toString()?.trim().orEmpty()
         val awb = binding.etAwbNumber.text?.toString()?.trim().orEmpty()
-        if (awb.isBlank()) {
-            showMessage("AWB Number is required.")
-            binding.etAwbNumber.requestFocus()
-            return
-        }
+        val packetId = binding.etPacketId.text?.toString()?.trim().orEmpty().ifBlank { "NA" }
 
         binding.progressClaim.visibility = View.VISIBLE
         binding.btnSubmitClaim.isEnabled = false
@@ -538,18 +723,22 @@ class ClaimCaptureActivity : AppCompatActivity() {
                     put("receiptScanId", data.scanId)
                 }
                 put("expectedReturnId", data.expectedReturnId)
-                put("claimReason", tpl?.name ?: "Wrong Product")
+                put("claimReason", selectedIssueLabel)
+                put("marketplaceIssueCode", selectedIssueCode)
                 put("claimTitle", binding.etClaimTitle.text?.toString()?.trim().orEmpty())
                 put("claimDescription", binding.etClaimContent.text?.toString()?.trim().orEmpty())
                 put("claimContent", binding.etClaimContent.text?.toString()?.trim().orEmpty())
                 put("remarks", binding.etReturnComment.text?.toString()?.trim().orEmpty())
-                put("claimTemplateId", tpl?.id ?: 1)
+                put("claimTemplateId", selectedTemplate?.id ?: 1)
                 put("customerName", data.customerName)
                 put("totalPrice", data.totalPrice)
                 put("shippedDate", data.shippedDate ?: "")
                 put("sku", item?.masterSku ?: item?.sku ?: "")
+                put("subOrderId", subOrder)
+                put("packetState", "Tampered")
                 put("packetId", packetId)
                 put("awb", awb)
+                put("missingAmount", data.missingAmount)
             }
 
             val createResult = api.unifiedCreateClaim(body)
@@ -562,7 +751,7 @@ class ClaimCaptureActivity : AppCompatActivity() {
 
                 MaterialAlertDialogBuilder(this@ClaimCaptureActivity)
                     .setTitle("Claim Submitted")
-                    .setMessage("Claim #$claimId created successfully! Evidence files are saved safely on device and uploading in background.")
+                    .setMessage("Meesho claim #$claimId created successfully! Evidence files are saved safely on device and uploading in background.")
                     .setPositiveButton("Done") { _, _ -> finish() }
                     .setCancelable(false)
                     .show()
@@ -597,8 +786,8 @@ class ClaimCaptureActivity : AppCompatActivity() {
 
     private fun showInfoDialog() {
         MaterialAlertDialogBuilder(this)
-            .setTitle("Claim Evidence Guidelines")
-            .setMessage("Capture clear photos of the shipping label, packet barcode, reverse waybill, and received product.\nFor Myntra, Meesho, and Ajio, an unboxing video is required.")
+            .setTitle("Meesho Claim Guidelines")
+            .setMessage("For Meesho Support tickets:\n• State of the packet is always Tampered.\n• Turnaround time (TAT) is 7 calendar days inclusive.\n• Unpacking video must be recorded in 720p MP4 and under 25 MB.\n• Images of received product and reverse waybill are mandatory.")
             .setPositiveButton("OK", null)
             .show()
     }

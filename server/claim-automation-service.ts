@@ -3,6 +3,17 @@ import type pg from "pg"
 import { accountCondition, type AccountScope } from "./access.js"
 import { ServiceError, type Actor } from "./register-service.js"
 import { listClaimTemplates } from "./claims-service.js"
+import {
+  MEESHO_PACKET_STATE,
+  MEESHO_TAT_DAYS,
+  MEESHO_ISSUES,
+  type MeeshoIssueCode,
+  istDate,
+  addDays,
+  daysBetween,
+  meeshoClaimDueDate,
+  meeshoClaimDescription,
+} from "./meesho-claims.js"
 
 // AES-256-GCM encryption for marketplace portal credentials
 const ENCRYPTION_KEY = crypto
@@ -838,8 +849,11 @@ export type ClaimReturnLookupResult = {
   expectedReturnId: number
   marketplace: string
   marketplaceId: number
+  subOrderId: string
   orderId: string
   trackingNumber: string
+  awb: string
+  packetState: string
   packetId: string
   customerName: string
   totalPrice: number
@@ -847,6 +861,18 @@ export type ClaimReturnLookupResult = {
   returnStatus: string
   shippedDate: string | null
   daysSinceShipped: number
+  tatDays: number
+  receivedDate: string | null
+  dueDate: string | null
+  daysRemaining: number | null
+  overdue: boolean
+  missingItems: Array<{
+    label: string
+    quantity: number
+    amountEach: number
+    amount: number
+  }>
+  missingAmount: number
   existingClaim: {
     id: number
     status: string
@@ -861,6 +887,7 @@ export type ClaimReturnLookupResult = {
     title: string
     quantity: number
     imageUrl: string
+    subOrderId: string
   }>
   templates: Array<{
     id: number
@@ -933,10 +960,12 @@ export async function lookupReturnForClaim(
   const expectedReturnId = Number(row.expected_return_id)
   const resolvedMktId = Number(row.marketplace_id)
   const marketplaceName = String(row.marketplace)
+  const isMeesho = marketplaceName.toLowerCase() === "meesho"
 
-  // Fetch items for this expected return
+  // Fetch items for this expected return including Sub Order ID
   const itemsRes = await db.query(
-    `SELECT eri.id, eri.sku, eri.master_sku, eri.product_title, eri.quantity, eri.catalog_image_url
+    `SELECT eri.id, eri.sku, eri.master_sku, eri.product_title, eri.quantity, eri.catalog_image_url,
+            COALESCE(NULLIF(eri.display_order_item_id, ''), eri.order_line_id, '') AS sub_order_id
      FROM expected_return_items eri
      WHERE eri.expected_return_id = $1
      ORDER BY eri.id ASC`,
@@ -950,7 +979,55 @@ export async function lookupReturnForClaim(
     title: String(i.product_title || "Returned Product"),
     quantity: Math.max(1, Number(i.quantity || 1)),
     imageUrl: String(i.catalog_image_url || ""),
+    subOrderId: String(i.sub_order_id || ""),
   }))
+
+  // If already scanned, check receipt_scan_items and issues for sub_order_id and missing components
+  let scannedSubOrderId = ""
+  const missingItems: Array<{ label: string; quantity: number; amountEach: number; amount: number }> = []
+  if (row.scan_id) {
+    const scanItemsRes = await db.query(
+      `SELECT rsi.id, rsi.order_item_id, rsi.product_name,
+              rsi_issue.category_code, rsi_issue.sub_issue_label, rsi_issue.qty,
+              COALESCE(option.claim_amount, 0)::numeric AS claim_amount
+       FROM receipt_scan_items rsi
+       LEFT JOIN receipt_scan_issues rsi_issue ON rsi_issue.receipt_scan_item_id = rsi.id
+       LEFT JOIN missing_component_options option ON option.id = rsi_issue.sub_issue_id
+       WHERE rsi.receipt_scan_id = $1
+       ORDER BY rsi.line_no, rsi_issue.id`,
+      [row.scan_id],
+    )
+    for (const r of scanItemsRes.rows) {
+      if (r.order_item_id && !scannedSubOrderId) {
+        scannedSubOrderId = String(r.order_item_id).trim()
+      }
+      if (r.category_code === "missing_component") {
+        const qty = Number(r.qty || 0)
+        const each = Number(r.claim_amount || 0)
+        missingItems.push({
+          label: String(r.sub_issue_label || "Missing item"),
+          quantity: qty,
+          amountEach: each,
+          amount: qty * each,
+        })
+      }
+    }
+  }
+
+  const orderId = String(row.order_number || "")
+  const trackingNumber = String(row.tracking_id || "")
+  const subOrderId = scannedSubOrderId || items[0]?.subOrderId || orderId
+  const packetId = String(row.flyer_id || "NA")
+  const missingAmount = missingItems.reduce((acc, it) => acc + it.amount, 0)
+
+  // Turnaround Time (TAT) Calculation: 7 calendar days inclusive for Meesho
+  const receivedAtVal = row.scanned_at || new Date()
+  const receivedDate = istDate(receivedAtVal)
+  const tatDays = isMeesho ? MEESHO_TAT_DAYS : 7
+  const dueDate = isMeesho ? meeshoClaimDueDate(receivedAtVal) : addDays(receivedDate, tatDays - 1)
+  const today = istDate(new Date())
+  const daysRemaining = daysBetween(today, dueDate)
+  const overdue = daysRemaining < 0
 
   // Fetch claim templates and fields for this marketplace
   const templates = await listClaimTemplates(db, scope)
@@ -979,55 +1056,74 @@ export async function lookupReturnForClaim(
     daysSinceShipped = Math.max(0, Math.floor(diffMs / (24 * 60 * 60 * 1000)))
   }
 
-  const orderId = String(row.order_number || "")
-  const trackingNumber = String(row.tracking_id || "")
-  const packetId = String(row.flyer_id || trackingNumber || orderId)
+  // Standard claim reasons & pre-filled content (Marketplace-specific for Meesho)
+  let standardReasons: Array<{
+    code: string
+    label: string
+    suggestedTitle: string
+    suggestedContent: string
+  }> = []
 
-  // Standard claim reasons & pre-filled content
-  const standardReasons = [
-    {
-      code: "wrong_product",
-      label: "Wrong Product Received",
-      suggestedTitle: `Wrong Item Received - Order ${orderId}`,
-      suggestedContent: `Received completely different product in return package for Order ${orderId} (AWB: ${trackingNumber}). The received item does not match the ordered master SKU ${items[0]?.masterSku || ""}. Please refer to the attached unboxing evidence and photos.`,
-    },
-    {
-      code: "missing_product",
-      label: "Missing Product / Empty Packet",
-      suggestedTitle: `Missing / Empty Package - Order ${orderId}`,
-      suggestedContent: `Return package was received empty or with missing items for Order ${orderId}. Expected ${items[0]?.quantity || 1} units of SKU ${items[0]?.masterSku || ""}. Outer packet ID is ${packetId}. Attached unboxing video shows condition upon opening.`,
-    },
-    {
-      code: "damaged_product",
-      label: "Damaged / Defective Product",
-      suggestedTitle: `Damaged Return Item - Order ${orderId}`,
-      suggestedContent: `Product arrived in damaged / broken condition for Order ${orderId}. See attached photos of product condition and shipping reverse waybill.`,
-    },
-    {
-      code: "used_product",
-      label: "Used / Worn Product Received",
-      suggestedTitle: `Used / Soiled Item - Order ${orderId}`,
-      suggestedContent: `Returned item shows clear signs of prior use / wear / odor / missing tags for Order ${orderId}. Not in resalable condition. Evidence attached.`,
-    },
-    {
-      code: "quantity_mismatch",
-      label: "Quantity Mismatch",
-      suggestedTitle: `Quantity Shortage - Order ${orderId}`,
-      suggestedContent: `Short shipment received in return for Order ${orderId}. Expected quantity does not match physically received quantity.`,
-    },
-    {
-      code: "wrong_barcode_rto",
-      label: "Wrong Barcode / RTO Mismatch",
-      suggestedTitle: `Barcode Mismatch RTO - Order ${orderId}`,
-      suggestedContent: `Barcode or tracking label on package does not match our return manifest. Packet ID: ${packetId}. Reverse Waybill: ${trackingNumber}.`,
-    },
-    {
-      code: "other",
-      label: "Other Return Issue",
-      suggestedTitle: `Return Issue - Order ${orderId}`,
-      suggestedContent: `Issue observed on returned shipment for Order ${orderId}. Evidence attached.`,
-    },
-  ]
+  if (isMeesho) {
+    const meeshoBase = {
+      subOrderId,
+      awb: trackingNumber,
+      packetId,
+      missingItems,
+      missingAmount,
+    }
+    standardReasons = (Object.keys(MEESHO_ISSUES) as MeeshoIssueCode[]).map((code) => ({
+      code,
+      label: MEESHO_ISSUES[code],
+      suggestedTitle: `${MEESHO_ISSUES[code]} - Sub Order ${subOrderId}`,
+      suggestedContent: meeshoClaimDescription(code, meeshoBase),
+    }))
+  } else {
+    standardReasons = [
+      {
+        code: "wrong_product",
+        label: "Wrong Product Received",
+        suggestedTitle: `Wrong Item Received - Order ${orderId}`,
+        suggestedContent: `Received completely different product in return package for Order ${orderId} (AWB: ${trackingNumber}). The received item does not match the ordered master SKU ${items[0]?.masterSku || ""}. Please refer to the attached unboxing evidence and photos.`,
+      },
+      {
+        code: "missing_product",
+        label: "Missing Product / Empty Packet",
+        suggestedTitle: `Missing / Empty Package - Order ${orderId}`,
+        suggestedContent: `Return package was received empty or with missing items for Order ${orderId}. Expected ${items[0]?.quantity || 1} units of SKU ${items[0]?.masterSku || ""}. Outer packet ID is ${packetId}. Attached unboxing video shows condition upon opening.`,
+      },
+      {
+        code: "damaged_product",
+        label: "Damaged / Defective Product",
+        suggestedTitle: `Damaged Return Item - Order ${orderId}`,
+        suggestedContent: `Product arrived in damaged / broken condition for Order ${orderId}. See attached photos of product condition and shipping reverse waybill.`,
+      },
+      {
+        code: "used_product",
+        label: "Used / Worn Product Received",
+        suggestedTitle: `Used / Soiled Item - Order ${orderId}`,
+        suggestedContent: `Returned item shows clear signs of prior use / wear / odor / missing tags for Order ${orderId}. Not in resalable condition. Evidence attached.`,
+      },
+      {
+        code: "quantity_mismatch",
+        label: "Quantity Mismatch",
+        suggestedTitle: `Quantity Shortage - Order ${orderId}`,
+        suggestedContent: `Short shipment received in return for Order ${orderId}. Expected quantity does not match physically received quantity.`,
+      },
+      {
+        code: "wrong_barcode_rto",
+        label: "Wrong Barcode / RTO Mismatch",
+        suggestedTitle: `Barcode Mismatch RTO - Order ${orderId}`,
+        suggestedContent: `Barcode or tracking label on package does not match our return manifest. Packet ID: ${packetId}. Reverse Waybill: ${trackingNumber}.`,
+      },
+      {
+        code: "other",
+        label: "Other Return Issue",
+        suggestedTitle: `Return Issue - Order ${orderId}`,
+        suggestedContent: `Issue observed on returned shipment for Order ${orderId}. Evidence attached.`,
+      },
+    ]
+  }
 
   return {
     found: true,
@@ -1035,8 +1131,11 @@ export async function lookupReturnForClaim(
     expectedReturnId,
     marketplace: marketplaceName,
     marketplaceId: resolvedMktId,
+    subOrderId,
     orderId,
     trackingNumber,
+    awb: trackingNumber,
+    packetState: MEESHO_PACKET_STATE,
     packetId,
     customerName: String(row.customer_name || "Customer"),
     totalPrice: Number(row.total_price || 0),
@@ -1044,6 +1143,13 @@ export async function lookupReturnForClaim(
     returnStatus: String(row.return_status || "Return Initiated"),
     shippedDate: shippedDateVal ? shippedDateVal.toISOString().split("T")[0] : null,
     daysSinceShipped,
+    tatDays,
+    receivedDate,
+    dueDate,
+    daysRemaining,
+    overdue,
+    missingItems,
+    missingAmount,
     existingClaim: row.claim_id
       ? {
           id: Number(row.claim_id),

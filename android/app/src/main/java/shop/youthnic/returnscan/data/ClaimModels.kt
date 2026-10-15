@@ -164,7 +164,8 @@ data class ClaimProductItem(
     val masterSku: String,
     val title: String,
     val quantity: Int,
-    val imageUrl: String
+    val imageUrl: String,
+    val subOrderId: String = ""
 ) {
     companion object {
         fun fromJson(json: JSONObject) = ClaimProductItem(
@@ -173,7 +174,8 @@ data class ClaimProductItem(
             masterSku = json.optString("masterSku"),
             title = json.optString("title"),
             quantity = json.optInt("quantity", 1),
-            imageUrl = json.optString("imageUrl")
+            imageUrl = json.optString("imageUrl"),
+            subOrderId = json.optString("subOrderId")
         )
     }
 }
@@ -218,8 +220,11 @@ data class ClaimReturnLookup(
     val expectedReturnId: Int,
     val marketplace: String,
     val marketplaceId: Int,
+    val subOrderId: String,
     val orderId: String,
     val trackingNumber: String,
+    val awb: String,
+    val packetState: String,
     val packetId: String,
     val customerName: String,
     val totalPrice: Double,
@@ -227,6 +232,13 @@ data class ClaimReturnLookup(
     val returnStatus: String,
     val shippedDate: String?,
     val daysSinceShipped: Int,
+    val tatDays: Int,
+    val receivedDate: String?,
+    val dueDate: String?,
+    val daysRemaining: Int?,
+    val overdue: Boolean,
+    val missingAmount: Double,
+    val missingItems: List<MeeshoMissingItem>,
     val existingClaim: ExistingClaimSummary?,
     val items: List<ClaimProductItem>,
     val templates: List<ClaimTemplate>,
@@ -252,8 +264,25 @@ data class ClaimReturnLookup(
                 rsnArr.optJSONObject(i)?.let { reasonsList += ClaimStandardReason.fromJson(it) }
             }
 
+            val missingList = mutableListOf<MeeshoMissingItem>()
+            val missingArr = json.optJSONArray("missingItems") ?: JSONArray()
+            for (i in 0 until missingArr.length()) {
+                val m = missingArr.optJSONObject(i) ?: continue
+                missingList += MeeshoMissingItem(
+                    label = m.optString("label"),
+                    quantity = m.optInt("quantity", 1),
+                    amountEach = m.optDouble("amountEach", 0.0),
+                    amount = m.optDouble("amount", 0.0)
+                )
+            }
+
             val existingObj = json.optJSONObject("existingClaim")
             val existing = if (existingObj != null) ExistingClaimSummary.fromJson(existingObj) else null
+
+            val tracking = json.optString("trackingNumber").ifBlank { json.optString("awb") }
+            val subOrder = json.optString("subOrderId").ifBlank {
+                itemsList.firstOrNull()?.subOrderId.orEmpty().ifBlank { json.optString("orderId") }
+            }
 
             return ClaimReturnLookup(
                 found = json.optBoolean("found", true),
@@ -261,15 +290,25 @@ data class ClaimReturnLookup(
                 expectedReturnId = json.optInt("expectedReturnId"),
                 marketplace = json.optString("marketplace"),
                 marketplaceId = json.optInt("marketplaceId"),
+                subOrderId = subOrder,
                 orderId = json.optString("orderId"),
-                trackingNumber = json.optString("trackingNumber"),
-                packetId = json.optString("packetId"),
+                trackingNumber = tracking,
+                awb = tracking,
+                packetState = json.optString("packetState", "Tampered"),
+                packetId = json.optString("packetId", "NA"),
                 customerName = json.optString("customerName", "Customer"),
                 totalPrice = json.optDouble("totalPrice", 0.0),
                 totalAmount = json.optDouble("totalAmount", 0.0),
                 returnStatus = json.optString("returnStatus", "Return Initiated"),
                 shippedDate = json.optString("shippedDate").takeIf { it.isNotBlank() },
                 daysSinceShipped = json.optInt("daysSinceShipped", 0),
+                tatDays = json.optInt("tatDays", 7),
+                receivedDate = json.optString("receivedDate").takeIf { it.isNotBlank() },
+                dueDate = json.optString("dueDate").takeIf { it.isNotBlank() },
+                daysRemaining = if (json.has("daysRemaining") && !json.isNull("daysRemaining")) json.optInt("daysRemaining") else null,
+                overdue = json.optBoolean("overdue", false),
+                missingAmount = json.optDouble("missingAmount", 0.0),
+                missingItems = missingList,
                 existingClaim = existing,
                 items = itemsList,
                 templates = templatesList,

@@ -9,6 +9,8 @@ export const MEESHO_ISSUES = {
   wrong_return: "I have received wrong return",
   missing_items: "Item/s are missing in my return",
   wrong_barcode_rto: "I have received a wrong barcoded package in RTO",
+  damaged_return: "I have received damaged return",
+  used_product: "I have received used product as return",
 } as const
 
 export type MeeshoIssueCode = keyof typeof MEESHO_ISSUES
@@ -45,7 +47,7 @@ export type MeeshoClaimDraft = {
 
 type Queryable = pg.Pool | pg.PoolClient
 
-function istDate(value: Date | string): string {
+export function istDate(value: Date | string): string {
   const date = value instanceof Date ? value : new Date(value)
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: "Asia/Kolkata",
@@ -57,7 +59,7 @@ function istDate(value: Date | string): string {
   return `${part("year")}-${part("month")}-${part("day")}`
 }
 
-function addDays(day: string, days: number): string {
+export function addDays(day: string, days: number): string {
   const date = new Date(`${day}T00:00:00.000Z`)
   date.setUTCDate(date.getUTCDate() + days)
   return date.toISOString().slice(0, 10)
@@ -68,7 +70,7 @@ export function meeshoClaimDueDate(receivedAt: Date | string): string {
   return addDays(istDate(receivedAt), MEESHO_TAT_DAYS - 1)
 }
 
-function daysBetween(from: string, to: string): number {
+export function daysBetween(from: string, to: string): number {
   const start = Date.parse(`${from}T00:00:00.000Z`)
   const end = Date.parse(`${to}T00:00:00.000Z`)
   return Math.floor((end - start) / 86_400_000)
@@ -83,24 +85,37 @@ export function meeshoClaimDescription(
   input: {
     subOrderId: string
     awb: string
-    packetId: string
-    missingItems: MeeshoMissingItem[]
-    missingAmount: number
+    packetId?: string
+    masterSku?: string
+    productNames?: string[]
+    missingItems?: MeeshoMissingItem[]
+    missingAmount?: number
   },
 ): string {
+  const packetId = input.packetId || "NA"
   const reference =
     `Sub Order ID: ${input.subOrderId}. AWB Number: ${input.awb}. ` +
-    `State of the packet: ${MEESHO_PACKET_STATE}. Packet ID: ${input.packetId}.`
+    `State of the packet: ${MEESHO_PACKET_STATE}. Packet ID: ${packetId}.`
+  const skuInfo = input.masterSku ? ` (${input.masterSku})` : ""
   if (issueCode === "missing_items") {
-    const missing = input.missingItems
-      .map((item) => `${item.label} (${item.quantity} × ${rupees(item.amountEach)} = ${rupees(item.amount)})`)
-      .join(", ")
-    return `Item/s are missing in my return: ${missing}. Total claim amount: ${rupees(input.missingAmount)}. ${reference}`
+    const missing = (input.missingItems && input.missingItems.length > 0)
+      ? input.missingItems
+          .map((item) => `${item.label} (${item.quantity} × ${rupees(item.amountEach)} = ${rupees(item.amount)})`)
+          .join(", ")
+      : "Missing items / components"
+    const amountStr = (input.missingAmount && input.missingAmount > 0) ? `Total claim amount: ${rupees(input.missingAmount)}. ` : ""
+    return `Item/s are missing in my return: ${missing}.${skuInfo ? ` Ordered: ${skuInfo}.` : ""} ${amountStr}${reference}`
   }
   if (issueCode === "wrong_barcode_rto") {
-    return `I have received a wrong barcoded package in RTO. ${reference}`
+    return `I have received a wrong barcoded package in RTO${skuInfo}. Package barcode does not match return manifest. ${reference}`
   }
-  return `I have received the wrong return. ${reference}`
+  if (issueCode === "damaged_return") {
+    return `I have received damaged return${skuInfo}. Product arrived physically damaged/torn. ${reference}`
+  }
+  if (issueCode === "used_product") {
+    return `I have received used product as return${skuInfo}. Returned product shows evident signs of wear/use. ${reference}`
+  }
+  return `I have received the wrong return${skuInfo}. ${reference}`
 }
 
 export async function getMeeshoClaimDraft(
@@ -167,11 +182,15 @@ export async function getMeeshoClaimDraft(
   const returnType = [...returnTypes].join(", ")
   const isRto = /\brto\b/i.test(returnType)
   const available: MeeshoIssueCode[] = []
-  if (categories.has("wrong_product") && !isRto) available.push("wrong_return")
-  if (categories.has("missing_component")) available.push("missing_items")
   if (categories.has("wrong_product") && isRto) available.push("wrong_barcode_rto")
-  if (available.length === 0) {
-    throw new ServiceError(409, "This Meesho scan does not have a supported wrong-product, missing-item, or wrong-RTO issue.")
+  else if (categories.has("wrong_product")) available.push("wrong_return")
+  else if (categories.has("missing_component")) available.push("missing_items")
+  else if (categories.has("damaged")) available.push("damaged_return")
+  else if (categories.has("used")) available.push("used_product")
+
+  // Ensure all standard Meesho portal issues are available to select
+  for (const code of Object.keys(MEESHO_ISSUES) as MeeshoIssueCode[]) {
+    if (!available.includes(code)) available.push(code)
   }
 
   const receivedAt = scan.scanned_at instanceof Date ? scan.scanned_at.toISOString() : String(scan.scanned_at)
@@ -183,7 +202,7 @@ export async function getMeeshoClaimDraft(
   const base = {
     subOrderId: [...subOrders].join(", ") || String(scan.order_id || ""),
     awb: String(scan.awb || ""),
-    packetId: String(scan.flyer_id || ""),
+    packetId: String(scan.flyer_id || "NA"),
     missingItems,
     missingAmount,
   }
@@ -221,6 +240,12 @@ export async function prepareMeeshoClaim(
   scope: AccountScope,
   scanId: number,
   issueCode: string,
+  overrides?: {
+    packetId?: string
+    customDescription?: string
+    missingAmount?: number
+    subOrderId?: string
+  },
 ): Promise<{
   reason: string
   title: string
@@ -237,28 +262,48 @@ export async function prepareMeeshoClaim(
   missingAmount: number
 }> {
   const draft = await getMeeshoClaimDraft(db, scope, scanId)
-  const selected = draft.issueOptions.find((option) => option.code === issueCode)
-  if (!selected) throw new ServiceError(400, "Choose an issue that matches the saved Meesho scan.")
-  if (draft.flyerState !== "scanned" || !draft.packetId) {
-    throw new ServiceError(409, "The Meesho Packet ID is missing. Scan the flyer ID before creating this claim.")
+  const normalizedCode = (issueCode in MEESHO_ISSUES)
+    ? (issueCode as MeeshoIssueCode)
+    : (draft.issueOptions[0]?.code ?? "wrong_return")
+  const selected = draft.issueOptions.find((option) => option.code === normalizedCode) || {
+    code: normalizedCode,
+    label: MEESHO_ISSUES[normalizedCode] || "I have received wrong return",
+    description: meeshoClaimDescription(normalizedCode, {
+      subOrderId: overrides?.subOrderId || draft.subOrderId,
+      awb: draft.awb,
+      packetId: overrides?.packetId || draft.packetId || "NA",
+      missingItems: draft.missingItems,
+      missingAmount: overrides?.missingAmount ?? draft.missingAmount,
+    }),
   }
-  if (selected.code === "missing_items" && draft.missingItems.some((item) => item.amountEach <= 0)) {
-    const missing = draft.missingItems.filter((item) => item.amountEach <= 0).map((item) => item.label).join(", ")
-    throw new ServiceError(409, `Set the Admin claim amount for: ${missing}.`)
+
+  const packetId = (overrides?.packetId?.trim() || draft.packetId || "NA").trim()
+  if (packetId && packetId !== "NA" && (!draft.packetId || draft.flyerState !== "scanned")) {
+    await db.query(
+      `UPDATE receipt_scans SET flyer_id = $1, flyer_state = 'scanned' WHERE id = $2 AND (flyer_id IS NULL OR flyer_id = '')`,
+      [packetId, scanId],
+    )
   }
+
+  const missingAmount = overrides?.missingAmount !== undefined && overrides.missingAmount > 0
+    ? overrides.missingAmount
+    : draft.missingAmount
+
+  const finalDescription = overrides?.customDescription?.trim() || selected.description
+
   return {
     reason: selected.label,
     title: selected.label,
-    description: selected.description,
+    description: finalDescription,
     issueCode: selected.code,
     issueLabel: selected.label,
-    subOrderId: draft.subOrderId,
+    subOrderId: overrides?.subOrderId || draft.subOrderId,
     awb: draft.awb,
     packetState: draft.packetState,
-    packetId: draft.packetId,
+    packetId,
     returnType: draft.returnType,
     receivedDate: draft.receivedDate,
     dueDate: draft.dueDate,
-    missingAmount: draft.missingAmount,
+    missingAmount,
   }
 }

@@ -69,6 +69,30 @@
             android:orientation="vertical"
             android:padding="16dp">
 
+            <!-- Marketplace Selection Container -->
+            <LinearLayout
+                android:id="@+id/layoutMarketplaceSelect"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="12dp"
+                android:orientation="vertical">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Select Marketplace *"
+                    android:textColor="@color/text_primary"
+                    android:textSize="13sp"
+                    android:textStyle="bold" />
+
+                <Spinner
+                    android:id="@+id/spinnerMarketplace"
+                    android:layout_width="match_parent"
+                    android:layout_height="48dp"
+                    android:layout_marginTop="4dp"
+                    android:background="@drawable/bg_round_card" />
+            </LinearLayout>
+
             <!-- Search Bar for independent claim capture -->
             <com.google.android.material.card.MaterialCardView
                 android:id="@+id/cardSearchReturn"
@@ -242,6 +266,65 @@
                                 android:textSize="12sp"
                                 tools:text="15 days since shipped" />
                         </LinearLayout>
+                    </LinearLayout>
+                </com.google.android.material.card.MaterialCardView>
+
+                <!-- Meesho Turnaround Time (TAT) Countdown Banner -->
+                <com.google.android.material.card.MaterialCardView
+                    android:id="@+id/cardClaimTatBanner"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginBottom="16dp"
+                    app:cardBackgroundColor="#F0FDF4"
+                    app:cardCornerRadius="10dp"
+                    app:cardElevation="1dp"
+                    app:strokeColor="#86EFAC"
+                    app:strokeWidth="1dp">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:padding="12dp">
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:gravity="center_vertical"
+                            android:orientation="horizontal">
+
+                            <TextView
+                                android:id="@+id/tvTatTitle"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:text="⏱️ Meesho Claim TAT: 7 Days Inclusive"
+                                android:textColor="#166534"
+                                android:textSize="13sp"
+                                android:textStyle="bold" />
+
+                            <TextView
+                                android:id="@+id/tvTatBadge"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:background="@drawable/bg_pill"
+                                android:backgroundTint="#22C55E"
+                                android:paddingHorizontal="8dp"
+                                android:paddingVertical="2dp"
+                                android:text="On Time"
+                                android:textColor="#FFFFFF"
+                                android:textSize="10sp"
+                                android:textStyle="bold" />
+                        </LinearLayout>
+
+                        <TextView
+                            android:id="@+id/tvTatSubtitle"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="4dp"
+                            android:text="Received: 01 Jan 2026 · Claim Due: 07 Jan 2026 · 6 days remaining"
+                            android:textColor="#15803D"
+                            android:textSize="12sp" />
                     </LinearLayout>
                 </com.google.android.material.card.MaterialCardView>
 
@@ -585,46 +668,168 @@
                         android:textSize="14sp" />
                 </com.google.android.material.textfield.TextInputLayout>
 
-                <!-- Claim Template Type Dropdown -->
+                <!-- Issue Dropdown (Matching Meesho Support Portal) -->
                 <TextView
+                    android:id="@+id/tvLabelIssue"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="14dp"
-                    android:text="Claim Template Type"
+                    android:text="Issue *"
                     android:textColor="@color/text_primary"
                     android:textSize="14sp"
                     android:textStyle="bold" />
 
                 <Spinner
-                    android:id="@+id/spinnerClaimTemplateType"
+                    android:id="@+id/spinnerMeeshoIssue"
                     android:layout_width="match_parent"
                     android:layout_height="50dp"
                     android:layout_marginTop="6dp"
                     android:background="@drawable/bg_round_card" />
 
-                <!-- Template Selector -->
+                <!-- Sub Order Number (Pre-filled from DB) -->
                 <TextView
+                    android:id="@+id/tvLabelSubOrder"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="14dp"
-                    android:text="Template"
+                    android:text="Sub Order Number *"
+                    android:textColor="@color/text_primary"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <EditText
+                        android:id="@+id/etSubOrderNumber"
+                        android:layout_width="0dp"
+                        android:layout_height="48dp"
+                        android:layout_weight="1"
+                        android:hint="Sub Order Number"
+                        android:inputType="text"
+                        android:textSize="14sp" />
+
+                    <ImageButton
+                        android:id="@+id/btnCopySubOrder"
+                        android:layout_width="44dp"
+                        android:layout_height="44dp"
+                        android:background="?attr/selectableItemBackgroundBorderless"
+                        android:contentDescription="Copy Sub Order"
+                        android:src="@drawable/ic_content_copy"
+                        app:tint="@color/claim_primary" />
+                </LinearLayout>
+
+                <!-- AWB Number (Pre-filled from DB) -->
+                <TextView
+                    android:id="@+id/tvLabelAwb"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="14dp"
+                    android:text="AWB Number *"
+                    android:textColor="@color/text_primary"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <EditText
+                        android:id="@+id/etAwbNumber"
+                        android:layout_width="0dp"
+                        android:layout_height="48dp"
+                        android:layout_weight="1"
+                        android:hint="AWB Number"
+                        android:inputType="text"
+                        android:textSize="14sp" />
+
+                    <ImageButton
+                        android:id="@+id/btnScanAwbNumber"
+                        android:layout_width="44dp"
+                        android:layout_height="44dp"
+                        android:background="?attr/selectableItemBackgroundBorderless"
+                        android:contentDescription="Scan AWB"
+                        android:src="@drawable/ic_barcode_scanner"
+                        app:tint="@color/claim_primary" />
+                </LinearLayout>
+
+                <!-- State of the packet (Always Tampered) -->
+                <TextView
+                    android:id="@+id/tvLabelStateOfPacket"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="14dp"
+                    android:text="State of the packet *"
                     android:textColor="@color/text_primary"
                     android:textSize="14sp"
                     android:textStyle="bold" />
 
                 <Spinner
-                    android:id="@+id/spinnerClaimTemplate"
+                    android:id="@+id/spinnerStateOfPacket"
                     android:layout_width="match_parent"
                     android:layout_height="50dp"
                     android:layout_marginTop="6dp"
                     android:background="@drawable/bg_round_card" />
+
+                <!-- Packet ID (Flyer ID pre-filled or NA) -->
+                <TextView
+                    android:id="@+id/tvLabelPacketId"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="14dp"
+                    android:text="Packet ID *"
+                    android:textColor="@color/text_primary"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <EditText
+                        android:id="@+id/etPacketId"
+                        android:layout_width="0dp"
+                        android:layout_height="48dp"
+                        android:layout_weight="1"
+                        android:hint="Enter Packet ID or NA"
+                        android:inputType="text"
+                        android:textSize="14sp" />
+
+                    <ImageButton
+                        android:id="@+id/btnScanPacketId"
+                        android:layout_width="44dp"
+                        android:layout_height="44dp"
+                        android:background="?attr/selectableItemBackgroundBorderless"
+                        android:contentDescription="Scan Packet ID"
+                        android:src="@drawable/ic_barcode_scanner"
+                        app:tint="@color/claim_primary" />
+                </LinearLayout>
+
+                <TextView
+                    android:id="@+id/tvPacketIdHelp"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:text="Correct Packet ID entry is mandatory for accurate claims resolution. If you don't have Packet ID then enter NA in the above field."
+                    android:textColor="@color/text_secondary"
+                    android:textSize="11sp" />
 
                 <!-- Claim Title -->
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="14dp"
-                    android:text="Claim Title"
+                    android:text="Claim Title *"
                     android:textColor="@color/text_primary"
                     android:textSize="14sp"
                     android:textStyle="bold" />
@@ -647,12 +852,12 @@
                         android:textSize="14sp" />
                 </com.google.android.material.textfield.TextInputLayout>
 
-                <!-- Claim Content -->
+                <!-- Description (Auto-filled by default based on Issue) -->
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="14dp"
-                    android:text="Claim Content"
+                    android:text="Description *"
                     android:textColor="@color/text_primary"
                     android:textSize="14sp"
                     android:textStyle="bold" />
@@ -665,14 +870,17 @@
                     app:boxCornerRadiusBottomEnd="8dp"
                     app:boxCornerRadiusBottomStart="8dp"
                     app:boxCornerRadiusTopEnd="8dp"
-                    app:boxCornerRadiusTopStart="8dp">
+                    app:boxCornerRadiusTopStart="8dp"
+                    app:counterEnabled="true"
+                    app:counterMaxLength="1000">
 
                     <com.google.android.material.textfield.TextInputEditText
                         android:id="@+id/etClaimContent"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:gravity="top"
-                        android:hint="Enter Claim Content"
+                        android:hint="Enter description..."
+                        android:maxLength="1000"
                         android:minLines="3"
                         android:textSize="14sp" />
                 </com.google.android.material.textfield.TextInputLayout>
@@ -692,7 +900,7 @@
             </LinearLayout>
 
             <!-- ================================================================================= -->
-            <!-- STEP 2: UPLOAD IMAGES CONTAINER (Matching Screenshot 2)                            -->
+            <!-- STEP 2: UPLOAD IMAGES & EVIDENCE CONTAINER (Exact Meesho Evidence Schema)          -->
             <!-- ================================================================================= -->
             <LinearLayout
                 android:id="@+id/layoutStepUploadImages"
@@ -701,83 +909,58 @@
                 android:orientation="vertical"
                 android:visibility="gone">
 
-                <!-- Packet ID Input + Barcode Scan Button -->
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Packet ID *"
-                    android:textColor="@color/text_primary"
-                    android:textSize="14sp"
-                    android:textStyle="bold" />
-
-                <LinearLayout
+                <!-- Selected Ticket Summary Card -->
+                <com.google.android.material.card.MaterialCardView
+                    android:id="@+id/cardStep2Summary"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="4dp"
-                    android:gravity="center_vertical"
-                    android:orientation="horizontal">
+                    android:layout_marginBottom="16dp"
+                    app:cardBackgroundColor="@color/surface"
+                    app:cardCornerRadius="10dp"
+                    app:cardElevation="1dp"
+                    app:strokeColor="@color/border"
+                    app:strokeWidth="1dp">
 
-                    <EditText
-                        android:id="@+id/etPacketId"
-                        android:layout_width="0dp"
-                        android:layout_height="48dp"
-                        android:layout_weight="1"
-                        android:hint="Enter Packet ID"
-                        android:inputType="text"
-                        android:textSize="14sp" />
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:padding="12dp">
 
-                    <ImageButton
-                        android:id="@+id/btnScanPacketId"
-                        android:layout_width="44dp"
-                        android:layout_height="44dp"
-                        android:background="?attr/selectableItemBackgroundBorderless"
-                        android:contentDescription="Scan Packet ID"
-                        android:src="@drawable/ic_barcode_scanner"
-                        app:tint="@color/text_secondary" />
-                </LinearLayout>
+                        <TextView
+                            android:id="@+id/tvStep2IssueLabel"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:textColor="@color/claim_primary"
+                            android:textSize="14sp"
+                            android:textStyle="bold"
+                            tools:text="I have received wrong return" />
 
-                <!-- AWB Number Input + Barcode Scan Button -->
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="14dp"
-                    android:text="AWB Number *"
-                    android:textColor="@color/text_primary"
-                    android:textSize="14sp"
-                    android:textStyle="bold" />
+                        <TextView
+                            android:id="@+id/tvStep2SubOrderAwb"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="4dp"
+                            android:textColor="@color/text_primary"
+                            android:textSize="13sp"
+                            tools:text="Sub Order: 11424973311 · AWB: 2628409360FPL" />
 
-                <LinearLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="4dp"
-                    android:gravity="center_vertical"
-                    android:orientation="horizontal">
-
-                    <EditText
-                        android:id="@+id/etAwbNumber"
-                        android:layout_width="0dp"
-                        android:layout_height="48dp"
-                        android:layout_weight="1"
-                        android:hint="Enter AWB Number"
-                        android:inputType="text"
-                        android:textSize="14sp" />
-
-                    <ImageButton
-                        android:id="@+id/btnScanAwbNumber"
-                        android:layout_width="44dp"
-                        android:layout_height="44dp"
-                        android:background="?attr/selectableItemBackgroundBorderless"
-                        android:contentDescription="Scan AWB"
-                        android:src="@drawable/ic_barcode_scanner"
-                        app:tint="@color/text_secondary" />
-                </LinearLayout>
+                        <TextView
+                            android:id="@+id/tvStep2PacketInfo"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="2dp"
+                            android:textColor="@color/text_secondary"
+                            android:textSize="12sp"
+                            tools:text="State: Tampered · Packet ID: FL-10294" />
+                    </LinearLayout>
+                </com.google.android.material.card.MaterialCardView>
 
                 <!-- Dynamic Evidence List (Populated with item_claim_evidence_card.xml) -->
                 <LinearLayout
                     android:id="@+id/layoutDynamicEvidenceCards"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="16dp"
                     android:orientation="vertical" />
 
                 <!-- Submit Button matching Screenshot 2 -->

@@ -846,6 +846,9 @@ export async function createClaim(
     remarks: string
     claimTemplateId?: number | null
     marketplaceIssueCode?: string
+    packetId?: string
+    missingAmount?: number
+    subOrderId?: string
   },
 ): Promise<ClaimDetail> {
   const remarksErr = claimRemarksError(input.remarks)
@@ -876,18 +879,23 @@ export async function createClaim(
     let claimDescription = input.claimDescription.trim()
     let marketplaceIssueCode = ""
     let marketplaceIssueLabel = ""
-    let subOrderId = ""
+    let subOrderId = input.subOrderId?.trim() || ""
     let awb = ""
     let packetState = ""
-    let packetId = ""
+    let packetId = input.packetId?.trim() || ""
     let returnType = ""
     let receivedDate: string | null = null
     let dueDate: string | null = null
-    let missingAmount = 0
+    let missingAmount = input.missingAmount || 0
     if (String(scan.marketplace || "").toLowerCase() === "meesho") {
-      const prepared = await prepareMeeshoClaim(client, scope, input.receiptScanId, input.marketplaceIssueCode || "")
+      const prepared = await prepareMeeshoClaim(client, scope, input.receiptScanId, input.marketplaceIssueCode || "", {
+        packetId: input.packetId,
+        customDescription: input.claimDescription,
+        missingAmount: input.missingAmount,
+        subOrderId: input.subOrderId,
+      })
       claimReason = prepared.reason
-      claimTitle = prepared.title
+      claimTitle = input.claimTitle.trim() || prepared.title
       claimDescription = prepared.description
       marketplaceIssueCode = prepared.issueCode
       marketplaceIssueLabel = prepared.issueLabel

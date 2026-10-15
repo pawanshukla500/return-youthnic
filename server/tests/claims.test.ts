@@ -185,3 +185,41 @@ test("Meesho missing-item description includes the saved sub-issue and configure
   assert.match(description, /Tampered/)
   assert.match(description, /SYN-PACKET-1/)
 })
+
+test("Meesho wrong-return description includes Sub Order ID, AWB, Tampered packet state, and Packet ID", () => {
+  const description = meeshoClaimDescription("wrong_return", {
+    subOrderId: "SYN-SUB-99",
+    awb: "SYN-AWB-99",
+    packetId: "SYN-FLYER-99",
+    masterSku: "SYN-SKU-KURTI",
+  })
+  assert.match(description, /wrong return/i)
+  assert.match(description, /SYN-SUB-99/)
+  assert.match(description, /SYN-AWB-99/)
+  assert.match(description, /Tampered/)
+  assert.match(description, /SYN-FLYER-99/)
+  assert.match(description, /SYN-SKU-KURTI/)
+})
+
+test("Meesho wrong-barcode-rto description includes Sub Order ID, AWB, Tampered, and Packet ID", () => {
+  const description = meeshoClaimDescription("wrong_barcode_rto", {
+    subOrderId: "SYN-SUB-88",
+    awb: "SYN-AWB-88",
+    packetId: "SYN-FLYER-88",
+  })
+  assert.match(description, /wrong barcoded package in RTO/i)
+  assert.match(description, /SYN-SUB-88/)
+  assert.match(description, /SYN-AWB-88/)
+  assert.match(description, /Tampered/)
+  assert.match(description, /SYN-FLYER-88/)
+})
+
+test("Meesho packet ID falls back to NA when omitted or empty", () => {
+  const description = meeshoClaimDescription("wrong_return", {
+    subOrderId: "SYN-SUB-77",
+    awb: "SYN-AWB-77",
+    packetId: "",
+  })
+  assert.match(description, /Packet ID: NA/)
+})
+

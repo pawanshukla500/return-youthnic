@@ -18,35 +18,24 @@ ALTER TABLE claims ADD COLUMN IF NOT EXISTS missing_item_amount numeric(12,2) NO
 CREATE INDEX IF NOT EXISTS claims_due_date_idx
   ON claims (claim_due_date) WHERE status <> 'submitted';
 
--- The original configurable Meesho template is upgraded only while it still has the foundation defaults.
-UPDATE claim_template_fields f
-SET field_label = 'Image of product received'
-FROM claim_templates t
-JOIN marketplaces m ON m.id = t.marketplace_id
-WHERE f.template_id = t.id
-  AND m.name = 'Meesho'
-  AND f.field_key = 'product_images'
-  AND f.field_label = 'Product images';
-
-UPDATE claim_template_fields f
-SET max_file_size_mb = 25
-FROM claim_templates t
-JOIN marketplaces m ON m.id = t.marketplace_id
-WHERE f.template_id = t.id
-  AND m.name = 'Meesho'
-  AND f.field_key = 'unboxing_video'
-  AND f.max_file_size_mb = 100;
-
+-- Ensure all Meesho templates have the exact 5 portal fields configured with 25MB limit
 INSERT INTO claim_template_fields
   (template_id, field_key, field_label, field_type, required, min_count, max_count, max_file_size_mb, sort_order)
 SELECT t.id, v.field_key, v.field_label, v.field_type, v.required, v.min_count, v.max_count, v.max_file_size_mb, v.sort_order
 FROM claim_templates t
 JOIN marketplaces m ON m.id = t.marketplace_id
 CROSS JOIN (VALUES
-  ('barcode_image', 'Barcode image', 'image', false, 0, 1, 25, 1),
-  ('reverse_waybill', 'Reverse waybill', 'image', true, 1, 1, 25, 3),
-  ('attachments', 'Additional attachments', 'document', false, 0, 5, 25, 5)
+  ('barcode_image', 'Barcode Image', 'image', false, 0, 1, 25, 1),
+  ('product_images', 'Image of product received', 'image', true, 1, 10, 25, 2),
+  ('reverse_waybill', 'Reverse Waybill', 'image', true, 1, 1, 25, 3),
+  ('unboxing_video', 'Unpacking Video', 'video', true, 1, 1, 25, 4),
+  ('attachments', 'Attachments', 'document', false, 0, 5, 25, 5)
 ) AS v(field_key, field_label, field_type, required, min_count, max_count, max_file_size_mb, sort_order)
 WHERE m.name = 'Meesho'
-  AND t.name = 'Default claim template'
-ON CONFLICT (template_id, field_key) DO NOTHING;
+ON CONFLICT (template_id, field_key) DO UPDATE SET
+  field_label = EXCLUDED.field_label,
+  max_file_size_mb = EXCLUDED.max_file_size_mb,
+  required = EXCLUDED.required,
+  min_count = EXCLUDED.min_count,
+  max_count = EXCLUDED.max_count,
+  sort_order = EXCLUDED.sort_order;
