@@ -16,6 +16,7 @@ graph TD
   SPA[React app in src/] -->|/api with Bearer token| API[Express API in server/index.ts]
   API --> AUTH[http.ts and access.ts: session user, account scope, Admin check]
   API --> DASH[dashboard.ts: overview and claims figures]
+  API --> CLAIMS[claims-routes.ts and claims-service.ts: templates, queue, approval, evidence]
   API --> UP[upload-routes.ts]
   API --> SCANLIST[scanner-list-routes.ts]
   API --> REG[register-routes.ts]
@@ -113,6 +114,8 @@ Every statement is idempotent. A normal start drops nothing. The app tables are 
 | `server/http.ts` | Helpers | The signed-in user, the scope, the Admin check, error mapping | `userOf`, `scopeOf`, `actorOf`, `requireAdmin`, `sendError` |
 | `server/access.ts` | Pure | The account rule | `scopeFor`, `allowsAccount`, `accountCondition`, `accountListParam`, `isAdminRole`, `ALL_ACCOUNTS`, `NO_ACCOUNTS`, `NO_ACCESS_MESSAGE` |
 | `server/dashboard.ts` | Database | Overview, claims and recent-scan figures, scoped | `loadDashboard`, `loadClaims`, `listRecentReturns`, `mapReturn`, `loadHeadline` |
+| `server/claims-routes.ts` | Routes | Claim queue, scanned-return search, approval-controlled status changes, secure evidence upload/download, Admin template routes | `mountClaimsRoutes` |
+| `server/claims-service.ts` | Database | Scoped claims, configurable evidence validation, duplicate prevention, status and audit history | `createClaim`, `listClaims`, `getClaim`, `updateClaimStatus`, `prepareClaimMediaUpload`, template operations |
 | `server/upload-routes.ts` | Routes | Upload history, template, preview and activation | `mountUploadRoutes` |
 | `server/scanner-list-routes.ts` | Routes | Validation-only multi-sheet scanner-list preview | `mountScannerListRoutes` |
 | `server/scanner-list.ts` | Pure | Scanner-list workbook parsing and source provenance | `parseScannerList` |
@@ -149,6 +152,7 @@ Every statement is idempotent. A normal start drops nothing. The app tables are 
 | `server/schema-import.sql` | Lookup status, the partial unique index for active AWBs per account, lookup lines, issue categories, scan items and issues, claim history, the audit log, product master, OMSGuru tables | Second |
 | `server/schema-register.sql` | Logistics partners and their aliases and hosts (seeded), tracking evidence and validation, return type and display identifiers, scan snapshots | Third |
 | `server/schema-scan-history.sql` | Scan snapshots for the file AWB, the link AWB, the tracking source, the forward AWB, the return event, the source file and the raw return type; four indexes | Fourth |
+| `server/schema-claims.sql` | Configurable claim templates, immutable scan-linked claims, evidence metadata, 24-month retention dates and status history | Last |
 
 Every file is additive and runs on every start. A change to the schema goes into one of these files, or into a new file that is added to `SCHEMA_FILES` in `server/db.ts`, in the order it must run.
 
