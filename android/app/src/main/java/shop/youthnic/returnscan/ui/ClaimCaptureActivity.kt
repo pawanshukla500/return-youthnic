@@ -49,12 +49,6 @@ class ClaimCaptureActivity : AppCompatActivity() {
     private var selectedTemplate: ClaimTemplate? = null
     private var currentStep = 1 // 1: Return Details, 2: Upload Images
 
-    // Steppers state
-    private var receivedGood = 0
-    private var receivedBad = 0
-    private var acceptedGood = 0
-    private var acceptedBad = 0
-
     // Meesho Issue Options
     private val meeshoIssues = listOf(
         Pair("wrong_return", "I have received wrong return"),
@@ -241,33 +235,6 @@ class ClaimCaptureActivity : AppCompatActivity() {
                 .show()
         }
 
-        // Steppers
-        binding.btnGoodMinus.setOnClickListener {
-            if (receivedGood > 0) {
-                receivedGood--
-                updateSteppersUi()
-            }
-        }
-        binding.btnGoodPlus.setOnClickListener {
-            val max = lookupData?.items?.firstOrNull()?.quantity ?: 1
-            if (receivedGood + receivedBad < max) {
-                receivedGood++
-                updateSteppersUi()
-            }
-        }
-        binding.btnBadMinus.setOnClickListener {
-            if (receivedBad > 0) {
-                receivedBad--
-                updateSteppersUi()
-            }
-        }
-        binding.btnBadPlus.setOnClickListener {
-            val max = lookupData?.items?.firstOrNull()?.quantity ?: 1
-            if (receivedGood + receivedBad < max) {
-                receivedBad++
-                updateSteppersUi()
-            }
-        }
 
         binding.btnProceedToUpload.setOnClickListener {
             if (validateStep1()) {
@@ -332,8 +299,10 @@ class ClaimCaptureActivity : AppCompatActivity() {
         // Item Card
         val item = data.items.firstOrNull()
         if (item != null) {
-            binding.tvProductSku.text = item.masterSku.ifBlank { item.sku }
-            binding.tvItemQtyBadge.text = "Qty: ${item.quantity}"
+            binding.tvProductTitle.text = item.title.ifBlank { item.masterSku.ifBlank { item.sku } }
+            binding.tvProductSku.text = "Master SKU: ${item.masterSku.ifBlank { item.sku }} · Listing: ${item.sku}"
+            binding.tvItemQtyBadge.text = "Ordered: ${item.quantity}"
+            binding.tvBadQtyBadge.text = "Bad Qty: 1 (Issue Claim)"
 
             if (item.imageUrl.isNotBlank()) {
                 lifecycleScope.launch {
@@ -355,14 +324,7 @@ class ClaimCaptureActivity : AppCompatActivity() {
             }
         }
 
-        // Steppers initial: 0 Good, 1 Bad (since opening claim)
-        receivedGood = 0
-        receivedBad = totalQty
-        acceptedGood = 0
-        acceptedBad = 0
-        updateSteppersUi()
-
-        // Pre-fill Meesho Support Form Inputs
+        // Pre-fill Meesho Support Form Inputs (Sub Order Number = Order Item ID, AWB = Tracking ID, Packet ID = Flyer ID or NA)
         binding.etSubOrderNumber.setText(data.subOrderId.ifBlank { data.orderId })
         binding.etAwbNumber.setText(data.awb.ifBlank { data.trackingNumber })
         binding.etPacketId.setText(data.packetId.ifBlank { "NA" })
@@ -421,13 +383,6 @@ class ClaimCaptureActivity : AppCompatActivity() {
         showStep(1)
     }
 
-    private fun updateSteppersUi() {
-        binding.tvGoodCount.text = receivedGood.toString()
-        binding.tvBadCount.text = receivedBad.toString()
-        binding.tvAcceptedGoodCount.text = acceptedGood.toString()
-        binding.tvAcceptedBadCount.text = acceptedBad.toString()
-    }
-
     private fun updateDescriptionAndTitle(code: String) {
         val data = lookupData ?: return
         val subOrder = binding.etSubOrderNumber.text?.toString()?.trim().orEmpty().ifBlank { data.subOrderId.ifBlank { data.orderId } }
@@ -445,20 +400,57 @@ class ClaimCaptureActivity : AppCompatActivity() {
                 } else {
                     "Missing item / component"
                 }
-                val amountStr = if (data.missingAmount > 0) "Total claim amount: ₹${String.format("%.2f", data.missingAmount)}. " else ""
-                "Item/s are missing in my return: $missingDetails. ${amountStr}Sub Order ID: $subOrder. AWB Number: $awb. State of the packet: Tampered. Packet ID: $packetId. We have not received the specified items/components in the return package."
+                val amountStr = if (data.missingAmount > 0) "Total claim amount: ₹${String.format("%.2f", data.missingAmount)}.\n" else ""
+                "Team,\n\n" +
+                "Please Note This Sub Order ID $subOrder has item/s missing in the return package: $missingDetails.\n" +
+                amountStr +
+                "Please check attached all proof and video and make sure our claim will be approved.\n\n" +
+                "Sub Order ID: $subOrder\n" +
+                "AWB Number: $awb\n" +
+                "State of the packet: Tampered\n" +
+                "Packet ID: $packetId\n\n" +
+                "Regards,\n" +
+                "Return Team Tullipprints"
             }
             "wrong_barcode_rto" -> {
-                "I have received a wrong barcoded package in RTO. Sub Order ID: $subOrder. AWB Number: $awb. State of the packet: Tampered. Packet ID: $packetId. Barcode label on RTO package does not match our return manifest. Please check attached barcode image and waybill."
+                "Team,\n\n" +
+                "Please Note This Sub Order ID $subOrder has received a wrong barcoded package in RTO instead of ordered item ($masterSku). Outer package barcode label does not match our return manifest. Please check attached proof and video and make sure our claim will be approved.\n\n" +
+                "Sub Order ID: $subOrder\n" +
+                "AWB Number: $awb\n" +
+                "State of the packet: Tampered\n" +
+                "Packet ID: $packetId\n\n" +
+                "Regards,\n" +
+                "Return Team Tullipprints"
             }
             "damaged_return" -> {
-                "I have received damaged return. Sub Order ID: $subOrder. AWB Number: $awb. State of the packet: Tampered. Packet ID: $packetId. Product arrived in physically damaged / torn condition. Please check attached photos and waybill."
+                "Team,\n\n" +
+                "Please Note This Sub Order ID $subOrder has received damaged return product. Product arrived in physically torn / damaged condition. Please check attached proof and video and make sure our claim will be approved.\n\n" +
+                "Sub Order ID: $subOrder\n" +
+                "AWB Number: $awb\n" +
+                "State of the packet: Tampered\n" +
+                "Packet ID: $packetId\n\n" +
+                "Regards,\n" +
+                "Return Team Tullipprints"
             }
             "used_product" -> {
-                "I have received used product as return. Sub Order ID: $subOrder. AWB Number: $awb. State of the packet: Tampered. Packet ID: $packetId. Returned item shows evident signs of prior use / wear / odor / missing tags. Evidence attached."
+                "Team,\n\n" +
+                "Please Note This Sub Order ID $subOrder has received used/soiled product as return instead of fresh product. Please check attached proof and video and make sure our claim will be approved.\n\n" +
+                "Sub Order ID: $subOrder\n" +
+                "AWB Number: $awb\n" +
+                "State of the packet: Tampered\n" +
+                "Packet ID: $packetId\n\n" +
+                "Regards,\n" +
+                "Return Team Tullipprints"
             }
             else -> {
-                "I have received the wrong return. Sub Order ID: $subOrder. AWB Number: $awb. State of the packet: Tampered. Packet ID: $packetId. Received completely different product inside package instead of ordered master SKU ($masterSku). Please refer to the attached unboxing video and reverse waybill."
+                "Team,\n\n" +
+                "Please Note This Sub Order ID $subOrder Has received Us the wrong please check attached all the prrof and video and and make sure we claim will be approved )\n\n" +
+                "Sub Order ID: $subOrder\n" +
+                "AWB Number: $awb\n" +
+                "State of the packet: Tampered\n" +
+                "Packet ID: $packetId\n\n" +
+                "Regards,\n" +
+                "Return Team Tullipprints"
             }
         }
         binding.etClaimContent.setText(desc)
@@ -728,7 +720,7 @@ class ClaimCaptureActivity : AppCompatActivity() {
                 put("claimTitle", binding.etClaimTitle.text?.toString()?.trim().orEmpty())
                 put("claimDescription", binding.etClaimContent.text?.toString()?.trim().orEmpty())
                 put("claimContent", binding.etClaimContent.text?.toString()?.trim().orEmpty())
-                put("remarks", binding.etReturnComment.text?.toString()?.trim().orEmpty())
+                put("remarks", "")
                 put("claimTemplateId", selectedTemplate?.id ?: 1)
                 put("customerName", data.customerName)
                 put("totalPrice", data.totalPrice)

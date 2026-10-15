@@ -11,9 +11,11 @@ if (!fs.existsSync(distDir)) {
   fs.mkdirSync(distDir, { recursive: true })
 }
 
+const npxCmd = process.platform === "win32" ? "npx.cmd" : "npx"
+
 console.log("[Build Agent] 1. Bundling with esbuild...")
 child_process.execSync(
-  `npx esbuild desktop-agent/src/index.ts --bundle --platform=node --format=cjs --outfile=desktop-agent/dist/agent-bundle.cjs`,
+  `${npxCmd} esbuild desktop-agent/src/index.ts --bundle --platform=node --format=cjs --outfile=desktop-agent/dist/agent-bundle.cjs`,
   { cwd: root, stdio: "inherit" },
 )
 
@@ -30,7 +32,7 @@ fs.copyFileSync(nodeExe, targetExe)
 
 console.log("[Build Agent] 4. Injecting SEA blob with postject...")
 child_process.execSync(
-  `npx --yes postject desktop-agent/dist/TaskFlowClaimAgent.exe NODE_SEA_BLOB desktop-agent/dist/sea-prep.blob --sentinel-fuse NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2`,
+  `${npxCmd} --yes postject desktop-agent/dist/TaskFlowClaimAgent.exe NODE_SEA_BLOB desktop-agent/dist/sea-prep.blob --sentinel-fuse NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2`,
   { cwd: root, stdio: "inherit" },
 )
 

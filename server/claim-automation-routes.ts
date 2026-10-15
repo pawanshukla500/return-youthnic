@@ -16,6 +16,7 @@ import {
   registerOrUpdateAgent,
   retryAutomationJob,
   saveMarketplaceCredential,
+  syncClaimTicketToRegister,
   updateJobProgress,
 } from "./claim-automation-service.js"
 import { createClaim } from "./claims-service.js"
@@ -156,7 +157,19 @@ export function mountClaimAutomationRoutes(app: Express, requireUser: RequestHan
       // Queue automation job
       const jobId = await createOrQueueAutomationJob(db, claim.id)
 
-      res.status(201).json({ claim, jobId })
+      // Sync ticket ID and Draft status to return register
+      const initialTicketCode = text(body.ticketCode) || `CLM-${claim.id}`
+      await syncClaimTicketToRegister(db, {
+        receiptScanId,
+        ticketCode: initialTicketCode,
+        status: "Draft",
+        actorId: actor.id,
+        issueCategoryCode: text(body.marketplaceIssueCode) || "wrong_item",
+        issueCategoryLabel: text(body.claimReason) || "Wrong Product",
+        notes: `Claim created: ${initialTicketCode}`,
+      })
+
+      res.status(201).json({ claim, jobId, ticketCode: initialTicketCode })
     } catch (error) {
       sendError(res, error, next)
     }

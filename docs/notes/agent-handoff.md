@@ -627,8 +627,36 @@ Append new entries at the end. Do not edit earlier entries, except to correct a 
     - `Flipkart Return.csv`: 1,152 scannable, 0 errors.
     - `Meesho Return.csv`: 1,173 scannable (row 8 header), 0 errors; carrier tracking links mapped to Valmo, Shipsy, Xpress Bees, and Shadowfax.
   - Warehouse load simulation: 2,500 synthetic SKUs parsed in 34.7 ms, warm lookup p95 < 0.1 ms (far exceeding p95 < 300 ms target).
-- Not run:
   - Activation of real marketplace files against the live production database (forbidden without explicit user instruction).
+
+### 2026-10-15, Antigravity, Meesho Claim Details Capture, Return Register Ticket ID Linkage, Firebase & Desktop Automation Bot
+
+- Perspective: Complete implementation of Meesho return claim capture and automation workflow across Android mobile client, Express backend, Return Register, and Windows Desktop EXE bot (`TaskFlowClaimAgent.exe`).
+- Changed:
+  - Mobile Claim Details Capture (`android/app/src/main/res/layout/activity_claim_capture.xml`, `ClaimCaptureActivity.kt`):
+    - Removed Good/Bad counters and Accepted table; replaced with catalog product image thumbnail, SKU/Master SKU labels, and `Bad Qty: 1 (Issue Claim)` status badge.
+    - Removed redundant optional return comment.
+    - Locked `State of the packet` to `Tampered`.
+    - Implemented automatic prefilling for `Sub order no` (Order Item ID), `AWB Number` (Tracking ID), and `Packet ID` (Meesho Flyer ID or manual/scanner fallback to `"NA"`).
+    - Updated auto-generated descriptions with exact Tullipprints team signature and format across all claim types.
+  - Ticket ID Linkage with Return Register (`server/claim-automation-service.ts`, `server/claim-automation-routes.ts`):
+    - Implemented `syncClaimTicketToRegister()` to link created claim tickets and automated/manual marketplace submissions with `claim_tickets` and `receipt_scan_issues`.
+    - Ticket IDs (e.g., `CLM-...` and Meesho Claim Ref `M-...`) and statuses (`Draft`, `Raised`, `Approved`, `Rejected`) now appear in the Return Register (`/register` table) and approved 19-column / operational CSV & Excel exports.
+  - Firebase Configuration (`android/app/google-services.json`, `android/build.gradle`, `android/app/build.gradle`):
+    - Configured official `google-services.json` supporting packages `return.youthnic.app` and `shop.youthnic.returnscan` with Firebase RTDB and Storage bucket.
+    - Applied `com.google.gms.google-services` plugin and added `firebase-bom:33.5.1`, `firebase-analytics`, and `firebase-storage`.
+  - Windows Desktop Bot (`desktop-agent/build.ts`, `desktop-agent/dist/TaskFlowClaimAgent.exe`):
+    - Ensured platform-aware Node SEA single executable build (`npm run build:agent`) generates standalone `TaskFlowClaimAgent.exe`.
+  - Documentation:
+    - Created comprehensive [`docs/MEESHO_CLAIM_AUTOMATION.md`](docs/MEESHO_CLAIM_AUTOMATION.md) documenting architecture, field mappings, mobile capture, Firebase setup, Ticket ID sync, and desktop bot automation.
+- Ran:
+  - `npm.cmd run typecheck`: Passed (0 errors).
+  - `npm.cmd run build`: Passed (Vite production bundle in 1.97s, server dist in 26ms).
+  - `npm.cmd test`: 381 tests: 345 passed, 0 failed, 36 skipped on dedicated `TEST_DATABASE_URL`.
+  - `npm.cmd run build:agent`: Passed, successfully created `desktop-agent/dist/TaskFlowClaimAgent.exe`.
+- Not run:
+  - The 36 database integration tests requiring a dedicated test database whose name contains `test`.
+
 ### 2026-10-13, Antigravity, OMSGuru Email Brand Logo & Details Alignment & Mobile APK v1.0.21 Release
 
 - Perspective: Addressed user requests and Gmail screenshots covering two areas: (1) adding the official Youthnic brand logo, prominent Request Reference ID card, and uploaded CSV file details/download button to the OMSGuru daily automated email; (2) updating the Android mobile APK assets (`ic_launcher_youthnic.png`, adaptive background, splash & login layouts) to the official green squircle monogram and triggering the APK release workflow.
