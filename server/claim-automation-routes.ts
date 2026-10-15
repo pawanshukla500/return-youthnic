@@ -19,7 +19,7 @@ import {
   syncClaimTicketToRegister,
   updateJobProgress,
 } from "./claim-automation-service.js"
-import { createClaim } from "./claims-service.js"
+import { createClaim, getClaim } from "./claims-service.js"
 
 function text(value: unknown): string {
   return typeof value === "string" ? value.trim() : ""
@@ -70,7 +70,7 @@ export function mountClaimAutomationRoutes(app: Express, requireUser: RequestHan
 
       let receiptScanId = positiveId(body.receiptScanId)
 
-      // If receiptScanId is not yet created, create a pending scan record from expectedReturnId
+      // If receiptScanId is not yet created, resolve or create scan record from expectedReturnId
       if (!receiptScanId) {
         let expectedReturnId = positiveId(body.expectedReturnId)
         if (!expectedReturnId) {
@@ -89,62 +89,116 @@ export function mountClaimAutomationRoutes(app: Express, requireUser: RequestHan
           throw new ServiceError(400, "Provide either receiptScanId, expectedReturnId, or valid AWB/Sub Order ID.")
         }
 
-        const client = await db.connect()
-        try {
-          await client.query("BEGIN")
-          const erRes = await client.query(
-            `SELECT er.id, er.marketplace_id, er.tracking_id, er.order_number
-             FROM expected_returns er
-             WHERE er.id = $1`,
-            [expectedReturnId],
-          )
-          if (!erRes.rows[0]) throw new ServiceError(404, "Expected return record not found.")
+        if (!receiptScanId && expectedReturnId) {
+          const client = await db.connect()
+          try {
+            await client.query("BEGIN")
+            const erRes = await client.query(
+              `SELECT er.id, er.marketplace_id, er.tracking_id, er.order_number, m.name AS marketplace
+               FROM expected_returns er
+               JOIN marketplaces m ON m.id = er.marketplace_id
+               WHERE er.id = $1`,
+              [expectedReturnId],
+            )
+            if (!erRes.rows[0]) throw new ServiceError(404, "Expected return record not found.")
 
-          // Create receipt scan with claim issue marker
-          const scanInsert = await client.query(
-            `INSERT INTO receipt_scans (
-               expected_return_id, scanned_by, scanned_at, status, scanned_tracking,
-               tracking_match_leg, tracking_validation, flyer_id
-             )
-             VALUES ($1, $2, now(), 'issue', $3, 'return', 'match', $4)
-             RETURNING id`,
-            [
-              expectedReturnId,
-              actor.id,
-              text(body.awb || erRes.rows[0].tracking_id),
-              text(body.packetId),
-            ],
-          )
-          receiptScanId = Number(scanInsert.rows[0].id)
-          await client.query("COMMIT")
-        } catch (err) {
-          await client.query("ROLLBACK")
-          throw err
-        } finally {
-          client.release()
+            // Check if receipt_scan already exists for this expected_return_id
+            const existingScan = await client.query(
+              `SELECT id FROM receipt_scans WHERE expected_return_id = $1`,
+              [expectedReturnId],
+            )
+            if (existingScan.rows[0]) {
+              receiptScanId = Number(existingScan.rows[0].id)
+            } else {
+              const scanTimeLabel = new Intl.DateTimeFormat("en-IN", {
+                timeZone: "Asia/Kolkata",
+                hour: "2-digit",
+                minute: "2-digit",
+                second: "2-digit",
+                hour12: true,
+              }).format(new Date())
+
+              const flyerVal = text(body.packetId)
+              const scanInsert = await client.query(
+                `INSERT INTO receipt_scans (
+                   expected_return_id, scanned_by, scanned_at, scanned_time_label,
+                   outcome, issue_label, status, scanned_tracking,
+                   matched_leg, tracking_validation_snapshot, flyer_id, flyer_state,
+                   tracking_id_snapshot, order_number_snapshot, marketplace_snapshot
+                 )
+                 VALUES ($1, $2, now(), $3, 'issue', $4, 'Draft', $5, 'return', 'match', $6, $7, $8, $9, $10)
+                 RETURNING id`,
+                [
+                  expectedReturnId,
+                  actor.id,
+                  scanTimeLabel,
+                  text(body.claimReason) || "Wrong Product",
+                  text(body.awb || erRes.rows[0].tracking_id),
+                  flyerVal,
+                  flyerVal ? "scanned" : "not_required",
+                  String(erRes.rows[0].tracking_id),
+                  String(erRes.rows[0].order_number),
+                  String(erRes.rows[0].marketplace),
+                ],
+              )
+              receiptScanId = Number(scanInsert.rows[0].id)
+            }
+            await client.query("COMMIT")
+          } catch (err) {
+            await client.query("ROLLBACK")
+            throw err
+          } finally {
+            client.release()
+          }
         }
       }
 
-      // Create claim
-      const claim = await createClaim(db, actor, scope, {
-        receiptScanId,
-        claimReason: text(body.claimReason) || "Wrong Product",
-        claimTitle: text(body.claimTitle) || `Claim for ${text(body.orderId || body.awb)}`,
-        claimDescription: text(body.claimDescription || body.claimContent),
-        remarks: text(body.remarks),
-        claimTemplateId: positiveId(body.claimTemplateId),
-        marketplaceIssueCode: text(body.marketplaceIssueCode),
-        packetId: text(body.packetId),
-        missingAmount: Number(body.missingAmount) || 0,
-        subOrderId: text(body.subOrderId),
-      })
+      if (!receiptScanId) {
+        throw new ServiceError(400, "Failed to resolve or create receipt scan.")
+      }
+
+      // Check if claim already exists for this receiptScanId
+      const existingClaim = await db.query(
+        `SELECT id FROM claims WHERE receipt_scan_id = $1`,
+        [receiptScanId],
+      )
+
+      let claim: any
+      if (existingClaim.rows[0]) {
+        const claimId = Number(existingClaim.rows[0].id)
+        claim = await getClaim(db, scope, claimId)
+      } else {
+        // Create claim
+        claim = await createClaim(db, actor, scope, {
+          receiptScanId,
+          claimReason: text(body.claimReason) || "Wrong Product",
+          claimTitle: text(body.claimTitle) || `Claim for ${text(body.orderId || body.awb)}`,
+          claimDescription: text(body.claimDescription || body.claimContent),
+          remarks: text(body.remarks),
+          claimTemplateId: positiveId(body.claimTemplateId),
+          marketplaceIssueCode: text(body.marketplaceIssueCode),
+          packetId: text(body.packetId),
+          missingAmount: Number(body.missingAmount) || 0,
+          subOrderId: text(body.subOrderId),
+        })
+      }
+
+      // Parse shipped date safely
+      let parsedShippedDate: string | null = null
+      const rawShipped = text(body.shippedDate)
+      if (rawShipped) {
+        const d = new Date(rawShipped)
+        if (!isNaN(d.getTime())) {
+          parsedShippedDate = d.toISOString().split("T")[0]
+        }
+      }
 
       // Update snapshots on claims row
       await db.query(
         `UPDATE claims
          SET customer_name_snapshot = COALESCE(NULLIF($2, ''), customer_name_snapshot),
              total_price_snapshot = COALESCE(NULLIF($3, 0), total_price_snapshot),
-             shipped_date = COALESCE(NULLIF($4, '')::date, shipped_date),
+             shipped_date = COALESCE($4::date, shipped_date),
              sku_snapshot = COALESCE(NULLIF($5, ''), sku_snapshot),
              packet_id_snapshot = COALESCE(NULLIF($6, ''), packet_id_snapshot),
              sub_order_id_snapshot = COALESCE(NULLIF($7, ''), sub_order_id_snapshot),
@@ -156,7 +210,7 @@ export function mountClaimAutomationRoutes(app: Express, requireUser: RequestHan
           claim.id,
           text(body.customerName),
           Number(body.totalPrice) || 0,
-          text(body.shippedDate) || null,
+          parsedShippedDate,
           text(body.sku),
           text(body.packetId),
           text(body.subOrderId),
@@ -183,6 +237,7 @@ export function mountClaimAutomationRoutes(app: Express, requireUser: RequestHan
 
       res.status(201).json({ claim, jobId, ticketCode: initialTicketCode })
     } catch (error) {
+      console.error("[unified-create error]", error)
       sendError(res, error, next)
     }
   })

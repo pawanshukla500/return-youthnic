@@ -1902,5 +1902,51 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
   - Use unconstrained `:id` route parameters on `/api/claims/` that shadow literal routes like `/return-lookup`.
   - Re-introduce non-existent columns on `expected_returns`.
 
+### 2026-10-15, Antigravity, Fix Claim Submission 500 Error, CameraX 480p SD Video & Storage Management
+
+- **Overview:**
+  1. Resolved the HTTP 500 "Internal server error occurred" when submitting claims from the mobile app via `POST /api/claims/unified-create`.
+  2. Changed Meesho unboxing video recording from 720p HD to 480p SD so that files stay safely under the 25 MB limit while allowing 2.5 minutes of continuous recording.
+  3. Added Android storage, media, and audio permissions, and implemented automatic deletion of local evidence files upon successful upload to Firebase.
+- **Root Cause Analysis (500 Error):**
+  1. **Check Constraint Violation on `receipt_scans`:** In `syncClaimTicketToRegister` (`server/claim-automation-service.ts`), `UPDATE receipt_scans SET status = 'issue'` failed because `receipt_scans.status` has a CHECK constraint allowing only `('Clear', 'Draft', 'Raised', 'Approved', 'Review')`. In `receipt_scans`, `outcome` is `'issue'` and `status` is `'Draft'` or `'Raised'`.
+  2. **Invalid Columns on `receipt_scan_items`:** In `syncClaimTicketToRegister`, the fallback insertion into `receipt_scan_items` attempted to insert non-existent columns `(sku, scanned_qty, accepted_qty, created_by)`, failing with PostgreSQL error `column "sku" of relation "receipt_scan_items" does not exist`.
+  3. **Scan Insertion Schema Mismatch in `unified-create`:** When `receiptScanId` was not provided, `unified-create` attempted to insert into `receipt_scans` with invalid columns `tracking_match_leg` and `tracking_validation` while omitting NOT NULL columns `scanned_time_label`, `outcome`, and `issue_label`, and setting `status = 'issue'`.
+  4. **Duplicate Claim Error:** `unified-create` did not check if a claim already existed for the `receiptScanId`, throwing an unhandled duplicate conflict.
+- **Changes Applied:**
+  - **Server (`server/claim-automation-service.ts`, `server/claim-automation-routes.ts`):
+    - In `syncClaimTicketToRegister`:
+      - Updated `UPDATE receipt_scans` to set `outcome = 'issue', status = CASE WHEN status = 'Clear' THEN 'Draft' ELSE status END`.
+      - Updated `receipt_scan_items` insert to use exact schema columns: `(receipt_scan_id, expected_return_item_id, line_no, order_item_id, marketplace_sku, product_sku, product_sku_source, product_name, expected_qty, received_qty, verified)`.
+    - In `server/claim-automation-routes.ts`:
+      - Made `unified-create` idempotent: checks for existing `receipt_scans` and existing `claims` row before inserting, loading existing claim via `getClaim(db, scope, id)` if already created.
+      - Safely formatted `shipped_date` as `YYYY-MM-DD` or null to eliminate PostgreSQL date-casting errors.
+      - Added detailed `console.error("[unified-create error]", error)` logging.
+  - **Android Client (`android/app/`):**
+    - `ClaimVideoCaptureActivity.kt`:
+      - Set CameraX recorder quality to `Quality.SD` (fallback `Quality.LOWEST`), providing crisp 480p video at ~1.5 Mbps.
+      - Increased `MAX_DURATION_MS` from 75s to 150s (2.5 minutes) while maintaining strict `STOP_AT_BYTES = 24 MB`.
+      - Updated status overlay text to `"Recording 480p SD MP4 · ..."`.
+    - `activity_claim_video.xml`:
+      - Updated camera description and initial placeholder text to 480p SD.
+    - `AndroidManifest.xml`:
+      - Added permissions: `RECORD_AUDIO`, `READ_EXTERNAL_STORAGE`, `WRITE_EXTERNAL_STORAGE`, `READ_MEDIA_IMAGES`, `READ_MEDIA_VIDEO`.
+    - `ClaimCaptureActivity.kt`:
+      - Added runtime `permissionLauncher` and `checkAndRun` helper for camera, audio, and media storage.
+      - Updated button label to `"Record Video (480p SD)"` and guidelines dialog text.
+      - In `recordCapturedEvidence`, immediately deleted previously captured files when replacing single-item evidence (video, waybill, barcode).
+    - `ClaimEvidenceUploadWorker.kt`:
+      - Safely deleted the local evidence file from device internal cache/files immediately upon `uploadClaimEvidence` returning success (`upload.isSuccess`).
+  - **Release Manifest (`data/return-scan-release.json`, `server/mobile-release.ts`):**
+    - Updated release notes to document 480p SD unboxing video, storage cleanup, and unified claim submission fix.
+- **Verification:**
+  - `npm.cmd run typecheck`: Passed (0 errors on client and server).
+  - `npm.cmd run build`: Passed (Vite production bundle in 1.67s, server dist in 41ms).
+  - `npm.cmd test`: 388 tests — 352 passed, 0 failed, 36 skipped (`TEST_DATABASE_URL`).
+- **The next agent must not:**
+  - Set `receipt_scans.status = 'issue'` (violates `receipt_scans_status_check`; use `outcome = 'issue'` and `status = 'Draft'`).
+  - Re-introduce non-existent columns on `receipt_scan_items`.
+
+
 
 

@@ -8,7 +8,7 @@
         android:id="@+id/previewVideo"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:contentDescription="720p claim video camera" />
+        android:contentDescription="480p SD claim video camera" />
 
     <LinearLayout
         android:layout_width="match_parent"
@@ -24,7 +24,7 @@
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:text="Preparing 720p MP4 camera…"
+            android:text="Preparing 480p SD MP4 camera…"
             android:textColor="#FFFFFF"
             android:textSize="16sp"
             android:textStyle="bold" />

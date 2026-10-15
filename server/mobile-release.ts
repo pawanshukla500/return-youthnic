@@ -24,10 +24,10 @@ const DEFAULT_RELEASE: MobileReleaseInfo = {
   minRequiredVersionCode: 10001,
   sha256: "db09eb8f2f3e881e74c76414ef20a8fef476113c92f10e5479cebefb7f32e238",
   sizeBytes: 3465554,
-  notes: "Youthnic Native Android Return Scanner · Claim Evidence Capture & Automation Sync\n- Dedicated marketplace return claim capture accessible directly from return scan and home screen\n- High-resolution evidence photo capture, barcode scanning, 720p unpacking video recorder, and file attachments\n- Offline upload queue backed by Android WorkManager with network retry\n- Background sync and automated claims preparation for desktop processing",
-  publishedAt: "2026-10-15T11:08:06Z",
-  downloadUrl: "https://github.com/pawanshukla500/return-youthnic/releases/download/v1.0.37/ReturnScan-v1.0.37.apk",
-  pageUrl: "https://github.com/pawanshukla500/return-youthnic/releases/tag/v1.0.37",
+  notes: "Youthnic Native Android Return Scanner · Claim Evidence Capture & Automation Sync\n- Dedicated marketplace return claim capture accessible directly from return scan and home screen\n- High-resolution evidence photo capture, barcode scanning, 480p SD unpacking video recorder, and file attachments\n- Storage and camera permission flow with automatic deletion of local evidence files after successful upload\n- Robust unified claim submission and automatic desktop automation job queueing",
+  publishedAt: "2026-10-15T16:25:00Z",
+  downloadUrl: "https://github.com/pawanshukla500/return-youthnic/releases/latest",
+  pageUrl: "https://github.com/pawanshukla500/return-youthnic/releases",
 }
 
 let cachedRelease: MobileReleaseInfo | null = null

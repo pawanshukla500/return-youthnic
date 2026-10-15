@@ -24,7 +24,11 @@ class ClaimEvidenceUploadWorker(
         val app = applicationContext as ReturnScanApp
         val upload = app.apiClient.uploadClaimEvidence(claimId, fieldKey, file, mimeType)
         if (upload.isSuccess) {
-            file.delete()
+            try {
+                if (file.exists()) {
+                    file.delete()
+                }
+            } catch (_: Exception) {}
             return Result.success()
         }
         val error = upload.exceptionOrNull()

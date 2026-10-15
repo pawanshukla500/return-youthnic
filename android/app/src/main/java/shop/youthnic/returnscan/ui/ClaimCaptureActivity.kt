@@ -4,9 +4,11 @@ import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.res.ColorStateList
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
@@ -14,6 +16,7 @@ import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import androidx.lifecycle.lifecycleScope
 import androidx.work.BackoffPolicy
@@ -82,6 +85,34 @@ class ClaimCaptureActivity : AppCompatActivity() {
             file?.delete()
         }
         pendingPhotoFile = null
+    }
+
+    private var pendingPermissionAction: (() -> Unit)? = null
+
+    private val permissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val anyDenied = permissions.values.any { !it }
+        if (!anyDenied) {
+            val action = pendingPermissionAction
+            pendingPermissionAction = null
+            action?.invoke()
+        } else {
+            pendingPermissionAction = null
+            showMessage("Required camera or storage permission was denied.")
+        }
+    }
+
+    private fun checkAndRun(permissions: Array<String>, action: () -> Unit) {
+        val missing = permissions.filter {
+            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
+        }
+        if (missing.isEmpty()) {
+            action()
+        } else {
+            pendingPermissionAction = action
+            permissionLauncher.launch(missing.toTypedArray())
+        }
     }
 
     private val pickGalleryLauncher = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
@@ -637,24 +668,47 @@ class ClaimCaptureActivity : AppCompatActivity() {
 
             val isVideo = field.fieldType == "video"
             if (isVideo) {
-                card.btnCapturePrimary.text = "Record Video (720p HD)"
+                card.btnCapturePrimary.text = "Record Video (480p SD)"
                 card.btnCapturePrimary.setOnClickListener {
                     pendingFieldKey = field.fieldKey
-                    recordVideoLauncher.launch(Intent(this, ClaimVideoCaptureActivity::class.java))
+                    checkAndRun(
+                        arrayOf(
+                            android.Manifest.permission.CAMERA,
+                            android.Manifest.permission.RECORD_AUDIO
+                        )
+                    ) {
+                        recordVideoLauncher.launch(Intent(this, ClaimVideoCaptureActivity::class.java))
+                    }
                 }
                 card.btnPickGallery.setOnClickListener {
                     pendingFieldKey = field.fieldKey
-                    pickGalleryLauncher.launch("video/*")
+                    val perms = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        arrayOf(android.Manifest.permission.READ_MEDIA_VIDEO)
+                    } else {
+                        arrayOf(android.Manifest.permission.READ_EXTERNAL_STORAGE)
+                    }
+                    checkAndRun(perms) {
+                        pickGalleryLauncher.launch("video/*")
+                    }
                 }
             } else {
                 card.btnCapturePrimary.text = "Take Photo"
                 card.btnCapturePrimary.setOnClickListener {
                     pendingFieldKey = field.fieldKey
-                    launchCameraPhoto(field.fieldKey)
+                    checkAndRun(arrayOf(android.Manifest.permission.CAMERA)) {
+                        launchCameraPhoto(field.fieldKey)
+                    }
                 }
                 card.btnPickGallery.setOnClickListener {
                     pendingFieldKey = field.fieldKey
-                    pickGalleryLauncher.launch("image/*")
+                    val perms = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        arrayOf(android.Manifest.permission.READ_MEDIA_IMAGES)
+                    } else {
+                        arrayOf(android.Manifest.permission.READ_EXTERNAL_STORAGE)
+                    }
+                    checkAndRun(perms) {
+                        pickGalleryLauncher.launch("image/*")
+                    }
                 }
             }
 
@@ -705,6 +759,17 @@ class ClaimCaptureActivity : AppCompatActivity() {
 
     private fun recordCapturedEvidence(fieldKey: String, file: File, mimeType: String) {
         val list = capturedFiles.getOrPut(fieldKey) { mutableListOf() }
+        // Clean up replaced file for single-item evidence slots to keep device storage clean
+        if (fieldKey == "unboxing_video" || fieldKey == "reverse_waybill" || fieldKey == "barcode_image") {
+            for (old in list) {
+                try {
+                    if (old.file.exists() && old.file.absolutePath != file.absolutePath) {
+                        old.file.delete()
+                    }
+                } catch (_: Exception) {}
+            }
+            list.clear()
+        }
         list.add(CapturedFile(file, mimeType, fieldKey))
 
         val card = evidenceCardBindings[fieldKey] ?: return
@@ -913,7 +978,7 @@ class ClaimCaptureActivity : AppCompatActivity() {
     private fun showInfoDialog() {
         MaterialAlertDialogBuilder(this)
             .setTitle("Meesho Claim Guidelines")
-            .setMessage("For Meesho Support tickets:\n• State of the packet is always Tampered.\n• Turnaround time (TAT) is 7 calendar days inclusive.\n• Unpacking video must be recorded in 720p MP4 and under 25 MB.\n• Images of received product and reverse waybill are mandatory.")
+            .setMessage("For Meesho Support tickets:\n• State of the packet is always Tampered.\n• Turnaround time (TAT) is 7 calendar days inclusive.\n• Unpacking video must be recorded in 480p SD MP4 and under 25 MB.\n• Images of received product and reverse waybill are mandatory.")
             .setPositiveButton("OK", null)
             .show()
     }
