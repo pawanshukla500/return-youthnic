@@ -607,6 +607,164 @@ export async function updateJobProgress(
   }
 }
 
+export function mapToReceiptIssueCategory(codeOrReason?: string): { code: string; label: string } {
+  const norm = (codeOrReason || "").toLowerCase()
+  if (norm.includes("missing")) {
+    return { code: "missing_component", label: "Missing product or component" }
+  }
+  if (norm.includes("damage")) {
+    return { code: "damaged_product", label: "Damaged product" }
+  }
+  if (norm.includes("sku")) {
+    return { code: "sku_change", label: "SKU Change" }
+  }
+  if (norm.includes("size")) {
+    return { code: "size_change", label: "Size Change" }
+  }
+  if (norm.includes("iron")) {
+    return { code: "iron_send", label: "Iron Send" }
+  }
+  if (norm.includes("other")) {
+    return { code: "other_issue", label: "Other issue" }
+  }
+  return { code: "wrong_product", label: "Wrong product" }
+}
+
+export async function syncClaimTicketToRegister(
+  dbOrClient: pg.Pool | pg.PoolClient,
+  params: {
+    receiptScanId: number
+    ticketCode: string
+    status?: "Draft" | "Raised" | "Review" | "Approved" | "Rejected"
+    actorId?: number | null
+    issueCategoryCode?: string
+    issueCategoryLabel?: string
+    notes?: string
+  },
+): Promise<number | null> {
+  const scanId = Number(params.receiptScanId)
+  if (!Number.isInteger(scanId) || scanId <= 0) return null
+
+  const rawCode = (params.ticketCode || "").trim()
+  const ticketCode = rawCode || `CLM-${scanId}`
+  const status = params.status || "Raised"
+  const actorId = params.actorId || null
+
+  const existingTicket = await dbOrClient.query(
+    `SELECT id, ticket_code, status FROM claim_tickets WHERE receipt_scan_id = $1 ORDER BY id DESC LIMIT 1`,
+    [scanId],
+  )
+
+  let ticketId: number
+  if (existingTicket.rows[0]) {
+    ticketId = Number(existingTicket.rows[0].id)
+    const oldCode = String(existingTicket.rows[0].ticket_code)
+    const oldStatus = String(existingTicket.rows[0].status)
+
+    if (ticketCode !== oldCode || status !== oldStatus) {
+      const conflict = await dbOrClient.query(
+        `SELECT id FROM claim_tickets WHERE ticket_code = $1 AND id <> $2`,
+        [ticketCode, ticketId],
+      )
+      const safeCode = conflict.rows[0] ? `${ticketCode}-${scanId}` : ticketCode
+
+      await dbOrClient.query(
+        `UPDATE claim_tickets
+         SET ticket_code = $2, status = $3, updated_at = now()
+         WHERE id = $1`,
+        [ticketId, safeCode, status],
+      )
+      await dbOrClient.query(
+        `INSERT INTO claim_ticket_history (claim_ticket_id, from_status, to_status, reason, changed_by)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [ticketId, oldStatus, status, `Ticket updated to ${safeCode}`, actorId],
+      )
+    }
+  } else {
+    const conflict = await dbOrClient.query(
+      `SELECT id FROM claim_tickets WHERE ticket_code = $1`,
+      [ticketCode],
+    )
+    const safeCode = conflict.rows[0] ? `${ticketCode}-${scanId}` : ticketCode
+
+    const inserted = await dbOrClient.query(
+      `INSERT INTO claim_tickets (receipt_scan_id, ticket_code, status, rejection_reason, created_by, created_at, updated_at)
+       VALUES ($1, $2, $3, '', $4, now(), now())
+       RETURNING id`,
+      [scanId, safeCode, status, actorId],
+    )
+    ticketId = Number(inserted.rows[0].id)
+    await dbOrClient.query(
+      `INSERT INTO claim_ticket_history (claim_ticket_id, from_status, to_status, reason, changed_by)
+       VALUES ($1, NULL, $2, 'Initial claim ticket created', $3)`,
+      [ticketId, status, actorId],
+    )
+  }
+
+  // Ensure scan status is 'issue'
+  await dbOrClient.query(
+    `UPDATE receipt_scans SET status = 'issue' WHERE id = $1 AND status <> 'issue'`,
+    [scanId],
+  )
+
+  // Ensure receipt_scan_items exists
+  const itemRes = await dbOrClient.query(
+    `SELECT id FROM receipt_scan_items WHERE receipt_scan_id = $1 ORDER BY id ASC LIMIT 1`,
+    [scanId],
+  )
+
+  let itemId: number
+  if (!itemRes.rows[0]) {
+    const erInfo = await dbOrClient.query(
+      `SELECT eri.id AS eri_id, eri.order_line_id, eri.display_order_item_id, s.code AS sku_code
+       FROM receipt_scans rs
+       JOIN expected_returns er ON er.id = rs.expected_return_id
+       LEFT JOIN expected_return_items eri ON eri.expected_return_id = er.id
+       LEFT JOIN skus s ON s.id = eri.sku_id
+       WHERE rs.id = $1
+       LIMIT 1`,
+      [scanId],
+    )
+    const orderItemId = erInfo.rows[0]?.display_order_item_id || erInfo.rows[0]?.order_line_id || ""
+    const skuCode = erInfo.rows[0]?.sku_code || ""
+    const eriId = erInfo.rows[0]?.eri_id ? Number(erInfo.rows[0].eri_id) : null
+
+    const itemInsert = await dbOrClient.query(
+      `INSERT INTO receipt_scan_items (receipt_scan_id, expected_return_item_id, line_no, order_item_id, sku, scanned_qty, accepted_qty, created_by)
+       VALUES ($1, $2, 1, $3, $4, 1, 0, $5)
+       RETURNING id`,
+      [scanId, eriId, orderItemId, skuCode, actorId],
+    )
+    itemId = Number(itemInsert.rows[0].id)
+  } else {
+    itemId = Number(itemRes.rows[0].id)
+  }
+
+  // Ensure receipt_scan_issues exists and links to ticketId
+  const issueRes = await dbOrClient.query(
+    `SELECT id, claim_ticket_id FROM receipt_scan_issues WHERE receipt_scan_item_id = $1 ORDER BY id ASC LIMIT 1`,
+    [itemId],
+  )
+
+  if (issueRes.rows[0]) {
+    if (Number(issueRes.rows[0].claim_ticket_id) !== ticketId) {
+      await dbOrClient.query(
+        `UPDATE receipt_scan_issues SET claim_ticket_id = $1 WHERE id = $2`,
+        [ticketId, issueRes.rows[0].id],
+      )
+    }
+  } else {
+    const cat = mapToReceiptIssueCategory(params.issueCategoryCode || params.issueCategoryLabel)
+    await dbOrClient.query(
+      `INSERT INTO receipt_scan_issues (receipt_scan_item_id, category_code, category_label, sub_issue_label, qty, claim_ticket_id, notes, created_by)
+       VALUES ($1, $2, $3, 'Claim Filed', 1, $4, $5, $6)`,
+      [itemId, cat.code, cat.label, ticketId, params.notes || "Linked to claim ticket", actorId],
+    )
+  }
+
+  return ticketId
+}
+
 export async function completeJobSubmission(
   db: pg.Pool,
   jobId: number,
@@ -661,6 +819,24 @@ export async function completeJobSubmission(
        VALUES ($1, 'processing', 'submitted', $2, NULL)`,
       [claimId, `Submitted by desktop automation. Marketplace Claim Ref: ${data.marketplaceClaimId}`],
     )
+
+    // Sync ticket ID and Raised status into return register
+    const claimRow = await client.query(
+      `SELECT receipt_scan_id, claim_reason, marketplace_issue_code, marketplace_issue_label
+       FROM claims WHERE id = $1`,
+      [claimId],
+    )
+    if (claimRow.rows[0]?.receipt_scan_id) {
+      await syncClaimTicketToRegister(client, {
+        receiptScanId: Number(claimRow.rows[0].receipt_scan_id),
+        ticketCode: data.marketplaceClaimId,
+        status: "Raised",
+        actorId: null,
+        issueCategoryCode: claimRow.rows[0].marketplace_issue_code || undefined,
+        issueCategoryLabel: claimRow.rows[0].marketplace_issue_label || claimRow.rows[0].claim_reason || "Marketplace Claim",
+        notes: `Claim ticket filed on marketplace: ${data.marketplaceClaimId}`,
+      })
+    }
 
     await client.query("COMMIT")
   } catch (err) {

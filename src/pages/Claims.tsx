@@ -796,24 +796,24 @@ function CreateClaimModal({
           .map((m) => `${m.label} (Qty: ${m.quantity}, Rate: ₹${m.amountEach || 100})`)
           .join(", ")
       }
-      const amtStr = res.missingAmount > 0 ? ` of total value ₹${res.missingAmount}` : ""
-      return `Item/s missing in return package. Ordered master SKU: ${masterSku}. Missing: ${missingDesc}${amtStr}. Sub Order Number: ${subId}, AWB Number: ${awbNo}, State of the packet: ${packetState}, Packet ID: ${pId}. Kindly process our claim.`
+      const amtStr = res.missingAmount > 0 ? `Total claim amount: ₹${res.missingAmount}.\n` : ""
+      return `Team,\n\nPlease Note This Sub Order ID ${subId} has item/s missing in the return package: ${missingDesc}.\n${amtStr}Please check attached all proof and video and make sure our claim will be approved.\n\nSub Order ID: ${subId}\nAWB Number: ${awbNo}\nState of the packet: ${packetState}\nPacket ID: ${pId}\n\nRegards,\nReturn Team Tullipprints`
     }
 
     if (reasonCode === "wrong_barcode_rto") {
-      return `I have received a wrong barcoded package in RTO instead of ordered item (${masterSku}). Sub Order Number: ${subId}, AWB Number: ${awbNo}, State of the packet: ${packetState}, Packet ID: ${pId}. Barcode label on package does not match reverse waybill. Kindly approve claim.`
+      return `Team,\n\nPlease Note This Sub Order ID ${subId} has received a wrong barcoded package in RTO instead of ordered item (${masterSku}). Outer package barcode label does not match our return manifest. Please check attached proof and video and make sure our claim will be approved.\n\nSub Order ID: ${subId}\nAWB Number: ${awbNo}\nState of the packet: ${packetState}\nPacket ID: ${pId}\n\nRegards,\nReturn Team Tullipprints`
     }
 
     if (reasonCode === "damaged_return") {
-      return `Damaged product received in return for ${masterSku}. Sub Order Number: ${subId}, AWB Number: ${awbNo}, State of the packet: ${packetState}, Packet ID: ${pId}. Kindly approve compensation.`
+      return `Team,\n\nPlease Note This Sub Order ID ${subId} has received damaged return product (${masterSku}). Product arrived physically damaged/torn. Please check attached proof and video and make sure our claim will be approved.\n\nSub Order ID: ${subId}\nAWB Number: ${awbNo}\nState of the packet: ${packetState}\nPacket ID: ${pId}\n\nRegards,\nReturn Team Tullipprints`
     }
 
     if (reasonCode === "used_product") {
-      return `Used/soiled product received in return instead of fresh ${masterSku}. Sub Order Number: ${subId}, AWB Number: ${awbNo}, State of the packet: ${packetState}, Packet ID: ${pId}. Kindly reimburse value.`
+      return `Team,\n\nPlease Note This Sub Order ID ${subId} has received used/soiled product as return instead of fresh ${masterSku}. Returned product shows evident signs of wear/use. Please check attached proof and video and make sure our claim will be approved.\n\nSub Order ID: ${subId}\nAWB Number: ${awbNo}\nState of the packet: ${packetState}\nPacket ID: ${pId}\n\nRegards,\nReturn Team Tullipprints`
     }
 
     // Default: wrong_return
-    return `I have received wrong return instead of ordered master SKU (${masterSku}). Sub Order Number: ${subId}, AWB Number: ${awbNo}, State of the packet: ${packetState}, Packet ID: ${pId}. Inspection reveals completely different product delivered. Kindly approve claim.`
+    return `Team,\n\nPlease Note This Sub Order ID ${subId} Has received Us the wrong please check attached all the prrof and video and and make sure we claim will be approved )\n\nSub Order ID: ${subId}\nAWB Number: ${awbNo}\nState of the packet: ${packetState}\nPacket ID: ${pId}\n\nRegards,\nReturn Team Tullipprints`
   }
 
   const handleSearch = async () => {

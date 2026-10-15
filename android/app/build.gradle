@@ -1,6 +1,7 @@
 plugins {
     id 'com.android.application'
     id 'org.jetbrains.kotlin.android'
+    id 'com.google.gms.google-services'
 }
 
 android {
@@ -123,6 +124,11 @@ dependencies {
 
     // Background update check worker
     implementation 'androidx.work:work-runtime-ktx:2.9.1'
+
+    // Firebase BoM and SDKs
+    implementation platform('com.google.firebase:firebase-bom:33.5.1')
+    implementation 'com.google.firebase:firebase-analytics'
+    implementation 'com.google.firebase:firebase-storage'
 
     // Testing
     testImplementation 'junit:junit:4.13.2'

@@ -94,28 +94,68 @@ export function meeshoClaimDescription(
 ): string {
   const packetId = input.packetId || "NA"
   const reference =
-    `Sub Order ID: ${input.subOrderId}. AWB Number: ${input.awb}. ` +
-    `State of the packet: ${MEESHO_PACKET_STATE}. Packet ID: ${packetId}.`
+    `Sub Order ID: ${input.subOrderId}\n` +
+    `AWB Number: ${input.awb}\n` +
+    `State of the packet: ${MEESHO_PACKET_STATE}\n` +
+    `Packet ID: ${packetId}`
   const skuInfo = input.masterSku ? ` (${input.masterSku})` : ""
+
   if (issueCode === "missing_items") {
     const missing = (input.missingItems && input.missingItems.length > 0)
       ? input.missingItems
           .map((item) => `${item.label} (${item.quantity} × ${rupees(item.amountEach)} = ${rupees(item.amount)})`)
           .join(", ")
-      : "Missing items / components"
-    const amountStr = (input.missingAmount && input.missingAmount > 0) ? `Total claim amount: ${rupees(input.missingAmount)}. ` : ""
-    return `Item/s are missing in my return: ${missing}.${skuInfo ? ` Ordered: ${skuInfo}.` : ""} ${amountStr}${reference}`
+      : "Missing item / component"
+    const amountStr = (input.missingAmount && input.missingAmount > 0) ? `Total claim amount: ${rupees(input.missingAmount)}.\n` : ""
+    return (
+      `Team,\n\n` +
+      `Please Note This Sub Order ID ${input.subOrderId} has item/s missing in the return package: ${missing}.${skuInfo ? ` Ordered: ${skuInfo}.` : ""}\n` +
+      `${amountStr}` +
+      `Please check attached all proof and video and make sure our claim will be approved.\n\n` +
+      `${reference}\n\n` +
+      `Regards,\n` +
+      `Return Team Tullipprints`
+    )
   }
+
   if (issueCode === "wrong_barcode_rto") {
-    return `I have received a wrong barcoded package in RTO${skuInfo}. Package barcode does not match return manifest. ${reference}`
+    return (
+      `Team,\n\n` +
+      `Please Note This Sub Order ID ${input.subOrderId} has received a wrong barcoded package in RTO${skuInfo}. Package barcode does not match return manifest. Please check attached proof and video and make sure our claim will be approved.\n\n` +
+      `${reference}\n\n` +
+      `Regards,\n` +
+      `Return Team Tullipprints`
+    )
   }
+
   if (issueCode === "damaged_return") {
-    return `I have received damaged return${skuInfo}. Product arrived physically damaged/torn. ${reference}`
+    return (
+      `Team,\n\n` +
+      `Please Note This Sub Order ID ${input.subOrderId} has received damaged return product${skuInfo}. Product arrived physically damaged/torn. Please check attached proof and video and make sure our claim will be approved.\n\n` +
+      `${reference}\n\n` +
+      `Regards,\n` +
+      `Return Team Tullipprints`
+    )
   }
+
   if (issueCode === "used_product") {
-    return `I have received used product as return${skuInfo}. Returned product shows evident signs of wear/use. ${reference}`
+    return (
+      `Team,\n\n` +
+      `Please Note This Sub Order ID ${input.subOrderId} has received used/soiled product as return${skuInfo}. Returned product shows evident signs of wear/use. Please check attached proof and video and make sure our claim will be approved.\n\n` +
+      `${reference}\n\n` +
+      `Regards,\n` +
+      `Return Team Tullipprints`
+    )
   }
-  return `I have received the wrong return${skuInfo}. ${reference}`
+
+  // Default: wrong_return
+  return (
+    `Team,\n\n` +
+    `Please Note This Sub Order ID ${input.subOrderId} Has received Us the wrong please check attached all the prrof and video and and make sure we claim will be approved )\n\n` +
+    `${reference}\n\n` +
+    `Regards,\n` +
+    `Return Team Tullipprints`
+  )
 }
 
 export async function getMeeshoClaimDraft(

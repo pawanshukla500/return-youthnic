@@ -1,0 +1,49 @@
+{
+  "project_info": {
+    "project_number": "1055211807035",
+    "firebase_url": "https://return-scan-app-default-rtdb.europe-west1.firebasedatabase.app",
+    "project_id": "return-scan-app",
+    "storage_bucket": "return-scan-app.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1055211807035:android:9a58bae66492c594f1171e",
+        "android_client_info": {
+          "package_name": "return.youthnic.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBiYoB3JCQPJJiDryeuJU6AuRp6AbOr8oE"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1055211807035:android:9a58bae66492c594f1171e",
+        "android_client_info": {
+          "package_name": "shop.youthnic.returnscan"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBiYoB3JCQPJJiDryeuJU6AuRp6AbOr8oE"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -4,6 +4,7 @@ import {
   decryptSecret,
   encryptSecret,
   maskSecret,
+  mapToReceiptIssueCategory,
 } from "../claim-automation-service.js"
 
 test("credentials encryption: round-trips plaintext correctly using AES-256-GCM", () => {
@@ -58,4 +59,11 @@ test("automation job stages: valid progression and states", () => {
   assert.equal(validStages.length, 9)
   assert.ok(validStages.includes("prepared"))
   assert.ok(validStages.includes("manual_intervention_required"))
+})
+
+test("mapToReceiptIssueCategory: maps marketplace issue codes and reasons to database categories", () => {
+  assert.deepEqual(mapToReceiptIssueCategory("wrong_item"), { code: "wrong_product", label: "Wrong product" })
+  assert.deepEqual(mapToReceiptIssueCategory("missing_items"), { code: "missing_component", label: "Missing product or component" })
+  assert.deepEqual(mapToReceiptIssueCategory("damaged_item"), { code: "damaged_product", label: "Damaged product" })
+  assert.deepEqual(mapToReceiptIssueCategory("other_issue"), { code: "other_issue", label: "Other issue" })
 })
