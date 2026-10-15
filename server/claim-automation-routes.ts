@@ -121,17 +121,23 @@ export function mountClaimAutomationRoutes(app: Express, requireUser: RequestHan
         remarks: text(body.remarks),
         claimTemplateId: positiveId(body.claimTemplateId),
         marketplaceIssueCode: text(body.marketplaceIssueCode),
+        packetId: text(body.packetId),
+        missingAmount: Number(body.missingAmount) || 0,
+        subOrderId: text(body.subOrderId),
       })
 
       // Update snapshots on claims row
       await db.query(
         `UPDATE claims
-         SET customer_name_snapshot = $2,
-             total_price_snapshot = $3,
-             shipped_date = $4,
-             sku_snapshot = $5,
+         SET customer_name_snapshot = COALESCE(NULLIF($2, ''), customer_name_snapshot),
+             total_price_snapshot = COALESCE(NULLIF($3, 0), total_price_snapshot),
+             shipped_date = COALESCE(NULLIF($4, '')::date, shipped_date),
+             sku_snapshot = COALESCE(NULLIF($5, ''), sku_snapshot),
              packet_id_snapshot = COALESCE(NULLIF($6, ''), packet_id_snapshot),
-             claim_content = $7
+             sub_order_id_snapshot = COALESCE(NULLIF($7, ''), sub_order_id_snapshot),
+             awb_snapshot = COALESCE(NULLIF($8, ''), awb_snapshot),
+             packet_state_snapshot = COALESCE(NULLIF($9, ''), packet_state_snapshot, 'Tampered'),
+             claim_content = COALESCE(NULLIF($10, ''), claim_content)
          WHERE id = $1`,
         [
           claim.id,
@@ -140,7 +146,10 @@ export function mountClaimAutomationRoutes(app: Express, requireUser: RequestHan
           text(body.shippedDate) || null,
           text(body.sku),
           text(body.packetId),
-          text(body.claimContent),
+          text(body.subOrderId),
+          text(body.awb),
+          text(body.packetState || "Tampered"),
+          text(body.claimContent || body.claimDescription),
         ],
       )
 

@@ -1762,5 +1762,38 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
 - **The next agent must not:**
   - Change default import mode from `merge` to `replace`.
   - Drop or truncate `product_master` or `unmapped_listing_skus`.
-  - Remove `ON CONFLICT (marketplace, listing_sku) DO UPDATE` in `upsertProductMaster`.
+### 2026-10-15, Antigravity, Meesho Return Claim Details Capture Flow (Mobile App + Web + Backend)
+
+- **Overview:** Implemented the dedicated marketplace claim evidence capture and ticket filing workflow focused strictly on **Meesho** (Support Portal: Help > Returns/RTO & Exchange > Raise a Ticket), with other marketplaces staged sequentially.
+- **Backend & Schema Services (`server/meesho-claims.ts`, `server/claim-automation-service.ts`, `server/claim-automation-routes.ts`, `server/claims-service.ts`, `server/schema-meesho-claims.sql`):
+  - Configured all 5 Meesho support issue categories: `wrong_return` ("I have received wrong return"), `missing_items` ("Item/s are missing in my return"), `wrong_barcode_rto` ("I have received a wrong barcoded package in RTO"), `damaged_return` ("I have received damaged return"), and `used_product` ("I have received used product as return").
+  - Auto-generated claim description engine (`meeshoClaimDescription`) incorporating `Sub Order ID`, `AWB Number`, `State of the packet: Tampered`, `Packet ID` (with `NA` fallback), `ordered product/masterSku`, and missing item breakdown with configured rates (e.g. ₹100) and total claim amount.
+  - `lookupReturnForClaim`: Added extraction of `subOrderId`, `awb`, `packetState: "Tampered"`, `packetId: flyer_id || "NA"`, 7-calendar-day inclusive TAT countdown (`receivedDate`, `dueDate`, `daysRemaining`, `overdue`), `missingItems`, and `missingAmount`.
+  - `unified-create` route & `claims` schema: Persisted `sub_order_id_snapshot`, `awb_snapshot`, `packet_state_snapshot: "Tampered"`, `packet_id_snapshot`, and full `claim_content`.
+  - Seeded claim template fields ensuring exact 5 Meesho portal slots: `barcode_image` (optional, 1), `product_images` (mandatory, 1-10), `reverse_waybill` (mandatory, 1), `unboxing_video` (mandatory, 1, 720p HD MP4 <= 25MB), and `attachments` (optional, 0-5).
+- **Web Frontend (`src/pages/Claims.tsx`, `src/types.ts`):**
+  - Updated `ClaimReturnLookup` type with `subOrderId`, `awb`, `packetState`, `tatDays`, `dueDate`, `daysRemaining`, `overdue`, `missingAmount`, and `missingItems`.
+  - Overhauled `CreateClaimModal`:
+    - Marketplace selector with Meesho active & configured, others disabled with upcoming badges.
+    - 7-day TAT countdown banner showing received date, due date, and days remaining / overdue badge.
+    - Pre-filled Sub Order Number with one-click copy button.
+    - AWB Number input pre-filled from database.
+    - State of the packet dropdown locked to "Tampered" per Meesho Claim Policy.
+    - Packet ID input pre-filled with flyer ID or "NA" with portal instructions.
+    - Dynamic auto-description text area with character counter (0/1000) that updates automatically when the Issue dropdown changes.
+- **Android Mobile App (`android/app/`):**
+  - `ClaimModels.kt`: Added `subOrderId` to `ClaimProductItem` and `ClaimReturnLookup`.
+  - `activity_claim_capture.xml`: Redesigned layout with Marketplace selector at top, 7-day TAT countdown banner, Meesho Issue dropdown, Sub Order Number with copy button, AWB Number with barcode scanner, State of the packet locked to "Tampered", Packet ID with flyer barcode scanner, Claim Title, Description with 0/1000 counter, and Step 2 ticket summary with dynamic evidence slots.
+  - `ClaimCaptureActivity.kt`: Wired marketplace selection, copy Sub Order ID action, auto-generation of descriptions and titles on issue selection, and TAT banner styling (green on-time vs red overdue).
+  - `ClaimVideoCaptureActivity.kt`: Verified 720p HD MP4 video recording with 24MB stop and 25MB hard limit.
+- **Verification:**
+  - `npm.cmd run typecheck`: Passed (0 errors on both tsconfig.json and tsconfig.server.json).
+  - `npm.cmd run build`: Passed (Vite production bundle in 1.87s, server dist bundled in 35ms).
+  - `npm.cmd test`: 380 tests — 344 passed, 0 failed, 36 skipped (`TEST_DATABASE_URL`).
+  - Unit tests in `server/tests/claims.test.ts` for all 5 Meesho issue descriptions, packet ID NA fallback, and 7-day inclusive TAT.
+- **The next agent must not:**
+  - Change the default packet state for Meesho return claims from "Tampered".
+  - Drop or truncate any database tables or columns.
+  - Remove the 25MB file size limit on unboxing video uploads.
+
 

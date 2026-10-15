@@ -760,20 +760,65 @@ function CreateClaimModal({
   onClose: () => void
   onCreated: (claimId: number) => void
 }) {
+  const [selectedMarketplace, setSelectedMarketplace] = useState("meesho")
   const [query, setQuery] = useState("")
   const [loadingLookup, setLoadingLookup] = useState(false)
   const [lookupResult, setLookupResult] = useState<ClaimReturnLookup | null>(null)
   const [selectedTemplateId, setSelectedTemplateId] = useState("")
-  const [selectedReason, setSelectedReason] = useState("wrong_product")
+  const [selectedReason, setSelectedReason] = useState("wrong_return")
+  const [subOrderNumber, setSubOrderNumber] = useState("")
+  const [awbNumber, setAwbNumber] = useState("")
+  const [packetId, setPacketId] = useState("")
   const [claimTitle, setClaimTitle] = useState("")
   const [claimContent, setClaimContent] = useState("")
   const [remarks, setRemarks] = useState("")
+  const [copiedSubOrder, setCopiedSubOrder] = useState(false)
   const [creating, setCreating] = useState(false)
   const [formError, setFormError] = useState("")
 
+  const generateDescription = (
+    reasonCode: string,
+    res: ClaimReturnLookup,
+    subOrderVal: string,
+    awbVal: string,
+    pktVal: string,
+  ) => {
+    const subId = subOrderVal || res.subOrderId || res.orderId
+    const awbNo = awbVal || res.awb || res.trackingNumber
+    const pId = pktVal || res.packetId || "NA"
+    const masterSku = res.items[0]?.masterSku || res.items[0]?.sku || "item"
+    const packetState = "Tampered"
+
+    if (reasonCode === "missing_items") {
+      let missingDesc = "one or more item/s"
+      if (res.missingItems && res.missingItems.length > 0) {
+        missingDesc = res.missingItems
+          .map((m) => `${m.label} (Qty: ${m.quantity}, Rate: ₹${m.amountEach || 100})`)
+          .join(", ")
+      }
+      const amtStr = res.missingAmount > 0 ? ` of total value ₹${res.missingAmount}` : ""
+      return `Item/s missing in return package. Ordered master SKU: ${masterSku}. Missing: ${missingDesc}${amtStr}. Sub Order Number: ${subId}, AWB Number: ${awbNo}, State of the packet: ${packetState}, Packet ID: ${pId}. Kindly process our claim.`
+    }
+
+    if (reasonCode === "wrong_barcode_rto") {
+      return `I have received a wrong barcoded package in RTO instead of ordered item (${masterSku}). Sub Order Number: ${subId}, AWB Number: ${awbNo}, State of the packet: ${packetState}, Packet ID: ${pId}. Barcode label on package does not match reverse waybill. Kindly approve claim.`
+    }
+
+    if (reasonCode === "damaged_return") {
+      return `Damaged product received in return for ${masterSku}. Sub Order Number: ${subId}, AWB Number: ${awbNo}, State of the packet: ${packetState}, Packet ID: ${pId}. Kindly approve compensation.`
+    }
+
+    if (reasonCode === "used_product") {
+      return `Used/soiled product received in return instead of fresh ${masterSku}. Sub Order Number: ${subId}, AWB Number: ${awbNo}, State of the packet: ${packetState}, Packet ID: ${pId}. Kindly reimburse value.`
+    }
+
+    // Default: wrong_return
+    return `I have received wrong return instead of ordered master SKU (${masterSku}). Sub Order Number: ${subId}, AWB Number: ${awbNo}, State of the packet: ${packetState}, Packet ID: ${pId}. Inspection reveals completely different product delivered. Kindly approve claim.`
+  }
+
   const handleSearch = async () => {
     if (query.trim().length < 3) {
-      setFormError("Enter at least 3 characters of AWB or Order ID.")
+      setFormError("Enter at least 3 characters of AWB, Sub Order ID, or Packet ID.")
       return
     }
     setLoadingLookup(true)
@@ -781,12 +826,18 @@ function CreateClaimModal({
     try {
       const data = await api<ClaimReturnLookup>(`/api/claims/return-lookup?query=${encodeURIComponent(query.trim())}`)
       setLookupResult(data)
+      const initialSubOrder = data.subOrderId || data.items[0]?.subOrderId || data.orderId
+      const initialAwb = data.awb || data.trackingNumber
+      const initialPacket = data.packetId || "NA"
+      setSubOrderNumber(initialSubOrder)
+      setAwbNumber(initialAwb)
+      setPacketId(initialPacket)
+
       if (data.templates[0]) setSelectedTemplateId(String(data.templates[0].id))
-      if (data.standardReasons[0]) {
-        setSelectedReason(data.standardReasons[0].code)
-        setClaimTitle(data.standardReasons[0].suggestedTitle)
-        setClaimContent(data.standardReasons[0].suggestedContent)
-      }
+      const initialReason = data.standardReasons[0]?.code || "wrong_return"
+      setSelectedReason(initialReason)
+      setClaimTitle(data.standardReasons[0]?.suggestedTitle || "I have received wrong return")
+      setClaimContent(generateDescription(initialReason, data, initialSubOrder, initialAwb, initialPacket))
     } catch (err: any) {
       setFormError(err.message || "No matching return found.")
       setLookupResult(null)
@@ -801,8 +852,16 @@ function CreateClaimModal({
     const match = lookupResult.standardReasons.find((r) => r.code === code)
     if (match) {
       setClaimTitle(match.suggestedTitle)
-      setClaimContent(match.suggestedContent)
     }
+    setClaimContent(generateDescription(code, lookupResult, subOrderNumber, awbNumber, packetId))
+  }
+
+  const copySubOrder = () => {
+    if (!subOrderNumber) return
+    navigator.clipboard.writeText(subOrderNumber).then(() => {
+      setCopiedSubOrder(true)
+      setTimeout(() => setCopiedSubOrder(false), 2000)
+    })
   }
 
   const handleCreate = async () => {
@@ -810,23 +869,27 @@ function CreateClaimModal({
     setCreating(true)
     setFormError("")
     try {
+      const selectedReasonObj = lookupResult.standardReasons.find((r) => r.code === selectedReason)
       const res = await api<{ claim: ClaimDetail; jobId: number }>("/api/claims/unified-create", {
         method: "POST",
         body: JSON.stringify({
           receiptScanId: lookupResult.scanId || undefined,
           expectedReturnId: lookupResult.expectedReturnId,
-          awb: lookupResult.trackingNumber,
+          subOrderId: subOrderNumber.trim() || lookupResult.subOrderId || lookupResult.orderId,
+          awb: awbNumber.trim() || lookupResult.awb || lookupResult.trackingNumber,
           orderId: lookupResult.orderId,
-          packetId: lookupResult.packetId,
+          packetState: "Tampered",
+          packetId: packetId.trim() || lookupResult.packetId || "NA",
           customerName: lookupResult.customerName,
           totalPrice: lookupResult.totalPrice,
+          missingAmount: lookupResult.missingAmount || 0,
           shippedDate: lookupResult.shippedDate,
           sku: lookupResult.items[0]?.masterSku || lookupResult.items[0]?.sku || "",
-          claimReason: lookupResult.standardReasons.find((r) => r.code === selectedReason)?.label || "Wrong Product",
-          claimTitle,
-          claimContent,
-          claimDescription: claimContent,
-          remarks,
+          claimReason: selectedReasonObj?.label || "I have received wrong return",
+          claimTitle: claimTitle.trim(),
+          claimContent: claimContent.trim(),
+          claimDescription: claimContent.trim(),
+          remarks: remarks.trim(),
           claimTemplateId: selectedTemplateId ? Number(selectedTemplateId) : undefined,
           marketplaceIssueCode: selectedReason,
         }),
@@ -843,17 +906,67 @@ function CreateClaimModal({
   return (
     <Modal onClose={onClose} wide>
       <div className="modal-head" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <h2>Capture Claim Evidence & Queue Automation</h2>
+        <h2>Meesho Support Portal · Raise a Return Claim Ticket</h2>
         <button className="btn-icon" onClick={onClose}><Icon name="close" /></button>
       </div>
       <div className="modal-body" style={{ display: "grid", gap: 16 }}>
         {formError && <div className="form-error">{formError}</div>}
 
+        {/* Marketplace Selection Header */}
+        <div style={{ background: "#f8fafc", padding: "12px 16px", borderRadius: 8, border: "1px solid #e2e8f0" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div>
+              <label style={{ fontSize: 13, fontWeight: 700, color: "var(--foreground)", display: "block" }}>
+                Select Marketplace
+              </label>
+              <span style={{ fontSize: 12, color: "var(--muted)" }}>
+                Meesho is active & configured. Other channels will be enabled sequentially.
+              </span>
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button
+                type="button"
+                className={`btn ${selectedMarketplace === "meesho" ? "primary" : "secondary"} small`}
+                onClick={() => setSelectedMarketplace("meesho")}
+              >
+                Meesho (Active)
+              </button>
+              <button
+                type="button"
+                className="btn secondary small"
+                disabled
+                title="Flipkart claim flow is upcoming"
+                style={{ opacity: 0.5 }}
+              >
+                Flipkart (Upcoming)
+              </button>
+              <button
+                type="button"
+                className="btn secondary small"
+                disabled
+                title="Amazon claim flow is upcoming"
+                style={{ opacity: 0.5 }}
+              >
+                Amazon (Upcoming)
+              </button>
+              <button
+                type="button"
+                className="btn secondary small"
+                disabled
+                title="Myntra claim flow is upcoming"
+                style={{ opacity: 0.5 }}
+              >
+                Myntra (Upcoming)
+              </button>
+            </div>
+          </div>
+        </div>
+
         {/* Search return box */}
         <div style={{ display: "flex", gap: 10 }}>
           <input
             type="search"
-            placeholder="Scan or enter AWB Number, Order ID, or Packet ID…"
+            placeholder="Scan or enter AWB Number, Sub Order ID, Order ID, or Packet ID…"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && handleSearch()}
@@ -864,19 +977,53 @@ function CreateClaimModal({
           </button>
         </div>
 
-        {/* Return Details Card */}
+        {/* Return Details Card & Meesho Ticket Form */}
         {lookupResult && (
           <div style={{ background: "#f8fafc", border: "1px solid #cbd5e1", borderRadius: 8, padding: 16 }}>
+            {/* 7-Day TAT Banner */}
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                background: lookupResult.overdue ? "#fef2f2" : "#f0fdf4",
+                border: `1px solid ${lookupResult.overdue ? "#fca5a5" : "#86efac"}`,
+                borderRadius: 8,
+                padding: "10px 14px",
+                marginBottom: 14,
+              }}
+            >
+              <div>
+                <strong style={{ color: lookupResult.overdue ? "#991b1b" : "#166534", fontSize: 13 }}>
+                  ⏱️ Meesho Claim TAT (Turnaround Time): 7 Days
+                </strong>
+                <div style={{ fontSize: 12, color: lookupResult.overdue ? "#b91c1c" : "#15803d", marginTop: 2 }}>
+                  Received: <strong>{lookupResult.receivedDate || "Today"}</strong> · File Claim Till:{" "}
+                  <strong>{lookupResult.dueDate || "Within 7 days"}</strong>
+                </div>
+              </div>
+              <div>
+                <Badge tone={lookupResult.overdue ? "danger" : "success"}>
+                  {lookupResult.overdue
+                    ? `⚠️ Overdue by ${Math.abs(lookupResult.daysRemaining || 0)}d`
+                    : `✓ ${lookupResult.daysRemaining !== null ? lookupResult.daysRemaining : 7}d remaining`}
+                </Badge>
+              </div>
+            </div>
+
+            {/* Order & Product Summary Card */}
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
               <div>
                 <MarketplaceBadge name={lookupResult.marketplace} />
                 <h3 style={{ margin: "6px 0 2px" }}>Order: {lookupResult.orderId}</h3>
-                <span style={{ fontSize: 13, color: "var(--muted)" }}>AWB: {lookupResult.trackingNumber} · Customer: {lookupResult.customerName}</span>
+                <span style={{ fontSize: 13, color: "var(--muted)" }}>
+                  AWB: {lookupResult.trackingNumber} · Customer: {lookupResult.customerName}
+                </span>
               </div>
               <div style={{ textAlign: "right" }}>
                 <span className="badge green" style={{ fontSize: 12 }}>₹{lookupResult.totalPrice}</span>
                 <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>
-                  {lookupResult.daysSinceShipped > 0 ? `${lookupResult.daysSinceShipped} days since shipped` : lookupResult.returnStatus}
+                  {lookupResult.returnStatus}
                 </div>
               </div>
             </div>
@@ -900,18 +1047,24 @@ function CreateClaimModal({
                   <div style={{ fontSize: 12, color: "var(--muted)" }}>
                     Master SKU: {lookupResult.items[0].masterSku} · Qty: {lookupResult.items[0].quantity}
                   </div>
+                  {lookupResult.items[0].subOrderId && (
+                    <div style={{ fontSize: 12, color: "#1e40af", marginTop: 2 }}>
+                      Item Sub Order: {lookupResult.items[0].subOrderId}
+                    </div>
+                  )}
                 </div>
               </div>
             )}
 
-            {/* Form Inputs */}
+            {/* Meesho Portal Form Inputs */}
             <div style={{ display: "grid", gap: 12, marginTop: 16 }}>
+              {/* Issue Selection */}
               <div>
-                <label style={{ fontSize: 13, fontWeight: 600 }}>Claim Reason</label>
+                <label style={{ fontSize: 13, fontWeight: 600 }}>Issue *</label>
                 <select
                   value={selectedReason}
                   onChange={(e) => handleReasonChange(e.target.value)}
-                  style={{ width: "100%", marginTop: 4 }}
+                  style={{ width: "100%", marginTop: 4, padding: "8px 10px", borderRadius: 6, border: "1px solid #cbd5e1" }}
                 >
                   {lookupResult.standardReasons.map((r) => (
                     <option key={r.code} value={r.code}>{r.label}</option>
@@ -919,39 +1072,109 @@ function CreateClaimModal({
                 </select>
               </div>
 
+              {/* Sub Order Number + Copy Button */}
               <div>
-                <label style={{ fontSize: 13, fontWeight: 600 }}>Claim Template</label>
-                <select
-                  value={selectedTemplateId}
-                  onChange={(e) => setSelectedTemplateId(e.target.value)}
-                  style={{ width: "100%", marginTop: 4 }}
-                >
-                  {lookupResult.templates.map((t) => (
-                    <option key={t.id} value={t.id}>{t.name}</option>
-                  ))}
-                </select>
+                <label style={{ fontSize: 13, fontWeight: 600 }}>Sub Order Number *</label>
+                <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+                  <input
+                    type="text"
+                    value={subOrderNumber}
+                    onChange={(e) => {
+                      setSubOrderNumber(e.target.value)
+                      setClaimContent(generateDescription(selectedReason, lookupResult, e.target.value, awbNumber, packetId))
+                    }}
+                    placeholder="Enter Sub Order Number"
+                    style={{ flex: 1, padding: "8px 10px", borderRadius: 6, border: "1px solid #cbd5e1" }}
+                  />
+                  <button
+                    type="button"
+                    className="btn secondary"
+                    onClick={copySubOrder}
+                    title="Copy Sub Order Number"
+                    style={{ whiteSpace: "nowrap" }}
+                  >
+                    {copiedSubOrder ? "✓ Copied" : "Copy"}
+                  </button>
+                </div>
               </div>
 
+              {/* AWB Number */}
               <div>
-                <label style={{ fontSize: 13, fontWeight: 600 }}>Claim Title</label>
+                <label style={{ fontSize: 13, fontWeight: 600 }}>AWB Number *</label>
+                <input
+                  type="text"
+                  value={awbNumber}
+                  onChange={(e) => {
+                    setAwbNumber(e.target.value)
+                    setClaimContent(generateDescription(selectedReason, lookupResult, subOrderNumber, e.target.value, packetId))
+                  }}
+                  placeholder="Enter AWB Number"
+                  style={{ width: "100%", marginTop: 4, padding: "8px 10px", borderRadius: 6, border: "1px solid #cbd5e1" }}
+                />
+              </div>
+
+              {/* State of the packet (ALWAYS Tampered) */}
+              <div>
+                <label style={{ fontSize: 13, fontWeight: 600 }}>State of the packet *</label>
+                <select
+                  disabled
+                  value="Tampered"
+                  style={{ width: "100%", marginTop: 4, padding: "8px 10px", borderRadius: 6, border: "1px solid #cbd5e1", background: "#f1f5f9", cursor: "not-allowed" }}
+                >
+                  <option value="Tampered">Tampered (Auto-fixed for claims)</option>
+                </select>
+                <small style={{ color: "var(--muted)", fontSize: 11, display: "block", marginTop: 2 }}>
+                  Per Meesho Claim Policy, return claims must always have packet state selected as Tampered.
+                </small>
+              </div>
+
+              {/* Packet ID */}
+              <div>
+                <label style={{ fontSize: 13, fontWeight: 600 }}>Packet ID *</label>
+                <input
+                  type="text"
+                  value={packetId}
+                  onChange={(e) => {
+                    setPacketId(e.target.value)
+                    setClaimContent(generateDescription(selectedReason, lookupResult, subOrderNumber, awbNumber, e.target.value))
+                  }}
+                  placeholder="Flyer barcode ID or NA"
+                  style={{ width: "100%", marginTop: 4, padding: "8px 10px", borderRadius: 6, border: "1px solid #cbd5e1" }}
+                />
+                <small style={{ color: "var(--muted)", fontSize: 11, display: "block", marginTop: 2 }}>
+                  Correct Packet ID entry is mandatory for accurate claims resolution. If you don't have Packet ID then enter NA in the above field.
+                </small>
+              </div>
+
+              {/* Claim Title */}
+              <div>
+                <label style={{ fontSize: 13, fontWeight: 600 }}>Claim Title *</label>
                 <input
                   type="text"
                   value={claimTitle}
                   onChange={(e) => setClaimTitle(e.target.value)}
-                  style={{ width: "100%", marginTop: 4 }}
+                  style={{ width: "100%", marginTop: 4, padding: "8px 10px", borderRadius: 6, border: "1px solid #cbd5e1" }}
                 />
               </div>
 
+              {/* Description */}
               <div>
-                <label style={{ fontSize: 13, fontWeight: 600 }}>Claim Content / Description</label>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <label style={{ fontSize: 13, fontWeight: 600 }}>Description *</label>
+                  <span style={{ fontSize: 11, color: claimContent.length > 1000 ? "#b91c1c" : "var(--muted)" }}>
+                    {claimContent.length}/1000
+                  </span>
+                </div>
                 <textarea
-                  rows={3}
+                  rows={4}
+                  maxLength={1000}
                   value={claimContent}
                   onChange={(e) => setClaimContent(e.target.value)}
-                  style={{ width: "100%", marginTop: 4 }}
+                  style={{ width: "100%", marginTop: 4, padding: "8px 10px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 13 }}
                 />
               </div>
 
+              {/* Internal Remarks */}
               <div>
                 <label style={{ fontSize: 13, fontWeight: 600 }}>Internal Remarks (Optional)</label>
                 <input
@@ -959,15 +1182,15 @@ function CreateClaimModal({
                   value={remarks}
                   onChange={(e) => setRemarks(e.target.value)}
                   placeholder="Notes for warehouse or supervisor…"
-                  style={{ width: "100%", marginTop: 4 }}
+                  style={{ width: "100%", marginTop: 4, padding: "8px 10px", borderRadius: 6, border: "1px solid #cbd5e1" }}
                 />
               </div>
             </div>
 
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 16 }}>
               <button className="btn secondary" onClick={onClose} disabled={creating}>Cancel</button>
-              <button className="btn primary" onClick={handleCreate} disabled={creating}>
-                {creating ? "Creating Claim & Queueing…" : "Create Claim & Proceed to Evidence"}
+              <button className="btn primary" onClick={handleCreate} disabled={creating || !subOrderNumber.trim() || !awbNumber.trim()}>
+                {creating ? "Creating Claim & Queueing…" : "Create Claim & Upload Evidence"}
               </button>
             </div>
           </div>

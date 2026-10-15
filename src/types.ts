@@ -848,8 +848,11 @@ export type ClaimReturnLookup = {
   expectedReturnId: number
   marketplace: string
   marketplaceId: number
+  subOrderId: string
   orderId: string
   trackingNumber: string
+  awb: string
+  packetState: string
   packetId: string
   customerName: string
   totalPrice: number
@@ -857,6 +860,18 @@ export type ClaimReturnLookup = {
   returnStatus: string
   shippedDate: string | null
   daysSinceShipped: number
+  tatDays: number
+  receivedDate: string | null
+  dueDate: string | null
+  daysRemaining: number | null
+  overdue: boolean
+  missingItems: Array<{
+    label: string
+    quantity: number
+    amountEach: number
+    amount: number
+  }>
+  missingAmount: number
   existingClaim: {
     id: number
     status: string
@@ -871,6 +886,7 @@ export type ClaimReturnLookup = {
     title: string
     quantity: number
     imageUrl: string
+    subOrderId: string
   }>
   templates: Array<{
     id: number
