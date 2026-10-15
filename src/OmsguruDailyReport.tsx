@@ -325,7 +325,7 @@ export function OmsguruDailyReport() {
               </span>
             )}
             <span className="omsguru-badge-schedule">
-              🕒 Scheduled Daily: {summary?.scheduledTime || "19:45"} IST
+              🕒 Scheduled Daily: {summary?.scheduledTime || "23:00"} IST
             </span>
           </div>
 
@@ -333,7 +333,7 @@ export function OmsguruDailyReport() {
           <p className="omsguru-subtitle">
             Combines all good return scans across marketplaces (Myntra, Flipkart, Meesho, Amazon, Ajio, Shopify),
             aggregates total received quantities per Master Product SKU (excluding damaged/issue units), archives the
-            file to Firebase Storage, and dispatches the OMSGuru bulk update CSV at 7:45 PM IST.
+            file to Firebase Storage, and dispatches the OMSGuru bulk update CSV at 11:00 PM IST.
           </p>
         </div>
 
@@ -463,7 +463,7 @@ export function OmsguruDailyReport() {
             <span>Scheduled Auto-Dispatch</span>
             <span className="omsguru-kpi-dot amber">●</span>
           </div>
-          <div className="omsguru-kpi-value">{summary?.scheduledTime || "19:45"} IST</div>
+          <div className="omsguru-kpi-value">{summary?.scheduledTime || "23:00"} IST</div>
           <div className="omsguru-kpi-sub">
             {summary?.scheduledEnabled ? "Active daily runner" : "Schedule disabled"}
           </div>
@@ -922,11 +922,11 @@ export function OmsguruDailyReport() {
                   className="input"
                   value={config.dailyTime}
                   onChange={(e) => setConfig({ ...config, dailyTime: e.target.value.trim() })}
-                  placeholder="19:45"
+                  placeholder="23:00"
                   required
                 />
                 <small style={{ color: "var(--muted)", fontSize: "11px" }}>
-                  Set to 19:45 for 7:45 PM IST daily generation and email dispatch.
+                  Set to 23:00 for 11:00 PM IST daily generation and email dispatch.
                 </small>
               </div>
 

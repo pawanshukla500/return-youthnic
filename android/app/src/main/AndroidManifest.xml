@@ -66,6 +66,12 @@
             android:theme="@style/Theme.ReturnScan.Scanner" />
 
         <activity
+            android:name=".ui.BarcodeScanCaptureActivity"
+            android:exported="false"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.ReturnScan.Scanner" />
+
+        <activity
             android:name=".ui.ImageViewerActivity"
             android:exported="false"
             android:theme="@style/Theme.ReturnScan.Scanner" />

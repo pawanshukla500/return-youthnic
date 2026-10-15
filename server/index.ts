@@ -51,6 +51,7 @@ import { runScheduledPaymentSync } from "./payment/sync.js"
 import { closePaymentPool, paymentDatabaseUrl } from "./payment/db.js"
 import { mountIronRoutes } from "./iron-routes.js"
 import { mountClaimsRoutes } from "./claims-routes.js"
+import { mountClaimAutomationRoutes } from "./claim-automation-routes.js"
 import { attachLiveServer, closeLiveServer } from "./live.js"
 import type { IncomingMessage } from "node:http"
 
@@ -474,6 +475,9 @@ mountIronRoutes(app, requireUser)
 
 // Claims foundation: claim lifecycle, evidence media, templates live in claims-routes.ts.
 mountClaimsRoutes(app, requireUser)
+
+// Claim automation: desktop agent sync, marketplace portal credentials, return lookup live in claim-automation-routes.ts.
+mountClaimAutomationRoutes(app, requireUser)
 
 // ---- Administrator pages. Every route here needs the Admin role. ----
 
@@ -1054,6 +1058,11 @@ app.get("/api/admin/system", requireUser, requireAdmin, async (_req, res, next) 
     next(error)
   }
 })
+
+const publicDir = path.join(root, "public")
+if (fs.existsSync(publicDir)) {
+  app.use(express.static(publicDir, { maxAge: "1h", etag: true }))
+}
 
 const dist = path.join(root, "dist")
 if (fs.existsSync(dist)) {

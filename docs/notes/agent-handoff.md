@@ -1689,3 +1689,44 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
 - What was NOT built: no `RECORD_AUDIO` permission (unpacking video is video-only); no product reference image snapshot for claims; no Electron desktop agent; no mobile release manifest update (deferred until the APK is published via the GitHub Actions workflow on merge to main).
 - Unrelated working-tree changes preserved and not staged: OMSGuru daily time (19:45 -> 23:00), logo/badge changes, schema-register OMSGuru migration, Reports UI, and express.static for public dir in `server/index.ts`.
 - The next agent must not: drop or rewrite the Meesho snapshot columns (additive only); change the fixed packet state from `Tampered`; bypass the flyer-ID/claim-amount validation in `prepareMeeshoClaim`; expose Firebase public URLs; or update `data/return-scan-release.json` / `server/mobile-release.ts` `DEFAULT_RELEASE` until the APK is actually published (the version code, sha256, and size are only known after the GitHub Actions build). When the APK is published, sync the release manifest as was done for v1.0.35.
+
+### 2026-10-15, Factory Droid, Claim Details Capture in Mobile App + Desktop EXE Claim Automation
+
+- **Overview:** Implemented the complete marketplace-wise return claim evidence capture and processing system across the Mobile App (Kotlin), Backend & Firebase Storage (Express 4 + PostgreSQL), and Windows Desktop EXE Claim Processing Agent (`TaskFlowClaimAgent.exe`).
+- **GitHub Releases Cleaned:** Deleted all 11 obsolete releases (`v1.0.12` through `v1.0.35`) via `gh release delete`. Only the latest release (`v1.0.37`) is kept on GitHub. Added automated older-release pruning in `.github/workflows/return-scan-apk.yml`.
+- **Database Schema:** `server/schema-claim-automation.sql` (additive only, registered in `SCHEMA_FILES` and `HISTORY_TABLES` in `server/db.ts`):
+  - Added `marketplace_credentials` with AES-256-GCM encrypted portal passwords, automation mode, and approval toggles.
+  - Added `claim_automation_agents` with agent UUID, status, heartbeat timestamp, and current task info.
+  - Added `claim_automation_jobs` for tracking claim automation lifecycle: `pending_evidence`, `ready_for_claim`, `waiting_for_approval`, `processing`, `manual_action_required`, `submitted`, `failed`.
+  - Added snapshot columns to `claims`: `customer_name_snapshot`, `total_price_snapshot`, `shipped_date`, `sku_snapshot`, `claim_content`, `manual_notes`, `evidence_summary`.
+  - Seeded marketplace claim templates with configurable evidence slots: Myntra VB/EJ, Meesho, Ajio (Images + Unpacking Video); Flipkart (Images Only).
+- **Backend API Routes & Services:**
+  - `server/claim-automation-service.ts`: credential encryption/decryption, agent registration, heartbeat monitoring, job queue polling, step progress updates, screenshot/reference tracking, and unified `lookupReturnForClaim`.
+  - `server/claim-automation-routes.ts`: `GET /api/claims/return-lookup`, `POST /api/claims/unified-create`, `/api/automation/agent/*`, `/api/automation/jobs/*`, `/api/automation/credentials`. Mounted in `server/index.ts`.
+- **Windows Desktop EXE Application (`desktop-agent/`):**
+  - Modular TypeScript engine with Chrome DevTools Protocol (CDP) browser automation connecting directly to Microsoft Edge / Google Chrome with `--user-data-dir` persistent session profiles.
+  - Handles CAPTCHA / OTP by setting stage to `manual_action_required`, notifying the operator, and pausing until solved.
+  - Respects permission control: prepares claims automatically but only submits after authorized user approval.
+  - Packaged as a standalone Windows binary `TaskFlowClaimAgent.exe` using Node SEA (Single Executable Applications) and `postject`. Build script added to `package.json` (`npm run build:agent`).
+- **Web Frontend Dashboard (`src/pages/Claims.tsx`, `src/types.ts`):**
+  - Added "Desktop EXE Automation" tab to manage marketplace seller credentials, inspect online/offline agent heartbeats, view live automation queues with logs, approve prepared claims, retry failed submissions, and manually resolve edge cases.
+  - Enhanced Create Claim modal with unified return lookup and catalog product thumbnail preview alongside evidence.
+- **Android Mobile App (`android/app/`):**
+  - `ClaimModels.kt`: Added `ClaimReturnLookup`, `ClaimTemplate`, `ClaimFieldTemplate`, `ClaimProductItem`, `ClaimStandardReason`, `UnifiedClaimResult`.
+  - `ApiClient.kt`: Added `lookupClaimReturn(query)` and `unifiedCreateClaim(json)`.
+  - `BarcodeScanCaptureActivity.kt` + `activity_barcode_scan_capture.xml`: CameraX instant barcode viewfinder with centered reticle box matching Screenshot 4, torch toggle, and sound cue feedback.
+  - `activity_claim_capture.xml` & `ClaimCaptureActivity.kt`: Built the 2-step flow matching user screenshots:
+    - Step 1 ("Return Details"): Header with expandable order summary, Customer name, Total amount, "Return Init" green badge, days since shipped, Item card with catalog reference thumbnail and SKU, Good/Bad steppers, Return Comment, Claim Template Type selector, Template dropdown, Claim Title, and Claim Content.
+    - Step 2 ("Upload Images"): Packet ID + Barcode scanner button, AWB Number + Barcode scanner button, dynamic evidence cards (`item_claim_evidence_card.xml`) for each template field with Take Photo / Record Video and Gallery buttons, thumbnail preview, file size, delete/retake, and full-width blue Submit button.
+    - WorkManager integration via `ClaimEvidenceUploadWorker` guaranteeing safe offline storage and retries on network disconnects.
+  - `ReturnVerificationBottomSheet.kt` + `sheet_return_verification.xml`: Added "File Claim" button in the bottom sheet allowing warehouse operators to transition into claim capture directly from the return scan workflow with pre-filled details.
+- **Verification:**
+  - `npm run typecheck` passed (0 errors).
+  - `npm run build` passed (Vite + esbuild).
+  - `npm test` finished with 377 tests: 341 pass, 0 fail, 36 skipped (`TEST_DATABASE_URL`).
+  - Unit tests in `server/tests/claim-automation.test.ts` (5/5 pass).
+- **The next agent must not:**
+  - Drop or truncate any table or column (Rule 6).
+  - Store unencrypted marketplace portal credentials in the database.
+  - Expose direct public URLs to Firebase Storage objects.
+  - Delete or bypass the permission approval check before final marketplace claim submission.

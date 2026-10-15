@@ -614,7 +614,7 @@ export function Reports() {
       >
         <Icon name="upload" size={16} />
         <span>OMSGuru Update Daily</span>
-        <span className="omsguru-live-indicator" title="Daily 7:45 PM IST automated schedule">● 7:45 PM IST</span>
+        <span className="omsguru-live-indicator" title="Daily 11:00 PM IST automated schedule">● 11:00 PM IST</span>
       </button>
       <button
         type="button"

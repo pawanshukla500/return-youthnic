@@ -258,6 +258,35 @@ class ApiClient(private val sessionManager: SessionManager) {
         }
     }
 
+    suspend fun lookupClaimReturn(query: String, marketplaceId: Int? = null): Result<ClaimReturnLookup?> = withContext(Dispatchers.IO) {
+        try {
+            val encoded = java.net.URLEncoder.encode(query.trim(), Charsets.UTF_8.name())
+            val mktParam = if (marketplaceId != null && marketplaceId > 0) "&marketplaceId=$marketplaceId" else ""
+            val request = authorizedRequestBuilder("/api/claims/return-lookup?query=$encoded$mktParam").get().build()
+            execute(request) { json ->
+                if (!json.optBoolean("found", true)) null else ClaimReturnLookup.fromJson(json)
+            }
+        } catch (e: Exception) {
+            Result.failure(mapException(e))
+        }
+    }
+
+    suspend fun unifiedCreateClaim(body: JSONObject): Result<UnifiedClaimResult> = withContext(Dispatchers.IO) {
+        try {
+            val request = authorizedRequestBuilder("/api/claims/unified-create")
+                .post(body.toString().toRequestBody(jsonMediaType))
+                .build()
+            execute(request) { json ->
+                val claimObj = json.optJSONObject("claim")
+                val claimId = claimObj?.optInt("id", 0) ?: json.optInt("claimId", 0)
+                val jobId = json.optInt("jobId").takeIf { it > 0 }
+                UnifiedClaimResult(claimId = claimId, jobId = jobId)
+            }
+        } catch (e: Exception) {
+            Result.failure(mapException(e))
+        }
+    }
+
     suspend fun uploadClaimEvidence(
         claimId: Int,
         fieldKey: String,

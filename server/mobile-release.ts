@@ -19,15 +19,15 @@ export type MobileReleaseInfo = {
 }
 
 const DEFAULT_RELEASE: MobileReleaseInfo = {
-  versionCode: 10035,
-  versionName: "1.0.35",
+  versionCode: 10037,
+  versionName: "1.0.37",
   minRequiredVersionCode: 10001,
-  sha256: "28ddb67a6ecc0cbe591522c179349c472b0a411b168af8e93b08bb029c54b048",
-  sizeBytes: 3325570,
-  notes: "Youthnic Native Android Return Scanner · Meesho flyer capture & continuous scanning\n- Meesho issue returns capture the flyer ID for future claims (scan the flyer or mark it unavailable; Iron Send never takes a flyer)\n- Same backend, database and validation as desktop; flyer stored permanently against the return tracking ID\n- Continuous scanning: compact success toast, scanner stays focused, buffered parcels continue automatically\n- Signed with the same warehouse key as v1.0.30: phones on v1.0.30 or later update in place",
-  publishedAt: "2026-10-14T15:44:06Z",
-  downloadUrl: "https://github.com/pawanshukla500/return-youthnic/releases/download/v1.0.35/ReturnScan-v1.0.35.apk",
-  pageUrl: "https://github.com/pawanshukla500/return-youthnic/releases/tag/v1.0.35",
+  sha256: "db09eb8f2f3e881e74c76414ef20a8fef476113c92f10e5479cebefb7f32e238",
+  sizeBytes: 3465554,
+  notes: "Youthnic Native Android Return Scanner · Claim Evidence Capture & Automation Sync\n- Dedicated marketplace return claim capture accessible directly from return scan and home screen\n- High-resolution evidence photo capture, barcode scanning, 720p unpacking video recorder, and file attachments\n- Offline upload queue backed by Android WorkManager with network retry\n- Background sync and automated claims preparation for desktop processing",
+  publishedAt: "2026-10-15T11:08:06Z",
+  downloadUrl: "https://github.com/pawanshukla500/return-youthnic/releases/download/v1.0.37/ReturnScan-v1.0.37.apk",
+  pageUrl: "https://github.com/pawanshukla500/return-youthnic/releases/tag/v1.0.37",
 }
 
 let cachedRelease: MobileReleaseInfo | null = null
