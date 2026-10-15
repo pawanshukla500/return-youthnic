@@ -72,9 +72,21 @@ export function mountClaimAutomationRoutes(app: Express, requireUser: RequestHan
 
       // If receiptScanId is not yet created, create a pending scan record from expectedReturnId
       if (!receiptScanId) {
-        const expectedReturnId = positiveId(body.expectedReturnId)
+        let expectedReturnId = positiveId(body.expectedReturnId)
         if (!expectedReturnId) {
-          throw new ServiceError(400, "Provide either receiptScanId or expectedReturnId.")
+          const lookupVal = text(body.subOrderId || body.awb || body.orderId)
+          if (lookupVal) {
+            const autoLookup = await lookupReturnForClaim(db, scope, lookupVal)
+            if (autoLookup) {
+              expectedReturnId = autoLookup.expectedReturnId
+              if (autoLookup.scanId) {
+                receiptScanId = autoLookup.scanId
+              }
+            }
+          }
+        }
+        if (!receiptScanId && !expectedReturnId) {
+          throw new ServiceError(400, "Provide either receiptScanId, expectedReturnId, or valid AWB/Sub Order ID.")
         }
 
         const client = await db.connect()

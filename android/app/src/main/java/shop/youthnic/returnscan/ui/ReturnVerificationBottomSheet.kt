@@ -343,10 +343,37 @@ class ReturnVerificationBottomSheet(
 
         binding.btnFileClaim.setOnClickListener {
             dismiss()
+            val firstItem = lookup.items.firstOrNull()
+            val firstState = itemStates.firstOrNull()
+            val subOrderId = firstItem?.orderItemId?.ifBlank { lookup.orderId }.orEmpty()
+            val flyerId = binding.etFlyerId.text?.toString()?.trim().orEmpty()
+            val issueCode = firstState?.category?.code ?: IssueCategory.CODE_WRONG
+
+            // Also save to SessionManager for instant fallback everywhere
+            (activity.application as? ReturnScanApp)?.sessionManager?.saveLastScannedReturn(
+                awb = lookup.trackingNumber,
+                orderId = lookup.orderId,
+                subOrderId = subOrderId,
+                flyerId = flyerId,
+                marketplace = lookup.marketplace,
+                productTitle = firstItem?.title.orEmpty(),
+                sku = firstItem?.marketplaceSku.orEmpty(),
+                masterSku = firstItem?.masterSku.orEmpty(),
+                imageUrl = firstItem?.imageUrl.orEmpty(),
+                issueCode = issueCode
+            )
+
             val intent = Intent(activity, ClaimCaptureActivity::class.java).apply {
                 putExtra(ClaimCaptureActivity.EXTRA_TRACKING_AWB, lookup.trackingNumber)
                 putExtra(ClaimCaptureActivity.EXTRA_ORDER_ID, lookup.orderId)
+                putExtra(ClaimCaptureActivity.EXTRA_SUB_ORDER_ID, subOrderId)
+                putExtra(ClaimCaptureActivity.EXTRA_PACKET_ID, flyerId.ifBlank { "NA" })
                 putExtra(ClaimCaptureActivity.EXTRA_MARKETPLACE, lookup.marketplace)
+                putExtra(ClaimCaptureActivity.EXTRA_PRODUCT_TITLE, firstItem?.title.orEmpty())
+                putExtra(ClaimCaptureActivity.EXTRA_PRODUCT_SKU, firstItem?.marketplaceSku.orEmpty())
+                putExtra(ClaimCaptureActivity.EXTRA_MASTER_SKU, firstItem?.masterSku.orEmpty())
+                putExtra(ClaimCaptureActivity.EXTRA_IMAGE_URL, firstItem?.imageUrl.orEmpty())
+                putExtra(ClaimCaptureActivity.EXTRA_ISSUE_CODE, issueCode)
             }
             activity.startActivity(intent)
         }

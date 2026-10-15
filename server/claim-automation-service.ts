@@ -1108,7 +1108,7 @@ export async function lookupReturnForClaim(
     mktCondition = `AND er.marketplace_id = $${params.length}`
   }
 
-  // 1. First look for already scanned returns in receipt_scans
+  // 1. First look for already scanned returns in receipt_scans or lookup records
   const scanQuery = `
     SELECT rs.id AS scan_id, er.id AS expected_return_id, er.marketplace_id, m.name AS marketplace,
            er.order_number, er.tracking_id, er.alt_tracking_id, rs.flyer_id, rs.scanned_at,
@@ -1121,9 +1121,33 @@ export async function lookupReturnForClaim(
     LEFT JOIN claims c ON c.receipt_scan_id = rs.id
     WHERE ${scopeCondition} ${mktCondition}
       AND (
-        er.tracking_id = $1 OR er.alt_tracking_id = $1 OR er.order_number = $1
-        OR rs.flyer_id = $1 OR rs.scanned_tracking = $1
+        er.tracking_id = $1::text OR er.alt_tracking_id = $1::text OR UPPER(er.order_number) = UPPER($1::text)
+        OR rs.flyer_id = $1::text OR rs.scanned_tracking = $1::text
         OR er.tracking_id ILIKE $2 OR er.order_number ILIKE $2
+        OR (
+          LENGTH(REPLACE(REPLACE($1::text, '-', ''), ' ', '')) >= 8
+          AND REPLACE(REPLACE(UPPER(er.order_number), '-', ''), ' ', '') = REPLACE(REPLACE(UPPER($1::text), '-', ''), ' ', '')
+        )
+        OR UPPER(COALESCE(er.forward_tracking_id, '')) = UPPER($1::text)
+        OR UPPER(COALESCE(er.return_event_id, '')) = UPPER($1::text)
+        OR EXISTS (
+          SELECT 1 FROM expected_return_items eri
+          WHERE eri.expected_return_id = er.id
+            AND (
+              UPPER(eri.display_order_item_id) = UPPER($1::text)
+              OR UPPER(eri.order_line_id) = UPPER($1::text)
+              OR UPPER(COALESCE(eri.shipment_id, '')) = UPPER($1::text)
+              OR (
+                LENGTH(REPLACE(REPLACE($1::text, '-', ''), ' ', '')) >= 8
+                AND REPLACE(REPLACE(UPPER(COALESCE(eri.display_order_item_id, '')), '-', ''), ' ', '') = REPLACE(REPLACE(UPPER($1::text), '-', ''), ' ', '')
+              )
+            )
+        )
+        OR EXISTS (
+          SELECT 1 FROM receipt_scan_items rsi
+          WHERE rsi.receipt_scan_id = rs.id
+            AND (UPPER(rsi.order_item_id) = UPPER($1::text) OR rsi.order_item_id ILIKE $2)
+        )
       )
     ORDER BY (rs.id IS NOT NULL) DESC, rs.scanned_at DESC NULLS LAST
     LIMIT 1
@@ -1138,13 +1162,18 @@ export async function lookupReturnForClaim(
   const marketplaceName = String(row.marketplace)
   const isMeesho = marketplaceName.toLowerCase() === "meesho"
 
-  // Fetch items for this expected return including Sub Order ID
+  // Fetch items for this expected return including Sub Order ID and product images
   const itemsRes = await db.query(
-    `SELECT eri.id, eri.sku, eri.master_sku, eri.product_title, eri.quantity, eri.catalog_image_url,
+    `SELECT eri.id, eri.qty AS quantity,
+            COALESCE(NULLIF(eri.label, ''), s.name, 'Returned Product') AS product_title,
+            COALESCE(s.code, '') AS master_sku,
+            COALESCE(NULLIF(eri.marketplace_sku_identifier, ''), NULLIF(eri.channel_listing_id, ''), s.code, '') AS sku,
+            COALESCE(s.image_url, '') AS catalog_image_url,
             COALESCE(NULLIF(eri.display_order_item_id, ''), eri.order_line_id, '') AS sub_order_id
      FROM expected_return_items eri
+     LEFT JOIN skus s ON s.id = eri.sku_id
      WHERE eri.expected_return_id = $1
-     ORDER BY eri.id ASC`,
+     ORDER BY eri.sort_order ASC, eri.id ASC`,
     [expectedReturnId],
   )
 
