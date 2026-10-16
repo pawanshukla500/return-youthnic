@@ -601,6 +601,36 @@ export type ProductMasterPreview = {
   sample: { listingSku: string; masterSku: string; category: string; imageUrl: string }[]
 }
 
+// The result of POST /api/admin/product-master/import/start: a staged upload the client drains in batches.
+export type ProductMasterImportStart = {
+  uploadId: string
+  total: number
+  filename: string
+  marketplace: string
+  mode: "merge" | "replace"
+  preview: ProductMasterPreview
+}
+
+// The result of one POST /api/admin/product-master/import/batch call. When done is true the
+// response also carries the final import result and the refreshed master state.
+export type ProductMasterImportBatch = {
+  uploadId: string
+  processed: number
+  total: number
+  done: boolean
+  batchInserted: number
+  result?: { inserted: number; updated?: number; removed?: number; resolvedUnmapped?: number }
+  state?: ProductMasterState
+}
+
+// Client-side progress for the staged product-master import loop (500 rows per batch call).
+export type ProductMasterImportProgress = {
+  uploadId: string
+  processed: number
+  total: number
+  batches: number
+}
+
 export type UnmappedSkuSummary = {
   total: number
   totalUnmapped: number
@@ -733,6 +763,7 @@ export type ClaimRow = {
   daysRemaining: number | null
   overdue: boolean
   missingAmount: number
+  totalPrice: number
 }
 
 export type ClaimDetail = ClaimRow & {

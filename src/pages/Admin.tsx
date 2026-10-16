@@ -2,6 +2,9 @@ import { type FormEvent, useEffect, useRef, useState } from "react"
 import { ApiError, api, downloadFile } from "../api"
 import type {
   AdminIssueCategory,
+  ProductMasterImportBatch,
+  ProductMasterImportProgress,
+  ProductMasterImportStart,
   ProductMasterPreview,
   ProductMasterState,
   UnmappedSkuSummary,
@@ -123,6 +126,10 @@ export function Admin() {
   const [pmError, setPmError] = useState("")
   const [pmNotice, setPmNotice] = useState("")
   const [pmBusy, setPmBusy] = useState(false)
+  const [pmProgress, setPmProgress] = useState<ProductMasterImportProgress | null>(null)
+  const pmCancelRef = useRef(false)
+  // A staged import is in flight (start+batch loop) or staged and resumable after a batch error.
+  const pmImportActive = pmProgress !== null
   const pmFileRef = useRef<HTMLInputElement>(null)
   const [error, setError] = useState("")
 
@@ -746,6 +753,8 @@ export function Admin() {
     setPmError("")
     setPmNotice("")
     setPmConfirmed(false)
+    setPmProgress(null)
+    pmCancelRef.current = false
     setPmFile(file)
     setPmFilename(file.name)
     setPmBusy(true)
@@ -766,12 +775,62 @@ export function Admin() {
     }
   }
 
-  const loadProductMaster = async () => {
+  // Staged batched import: POST /start stages the parsed file server-side, then the client
+  // drains it with POST /batch (limit 500) until done. There is no cancel endpoint: cancelling
+  // only stops the loop and abandons the staged upload client-side; the server copy expires by TTL.
+  const runProductMasterBatches = async (uploadId: string, mode: "merge" | "replace", fromBatches: number) => {
+    let batches = fromBatches
+    for (;;) {
+      if (pmCancelRef.current) return "cancelled" as const
+      const data = await api<ProductMasterImportBatch>("/api/admin/product-master/import/batch", {
+        method: "POST",
+        body: JSON.stringify({ uploadId, limit: 500 }),
+      })
+      batches += 1
+      setPmProgress({ uploadId, processed: data.processed, total: data.total, batches })
+      if (data.done) {
+        if (!data.result || !data.state) {
+          throw new Error("The import finished but the server did not return a result.")
+        }
+        const result = data.result
+        setProductMaster(data.state)
+        if (mode === "replace") {
+          setPmNotice(
+            `Replaced product master with ${result.inserted.toLocaleString("en-US")} listing SKUs. Removed ${result.removed?.toLocaleString("en-US") ?? 0} earlier rows.`,
+          )
+        } else {
+          const resolvedText = result.resolvedUnmapped
+            ? ` Resolved and linked ${result.resolvedUnmapped.toLocaleString("en-US")} previously unmapped return items!`
+            : ""
+          setPmNotice(
+            `Successfully merged ${result.inserted.toLocaleString("en-US")} new and updated ${result.updated?.toLocaleString("en-US") ?? 0} listing SKUs.${resolvedText} All previous catalog mappings were preserved intact.`,
+          )
+        }
+        setPmPreview(null)
+        setPmConfirmed(false)
+        setPmFilename("")
+        setPmFile(null)
+        setPmProgress(null)
+        if (pmFileRef.current) pmFileRef.current.value = ""
+        void loadUnmappedSummary()
+        void loadUnmappedList(1, unmappedFilterMp)
+        return "done" as const
+      }
+    }
+  }
+
+  const startProductMasterImport = async () => {
     const file = pmFile
     if (!file) {
       setPmError("Choose a file first.")
       return
     }
+    if (pmImportMode === "replace" && !pmConfirmed) {
+      setPmError("Confirm the replacement before starting the import.")
+      return
+    }
+    const mode = pmImportMode
+    pmCancelRef.current = false
     setPmBusy(true)
     setPmError("")
     setPmNotice("")
@@ -779,40 +838,53 @@ export function Admin() {
       const body = new FormData()
       body.append("file", file)
       body.append("marketplace", pmMarketplace)
-      body.append("mode", pmImportMode)
-      if (pmImportMode === "replace") {
+      body.append("mode", mode)
+      if (mode === "replace") {
         body.append("confirm", "true")
       }
-      const data = await api<{
-        result: { inserted: number; updated?: number; removed?: number; resolvedUnmapped?: number }
-        state: ProductMasterState
-        mode: "merge" | "replace"
-      }>("/api/admin/product-master/import", { method: "POST", body })
-
-      setProductMaster(data.state)
-      if (data.mode === "replace") {
-        setPmNotice(
-          `Replaced product master with ${data.result.inserted.toLocaleString("en-US")} listing SKUs. Removed ${data.result.removed?.toLocaleString("en-US") ?? 0} earlier rows.`,
-        )
-      } else {
-        const resolvedText = data.result.resolvedUnmapped
-          ? ` Resolved and linked ${data.result.resolvedUnmapped.toLocaleString("en-US")} previously unmapped return items!`
-          : ""
-        setPmNotice(
-          `Successfully merged ${data.result.inserted.toLocaleString("en-US")} new and updated ${data.result.updated?.toLocaleString("en-US") ?? 0} listing SKUs.${resolvedText} All previous catalog mappings were preserved intact.`,
-        )
+      const started = await api<ProductMasterImportStart>("/api/admin/product-master/import/start", {
+        method: "POST",
+        body,
+      })
+      if (started.preview) setPmPreview(started.preview)
+      setPmProgress({ uploadId: started.uploadId, processed: 0, total: started.total, batches: 0 })
+      await runProductMasterBatches(started.uploadId, started.mode ?? mode, 0)
+      if (pmCancelRef.current) {
+        setPmProgress(null)
+        setPmNotice("Import cancelled. The staged upload was abandoned and will expire on the server.")
       }
-      setPmPreview(null)
-      setPmConfirmed(false)
-      setPmFilename("")
-      setPmFile(null)
-      if (pmFileRef.current) pmFileRef.current.value = ""
-      void loadUnmappedSummary()
-      void loadUnmappedList(1, unmappedFilterMp)
     } catch (err) {
       setPmError(err instanceof ApiError ? err.message : "The product master was not loaded.")
     } finally {
       setPmBusy(false)
+    }
+  }
+
+  const retryProductMasterImport = async () => {
+    const staged = pmProgress
+    if (!staged) return
+    pmCancelRef.current = false
+    setPmBusy(true)
+    setPmError("")
+    try {
+      await runProductMasterBatches(staged.uploadId, pmImportMode, staged.batches)
+      if (pmCancelRef.current) {
+        setPmProgress(null)
+        setPmNotice("Import cancelled. The staged upload was abandoned and will expire on the server.")
+      }
+    } catch (err) {
+      setPmError(err instanceof ApiError ? err.message : "The product master import could not continue.")
+    } finally {
+      setPmBusy(false)
+    }
+  }
+
+  const cancelProductMasterImport = () => {
+    pmCancelRef.current = true
+    if (!pmBusy) {
+      // No batch loop in flight (e.g. after a batch error): abandon the staged upload right away.
+      setPmProgress(null)
+      setPmNotice("Import cancelled. The staged upload was abandoned and will expire on the server.")
     }
   }
 
@@ -1490,6 +1562,12 @@ export function Admin() {
                     value={pmImportMode}
                     aria-label="Product master import mode"
                     onChange={(event) => setPmImportMode(event.target.value as "merge" | "replace")}
+                    disabled={pmBusy || pmImportActive}
+                    title={
+                      pmBusy || pmImportActive
+                        ? "The import mode cannot be changed while a staged import exists"
+                        : "Product master import mode"
+                    }
                     style={{ height: 38, borderRadius: 6, border: "1px solid var(--line)", background: "#fff", fontWeight: 600 }}
                   >
                     <option value="merge">Append / Merge (Keep existing) [Recommended]</option>
@@ -1506,6 +1584,8 @@ export function Admin() {
                       setPmMarketplace(event.target.value)
                       setPmPreview(null)
                       setPmConfirmed(false)
+                      setPmProgress(null)
+                      pmCancelRef.current = true
                       setPmError("")
                       setPmNotice("")
                       setPmFilename("")
@@ -1872,11 +1952,20 @@ export function Admin() {
                       </div>
                       <button
                         className="btn primary"
-                        disabled={!pmReady || pmBusy}
-                        onClick={() => void loadProductMaster()}
+                        disabled={!pmReady || pmBusy || pmImportActive}
+                        title={
+                          pmImportActive
+                            ? "A staged import is already in progress — retry or cancel it below"
+                            : pmBusy
+                              ? "A file is being read"
+                              : !pmReady
+                                ? "Preview a file first"
+                                : `Start the staged import of ${count(pmPreview.rows)} rows`
+                        }
+                        onClick={() => void startProductMasterImport()}
                         style={{ alignSelf: "flex-start", background: "#0f6b56" }}
                       >
-                        {pmBusy ? "Merging catalog…" : `Merge & Append ${count(pmPreview.rows)} rows`} <Icon name="arrow" />
+                        {pmBusy ? "Starting import…" : `Start import of ${count(pmPreview.rows)} rows`} <Icon name="arrow" />
                       </button>
                     </div>
                   ) : (
@@ -1894,12 +1983,78 @@ export function Admin() {
 
                       <button
                         className="btn primary"
-                        disabled={!pmReady || pmBusy}
-                        onClick={() => void loadProductMaster()}
+                        disabled={!pmReady || pmBusy || pmImportActive}
+                        title={
+                          pmImportActive
+                            ? "A staged import is already in progress — retry or cancel it below"
+                            : pmBusy
+                              ? "A file is being read"
+                              : pmImportMode === "replace" && !pmConfirmed
+                                ? "Tick the confirmation checkbox to enable the replace import"
+                                : !pmReady
+                                  ? "Preview a file first"
+                                  : `Start the staged import of ${count(pmPreview.rows)} rows`
+                        }
+                        onClick={() => void startProductMasterImport()}
                         style={{ alignSelf: "flex-start", background: "#dc2626" }}
                       >
-                        {pmBusy ? "Replacing catalog…" : `Commit & Replace with ${count(pmPreview.rows)} rows`} <Icon name="arrow" />
+                        {pmBusy ? "Starting import…" : `Start import of ${count(pmPreview.rows)} rows`} <Icon name="arrow" />
                       </button>
+                    </div>
+                  )}
+
+                  {pmProgress && (
+                    <div style={{ marginTop: 14, padding: 12, background: "#fff", border: "1px solid #cbd5e1", borderRadius: 8 }}>
+                      {(() => {
+                        const pct = pmProgress.total > 0 ? Math.min(100, Math.round((pmProgress.processed / pmProgress.total) * 100)) : 0
+                        return (
+                          <>
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
+                              <strong style={{ fontSize: 13 }}>
+                                {pmBusy ? "Importing catalog…" : pmError ? "Import paused — a batch failed" : "Import staged"}
+                              </strong>
+                              <span style={{ fontSize: 12, color: "#475569" }}>
+                                {count(pmProgress.processed)} / {count(pmProgress.total)} rows · {pct}% · Batch {count(pmProgress.batches)}
+                              </span>
+                            </div>
+                            <div
+                              role="progressbar"
+                              aria-label="Product master import progress"
+                              aria-valuemin={0}
+                              aria-valuemax={pmProgress.total}
+                              aria-valuenow={pmProgress.processed}
+                              style={{ marginTop: 8, height: 10, borderRadius: 6, background: "#e2e8f0", overflow: "hidden" }}
+                            >
+                              <div style={{ width: `${pct}%`, height: "100%", borderRadius: 6, background: "#0f6b56", transition: "width 0.2s ease" }} />
+                            </div>
+                            <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                              {!pmBusy && (
+                                <button
+                                  type="button"
+                                  className="btn primary"
+                                  onClick={() => void retryProductMasterImport()}
+                                  title="Resume the staged import with the same upload"
+                                  style={{ background: "#0f6b56" }}
+                                >
+                                  Retry <Icon name="arrow" />
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                className="btn secondary"
+                                onClick={cancelProductMasterImport}
+                                title={
+                                  pmBusy
+                                    ? "Stop the import loop and abandon the staged upload (it expires on the server)"
+                                    : "Abandon the staged upload (it expires on the server)"
+                                }
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          </>
+                        )
+                      })()}
                     </div>
                   )}
                 </>

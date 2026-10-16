@@ -5,11 +5,15 @@
 //   npm run sync:oms                    every active channel, then the master SKU list (the daily run)
 //   npm run sync:oms -- --channel 12    one channel company id, then the master SKU list
 //   npm run sync:oms -- --skip-skus     listings only
+//   npm run sync:oms -- --skip-master-bridge   listings + SKUs, without the product-master bridge
 //
 // Writes:
 //   oms_listings   every listing record, with the OMSGuru master SKU it is mapped to (oms_sku_id)
 //   oms_skus       every master SKU record (the SKU record has no image field)
 //   sku_catalog    one title and image per listing SKU, read by the upload preview
+//   product_master new (marketplace, listing_sku) mappings from mapped listings, plus image fills
+//                  for blank product_master images; matching unmapped_listing_skus flip to mapped.
+//                  Skipped with --skip-master-bridge. Recorded in oms_sync_runs as kind='master-bridge'.
 // Each step is recorded in oms_sync_runs. The OMSGuru limit is 60 requests per 5 minutes. The client waits when
 // credits run low, so a full run takes longer. It does not fail.
 //
@@ -23,6 +27,7 @@ import type pg from "pg"
 import { getPool } from "../db.js"
 import { syncChannelListings, type ListingSyncTotals } from "../oms/catalog.js"
 import { OmsClient, omsConfigFromEnv, type OmsRow } from "../oms/client.js"
+import { bridgeMasterMappings } from "../oms/master-bridge.js"
 import { syncSkuMaster } from "../oms/skus.js"
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..")
@@ -151,6 +156,39 @@ async function main() {
         const message = errorText(error)
         console.error(`master SKUs: failed, ${message}`)
         await closeRun(db, skuRun, false, { pages: 0, rows: 0, newRows: 0 }, message)
+      }
+    }
+
+    // Master bridge: mapped listings become product_master rows, blank master images are
+    // filled from listing images, and matching unmapped SKUs flip to mapped. On by default;
+    // --skip-master-bridge opts out. A failed bridge is reported and never throws past this step.
+    if (!process.argv.includes("--skip-master-bridge")) {
+      const bridgeRun = await openRun(db, "master-bridge")
+      try {
+        const bridgeChannels = targets.map((row) => ({
+          id: channelId(row),
+          name: String(row.name ?? ""),
+          channel_name: String(row.channel_name ?? ""),
+        }))
+        const bridge = await bridgeMasterMappings(db, bridgeChannels)
+        for (const skipped of bridge.skippedChannels) {
+          console.log(`master bridge: skipped channel ${skipped.id} ${skipped.label} (no account mapping)`)
+        }
+        console.log(
+          `master bridge: ${bridge.inserted} new mapping(s), ${bridge.imageFilled} blank image(s) filled`,
+        )
+        await closeRun(
+          db,
+          bridgeRun,
+          true,
+          { pages: 0, rows: bridge.inserted + bridge.imageFilled, newRows: bridge.inserted },
+          "",
+        )
+      } catch (error) {
+        failed++
+        const message = errorText(error)
+        console.error(`master bridge: failed, ${message}`)
+        await closeRun(db, bridgeRun, false, { pages: 0, rows: 0, newRows: 0 }, message)
       }
     }
 

@@ -425,3 +425,136 @@ export async function generateUnmappedSkusTemplateCsv(db: pg.Pool, marketplace?:
   })
   return header + rows.join("\n") + (rows.length ? "\n" : "")
 }
+
+// ---------------------------------------------------------------------------------------------------------------
+// Staged batched import for large product-master files (tens of thousands of rows).
+//
+// The batch routes in server/product-master-routes.ts stage parsed rows in memory and commit them 500 rows at a
+// time, so the server never holds one huge transaction. Everything below is additive: the existing
+// upsertProductMaster/replaceProductMaster above are untouched, and the chunk writers below reuse their exact
+// row-insert SQL pattern. No history table is ever deleted here.
+// ---------------------------------------------------------------------------------------------------------------
+
+// One batch never exceeds 500 rows, no matter what the client asks for.
+export const MASTER_BATCH_LIMIT = 500
+
+// A staged master import expires 15 minutes after /import/start, mirroring the upload preview TTL.
+export const MASTER_STAGING_TTL_MS = 15 * 60 * 1000
+
+export type MasterImportMode = "merge" | "replace"
+
+export type StagedMasterImport = {
+  rows: MasterRow[]
+  filename: string
+  scope: string
+  mode: MasterImportMode
+  ownerId: number
+  createdAt: number
+  // Progress across /import/batch calls.
+  processed: number
+  inserted: number
+  // Replace mode only: rows removed by the one DELETE, and whether that DELETE already ran.
+  removed: number
+  replaced: boolean
+}
+
+// Caps a client-supplied batch limit at 500. Missing, zero, negative and non-numeric values mean 500.
+export function clampMasterBatchLimit(limit: unknown): number {
+  const n = typeof limit === "string" ? Number(limit) : (limit as number)
+  if (typeof n !== "number" || !Number.isFinite(n) || n <= 0) return MASTER_BATCH_LIMIT
+  return Math.min(Math.floor(n), MASTER_BATCH_LIMIT)
+}
+
+// The next chunk of staged rows to commit, plus the progress it leads to.
+export function takeMasterBatch<T>(
+  rows: T[],
+  processed: number,
+  limit?: unknown,
+): { chunk: T[]; nextProcessed: number; done: boolean; effectiveLimit: number } {
+  const effectiveLimit = clampMasterBatchLimit(limit ?? MASTER_BATCH_LIMIT)
+  const start = Math.max(0, Math.min(processed, rows.length))
+  const chunk = rows.slice(start, start + effectiveLimit)
+  const nextProcessed = start + chunk.length
+  return { chunk, nextProcessed, done: nextProcessed >= rows.length, effectiveLimit }
+}
+
+// Overall progress of a staged import. Processed is clamped so it can never exceed the total.
+export function masterBatchProgress(
+  processed: number,
+  total: number,
+): { processed: number; total: number; done: boolean; remaining: number } {
+  const safe = Math.max(0, Math.min(processed, total))
+  return { processed: safe, total, done: safe >= total, remaining: total - safe }
+}
+
+// Returns the staged import for this owner, or throws the same way an unknown/expired upload preview does:
+// unknown ids and other owners mean the file must be uploaded again (400/403), an expired staging means the
+// preview expired (400). The clock is a parameter so tests can pin it. Expired entries are removed on read.
+export function requireStagedMasterImport(
+  staged: Map<string, StagedMasterImport>,
+  uploadId: string,
+  ownerId: number,
+  now: number = Date.now(),
+): StagedMasterImport {
+  const entry = staged.get(uploadId)
+  if (!entry) throw new ServiceError(400, "Upload the file again before importing.")
+  if (entry.ownerId !== ownerId) throw new ServiceError(403, "Upload the file again before importing.")
+  if (now - entry.createdAt > MASTER_STAGING_TTL_MS) {
+    staged.delete(uploadId)
+    throw new ServiceError(400, "That file preview expired. Upload it again.")
+  }
+  return entry
+}
+
+// Shared value list for one chunk, using the same columns as upsertProductMaster.
+function masterChunkValues(rows: MasterRow[]): { values: unknown[]; groups: string[] } {
+  const values: unknown[] = []
+  const groups = rows.map((row) => {
+    const base = values.length
+    values.push(row.marketplace, row.listingSku, row.masterSku, row.category || null, row.cogs, row.weightSlab, row.imageUrl)
+    return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7}, now())`
+  })
+  return { values, groups }
+}
+
+// Upserts one chunk (merge mode). The caller owns the transaction: one batch, one commit.
+export async function upsertMasterRows(client: pg.PoolClient, rows: MasterRow[]): Promise<number> {
+  if (!rows.length) return 0
+  const { values, groups } = masterChunkValues(rows)
+  const res = await client.query(
+    `INSERT INTO product_master (marketplace, listing_sku, master_sku, category, cogs, weight_slab, image_url, updated_at)
+     VALUES ${groups.join(", ")}
+     ON CONFLICT (marketplace, listing_sku) DO UPDATE SET
+       master_sku = EXCLUDED.master_sku,
+       category = COALESCE(NULLIF(EXCLUDED.category, ''), product_master.category),
+       image_url = CASE WHEN EXCLUDED.image_url <> '' THEN EXCLUDED.image_url ELSE product_master.image_url END,
+       cogs = COALESCE(EXCLUDED.cogs, product_master.cogs),
+       weight_slab = COALESCE(EXCLUDED.weight_slab, product_master.weight_slab),
+       updated_at = now()`,
+    values,
+  )
+  return res.rowCount ?? 0
+}
+
+// Inserts one chunk (replace mode, after the one DELETE). The caller owns the transaction.
+export async function insertMasterRows(client: pg.PoolClient, rows: MasterRow[]): Promise<number> {
+  if (!rows.length) return 0
+  const { values, groups } = masterChunkValues(rows)
+  const res = await client.query(
+    `INSERT INTO product_master (marketplace, listing_sku, master_sku, category, cogs, weight_slab, image_url, updated_at)
+     VALUES ${groups.join(", ")}`,
+    values,
+  )
+  return res.rowCount ?? 0
+}
+
+// Flips matching unmapped_listing_skus to mapped. Shared by every batch so the logic lives in one place.
+export async function markUnmappedListingSkusMapped(client: pg.PoolClient): Promise<void> {
+  await client.query(`
+    UPDATE unmapped_listing_skus u
+    SET status = 'mapped'
+    FROM product_master pm
+    WHERE u.status = 'unmapped'
+      AND LOWER(pm.listing_sku) = LOWER(u.listing_sku)
+  `)
+}
