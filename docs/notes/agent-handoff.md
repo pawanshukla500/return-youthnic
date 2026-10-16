@@ -1622,6 +1622,13 @@ Append new entries at the end. Do not edit earlier entries, except to correct a 
 - **Next agent must not:** widen the bridge channel map by guessing (myntra→null stays), turn the bridge INSERT into an update, or commit the other workstream's files (Claims.tsx, dashboard.ts, format.ts, index.css, desktop-agent/, scratch/) with this work.
 - **Open for the user:** confirm Sheet2 of Book11 is intentionally ignored; run the first big Book11 import via the new batched UI; Myntra channel disambiguation for the bridge (needs seller-ID decision #4).
 
+### 2026-10-16, OpenCode, PR #23 merged (batched import + OMSGuru bridge)
+
+- **CI failed once, fixed in real time:** `product-master-batch.test.ts` success-path test used `createdAt: 1_000_000` with `now = 2_000_000` (diff 1,000 s > 15-min TTL) — passed locally only because... it didn't; the committed test was simply wrong. The user committed `4314534` (same NOW-relative fix) directly on the PR branch. Re-run CI: SUCCESS. Lesson: TTL tests must derive `createdAt` from the pinned `now`.
+- **Merged:** PR #23 (commits `ac783f0` + `4314534`) — user merged after green CI. Post-merge main CI SUCCESS, production deploy SUCCESS, `/api/health` → DB connected (startup migration applied `schema-vms.sql`). No APK workflow (no mobile changes) — latest stays v1.0.53.
+- **Left untouched:** the concurrent claims-branch worktree (Claims.tsx, dashboard, desktop-agent, scratch/, release manifests) was never staged or committed here; PR #23 contains only the 10 batched-import/bridge files.
+- **Still open for the user:** Book11 Sheet2 ignore-confirmation; first big import via the batched UI; Myntra bridge disambiguation (seller-ID decision); `--apply` runs (VMS + OMSGuru bridge) against production data + daily scheduling.
+
 ## STOP — needs the user to resume
 
 
