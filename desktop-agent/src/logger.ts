@@ -24,7 +24,21 @@ export class AgentLogger {
 
   private log(level: LogLevel, message: string, ...args: unknown[]) {
     const timestamp = new Date().toISOString()
-    const formatted = args.length > 0 ? `${message} ${args.map((a) => (typeof a === "object" ? JSON.stringify(a) : a)).join(" ")}` : message
+    const formattedArgs = args.map((a) => {
+      if (a instanceof Error) {
+        const cause = (a as any).cause ? ` (cause: ${(a as any).cause?.message || (a as any).cause})` : ""
+        return `${a.name}: ${a.message}${cause}`
+      }
+      if (typeof a === "object" && a !== null) {
+        try {
+          return JSON.stringify(a)
+        } catch {
+          return String(a)
+        }
+      }
+      return String(a)
+    })
+    const formatted = formattedArgs.length > 0 ? `${message} ${formattedArgs.join(" ")}` : message
 
     const color =
       level === "error" ? "\x1b[31m" : level === "warn" ? "\x1b[33m" : level === "info" ? "\x1b[32m" : "\x1b[36m"
@@ -34,7 +48,7 @@ export class AgentLogger {
 
     const entry = { timestamp, level, message: formatted }
     this.inMemoryLogs.push(entry)
-    if (this.inMemoryLogs.length > 100) this.inMemoryLogs.shift()
+    if (this.inMemoryLogs.length > 250) this.inMemoryLogs.shift()
 
     for (const cb of this.onLogCallbacks) {
       try {

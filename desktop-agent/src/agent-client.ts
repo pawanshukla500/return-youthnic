@@ -243,4 +243,39 @@ export class AgentBackendClient {
       logger.error("Failed to report job completion:", err)
     }
   }
+
+  async testConnection(): Promise<{ ok: boolean; status: number; message: string; latencyMs: number }> {
+    const start = Date.now()
+    try {
+      const url = `${this.config.backendUrl}/api/health`
+      const res = await fetch(url)
+      const latencyMs = Date.now() - start
+      if (res.ok) {
+        return { ok: true, status: res.status, message: "Backend connected successfully.", latencyMs }
+      }
+      return { ok: false, status: res.status, message: `Backend responded with HTTP ${res.status}`, latencyMs }
+    } catch (err: any) {
+      return { ok: false, status: 0, message: err?.message || String(err), latencyMs: Date.now() - start }
+    }
+  }
+
+  async getRecentJobs(filter: { stage?: string; search?: string; page?: number; pageSize?: number } = {}): Promise<{ rows: any[]; total: number }> {
+    try {
+      const q = new URLSearchParams()
+      q.set("agentUuid", this.config.agentUuid)
+      if (filter.stage) q.set("stage", filter.stage)
+      if (filter.search) q.set("search", filter.search)
+      if (filter.page) q.set("page", String(filter.page))
+      if (filter.pageSize) q.set("pageSize", String(filter.pageSize))
+      const url = `${this.config.backendUrl}/api/automation/agent/jobs?${q.toString()}`
+      const res = await fetch(url, {
+        headers: { "X-Agent-UUID": this.config.agentUuid },
+      })
+      if (!res.ok) return { rows: [], total: 0 }
+      return (await res.json()) as { rows: any[]; total: number }
+    } catch (err) {
+      logger.error("Failed to fetch jobs list from backend:", err)
+      return { rows: [], total: 0 }
+    }
+  }
 }

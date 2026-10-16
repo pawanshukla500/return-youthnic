@@ -335,6 +335,34 @@ export function mountClaimAutomationRoutes(app: Express, requireUser: RequestHan
     }
   })
 
+  app.get("/api/automation/agent/jobs", async (req, res, next) => {
+    try {
+      const agentUuid = text(req.query.agentUuid || req.headers["x-agent-uuid"])
+      if (!agentUuid) throw new ServiceError(400, "Agent UUID required.")
+
+      const db = getPool()
+      const agentRes = await db.query(
+        `SELECT id, is_authorized FROM claim_automation_agents WHERE agent_uuid = $1`,
+        [agentUuid],
+      )
+      if (agentRes.rows.length === 0 || !agentRes.rows[0].is_authorized) {
+        throw new ServiceError(401, "Agent not authorized.")
+      }
+
+      const q = req.query as Record<string, unknown>
+      const result = await listAutomationJobs(db, { all: true }, {
+        stage: text(q.stage) || undefined,
+        marketplaceId: positiveId(q.marketplaceId) || undefined,
+        search: text(q.search) || undefined,
+        page: positiveId(q.page) || 1,
+        pageSize: positiveId(q.pageSize) || 50,
+      })
+      res.json(result)
+    } catch (error) {
+      sendError(res, error, next)
+    }
+  })
+
   app.get("/api/automation/jobs/:id/bundle", async (req, res, next) => {
     try {
       const id = positiveId(req.params.id)

@@ -2140,4 +2140,32 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
   - Re-add the "Supplier Portal Login URL" field to the UI (all URLs must remain hardcoded).
   - Remove the 24/7 continuous reconnect loop or persistent browser profiles.
 
+### 2026-10-16, Antigravity Agent, 24/7 Desktop App GUI Dashboard & Windows Installer Package
+- **What was done:**
+  - **Eliminated Experimental Node SEA Warning & Exe Reliance:** Replaced the fragile single-executable command-line binary with a robust, dedicated **Desktop App** architecture (`desktop-agent/src/desktop-app-server.ts`) that runs locally with an embedded GUI dashboard served via lightweight HTTP and rendered inside a native Chromium app window (`--app=http://127.0.0.1:3005`).
+  - **Visual Claims Pipeline & Queue Dashboard:**
+    - Visualizes exactly which claims are **Done (Completed)**, **Queued (Waiting)**, **In Progress**, and **Need Attention (OTP / 2FA / Review)**.
+    - Added filter tabs (`All`, `Queued`, `In Progress`, `Completed`, `Attention Needed`), search filter (AWB, Order ID, Ticket Ref), and KPI stat cards.
+    - Shows marketplace badges (Meesho, Flipkart, Amazon, etc.), tracking numbers, sub-orders, claim reasons, and confirmed marketplace ticket reference codes.
+  - **24/7 Task Scheduling & Controls:**
+    - Real-time countdown timer to next poll.
+    - One-click buttons to `▶ Start Bot` / `⏸ Pause Bot`, `↻ Poll Now`, `🖥️ Launch Test Browser`, and `⚡ Test Ping`.
+    - Live terminal view with Server-Sent Events (SSE) streaming real-time colored log output.
+    - Live backend server switcher with auto-ping latency indicator (defaults to `https://return.youthnic.shop`).
+  - **Error Serialization & Connection Diagnostics:**
+    - In `desktop-agent/src/logger.ts`, fixed `JSON.stringify(new Error(...))` yielding `{}` by properly formatting Error name, message, and cause.
+    - In `desktop-agent/src/config.ts`, added `saveAgentConfig()` and set smart default fallback to production VPS `https://return.youthnic.shop`.
+    - In `server/claim-automation-routes.ts`, added authorized agent endpoint `GET /api/automation/agent/jobs` returning claims queue to the desktop bot.
+  - **Windows Installer & Desktop Shortcut:**
+    - Added `install-desktop-app.bat`: checks Node.js, runs `npm install`, creates a Windows Desktop shortcut (`TaskFlow Pro 24-7 Bot.lnk`) on the user's Desktop, and launches the app.
+    - Updated `START-BOT.bat` and `package.json` scripts (`"bot"` and `"desktop-app"`).
+- **Verification:**
+  - `npm.cmd run typecheck`: Passed (0 errors across client, server, and desktop agent).
+  - `npm.cmd run build`: Passed (Vite client bundled in 1.59s, esbuild server in 20ms).
+  - `npm.cmd test`: All 422 tests passed (386 passed, 0 failed, 36 skipped).
+- **The next agent must not:**
+  - Remove the live dashboard or the `GET /api/automation/agent/jobs` endpoint.
+  - Return to Node SEA binary packing without resolving require-hook dependencies.
+
+
 
