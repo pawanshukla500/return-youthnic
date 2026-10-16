@@ -720,16 +720,20 @@ function ClaimDetailModal({
                       <button className="btn secondary small" onClick={() => setManualModalOpen(true)}>Record Manual Claim</button>
                     </>
                   )}
+                  {automationJob.stage === "not_eligible" && (
+                    <button className="btn secondary small" onClick={() => setManualModalOpen(true)}>Record Manual Claim</button>
+                  )}
                 </div>
               </div>
 
               {automationJob.manualActionReason && (
                 <div style={{ background: "#fef3c7", padding: "10px 14px", borderRadius: 6, fontSize: 13, color: "#92400e", marginBottom: 8 }}>
-                  ⚠️ <strong>Manual Action Required:</strong> {automationJob.manualActionReason}
+                  ⚠️ <strong>{automationJob.stage === "not_eligible" ? "Not eligible, the bot did not claim it:" : "Manual Action Required:"}</strong>{" "}
+                  {automationJob.manualActionReason}
                 </div>
               )}
 
-              {automationJob.marketplaceClaimId && (
+              {automationJob.marketplaceClaimId && automationJob.stage === "completed" && (
                 <div style={{ background: "#ecfdf5", padding: "10px 14px", borderRadius: 6, fontSize: 13, color: "#065f46", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                   <span>✅ <strong>Marketplace Claim Reference:</strong> <code>{automationJob.marketplaceClaimId}</code></span>
                   <button
@@ -1386,12 +1390,37 @@ function CreateClaimModal({
   )
 }
 
+type JobFilter = "all" | "active" | "manual" | "not_eligible" | "completed"
+
+const JOB_FILTERS: { id: JobFilter; label: string }[] = [
+  { id: "all", label: "All" },
+  { id: "active", label: "In progress" },
+  { id: "manual", label: "Needs manual action" },
+  { id: "not_eligible", label: "Not eligible (manual)" },
+  { id: "completed", label: "Filed" },
+]
+
+function jobMatchesFilter(job: AutomationJob, filter: JobFilter): boolean {
+  if (filter === "all") return true
+  if (filter === "not_eligible") return job.stage === "not_eligible"
+  if (filter === "manual") return job.stage === "manual_intervention_required" || job.stage === "failed"
+  if (filter === "completed") return job.stage === "completed"
+  return !["not_eligible", "manual_intervention_required", "failed", "completed"].includes(job.stage)
+}
+
+function jobStageLabel(stage: string): string {
+  if (stage === "not_eligible") return "not eligible · manual"
+  return stage
+}
+
 function DesktopAutomationTab() {
   const [agents, setAgents] = useState<AutomationAgent[]>([])
   const [jobs, setJobs] = useState<AutomationJob[]>([])
   const [credentials, setCredentials] = useState<MarketplaceCredential[]>([])
   const [loading, setLoading] = useState(true)
   const [selectedJob, setSelectedJob] = useState<AutomationJob | null>(null)
+  const [jobFilter, setJobFilter] = useState<JobFilter>("all")
+  const shownJobs = jobs.filter((job) => jobMatchesFilter(job, jobFilter))
 
   const loadData = () => {
     setLoading(true)
@@ -1506,8 +1535,26 @@ function DesktopAutomationTab() {
         <div className="panel-head">
           <div>
             <h2>Automated Claims Processing Queue</h2>
-            <p>Live marketplace submission tasks and execution status</p>
+            <p>Live marketplace submission tasks and execution status. Orders the marketplace refuses are never claimed; they wait under “Not eligible” for a manual check.</p>
           </div>
+        </div>
+
+        <div role="tablist" aria-label="Filter claim bot jobs" style={{ display: "flex", flexWrap: "wrap", gap: 8, margin: "4px 0 12px" }}>
+          {JOB_FILTERS.map((filter) => {
+            const count = jobs.filter((job) => jobMatchesFilter(job, filter.id)).length
+            return (
+              <button
+                key={filter.id}
+                type="button"
+                role="tab"
+                aria-selected={jobFilter === filter.id}
+                className={jobFilter === filter.id ? "btn primary small" : "btn secondary small"}
+                onClick={() => setJobFilter(filter.id)}
+              >
+                {filter.label} ({count})
+              </button>
+            )
+          })}
         </div>
 
         <DataTable
@@ -1516,8 +1563,20 @@ function DesktopAutomationTab() {
               key: "stage",
               header: "Stage",
               render: (row) => (
-                <Badge tone={row.stage === "completed" ? "success" : row.stage === "failed" ? "danger" : row.stage === "prepared" ? "purple" : "blue"}>
-                  {row.stage}
+                <Badge
+                  tone={
+                    row.stage === "completed"
+                      ? "success"
+                      : row.stage === "failed"
+                        ? "danger"
+                        : row.stage === "not_eligible" || row.stage === "manual_intervention_required"
+                          ? "warning"
+                          : row.stage === "prepared"
+                            ? "purple"
+                            : "blue"
+                  }
+                >
+                  {jobStageLabel(row.stage)}
                 </Badge>
               ),
             },
@@ -1540,7 +1599,7 @@ function DesktopAutomationTab() {
               ),
             },
           ]}
-          rows={jobs}
+          rows={shownJobs}
           rowKey={(row) => String(row.id)}
         />
       </section>

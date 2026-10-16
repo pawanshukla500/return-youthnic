@@ -33,6 +33,12 @@ function writeStored(session: StoredSession): void {
   fs.writeFileSync(file, JSON.stringify(session), { encoding: "utf8" })
 }
 
+export function operatorAuthorization(): string | null {
+  const stored = readStored()
+  if (!stored?.token) return null
+  return `Bearer ${stored.token}`
+}
+
 export function clearOperatorSession(): void {
   try {
     fs.unlinkSync(sessionFile())
@@ -113,6 +119,17 @@ export async function loginOperator(
   const user = profileOf(data.user)
   writeStored({ token: data.token, ...user })
   return { ok: true, user }
+}
+
+export async function operatorFetch(pathname: string, init: RequestInit = {}): Promise<Response> {
+  const stored = readStored()
+  if (!stored?.token) {
+    throw new Error("Sign in on the claim bot before setting up a supplier login.")
+  }
+  const headers = new Headers(init.headers)
+  headers.set("Authorization", `Bearer ${stored.token}`)
+  if (init.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json")
+  return fetch(`${backendOrigin()}${pathname}`, { ...init, headers })
 }
 
 export async function logoutOperator(): Promise<void> {

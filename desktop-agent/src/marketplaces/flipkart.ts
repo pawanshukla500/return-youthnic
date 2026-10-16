@@ -68,13 +68,11 @@ export class FlipkartAutomation extends BaseMarketplaceAutomation {
     const confScreenshot = path.join(this.workDir, `submitted-flipkart-${this.job.jobId}.png`)
     await this.browser.captureScreenshot(confScreenshot)
 
-    const claimId = `FK-SPF-${this.job.claim.orderNumber.slice(-8)}-${Date.now().toString(36).toUpperCase()}`
-
     return {
-      success: true,
-      stage: "completed",
-      marketplaceClaimId: claimId,
+      success: false,
+      stage: "manual_intervention_required",
       screenshotPath: confScreenshot,
+      manualActionReason: "Flipkart did not show a ticket number. Finish this claim in the open browser, then run it again.",
     }
   }
 }

@@ -3,7 +3,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { buildInsights, normalizeFilters, pct, sizeOfLine, sizeRank } from "../analytics.js"
-import { canDispatchIron, canReceiveIron, ironBatchNumber, ironBatchStateOf, ironStateOf, receiveProblem } from "../iron.js"
+import { canDispatchIron, canReceiveIron, ironBatchNumber, ironBatchStateOf, ironLocationOf, ironStateOf, receiveProblem } from "../iron.js"
 import { changeVisibleTo } from "../live.js"
 import { countsAsReturnIssue, scanStatusFor } from "../register-rules.js"
 
@@ -110,4 +110,12 @@ test("Iron batches: numbered by IST day, overdue after their own date, made by t
   assert.equal(canDispatchIron("Supervisor"), true)
   assert.equal(canDispatchIron("Admin"), true)
   assert.equal(canDispatchIron("Inward"), false, "the Inward Team receives; it does not make batches")
+})
+
+test("Iron batches go to a khaata unless the Return Team chose the return desk", () => {
+  assert.equal(ironLocationOf("in_house"), "in_house")
+  assert.equal(ironLocationOf(" IN_HOUSE "), "in_house")
+  assert.equal(ironLocationOf("khaata"), "khaata")
+  assert.equal(ironLocationOf(undefined), "khaata")
+  assert.equal(ironLocationOf("anything else"), "khaata")
 })

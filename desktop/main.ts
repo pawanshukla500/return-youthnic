@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url"
 import { loadAgentConfig, saveAgentConfig } from "../desktop-agent/src/config.js"
 import { AgentBackendClient } from "../desktop-agent/src/agent-client.js"
 import { BrowserRunner } from "../desktop-agent/src/browser-runner.js"
+import { closePortalLoginBrowser, holdPortalBrowser, profileDirFor, readSessionSavedAt } from "../desktop-agent/src/portal-login.js"
 import { getAutomationEngine } from "../desktop-agent/src/marketplaces/registry.js"
 import { logger } from "../desktop-agent/src/logger.js"
 import {
@@ -67,7 +68,7 @@ if (!gotTheLock) {
 // ---------------------------------------------------------------------------------------------------------------
 
 async function runAutomationWorkerLoop(): Promise<boolean> {
-  if (!isBotActive || isProcessingJob) return false
+  if (!isBotActive || isProcessingJob || holdPortalBrowser()) return false
   lastPollLabel = new Date().toLocaleTimeString("en-IN")
 
   let pollResult: any = null
@@ -105,6 +106,9 @@ async function runAutomationWorkerLoop(): Promise<boolean> {
 
     const evidenceFilesMap = await client.downloadEvidenceFiles(bundle.claimId, bundle.evidenceFiles)
 
+    // The supplier-login window uses the same browser profile. Close it before this claim opens the portal.
+    await closePortalLoginBrowser()
+
     // Launch browser with persistent profile
     const browserRunner = new BrowserRunner()
     const isHeadless = bundle.automationMode === "headless"
@@ -115,6 +119,7 @@ async function runAutomationWorkerLoop(): Promise<boolean> {
       headless: isHeadless,
     })
 
+    let keepBrowserOpen = false
     try {
       await browserRunner.connectToPage(browserSession.port)
 
@@ -126,7 +131,8 @@ async function runAutomationWorkerLoop(): Promise<boolean> {
         path.join(agentConfig.workDir, `claim-${bundle.claimId}`),
       )
 
-      const action = jobHeader.stage === "submitting" ? "submit" : "prepare"
+      const sessionSaved = Boolean(readSessionSavedAt(profileDirFor(agentConfig.userDataDir, bundle.marketplace)))
+      const action = jobHeader.stage === "submitting" || sessionSaved ? "submit" : "prepare"
       const result = await engine.execute(action)
 
       if (result.stage === "prepared") {
@@ -141,19 +147,21 @@ async function runAutomationWorkerLoop(): Promise<boolean> {
             body: `${bundle.marketplace} claim #${bundle.claimId} prepared. Review in Claims tab.`,
           }).show()
         }
-      } else if (result.stage === "completed") {
+      } else if (result.stage === "completed" && result.marketplaceClaimId) {
         await client.completeJob(jobHeader.jobId, {
-          marketplaceClaimId: result.marketplaceClaimId || "CONFIRMED",
+          marketplaceClaimId: result.marketplaceClaimId,
           screenshotPath: result.screenshotPath,
         })
         await client.cleanClaimEvidenceFiles(bundle.claimId)
         if (Notification.isSupported()) {
           new Notification({
             title: "Claim Submitted Successfully ✓",
-            body: `${bundle.marketplace} claim filed. Ticket Ref: ${result.marketplaceClaimId || "CONFIRMED"}`,
+            body: `${bundle.marketplace} claim filed. Ticket Ref: ${result.marketplaceClaimId}`,
           }).show()
         }
       } else if (result.stage === "manual_intervention_required") {
+        keepBrowserOpen = true
+        holdPortalBrowser(browserRunner)
         await client.updateProgress(jobHeader.jobId, {
           stage: "manual_intervention_required",
           logMessage: result.manualActionReason || "Manual action required on portal.",
@@ -162,13 +170,22 @@ async function runAutomationWorkerLoop(): Promise<boolean> {
         })
         if (Notification.isSupported()) {
           new Notification({
-            title: "Manual Action Required on Portal",
-            body: result.manualActionReason || "OTP or review needed for claim submission.",
+            title: "Finish the supplier login",
+            body: result.manualActionReason || "The supplier browser stays open. Finish the login, then run this claim again.",
           }).show()
         }
+      } else if (result.stage === "not_eligible") {
+        logger.warn(`[Desktop App Bot] Job #${jobHeader.jobId} is not eligible for a claim. Kept for manual review; moving to the next job.`)
+        await client.updateProgress(jobHeader.jobId, {
+          stage: "not_eligible",
+          logMessage: result.manualActionReason || "The marketplace says this order is not eligible for a claim.",
+          screenshotPath: result.screenshotPath,
+          manualActionReason: result.manualActionReason,
+        })
+        await client.cleanClaimEvidenceFiles(bundle.claimId).catch(() => undefined)
       }
     } finally {
-      await browserRunner.close()
+      if (!keepBrowserOpen) await browserRunner.close()
     }
   } catch (err: any) {
     logger.error("[Desktop App Bot] Automation error:", err)

@@ -141,3 +141,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS iron_batches_client_key_uidx ON iron_batches (
 CREATE INDEX IF NOT EXISTS iron_batches_created_idx ON iron_batches (created_at DESC);
 ALTER TABLE iron_send_records ADD COLUMN IF NOT EXISTS batch_id integer REFERENCES iron_batches(id) ON DELETE RESTRICT;
 CREATE INDEX IF NOT EXISTS iron_send_records_batch_idx ON iron_send_records (batch_id);
+
+-- Where a batch is ironed (2026-10-16): 'khaata' (sent out on a challan) or 'in_house' (high-running pieces ironed at
+-- the return desk). Receiving stays the same manual Inward Team step for both, and neither touches OMSGuru.
+ALTER TABLE iron_batches ADD COLUMN IF NOT EXISTS iron_location text NOT NULL DEFAULT 'khaata'
+  CHECK (iron_location IN ('khaata', 'in_house'));

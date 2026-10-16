@@ -4,7 +4,9 @@ import { logger } from "../logger.js"
 
 export type MarketplaceAutomationResult = {
   success: boolean
-  stage: "prepared" | "completed" | "manual_intervention_required" | "failed"
+  // not_eligible: the marketplace refuses this order for a claim (for example Meesho's packaging policy). The bot does
+  // not claim it, keeps it for manual review, and moves on to the next job.
+  stage: "prepared" | "completed" | "manual_intervention_required" | "not_eligible" | "failed"
   marketplaceClaimId?: string
   screenshotPath?: string
   errorMessage?: string
@@ -33,6 +35,21 @@ export abstract class BaseMarketplaceAutomation {
       const exists = await this.browser.evaluate<boolean>(`Boolean(document.querySelector(${JSON.stringify(selector)}))`)
       if (exists) return true
       await new Promise((r) => setTimeout(r, 500))
+    }
+    return false
+  }
+
+  protected async waitForContent(timeoutMs = 15000): Promise<boolean> {
+    const start = Date.now()
+    while (Date.now() - start < timeoutMs) {
+      const ready = await this.browser.evaluate<boolean>(`
+        (() => {
+          const text = document.body ? document.body.innerText.trim() : '';
+          return text.length > 40;
+        })()
+      `)
+      if (ready) return true
+      await new Promise((resolve) => setTimeout(resolve, 500))
     }
     return false
   }

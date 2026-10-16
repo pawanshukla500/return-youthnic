@@ -37,13 +37,11 @@ export class MyntraAutomation extends BaseMarketplaceAutomation {
     const confScreenshot = path.join(this.workDir, `submitted-myntra-${this.job.jobId}.png`)
     await this.browser.captureScreenshot(confScreenshot)
 
-    const claimId = `MYN-CLM-${this.job.claim.orderNumber.slice(-8)}-${Date.now().toString(36).toUpperCase()}`
-
     return {
-      success: true,
-      stage: "completed",
-      marketplaceClaimId: claimId,
+      success: false,
+      stage: "manual_intervention_required",
       screenshotPath: confScreenshot,
+      manualActionReason: "Myntra did not show a ticket number. Finish this claim in the open browser, then run it again.",
     }
   }
 }

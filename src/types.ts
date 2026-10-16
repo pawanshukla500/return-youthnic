@@ -266,6 +266,8 @@ export type IronBatchState = "open" | "partial" | "overdue" | "received"
 export type IronBatch = {
   id: number
   batchNo: string
+  // khaata: sent out on a challan. in_house: high-running pieces ironed at the return desk.
+  location: "khaata" | "in_house"
   khaataName: string
   challanNo: string
   expectedDays: number

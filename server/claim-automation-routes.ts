@@ -9,6 +9,7 @@ import {
   getJobExecutionBundle,
   listAutomationAgents,
   listAutomationJobs,
+  getPortalLoginForSetup,
   listMarketplaceCredentials,
   lookupReturnForClaim,
   pollNextAutomationJob,
@@ -471,6 +472,18 @@ export function mountClaimAutomationRoutes(app: Express, requireUser: RequestHan
         notes: text(body.notes),
       })
       res.json({ ok: true })
+    } catch (error) {
+      sendError(res, error, next)
+    }
+  })
+
+  app.get("/api/automation/portal-login-secret", requireUser, requireAdmin, async (req, res, next) => {
+    try {
+      const account = text(req.query.account)
+      if (!account) throw new ServiceError(400, "Account name is required.")
+      const secret = await getPortalLoginForSetup(getPool(), account)
+      if (!secret) throw new ServiceError(404, "No bot password is saved for this marketplace.")
+      res.json(secret)
     } catch (error) {
       sendError(res, error, next)
     }

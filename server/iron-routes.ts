@@ -24,6 +24,7 @@ import {
   getIronRecord,
   ironBatchCsv,
   ironBatchXlsx,
+  ironLocationOf,
   ironRecordAccount,
   ironSummary,
   listIronBatches,
@@ -80,6 +81,7 @@ export function mountIronRoutes(app: Express, requireUser: RequestHandler): void
       const recordIds = Array.isArray(body.recordIds) ? body.recordIds.map(Number) : null
       const result = await createIronBatch(getPool(), { ...actorOf(req), role: user.role }, scopeOf(req), {
         recordIds,
+        location: ironLocationOf(body.location),
         khaataName: text(body.khaataName),
         challanNo: text(body.challanNo),
         expectedDays: Number(body.expectedDays ?? 3),

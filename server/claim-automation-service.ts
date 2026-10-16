@@ -227,6 +227,35 @@ export async function listMarketplaceCredentials(
   })
 }
 
+export async function getPortalLoginForSetup(
+  db: pg.Pool,
+  accountName: string,
+): Promise<{ accountName: string; portalUrl: string; username: string; password: string } | null> {
+  const name = accountName.trim()
+  if (!name) return null
+  const res = await db.query(
+    `SELECT mc.account_name, mc.portal_url, mc.username_encrypted, mc.password_encrypted
+     FROM marketplace_credentials mc
+     LEFT JOIN marketplaces m ON m.id = mc.marketplace_id
+     WHERE mc.is_active = true
+       AND (LOWER(mc.account_name) = LOWER($1) OR LOWER(COALESCE(m.name, '')) = LOWER($1))
+     ORDER BY mc.id ASC
+     LIMIT 1`,
+    [name],
+  )
+  const row = res.rows[0]
+  if (!row) return null
+  const username = decryptSecret(String(row.username_encrypted || ""))
+  const password = decryptSecret(String(row.password_encrypted || ""))
+  if (!username || !password) return null
+  return {
+    accountName: String(row.account_name),
+    portalUrl: String(row.portal_url || ""),
+    username,
+    password,
+  }
+}
+
 export function defaultMarketplacePortalUrl(accountName: string): string {
   const n = accountName.toLowerCase()
   if (n.includes("meesho")) return "https://supplier.meesho.com/panel/v3/new/root/login"
@@ -626,6 +655,13 @@ export async function updateJobProgress(
       await client.query(
         `UPDATE claims SET status = 'manual_action_required', remarks = COALESCE(remarks, '') || '\nManual action required: ' || $2, updated_at = now() WHERE id = (SELECT claim_id FROM claim_automation_jobs WHERE id = $1)`,
         [jobId, data.manualActionReason || "Marketplace portal requires manual intervention"],
+      )
+    } else if (data.stage === "not_eligible") {
+      // The marketplace refused the order (for example Meesho's packaging policy). It is not claimed; the claim stays
+      // for manual review, and the job is not picked up again unless someone retries it.
+      await client.query(
+        `UPDATE claims SET status = 'manual_action_required', remarks = COALESCE(remarks, '') || '\nNot eligible on marketplace: ' || $2, updated_at = now() WHERE id = (SELECT claim_id FROM claim_automation_jobs WHERE id = $1)`,
+        [jobId, data.manualActionReason || "The marketplace says this order is not eligible for a claim"],
       )
     }
 

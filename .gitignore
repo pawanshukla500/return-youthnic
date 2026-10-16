@@ -1,6 +1,9 @@
 node_modules
 dist
 dist-electron
+dist-electron-login
+dist-electron-ready
+dist-electron-form
 desktop/dist
 desktop-agent/dist
 server/dist.js

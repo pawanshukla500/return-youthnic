@@ -56,6 +56,14 @@ export function canDispatchIron(role: string): boolean {
   return !isInwardRole(role) && String(role || "").trim() !== ""
 }
 
+// Where a batch is ironed: sent out to a khaata on a challan, or (high-running pieces) ironed at the return desk.
+export type IronLocation = "khaata" | "in_house"
+export const IN_HOUSE_IRON_NAME = "Return desk (in-house)"
+
+export function ironLocationOf(value: unknown): IronLocation {
+  return String(value ?? "").trim().toLowerCase() === "in_house" ? "in_house" : "khaata"
+}
+
 // IRN-YYMMDD-NNN, by the IST day the batch was made.
 export function ironBatchNumber(istDay: string, sequence: number): string {
   const compact = istDay.replace(/-/g, "").slice(2)
@@ -560,6 +568,7 @@ export type IronBatchState = "open" | "partial" | "overdue" | "received"
 export type IronBatchView = {
   id: number
   batchNo: string
+  location: IronLocation
   khaataName: string
   challanNo: string
   expectedDays: number
@@ -586,7 +595,7 @@ export function ironBatchStateOf(input: { qtySent: number; qtyReceived: number; 
 }
 
 const BATCH_SQL = `
-  SELECT b.id, b.batch_no, b.khaata_name, b.challan_no, b.expected_days, b.expected_return_at, b.notes, b.created_at,
+  SELECT b.id, b.batch_no, b.iron_location, b.khaata_name, b.challan_no, b.expected_days, b.expected_return_at, b.notes, b.created_at,
          COALESCE(u.name, '') AS created_by,
          COUNT(r.id)::int AS lines,
          COALESCE(SUM(r.qty_sent), 0)::int AS qty_sent,
@@ -605,6 +614,7 @@ function toBatchView(row: Record<string, unknown>, now: Date): IronBatchView {
   return {
     id: Number(row.id),
     batchNo: String(row.batch_no),
+    location: ironLocationOf(row.iron_location),
     khaataName: String(row.khaata_name || ""),
     challanNo: String(row.challan_no || ""),
     expectedDays: Number(row.expected_days),
@@ -677,6 +687,7 @@ export async function createIronBatch(
   scope: AccountScope,
   input: {
     recordIds: number[] | null
+    location?: IronLocation
     khaataName: string
     challanNo: string
     expectedDays: number
@@ -687,7 +698,8 @@ export async function createIronBatch(
   if (!canDispatchIron(actor.role)) {
     throw new ServiceError(403, "The Return Team makes Iron Send batches. The Inward Team records what comes back.")
   }
-  const khaataName = cleanText(input.khaataName, "Khaata name")
+  const location = ironLocationOf(input.location)
+  const khaataName = location === "in_house" ? IN_HOUSE_IRON_NAME : cleanText(input.khaataName, "Khaata name")
   if (!khaataName) throw new ServiceError(400, "Enter the khaata (ironing unit) the batch goes to.")
   const challanNo = cleanText(input.challanNo, "Challan number")
   const notes = cleanText(input.notes, "Notes", MAX_IRON_NOTES)
@@ -749,17 +761,17 @@ export async function createIronBatch(
     )
     const batchNo = ironBatchNumber(istToday, sequence)
     const inserted = await client.query(
-      `INSERT INTO iron_batches (batch_no, khaata_name, challan_no, expected_days, expected_return_at, notes, created_by, client_key)
-       VALUES ($1, $2, $3, $4::int, now() + make_interval(days => $4::int), $5, $6, $7)
+      `INSERT INTO iron_batches (batch_no, iron_location, khaata_name, challan_no, expected_days, expected_return_at, notes, created_by, client_key)
+       VALUES ($1, $8, $2, $3, $4::int, now() + make_interval(days => $4::int), $5, $6, $7)
        RETURNING id`,
-      [batchNo, khaataName, challanNo, expectedDays, notes, actor.id, clientKey],
+      [batchNo, khaataName, challanNo, expectedDays, notes, actor.id, clientKey, location],
     )
     const batchId = Number(inserted.rows[0].id)
     await client.query("UPDATE iron_send_records SET batch_id = $1 WHERE id = ANY($2::integer[])", [batchId, ids])
     await client.query(
       `INSERT INTO register_audit_log (actor_user_id, action, entity_type, entity_id, details)
        VALUES ($1, 'iron.batch_create', 'iron_batch', $2, $3::jsonb)`,
-      [actor.id, String(batchId), JSON.stringify({ batchNo, lines: ids.length, khaataName, challanNo, expectedDays })],
+      [actor.id, String(batchId), JSON.stringify({ batchNo, lines: ids.length, location, khaataName, challanNo, expectedDays })],
     )
     await client.query("COMMIT")
     open = false
@@ -789,7 +801,10 @@ export async function updateIronBatch(
   if (!canDispatchIron(actor.role)) throw new ServiceError(403, "Only the Return Team can change a batch.")
   const current = await getIronBatch(db, scope, id)
   const next = {
-    khaataName: input.khaataName === undefined ? current.batch.khaataName : cleanText(input.khaataName, "Khaata name"),
+    khaataName:
+      input.khaataName === undefined || current.batch.location === "in_house"
+        ? current.batch.khaataName
+        : cleanText(input.khaataName, "Khaata name"),
     challanNo: input.challanNo === undefined ? current.batch.challanNo : cleanText(input.challanNo, "Challan number"),
     notes: input.notes === undefined ? current.batch.notes : cleanText(input.notes, "Notes", MAX_IRON_NOTES),
   }
@@ -860,8 +875,9 @@ export function ironBatchSheetRows(batch: IronBatchView, rows: IronRecordView[])
   const out: (string | number)[][] = [
     ["Youthnic · Iron Send batch"],
     ["Batch No", batch.batchNo],
+    ["Ironed at", batch.location === "in_house" ? "Return desk (in-house, high-running pieces)" : "Khaata (sent out)"],
     ["Khaata (ironing unit)", batch.khaataName],
-    ["Challan No", batch.challanNo || "(write the challan number here)"],
+    ["Challan No", batch.challanNo || (batch.location === "in_house" ? "(not needed for in-house ironing)" : "(write the challan number here)")],
     ["Sent on (IST)", IST_DATE_TIME.format(new Date(batch.createdAt))],
     ["Expected back by (IST)", IST_DATE_TIME.format(new Date(batch.expectedReturnAt))],
     ["Made by", batch.createdBy],

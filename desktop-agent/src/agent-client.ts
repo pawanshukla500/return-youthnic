@@ -2,6 +2,7 @@ import fs from "node:fs"
 import path from "node:path"
 import os from "node:os"
 import type { AgentConfig } from "./config.js"
+import { operatorAuthorization } from "./operator-session.js"
 import { logger } from "./logger.js"
 
 export type JobPollResult = {
@@ -185,9 +186,10 @@ export class AgentBackendClient {
       try {
         const mediaUrl = `${this.config.backendUrl}/api/claims/${claimId}/media/${f.id}`
         logger.info(`Downloading evidence file: ${f.fieldKey} (${f.originalFilename})...`)
-        const res = await fetch(mediaUrl, {
-          headers: { "X-Agent-UUID": this.config.agentUuid },
-        })
+        const headers: Record<string, string> = { "X-Agent-UUID": this.config.agentUuid }
+        const authorization = operatorAuthorization()
+        if (authorization) headers.Authorization = authorization
+        const res = await fetch(mediaUrl, { headers })
 
         if (res.ok && res.body) {
           const fileStream = fs.createWriteStream(localPath)

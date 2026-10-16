@@ -13,7 +13,7 @@ import { ReceiveDialog, imageSrc, istDateTime, newKey } from "./IronTracking"
 type BatchFilter = "open" | "overdue" | "partial" | "received" | "all"
 
 const BATCH_TABS: { id: BatchFilter; label: string }[] = [
-  { id: "open", label: "Out with khaata" },
+  { id: "open", label: "Out for ironing" },
   { id: "overdue", label: "Overdue" },
   { id: "partial", label: "Part received" },
   { id: "received", label: "Received" },
@@ -35,7 +35,14 @@ const BATCH_STATE_CLASS: Record<IronBatchState, string> = {
   received: "state-received",
 }
 
+function batchStateLabel(batch: IronBatch): string {
+  if (batch.state === "open" && batch.location === "in_house") return "Ironing at return desk"
+  return BATCH_STATE_LABEL[batch.state]
+}
+
 const DAY_CHOICES = [2, 3, 4, 5, 6, 7]
+// High-running pieces ironed at the return desk come back the same or the next days.
+const IN_HOUSE_DAY_CHOICES = [1, 2, 3]
 
 function downloadBatch(batch: IronBatch, format: "xlsx" | "csv"): Promise<void> {
   return downloadFile(`/api/iron/batches/${batch.id}/download?format=${format}`, `${batch.batchNo}.${format}`)
@@ -127,16 +134,24 @@ export function IronBatches({
             <article key={batch.id} className={`iron-batch-row state-${batch.state}`}>
               <div className="iron-batch-id">
                 <strong>{batch.batchNo}</strong>
-                <span className={`iron-state ${BATCH_STATE_CLASS[batch.state]}`}>{BATCH_STATE_LABEL[batch.state]}</span>
+                <span className={`iron-state ${BATCH_STATE_CLASS[batch.state]}`}>{batchStateLabel(batch)}</span>
               </div>
               <div className="iron-main">
                 <div className="iron-meta">
-                  <span>
-                    Khaata <b>{batch.khaataName}</b>
-                  </span>
-                  <span>
-                    Challan <b>{batch.challanNo || "not entered"}</b>
-                  </span>
+                  {batch.location === "in_house" ? (
+                    <span>
+                      Ironed at <b>return desk (in-house)</b>
+                    </span>
+                  ) : (
+                    <>
+                      <span>
+                        Khaata <b>{batch.khaataName}</b>
+                      </span>
+                      <span>
+                        Challan <b>{batch.challanNo || "not entered"}</b>
+                      </span>
+                    </>
+                  )}
                   <span>{batch.lines} line{batch.lines === 1 ? "" : "s"}</span>
                 </div>
                 <div className="iron-meta subtle">
@@ -255,7 +270,8 @@ function BatchDialog({
 
   const receiveAll = async () => {
     if (!batch) return
-    if (!window.confirm(`Record every pending unit of ${batch.batchNo} (${batch.qtyPending}) as received back from ${batch.khaataName}?`)) return
+    const from = batch.location === "in_house" ? "the return desk" : batch.khaataName
+    if (!window.confirm(`Record every pending unit of ${batch.batchNo} (${batch.qtyPending}) as ironed and received back from ${from}?`)) return
     setBusy(true)
     try {
       const result = await api<{ batch: IronBatch; unitsReceived: number }>(`/api/iron/batches/${id}/receive`, {
@@ -281,7 +297,16 @@ function BatchDialog({
             <h2>{batch?.batchNo ?? "…"}</h2>
             {batch && (
               <p>
-                Khaata <b>{batch.khaataName}</b> · sent {istDateTime(batch.createdAt)} by {batch.createdBy || "—"} · due back{" "}
+                {batch.location === "in_house" ? (
+                  <>
+                    Ironed at <b>return desk (in-house)</b>
+                  </>
+                ) : (
+                  <>
+                    Khaata <b>{batch.khaataName}</b>
+                  </>
+                )}{" "}
+                · sent {istDateTime(batch.createdAt)} by {batch.createdBy || "—"} · due back{" "}
                 <span className={batch.state === "overdue" ? "iron-due-late" : ""}>{istDateTime(batch.expectedReturnAt)}</span>
               </p>
             )}
@@ -306,6 +331,7 @@ function BatchDialog({
                 <strong>{batch.qtyPending}</strong>
               </div>
             </div>
+            {batch.location === "khaata" && (
             <form className="iron-challan" onSubmit={saveChallan}>
               <span>Khaata challan no.</span>
               {editingChallan ? (
@@ -330,6 +356,7 @@ function BatchDialog({
                 </>
               )}
             </form>
+            )}
           </>
         )}
         {flash && (
@@ -430,6 +457,8 @@ export function CreateBatchDialog({
 }) {
   const [lines, setLines] = useState<IronRecord[]>([])
   const [chosen, setChosen] = useState<Set<number>>(new Set())
+  const [location, setLocation] = useState<IronBatch["location"]>("khaata")
+  const [pickSearch, setPickSearch] = useState("")
   const [khaatas, setKhaatas] = useState<string[]>([])
   const [khaata, setKhaata] = useState("")
   const [challan, setChallan] = useState("")
@@ -457,6 +486,26 @@ export function CreateBatchDialog({
 
   const chosenLines = lines.filter((line) => chosen.has(line.id))
   const units = chosenLines.reduce((sum, line) => sum + line.qtySent, 0)
+  const inHouse = location === "in_house"
+  const pickTerm = pickSearch.trim().toUpperCase()
+  const shownLines = pickTerm
+    ? lines.filter((line) =>
+        [line.productSku, line.marketplaceSku, line.productName, line.trackingId].some((value) => (value || "").toUpperCase().includes(pickTerm)),
+      )
+    : lines
+
+  const chooseLocation = (next: IronBatch["location"]) => {
+    setLocation(next)
+    setError("")
+    if (next === "in_house") {
+      // High-running pieces are picked one by one, so start with nothing ticked.
+      setChosen(new Set())
+      setDays("1")
+    } else {
+      setChosen(new Set(lines.map((line) => line.id)))
+      setDays("3")
+    }
+  }
 
   const toggle = (id: number) =>
     setChosen((current) => {
@@ -468,7 +517,7 @@ export function CreateBatchDialog({
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
-    if (!khaata.trim()) {
+    if (!inHouse && !khaata.trim()) {
       setError("Enter the khaata (ironing unit) the batch goes to.")
       return
     }
@@ -483,8 +532,9 @@ export function CreateBatchDialog({
         method: "POST",
         body: JSON.stringify({
           recordIds: chosenLines.map((line) => line.id),
-          khaataName: khaata.trim(),
-          challanNo: challan.trim(),
+          location,
+          khaataName: inHouse ? "" : khaata.trim(),
+          challanNo: inHouse ? "" : challan.trim(),
           expectedDays: Number(days),
           notes: notes.trim(),
           clientKey,
@@ -503,10 +553,13 @@ export function CreateBatchDialog({
     return (
       <Modal onClose={onClose}>
         <div className="iron-dialog iron-batch-made">
-          <small>Batch made · write this number on the khaata challan</small>
+          <small>
+            {made.location === "in_house" ? "Batch made · ironing at the return desk" : "Batch made · write this number on the khaata challan"}
+          </small>
           <strong className="iron-batch-big">{made.batchNo}</strong>
           <p>
-            {made.lines} line{made.lines === 1 ? "" : "s"} · {made.qtySent} unit{made.qtySent === 1 ? "" : "s"} to <b>{made.khaataName}</b>
+            {made.lines} line{made.lines === 1 ? "" : "s"} · {made.qtySent} unit{made.qtySent === 1 ? "" : "s"}{" "}
+            {made.location === "in_house" ? "at" : "to"} <b>{made.location === "in_house" ? "the return desk" : made.khaataName}</b>
             {made.challanNo ? ` · challan ${made.challanNo}` : ""} · due back {istDateTime(made.expectedReturnAt)}
           </p>
           {error && <div className="form-error">{error}</div>}
@@ -532,33 +585,49 @@ export function CreateBatchDialog({
         <div className="iron-dialog-head">
           <div>
             <small>Create Iron Send batch</small>
-            <h2 className="plain">Send pending lines to the khaata</h2>
-            <p>Every line not yet in a batch is ticked. Untick what is not going out now. The batch number goes on the khaata challan.</p>
+            <h2 className="plain">{inHouse ? "Iron high-running pieces at the return desk" : "Send pending lines to the khaata"}</h2>
+            <p>
+              {inHouse
+                ? "Tick the pieces you will iron here. Search by SKU to find them. When ironing is done, the Inward Team records them as received."
+                : "Every line not yet in a batch is ticked. Untick what is not going out now. The batch number goes on the khaata challan."}
+            </p>
           </div>
           <button type="button" className="icon-button" onClick={onClose} aria-label="Close">
             <Icon name="close" />
           </button>
         </div>
+        <div className="iron-tabs" role="tablist" aria-label="Where will it be ironed?">
+          <button type="button" role="tab" aria-selected={!inHouse} className={!inHouse ? "active" : ""} onClick={() => chooseLocation("khaata")}>
+            Send to khaata
+          </button>
+          <button type="button" role="tab" aria-selected={inHouse} className={inHouse ? "active" : ""} onClick={() => chooseLocation("in_house")}>
+            Iron at return desk (high-running)
+          </button>
+        </div>
         <div className="iron-batch-form">
+          {!inHouse && (
+            <>
+              <label className="iron-field">
+                Khaata (ironing unit)
+                <input value={khaata} maxLength={120} list="iron-khaatas" onChange={(event) => setKhaata(event.target.value)} autoFocus required />
+                <datalist id="iron-khaatas">
+                  {khaatas.map((name) => (
+                    <option key={name} value={name} />
+                  ))}
+                </datalist>
+              </label>
+              <label className="iron-field">
+                Khaata challan no. (optional, can be added later)
+                <input value={challan} maxLength={120} onChange={(event) => setChallan(event.target.value)} />
+              </label>
+            </>
+          )}
           <label className="iron-field">
-            Khaata (ironing unit)
-            <input value={khaata} maxLength={120} list="iron-khaatas" onChange={(event) => setKhaata(event.target.value)} autoFocus required />
-            <datalist id="iron-khaatas">
-              {khaatas.map((name) => (
-                <option key={name} value={name} />
-              ))}
-            </datalist>
-          </label>
-          <label className="iron-field">
-            Khaata challan no. (optional, can be added later)
-            <input value={challan} maxLength={120} onChange={(event) => setChallan(event.target.value)} />
-          </label>
-          <label className="iron-field">
-            Expected back in
+            {inHouse ? "Ironing done in" : "Expected back in"}
             <select value={days} onChange={(event) => setDays(event.target.value)}>
-              {DAY_CHOICES.map((choice) => (
+              {(inHouse ? IN_HOUSE_DAY_CHOICES : DAY_CHOICES).map((choice) => (
                 <option key={choice} value={choice}>
-                  {choice} days
+                  {choice} day{choice === 1 ? "" : "s"}
                 </option>
               ))}
             </select>
@@ -572,9 +641,22 @@ export function CreateBatchDialog({
           <strong>
             {chosenLines.length} of {lines.length} lines · {units} units
           </strong>
+          <label className="iron-search">
+            <Icon name="search" size={16} />
+            <input
+              value={pickSearch}
+              onChange={(event) => setPickSearch(event.target.value)}
+              placeholder="Find SKU or AWB"
+              aria-label="Find pending lines by SKU, product or AWB"
+            />
+          </label>
           <span>
-            <button type="button" className="link-button" onClick={() => setChosen(new Set(lines.map((line) => line.id)))}>
-              Tick all
+            <button
+              type="button"
+              className="link-button"
+              onClick={() => setChosen((current) => new Set([...current, ...shownLines.map((line) => line.id)]))}
+            >
+              {pickTerm ? "Tick shown" : "Tick all"}
             </button>{" "}
             ·{" "}
             <button type="button" className="link-button" onClick={() => setChosen(new Set())}>
@@ -587,8 +669,10 @@ export function CreateBatchDialog({
             <p className="iron-empty">Loading pending lines…</p>
           ) : lines.length === 0 ? (
             <p className="iron-empty">Every pending Iron Send line is already in a batch.</p>
+          ) : shownLines.length === 0 ? (
+            <p className="iron-empty">No pending line matches “{pickSearch.trim()}”.</p>
           ) : (
-            lines.map((line) => (
+            shownLines.map((line) => (
               <label key={line.id} className="iron-batch-line pick">
                 <input type="checkbox" checked={chosen.has(line.id)} onChange={() => toggle(line.id)} />
                 <div className="iron-thumb small">
@@ -616,7 +700,7 @@ export function CreateBatchDialog({
             Cancel
           </button>
           <button type="submit" className="btn primary" disabled={saving || !chosenLines.length}>
-            {saving ? "Making batch…" : `Create batch (${units} units)`}
+            {saving ? "Making batch…" : inHouse ? `Iron at return desk (${units} units)` : `Create batch (${units} units)`}
           </button>
         </div>
       </form>

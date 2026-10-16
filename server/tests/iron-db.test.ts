@@ -65,6 +65,7 @@ const AWB = {
   correct: `SYN-${run}-CORR`,
   batchA: `SYN-${run}-BATA`,
   batchB: `SYN-${run}-BATB`,
+  inHouse: `SYN-${run}-BATC`,
 }
 
 let pool: pg.Pool
@@ -170,6 +171,7 @@ before(async () => {
       row({ trackingId: AWB.correct, orderLineId: `SYN-${run}-L5`, qty: 1 }),
       row({ trackingId: AWB.batchA, orderLineId: `SYN-${run}-L6`, qty: 2 }),
       row({ trackingId: AWB.batchB, orderLineId: `SYN-${run}-L7`, qty: 1, channelListingId: `SYN-${run}-TOP-RED_L`, sku: `SYN-${run}-TOP-RED_L` }),
+      row({ trackingId: AWB.inHouse, orderLineId: `SYN-${run}-L8`, qty: 1 }),
     ],
     images: new Map(),
     sources: new Map(),
@@ -538,7 +540,8 @@ test("Iron batches: the Return Team batches pending lines for the khaata challan
   // The challan sheet.
   const sheet = ironBatchSheetRows(late.batch, late.rows)
   assert.deepEqual(sheet[1], ["Batch No", made.batch.batchNo])
-  assert.equal(sheet[3][1], "SYN-CH-1")
+  assert.deepEqual(sheet[2], ["Ironed at", "Khaata (sent out)"])
+  assert.equal(sheet[4][1], "SYN-CH-1")
   assert.equal(sheet[sheet.length - 1][8], 3, "the total sent")
   assert.equal(ironBatchXlsx(late.batch, late.rows).subarray(0, 2).toString(), "PK", "a real .xlsx file")
 
@@ -551,4 +554,27 @@ test("Iron batches: the Return Team batches pending lines for the khaata challan
   assert.equal(again.unitsReceived, 0)
   const done = await listIronBatches(pool, allScope, { state: "received", search: made.batch.batchNo })
   assert.equal(done.length, 1)
+})
+
+test("Iron batches: high-running pieces ironed at the return desk; the Inward Team still receives them by hand", { skip: skip || false }, async () => {
+  const id = await ironScan(AWB.inHouse, `SYN-${run}-BATC-1`)
+  const made = await createIronBatch(pool, scanner, allScope, {
+    recordIds: [id],
+    location: "in_house",
+    khaataName: "SYN ignored",
+    challanNo: "SYN ignored",
+    expectedDays: 1,
+    notes: "SYN",
+    clientKey: `SYN-${run}-INHOUSE-1`,
+  })
+  assert.equal(made.batch.location, "in_house")
+  assert.equal(made.batch.khaataName, "Return desk (in-house)", "an in-house batch is not sent to a khaata")
+  assert.equal(made.batch.lines, 1)
+  const sheet = ironBatchSheetRows(made.batch, (await getIronBatch(pool, allScope, made.batch.id)).rows)
+  assert.equal(sheet[2][1], "Return desk (in-house, high-running pieces)")
+
+  await expectError(receiveIronBatch(pool, scanner, allScope, made.batch.id, { notes: "", clientKey: null }), 403, /Inward Team/)
+  const received = await receiveIronBatch(pool, inward, allScope, made.batch.id, { notes: "", clientKey: `SYN-${run}-RB-IH` })
+  assert.equal(received.unitsReceived, 1)
+  assert.equal(received.batch.state, "received")
 })

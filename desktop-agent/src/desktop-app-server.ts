@@ -8,6 +8,7 @@ import { AgentBackendClient } from "./agent-client.js"
 import { BrowserRunner, findSystemBrowser } from "./browser-runner.js"
 import { getAutomationEngine } from "./marketplaces/registry.js"
 import { currentOperator, loginOperator, logoutOperator } from "./operator-session.js"
+import { closePortalLoginBrowser, holdPortalBrowser, listPortalLogins, PORTAL_CHANNELS, profileDirFor, queueOneClaim, readSessionSavedAt, savePortalLogin, testPortalLogin } from "./portal-login.js"
 
 export type DesktopBotControl = {
   isRunning: () => boolean
@@ -56,7 +57,7 @@ logger.onLog((entry) => {
 // ---------------------------------------------------------------------------------------------------------------
 
 async function pollAndProcessJob(): Promise<void> {
-  if (!isWorkerRunning || isCurrentlyProcessing) return
+  if (!isWorkerRunning || isCurrentlyProcessing || holdPortalBrowser()) return
   lastPollTime = new Date().toLocaleTimeString("en-IN")
   nextPollCountdown = Math.round(config.pollIntervalMs / 1000)
 
@@ -97,6 +98,7 @@ async function pollAndProcessJob(): Promise<void> {
       headless: isHeadless,
     })
 
+    let keepBrowserOpen = false
     try {
       await browserRunner.connectToPage(browserSession.port)
 
@@ -108,7 +110,8 @@ async function pollAndProcessJob(): Promise<void> {
         path.join(config.workDir, `claim-${bundle.claimId}`),
       )
 
-      const action = jobHeader.stage === "submitting" ? "submit" : "prepare"
+      const sessionSaved = Boolean(readSessionSavedAt(profileDirFor(config.userDataDir, bundle.marketplace)))
+      const action = jobHeader.stage === "submitting" || sessionSaved ? "submit" : "prepare"
       const result = await engine.execute(action)
 
       if (result.stage === "prepared") {
@@ -117,23 +120,34 @@ async function pollAndProcessJob(): Promise<void> {
           logMessage: "Claim prepared on seller portal. Waiting for user approval before submission.",
           screenshotPath: result.screenshotPath,
         })
-      } else if (result.stage === "completed") {
+      } else if (result.stage === "completed" && result.marketplaceClaimId) {
         await client.completeJob(jobHeader.jobId, {
-          marketplaceClaimId: result.marketplaceClaimId || "CONFIRMED",
+          marketplaceClaimId: result.marketplaceClaimId,
           screenshotPath: result.screenshotPath,
         })
         // Clean up local downloaded evidence files so they don't occupy disk space
         await client.cleanClaimEvidenceFiles(bundle.claimId)
       } else if (result.stage === "manual_intervention_required") {
+        keepBrowserOpen = true
+        holdPortalBrowser(browserRunner)
         await client.updateProgress(jobHeader.jobId, {
           stage: "manual_intervention_required",
           logMessage: result.manualActionReason || "Manual action required on portal.",
           screenshotPath: result.screenshotPath,
           manualActionReason: result.manualActionReason,
         })
+      } else if (result.stage === "not_eligible") {
+        logger.warn(`Job #${jobHeader.jobId} is not eligible for a claim. Kept for manual review; moving to the next job.`)
+        await client.updateProgress(jobHeader.jobId, {
+          stage: "not_eligible",
+          logMessage: result.manualActionReason || "The marketplace says this order is not eligible for a claim.",
+          screenshotPath: result.screenshotPath,
+          manualActionReason: result.manualActionReason,
+        })
+        await client.cleanClaimEvidenceFiles(bundle.claimId)
       }
     } finally {
-      await browserRunner.close()
+      if (!keepBrowserOpen) await browserRunner.close()
     }
   } catch (err: any) {
     logger.error("Error processing automation job:", err)
@@ -280,6 +294,9 @@ function getDashboardHtml(): string {
     .login-card input { width: 100%; margin-bottom: 14px; padding: 10px 12px; }
     .login-error { min-height: 18px; color: #fca5a5; font-size: 12px; margin-bottom: 10px; }
     .login-card .btn { width: 100%; justify-content: center; padding: 11px 14px; }
+    .portal-row { display: grid; grid-template-columns: 140px 1fr 1fr auto; gap: 10px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--line); }
+    .portal-row input { width: 100%; }
+    @media (max-width: 900px) { .portal-row { grid-template-columns: 1fr; } }
   </style>
 </head>
 <body>
@@ -330,11 +347,33 @@ function getDashboardHtml(): string {
       </div>
       <button class="btn btn-secondary" onclick="pollNow()">↻ Poll Now</button>
       <button class="btn btn-primary" id="toggle-worker-btn" onclick="toggleWorker()">⏸ Pause Bot</button>
-      <button class="btn btn-secondary" onclick="testBrowser()">🖥️ Launch Test Browser</button>
+      <button class="btn btn-secondary" onclick="focusLogin()">Set up supplier login</button>
     </div>
   </div>
 
   <main inert>
+    <section class="panel" id="portal-setup" style="padding: 16px 18px;">
+      <div class="panel-title" style="margin-bottom: 6px;">Supplier login, then one claim</div>
+      <p style="color: var(--muted); font-size: 12px; line-height: 1.5; margin-bottom: 12px;">Do one marketplace at a time. Leave the ID and password blank to use the bot login already saved on the web. Test login opens Edge, signs in, and stores the cookies on this PC. If a code appears, type it in that window before closing it.</p>
+      <div style="display: flex; flex-wrap: wrap; gap: 10px; align-items: end;">
+        <label style="font-size: 12px; font-weight: 600;">Marketplace<br>
+          <select id="portal-marketplace" class="form-control" style="min-width: 140px; margin-top: 4px;">
+            ${PORTAL_CHANNELS.map((channel) => `<option value="${channel.name}">${channel.name}</option>`).join("")}
+          </select>
+        </label>
+        <label style="font-size: 12px; font-weight: 600;">Supplier ID<br>
+          <input id="portal-username" class="form-control" type="text" autocomplete="off" style="min-width: 220px; margin-top: 4px;" />
+        </label>
+        <label style="font-size: 12px; font-weight: 600;">Password<br>
+          <input id="portal-password" class="form-control" type="password" autocomplete="off" style="min-width: 180px; margin-top: 4px;" />
+        </label>
+        <button class="btn btn-secondary" type="button" onclick="savePortal()">Save login</button>
+        <button class="btn btn-primary" type="button" onclick="testPortal()">Sign in and save cookies</button>
+      </div>
+      <div id="portal-status" style="margin-top: 10px; font-size: 12px; color: #a7f3d0;"></div>
+      <div id="portal-message" style="margin-top: 6px; font-size: 12px; color: #fca5a5;"></div>
+    </section>
+
     <!-- KPI Overview -->
     <div class="kpi-grid">
       <div class="kpi-card">
@@ -397,11 +436,12 @@ function getDashboardHtml(): string {
                 <th>Status / Stage</th>
                 <th>Marketplace Ticket Ref</th>
                 <th>Updated</th>
+                <th>Next</th>
               </tr>
             </thead>
             <tbody id="jobs-table-body">
               <tr>
-                <td colspan="6" style="text-align: center; padding: 30px; color: var(--muted);">Loading marketplace claims queue...</td>
+                <td colspan="7" style="text-align: center; padding: 30px; color: var(--muted);">Loading marketplace claims queue...</td>
               </tr>
             </tbody>
           </table>
@@ -442,6 +482,7 @@ function getDashboardHtml(): string {
       document.getElementById('sign-out-btn').hidden = false;
       document.getElementById('operator-name').textContent = user && user.name ? user.name : '';
       setWorkspaceLocked(false);
+      void loadPortalLogins();
     }
 
     function showSignedOut() {
@@ -588,7 +629,7 @@ function getDashboardHtml(): string {
 
       const tbody = document.getElementById('jobs-table-body');
       if (filtered.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; padding: 24px; color: var(--muted);">No claims match current filter.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; padding: 24px; color: var(--muted);">No claims match current filter.</td></tr>';
         return;
       }
 
@@ -600,6 +641,15 @@ function getDashboardHtml(): string {
         else if (j.stage === 'prepared') stageClass = 'stage-prepared';
         else if (['manual_intervention_required', 'failed'].includes(j.stage)) stageClass = 'stage-manual';
 
+        const jobId = Number(j.id) || 0;
+        const reason = String(j.manualActionReason || '').toLowerCase();
+        let nextStep = '';
+        if (j.stage !== 'completed' && jobId) {
+          nextStep += '<button class="btn btn-primary" style="margin: 2px;" onclick="runOneClaim(' + jobId + ')">Run this claim</button>';
+        }
+        if (reason.includes('login') || reason.includes('otp') || reason.includes('password')) {
+          nextStep += '<button class="btn btn-secondary" style="margin: 2px;" data-market="' + String(j.marketplace || "Meesho").replace(/[^a-zA-Z0-9 ]/g, "") + '" onclick="focusLogin(this.dataset.market)">Set up login</button>';
+        }
         return '<tr>' +
           '<td><span class="badge ' + mpClass + '">' + (j.marketplace || 'Channel') + '</span></td>' +
           '<td><strong>' + (j.trackingId || j.orderNumber || '—') + '</strong><br><small style="color: var(--muted); font-family: monospace;">' + (j.orderNumber || '') + '</small></td>' +
@@ -607,6 +657,7 @@ function getDashboardHtml(): string {
           '<td><span class="badge ' + stageClass + '">' + j.stage + '</span>' + (j.manualActionReason ? '<br><small style="color: #fca5a5;">' + j.manualActionReason + '</small>' : '') + '</td>' +
           '<td>' + (j.marketplaceClaimId ? '<strong style="color: #34d399; font-family: monospace;">' + j.marketplaceClaimId + '</strong>' : '<span style="color: var(--muted);">Pending Submit</span>') + '</td>' +
           '<td><small style="color: var(--muted);">' + (j.updatedAt ? new Date(j.updatedAt).toLocaleTimeString('en-IN') : '—') + '</small></td>' +
+          '<td>' + (nextStep || '—') + '</td>' +
         '</tr>';
       }).join('');
     }
@@ -653,9 +704,87 @@ function getDashboardHtml(): string {
       }
     }
 
-    async function testBrowser() {
-      alert("Launching system Chromium browser in test mode...");
-      await fetch('/api/test-browser', { method: 'POST' });
+    function focusLogin(marketplace) {
+      const panel = document.getElementById('portal-setup');
+      if (marketplace) {
+        const select = document.getElementById('portal-marketplace');
+        const match = Array.from(select.options).find((option) => marketplace.toLowerCase().includes(option.value.toLowerCase()));
+        if (match) select.value = match.value;
+      }
+      panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      document.getElementById('portal-username').focus();
+    }
+
+    async function loadPortalLogins() {
+      const status = document.getElementById('portal-status');
+      try {
+        const res = await fetch('/api/portal-logins');
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          status.textContent = data.error || 'Supplier login status is unavailable.';
+          return;
+        }
+        status.textContent = (data.channels || []).map((channel) => channel.name + ': ' + (channel.configured ? 'ID saved' : 'no ID') + (channel.sessionSavedAt ? ', cookies saved' : ', cookies not saved')).join(' · ');
+      } catch (err) {
+        status.textContent = '';
+      }
+    }
+
+    async function savePortal() {
+      const message = document.getElementById('portal-message');
+      message.textContent = '';
+      const res = await fetch('/api/portal-logins', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          marketplace: document.getElementById('portal-marketplace').value,
+          username: document.getElementById('portal-username').value,
+          password: document.getElementById('portal-password').value,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        message.textContent = data.error || 'Could not save the supplier login.';
+        return;
+      }
+      document.getElementById('portal-password').value = '';
+      message.style.color = '#6ee7b7';
+      message.textContent = 'Supplier login saved. Test it, then run the waiting claim.';
+      await loadPortalLogins();
+    }
+
+    async function testPortal() {
+      const message = document.getElementById('portal-message');
+      message.style.color = '#a7f3d0';
+      message.textContent = 'Opening the supplier login...';
+      const res = await fetch('/api/portal-logins/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          marketplace: document.getElementById('portal-marketplace').value,
+          username: document.getElementById('portal-username').value,
+          password: document.getElementById('portal-password').value,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      message.style.color = res.ok ? '#6ee7b7' : '#fca5a5';
+      message.textContent = data.message || data.error || 'Could not open the supplier login.';
+    }
+
+    async function runOneClaim(jobId) {
+      const message = document.getElementById('portal-message');
+      message.style.color = '#a7f3d0';
+      message.textContent = 'Queuing that one claim...';
+      const res = await fetch('/api/jobs/run-one', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jobId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      message.style.color = res.ok ? '#6ee7b7' : '#fca5a5';
+      message.textContent = data.message || data.error || (res.ok ? 'That claim is running.' : 'Could not run that claim.');
+      await loadJobs();
+      await loadStatus();
     }
 
     function clearLogs() {
@@ -688,6 +817,7 @@ function getDashboardHtml(): string {
 
     // Initial load
     loadOperator();
+    loadPortalLogins();
     loadStatus();
     loadJobs();
     connectSse();
@@ -703,6 +833,7 @@ function getDashboardHtml(): string {
 // ---------------------------------------------------------------------------------------------------------------
 
 let operatorSignedIn = false
+let portalLoginBusy = false
 
 function sendJson(res: http.ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { "Content-Type": "application/json" })
@@ -867,25 +998,89 @@ export function startDesktopAppServer(port = 3005, control?: DesktopBotControl):
         return
       }
 
-      if (url.pathname === "/api/test-browser" && req.method === "POST") {
-        const browserPath = findSystemBrowser()
-        if (!browserPath) {
-          res.writeHead(400, { "Content-Type": "application/json" })
-          res.end(JSON.stringify({ ok: false, message: "No compatible Chromium browser found." }))
+      if (url.pathname === "/api/portal-logins" && req.method === "GET") {
+        if (!operatorSignedIn) {
+          sendJson(res, 401, { error: "Sign in before setting up a supplier login." })
           return
         }
-        const runner = new BrowserRunner()
-        void runner.launch({
-          executablePath: browserPath,
-          profileDir: path.join(config.userDataDir, "test-profile"),
-          headless: false,
-        }).then(async (session) => {
-          await runner.connectToPage(session.port)
-          await runner.navigate("https://www.google.com")
-          logger.info("Browser launched and connected successfully!")
-        })
-        res.writeHead(200, { "Content-Type": "application/json" })
-        res.end(JSON.stringify({ ok: true }))
+        try {
+          sendJson(res, 200, await listPortalLogins())
+        } catch (error) {
+          sendJson(res, 400, { error: error instanceof Error ? error.message : "Could not load supplier logins." })
+        }
+        return
+      }
+
+      if (url.pathname === "/api/portal-logins" && req.method === "POST") {
+        if (!operatorSignedIn) {
+          sendJson(res, 401, { error: "Sign in before saving a supplier login." })
+          return
+        }
+        try {
+          const body = await readJson(req)
+          const result = await savePortalLogin(String(body.marketplace || ""), String(body.username || ""), String(body.password || ""))
+          if (!result.ok) {
+            sendJson(res, result.status, { error: result.message })
+            return
+          }
+          sendJson(res, 200, { ok: true })
+        } catch (error) {
+          sendJson(res, 400, { error: error instanceof Error ? error.message : "Could not save the supplier login." })
+        }
+        return
+      }
+
+      if (url.pathname === "/api/portal-logins/test" && req.method === "POST") {
+        if (!operatorSignedIn) {
+          sendJson(res, 401, { error: "Sign in before testing a supplier login." })
+          return
+        }
+        if (isCurrentlyProcessing || externalControl?.isProcessing()) {
+          sendJson(res, 409, { error: "A claim is running. Wait until it finishes, then test the login." })
+          return
+        }
+        if (externalControl?.isRunning()) externalControl.pause()
+        else isWorkerRunning = false
+        try {
+          const body = await readJson(req)
+          const result = await testPortalLogin(String(body.marketplace || "Meesho"), String(body.username || ""), String(body.password || ""))
+          if (result.ok && operatorSignedIn) {
+            if (externalControl) externalControl.onSignedIn()
+            else startScheduler()
+          }
+          sendJson(res, result.ok ? 200 : 400, result)
+        } catch (error) {
+          logger.error("Supplier login test failed.", error)
+          sendJson(res, 500, { error: error instanceof Error ? error.message : "Could not open the supplier login." })
+        }
+        return
+      }
+
+      if (url.pathname === "/api/jobs/run-one" && req.method === "POST") {
+        if (!operatorSignedIn) {
+          sendJson(res, 401, { error: "Sign in before running a claim." })
+          return
+        }
+        if (isCurrentlyProcessing || externalControl?.isProcessing()) {
+          sendJson(res, 409, { error: "A claim is already running. Let it finish before starting the next one." })
+          return
+        }
+        try {
+          const body = await readJson(req)
+          const result = await queueOneClaim(Number(body.jobId))
+          if (!result.ok) {
+            sendJson(res, result.status, { error: result.message })
+            return
+          }
+          if (externalControl) externalControl.pollNow()
+          else {
+            isWorkerRunning = true
+            void pollAndProcessJob()
+          }
+          sendJson(res, 200, { ok: true, message: "That claim is next. The bot will open the supplier panel for it." })
+        } catch (error) {
+          sendJson(res, 400, { error: error instanceof Error ? error.message : "Could not run that claim." })
+        }
         return
       }
 
