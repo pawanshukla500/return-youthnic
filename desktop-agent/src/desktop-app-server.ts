@@ -7,11 +7,28 @@ import { logger } from "./logger.js"
 import { AgentBackendClient } from "./agent-client.js"
 import { BrowserRunner, findSystemBrowser } from "./browser-runner.js"
 import { getAutomationEngine } from "./marketplaces/registry.js"
+import { currentOperator, loginOperator, logoutOperator } from "./operator-session.js"
+
+export type DesktopBotControl = {
+  isRunning: () => boolean
+  isProcessing: () => boolean
+  activeSummary: () => string | null
+  nextPollSeconds: () => number
+  lastPollTime: () => string
+  onSignedIn: () => void
+  onSignedOut: () => void
+  pause: () => void
+  pollNow: () => void
+  backendUrl: () => string
+  setBackendUrl: (url: string) => void
+}
+
+let externalControl: DesktopBotControl | null = null
 
 let config: AgentConfig = loadAgentConfig()
 let client = new AgentBackendClient(config)
 
-let isWorkerRunning = true
+let isWorkerRunning = false
 let isCurrentlyProcessing = false
 let activeJobInfo: any = null
 let lastHeartbeatTime: string = ""
@@ -127,7 +144,13 @@ async function pollAndProcessJob(): Promise<void> {
   }
 }
 
+let schedulerStarted = false
+
 function startScheduler(): void {
+  isWorkerRunning = true
+  if (schedulerStarted) return
+  schedulerStarted = true
+
   if (pollTimer) clearInterval(pollTimer)
   if (countdownTimer) clearInterval(countdownTimer)
 
@@ -140,10 +163,11 @@ function startScheduler(): void {
     }
   }, 1000)
 
-  // Send periodic heartbeat
+  // Send periodic heartbeat while the bot is signed in and running.
   setInterval(async () => {
     lastHeartbeatTime = new Date().toLocaleTimeString("en-IN")
-    await client.sendHeartbeat("online", { status: isCurrentlyProcessing ? "busy" : "idle", uptime: process.uptime() })
+    const status = isWorkerRunning ? "online" : "offline"
+    await client.sendHeartbeat(status, { status: isCurrentlyProcessing ? "busy" : "idle", uptime: process.uptime() })
   }, config.heartbeatIntervalMs)
 
   void pollAndProcessJob()
@@ -246,26 +270,52 @@ function getDashboardHtml(): string {
     .log-warn { color: #fbbf24; }
     .log-error { color: #f87171; }
     .log-debug { color: #94a3b8; }
+
+    [hidden] { display: none !important; }
+    .login-gate { position: fixed; inset: 0; z-index: 80; background: #060b09; display: flex; align-items: center; justify-content: center; padding: 24px; }
+    .login-card { width: min(420px, 100%); background: #111e1b; border: 1px solid var(--card-border); border-radius: 16px; padding: 28px 26px; box-shadow: 0 24px 48px rgba(0,0,0,0.45); }
+    .login-card h1 { font-size: 22px; margin: 8px 0 8px; }
+    .login-card p { color: var(--muted); font-size: 13px; line-height: 1.55; margin-bottom: 18px; }
+    .login-card label { display: block; font-size: 12px; font-weight: 600; margin-bottom: 6px; }
+    .login-card input { width: 100%; margin-bottom: 14px; padding: 10px 12px; }
+    .login-error { min-height: 18px; color: #fca5a5; font-size: 12px; margin-bottom: 10px; }
+    .login-card .btn { width: 100%; justify-content: center; padding: 11px 14px; }
   </style>
 </head>
 <body>
-  <header>
+  <header inert>
     <div class="brand">
       <div class="brand-icon">🤖</div>
       <div>
-        <div class="brand-title">TaskFlow Pro · 24/7 Desktop Claim Processing Bot</div>
-        <div class="brand-subtitle">Automated Marketplace Return Claims & Evidence Engine · Server PC Active</div>
+        <div class="brand-title">Return App · 24/7 Claim Bot</div>
+        <div class="brand-subtitle">Files marketplace claims while this app is running. Scanning stays on the warehouse web and phone.</div>
       </div>
     </div>
     <div style="display: flex; align-items: center; gap: 12px;">
+      <span id="operator-name" style="font-size: 12px; color: var(--muted);"></span>
       <div class="status-pill" id="agent-status-pill">
         <span class="pulse-dot"></span>
-        <span id="agent-status-text">24/7 Bot Online</span>
+        <span id="agent-status-text">Waiting for sign-in</span>
       </div>
+      <button class="btn btn-secondary" id="sign-out-btn" type="button" onclick="signOut()" hidden>Sign out</button>
     </div>
   </header>
 
-  <div class="top-toolbar">
+  <div class="login-gate" id="login-gate">
+    <form class="login-card" onsubmit="submitLogin(event)">
+      <div class="brand-subtitle">CLAIM BOT</div>
+      <h1>Sign in to start claims</h1>
+      <p>This desktop app does not open return scanning. After you sign in, it keeps picking up queued claims for as long as the app is running, including when the window is closed to the tray.</p>
+      <label for="login-email">Email or login ID</label>
+      <input id="login-email" class="form-control" type="text" autocomplete="username" required />
+      <label for="login-password">Password</label>
+      <input id="login-password" class="form-control" type="password" autocomplete="current-password" required />
+      <div class="login-error" id="login-error"></div>
+      <button class="btn btn-primary" id="login-submit" type="submit">Sign in and run the bot</button>
+    </form>
+  </div>
+
+  <div class="top-toolbar" inert>
     <div class="backend-picker">
       <strong>Backend Server:</strong>
       <input type="text" id="backend-url-input" class="form-control" style="width: 250px;" value="${config.backendUrl}" />
@@ -284,7 +334,7 @@ function getDashboardHtml(): string {
     </div>
   </div>
 
-  <main>
+  <main inert>
     <!-- KPI Overview -->
     <div class="kpi-grid">
       <div class="kpi-card">
@@ -381,6 +431,77 @@ function getDashboardHtml(): string {
     let allJobs = [];
     let isRunning = true;
 
+    function setWorkspaceLocked(locked) {
+      document.querySelectorAll('header, .top-toolbar, main').forEach((el) => {
+        el.inert = locked;
+      });
+    }
+
+    function showSignedIn(user) {
+      document.getElementById('login-gate').hidden = true;
+      document.getElementById('sign-out-btn').hidden = false;
+      document.getElementById('operator-name').textContent = user && user.name ? user.name : '';
+      setWorkspaceLocked(false);
+    }
+
+    function showSignedOut() {
+      document.getElementById('login-gate').hidden = false;
+      document.getElementById('sign-out-btn').hidden = true;
+      document.getElementById('operator-name').textContent = '';
+      setWorkspaceLocked(true);
+    }
+
+    async function loadOperator() {
+      try {
+        const res = await fetch('/api/operator/session');
+        if (!res.ok) {
+          showSignedOut();
+          return;
+        }
+        const data = await res.json();
+        if (data.signedIn && data.user) showSignedIn(data.user);
+        else showSignedOut();
+      } catch (err) {
+        console.error(err);
+      }
+    }
+
+    async function submitLogin(event) {
+      event.preventDefault();
+      const button = document.getElementById('login-submit');
+      const error = document.getElementById('login-error');
+      error.textContent = '';
+      button.disabled = true;
+      try {
+        const res = await fetch('/api/operator/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: document.getElementById('login-email').value,
+            password: document.getElementById('login-password').value,
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          error.textContent = data.error || 'Sign-in failed.';
+          return;
+        }
+        document.getElementById('login-password').value = '';
+        showSignedIn(data.user);
+        await loadStatus();
+      } catch (err) {
+        error.textContent = 'Sign-in failed. Check that the claim bot is still running.';
+      } finally {
+        button.disabled = false;
+      }
+    }
+
+    async function signOut() {
+      await fetch('/api/operator/logout', { method: 'POST' });
+      showSignedOut();
+      await loadStatus();
+    }
+
     async function loadStatus() {
       try {
         const res = await fetch('/api/status');
@@ -388,14 +509,21 @@ function getDashboardHtml(): string {
         const data = await res.json();
         isRunning = data.isRunning;
         document.getElementById('toggle-worker-btn').innerText = isRunning ? '⏸ Pause Bot' : '▶ Start Bot';
-        document.getElementById('agent-status-text').innerText = isRunning ? (data.isCurrentlyProcessing ? '⚡ Filing Claim...' : '24/7 Bot Online') : '⏸ Bot Paused';
+        const statusText = !data.signedIn
+          ? 'Waiting for sign-in'
+          : isRunning
+            ? (data.isCurrentlyProcessing ? 'Filing a claim' : '24/7 bot running')
+            : 'Bot paused';
+        document.getElementById('agent-status-text').innerText = statusText;
         document.getElementById('agent-status-pill').style.background = isRunning ? 'var(--primary-light)' : 'rgba(239, 68, 68, 0.12)';
         document.getElementById('agent-status-pill').style.color = isRunning ? 'var(--primary)' : 'var(--danger)';
         document.getElementById('countdown').innerText = data.nextPollCountdown + 's';
-        if (data.activeJobInfo) {
+        if (data.activeSummary) {
+          document.getElementById('active-task-label').innerText = data.activeSummary;
+        } else if (data.activeJobInfo) {
           document.getElementById('active-task-label').innerText = data.activeJobInfo.marketplace + ' #' + data.activeJobInfo.jobId;
         } else {
-          document.getElementById('active-task-label').innerText = isRunning ? 'Idle / Polling every 10s' : 'Paused';
+          document.getElementById('active-task-label').innerText = data.signedIn ? (isRunning ? 'Idle / waiting for the next claim' : 'Paused') : 'Sign in to start';
         }
       } catch (err) {
         console.error(err);
@@ -559,6 +687,7 @@ function getDashboardHtml(): string {
     }
 
     // Initial load
+    loadOperator();
     loadStatus();
     loadJobs();
     connectSse();
@@ -573,8 +702,59 @@ function getDashboardHtml(): string {
 // HTTP API & Static Server
 // ---------------------------------------------------------------------------------------------------------------
 
-export function startDesktopAppServer(port = 3005): Promise<http.Server> {
-  return new Promise((resolve) => {
+let operatorSignedIn = false
+
+function sendJson(res: http.ServerResponse, status: number, body: unknown): void {
+  res.writeHead(status, { "Content-Type": "application/json" })
+  res.end(JSON.stringify(body))
+}
+
+function readJson(req: http.IncomingMessage): Promise<Record<string, unknown>> {
+  return new Promise((resolve, reject) => {
+    let body = ""
+    req.on("data", (chunk: Buffer | string) => {
+      body += chunk
+      if (body.length > 20_000) {
+        reject(new Error("Body too large"))
+        req.destroy()
+      }
+    })
+    req.on("end", () => {
+      try {
+        resolve(body ? (JSON.parse(body) as Record<string, unknown>) : {})
+      } catch (error) {
+        reject(error)
+      }
+    })
+    req.on("error", reject)
+  })
+}
+
+async function beginClaimWork(): Promise<void> {
+  operatorSignedIn = true
+  if (externalControl) {
+    externalControl.onSignedIn()
+    return
+  }
+  await client.register()
+  startScheduler()
+}
+
+export async function resumeClaimBotIfSignedIn(): Promise<boolean> {
+  const user = await currentOperator()
+  if (!user) {
+    operatorSignedIn = false
+    logger.info("Claim bot is waiting for sign-in. Return scanning is not opened in this window.")
+    return false
+  }
+  logger.info(`Operator ${user.name} is already signed in. The 24/7 claim bot is starting.`)
+  await beginClaimWork()
+  return true
+}
+
+export function startDesktopAppServer(port = 3005, control?: DesktopBotControl): Promise<http.Server> {
+  externalControl = control ?? null
+  return new Promise((resolve, reject) => {
     const server = http.createServer(async (req, res) => {
       const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`)
 
@@ -585,18 +765,58 @@ export function startDesktopAppServer(port = 3005): Promise<http.Server> {
       }
 
       if (url.pathname === "/api/status") {
-        res.writeHead(200, { "Content-Type": "application/json" })
-        res.end(JSON.stringify({
-          isRunning: isWorkerRunning,
-          isCurrentlyProcessing,
+        sendJson(res, 200, {
+          isRunning: externalControl ? externalControl.isRunning() : isWorkerRunning,
+          isCurrentlyProcessing: externalControl ? externalControl.isProcessing() : isCurrentlyProcessing,
           activeJobInfo,
-          nextPollCountdown,
+          activeSummary: externalControl
+            ? externalControl.activeSummary()
+            : activeJobInfo
+              ? `${activeJobInfo.marketplace} #${activeJobInfo.jobId}`
+              : null,
+          nextPollCountdown: externalControl ? externalControl.nextPollSeconds() : nextPollCountdown,
           lastHeartbeatTime,
-          lastPollTime,
-          backendUrl: config.backendUrl,
+          lastPollTime: externalControl ? externalControl.lastPollTime() : lastPollTime,
+          backendUrl: externalControl ? externalControl.backendUrl() : config.backendUrl,
           agentUuid: config.agentUuid,
           agentName: config.agentName,
-        }))
+          signedIn: operatorSignedIn,
+        })
+        return
+      }
+
+      if (url.pathname === "/api/operator/session" && req.method === "GET") {
+        const user = await currentOperator()
+        operatorSignedIn = Boolean(user)
+        sendJson(res, 200, { signedIn: operatorSignedIn, user })
+        return
+      }
+
+      if (url.pathname === "/api/operator/login" && req.method === "POST") {
+        try {
+          const body = await readJson(req)
+          const result = await loginOperator(String(body.email || ""), String(body.password || ""))
+          if (!result.ok) {
+            sendJson(res, result.status, { error: result.message })
+            return
+          }
+          logger.info(`Operator ${result.user.name} signed in. Claim bot is running.`)
+          await beginClaimWork()
+          sendJson(res, 200, { ok: true, user: result.user })
+        } catch (error) {
+          logger.error("Operator sign-in failed.", error)
+          sendJson(res, 400, { error: "Sign-in failed." })
+        }
+        return
+      }
+
+      if (url.pathname === "/api/operator/logout" && req.method === "POST") {
+        operatorSignedIn = false
+        if (externalControl) externalControl.onSignedOut()
+        else isWorkerRunning = false
+        await logoutOperator()
+        logger.info("Operator signed out. Claim bot is paused until the next sign-in.")
+        sendJson(res, 200, { ok: true })
         return
       }
 
@@ -608,18 +828,35 @@ export function startDesktopAppServer(port = 3005): Promise<http.Server> {
       }
 
       if (url.pathname === "/api/scheduler/toggle" && req.method === "POST") {
-        isWorkerRunning = !isWorkerRunning
-        logger.info(`24/7 Automation Scheduler ${isWorkerRunning ? "RESUMED" : "PAUSED"} by user.`)
-        res.writeHead(200, { "Content-Type": "application/json" })
-        res.end(JSON.stringify({ ok: true, isRunning: isWorkerRunning }))
+        if (!operatorSignedIn) {
+          sendJson(res, 401, { error: "Sign in before starting the claim bot." })
+          return
+        }
+        const running = externalControl ? externalControl.isRunning() : isWorkerRunning
+        if (running) {
+          if (externalControl) externalControl.pause()
+          else isWorkerRunning = false
+          logger.info("Claim bot paused. It stays on this PC and resumes when Start Bot is used.")
+        } else if (externalControl) {
+          externalControl.onSignedIn()
+          logger.info("Claim bot resumed.")
+        } else {
+          startScheduler()
+          logger.info("Claim bot resumed.")
+        }
+        sendJson(res, 200, { ok: true, isRunning: externalControl ? externalControl.isRunning() : isWorkerRunning })
         return
       }
 
       if (url.pathname === "/api/scheduler/poll-now" && req.method === "POST") {
-        logger.info("Manual poll triggered via Desktop App.")
-        void pollAndProcessJob()
-        res.writeHead(200, { "Content-Type": "application/json" })
-        res.end(JSON.stringify({ ok: true }))
+        if (!operatorSignedIn) {
+          sendJson(res, 401, { error: "Sign in before checking for claims." })
+          return
+        }
+        logger.info("Manual claim check triggered from the desktop bot.")
+        if (externalControl) externalControl.pollNow()
+        else void pollAndProcessJob()
+        sendJson(res, 200, { ok: true })
         return
       }
 
@@ -657,13 +894,16 @@ export function startDesktopAppServer(port = 3005): Promise<http.Server> {
         req.on("data", (chunk) => { body += chunk })
         req.on("end", async () => {
           try {
-            const data = JSON.parse(body)
-            config = saveAgentConfig(data)
+            const data = JSON.parse(body) as { backendUrl?: string }
+            const updates = typeof data.backendUrl === "string" ? { backendUrl: data.backendUrl } : {}
+            config = saveAgentConfig(updates)
+            if (updates.backendUrl && externalControl) externalControl.setBackendUrl(updates.backendUrl)
             client = new AgentBackendClient(config)
             logger.info(`Agent configuration updated. Backend URL: ${config.backendUrl}`)
-            await client.register()
+            if (operatorSignedIn) await client.register()
+            const { apiKey: _apiKey, ...publicConfig } = config
             res.writeHead(200, { "Content-Type": "application/json" })
-            res.end(JSON.stringify({ ok: true, config }))
+            res.end(JSON.stringify({ ok: true, config: publicConfig }))
           } catch (err: any) {
             res.writeHead(400, { "Content-Type": "application/json" })
             res.end(JSON.stringify({ error: err?.message || String(err) }))
@@ -695,8 +935,9 @@ export function startDesktopAppServer(port = 3005): Promise<http.Server> {
       res.end("Not Found")
     })
 
+    server.once("error", reject)
     server.listen(port, "127.0.0.1", () => {
-      logger.info(`Desktop App Dashboard server running at http://127.0.0.1:${port}`)
+      logger.info(`Claim bot window is ready at http://127.0.0.1:${port}`)
       resolve(server)
     })
   })
@@ -742,15 +983,9 @@ async function main() {
 
   logger.info(`Starting 24/7 Claim Desktop Bot (Backend: ${config.backendUrl})...`)
 
-  // Register with backend
-  await client.register()
-
-  // Start HTTP dashboard server
   const port = 3005
   await startDesktopAppServer(port)
-
-  // Start background worker loop
-  startScheduler()
+  await resumeClaimBotIfSignedIn()
 
   // Open native desktop app window unless running with --headless or in CI
   const isHeadlessArg = process.argv.includes("--no-window") || process.env.HEADLESS === "true"

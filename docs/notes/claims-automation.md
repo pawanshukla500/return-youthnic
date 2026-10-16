@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Desktop Claim Automation Agent (`desktop-agent/` -> `desktop-agent/dist/TaskFlowClaimAgent.exe`) is an autonomous Windows worker designed to run continuously on warehouse PCs. It polls queued return claims from the Return App backend (`https://return.youthnic.shop` or local `http://127.0.0.1:3001`), automates supplier panel navigation via Chrome DevTools Protocol (CDP), simulates realistic human keystrokes and timing, files return claims, captures visual confirmation proofs, and cleans local evidence files.
+The claim bot runs inside the Windows desktop app (`npm run desktop`). After sign-in it polls queued return claims from `https://return.youthnic.shop`, opens the supplier panel through Chrome DevTools Protocol, files the claim, and cleans local evidence files. The scan screen stays on the website and the phone.
 
 ## Key System Features
 
@@ -82,10 +82,4 @@ npm run desktop:build
 
 # Package official enterprise Windows NSIS installer (C:\Program Files\Return App\)
 npm run desktop:dist
-
-# Build the standalone Windows CLI EXE agent
-npm run build:agent
-
-# Test browser detection and launch
-.\desktop-agent\dist\TaskFlowClaimAgent.exe --test-browser
 ```

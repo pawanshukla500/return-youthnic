@@ -2265,3 +2265,23 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
     - `npm.cmd test`: All 424 tests passed (388 passed, 0 failed, 36 skipped).
 - **The next agent must not:**
   - Discard desktop hardware constraints or revert Rule 13 in `AGENTS.md`.
+
+### 2026-10-16, Cursor, Desktop bot completeness audit (read-only)
+- **What was done:** Read `desktop/main.ts`, `desktop-agent/src/` (worker, browser runner, Meesho, Flipkart, Myntra, Ajio, registry), and the claim-automation server routes/service. Checked whether the Windows app is installed or running.
+- **Found:** The Electron shell, tray worker, job queue, and credential storage exist. The bot is not a finished marketplace filer. Meesho has a real portal script but still marks a job completed with a generated ticket id when the page does not return one. Flipkart, Myntra, and Ajio generate ticket ids without filing. Amazon has no engine and falls through to the Meesho script. A thrown error does not set the job to `failed`, so the row stays out of the poll (`queued` / `approved` only). The browser is closed even when OTP is required. `GET /api/automation/jobs/:id/bundle`, progress, and complete do not check a signed-in user or the agent key, and the bundle returns the decrypted portal password. This PC has `dist-electron/Return App Setup 1.0.0.exe` and does not have `C:\Program Files\Return App\Return App.exe`. No Return App or Electron process was running.
+- **Ran:** Process and install-path check only. Did not start the bot, did not file a live claim, did not run `npm test` or `npm run typecheck`.
+- **The next agent must not:** Treat a generated `MSHO-TKT-`, `FK-SPF-`, `MYN-CLM-`, or `AJIO-CLM-` id as a marketplace ticket. Do not point Amazon jobs at the Meesho script. Do not leave the job bundle route open.
+
+### 2026-10-16, Cursor, Desktop window is the claim bot, not the scan screen
+- **What changed:** The Electron window no longer loads `https://return.youthnic.shop` (which sent scanner users to `/scan`). It opens the local claim-bot screen at `http://127.0.0.1:3005/`. Sign-in uses the Return App account (`rememberDevice: true`). The password is not stored. The session token is kept in `~/.taskflow-claim-agent/operator-session.json`. After a valid sign-in, the existing 24/7 poll loop starts. Closing the window still hides it to the tray and the bot keeps running. Sign-out or quit stops the poll. A saved valid session resumes the bot on the next launch without opening scan.
+- **Files:** `desktop/main.ts`, `desktop-agent/src/desktop-app-server.ts`, `desktop-agent/src/operator-session.ts`, `desktop/dist/main.cjs` (build output).
+- **Ran:** `npm run desktop:build` passed (bundle `desktop/dist/main.cjs`, 108.2kb). Started the dashboard with `HEADLESS=true` and no saved operator session: log said it was waiting for sign-in and did not open scanning. `GET /api/status` returned `signedIn: false`, `isRunning: false`. `POST /api/scheduler/poll-now` returned HTTP 401. Browser check of `http://127.0.0.1:3005/` showed the sign-in card and no scan screen. The dashboard process was then stopped.
+- **Did not run:** `npm test`, `npm run typecheck`, `npm run desktop` (that would open the Electron window), a live claim filing, or a new NSIS installer. The copy in `C:\Program Files\Return App\` was not updated.
+- **The next agent must not:** Point the Electron window back at the production scan app. Do not start the claim poll before sign-in. Do not log or return the operator session token.
+
+### 2026-10-16, Cursor, Removed the unused single-file claim bot
+- **What changed:** Deleted the Node SEA claim bot that nothing in `package.json` builds anymore: `desktop-agent/build.ts`, `desktop-agent/sea-config.json`, and `desktop-agent/src/index.ts`. Deleted local generated output `dist-electron/` (518 MB) and `desktop-agent/dist/` (89 MB). Those folders stay gitignored. `START-BOT.bat` now starts `npm run desktop` and restarts only when that process crashes. The scan app on the website and phone is unchanged.
+- **Files:** deleted the three SEA files above. Updated `START-BOT.bat`, `install-desktop-app.bat`, `docs/DEVELOPMENT.md`, `docs/API.md`, `docs/MEESHO_CLAIM_AUTOMATION.md`, `docs/notes/claims-automation.md`.
+- **Ran:** `npm run desktop:build` passed (`desktop/dist/main.cjs`, 108.2kb). Confirmed the two output folders are gone.
+- **Did not run:** `npm test`, a live claim, or a new NSIS installer.
+- **The next agent must not:** Recreate `TaskFlowClaimAgent.exe` or `npm run build:agent`. Do not commit `dist-electron/` or `desktop-agent/dist/`.

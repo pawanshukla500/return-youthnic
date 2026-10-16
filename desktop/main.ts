@@ -2,11 +2,16 @@ import path from "node:path"
 import fs from "node:fs"
 import { app, BrowserWindow, Menu, Tray, nativeImage, Notification, ipcMain, shell, session } from "electron"
 import { fileURLToPath } from "node:url"
-import { loadAgentConfig } from "../desktop-agent/src/config.js"
+import { loadAgentConfig, saveAgentConfig } from "../desktop-agent/src/config.js"
 import { AgentBackendClient } from "../desktop-agent/src/agent-client.js"
 import { BrowserRunner } from "../desktop-agent/src/browser-runner.js"
 import { getAutomationEngine } from "../desktop-agent/src/marketplaces/registry.js"
 import { logger } from "../desktop-agent/src/logger.js"
+import {
+  resumeClaimBotIfSignedIn,
+  startDesktopAppServer,
+  type DesktopBotControl,
+} from "../desktop-agent/src/desktop-app-server.js"
 
 // Hardware efficiency switches for low-spec PCs (4GB RAM, 2-Core CPUs)
 app.commandLine.appendSwitch("js-flags", "--max-old-space-size=256")
@@ -20,6 +25,8 @@ let isQuitting = false
 
 // Agent State
 const PRODUCTION_URL = "https://return.youthnic.shop"
+const DASHBOARD_PORT = 3005
+const DASHBOARD_URL = `http://127.0.0.1:${DASHBOARD_PORT}/`
 const agentConfig = loadAgentConfig()
 
 // Server URL: Production VPS default, fallback to explicit env if specified
@@ -32,10 +39,14 @@ const APP_URL =
 
 // Ensure agent backend client connects to the exact same production endpoint
 agentConfig.backendUrl = APP_URL
-const client = new AgentBackendClient(agentConfig)
-let isBotActive = true
+let client = new AgentBackendClient(agentConfig)
+let isBotActive = false
+let operatorSignedIn = false
 let isProcessingJob = false
 let activeJobSummary: string | null = null
+let lastPollLabel = ""
+let schedulerStarted = false
+let refreshTray = () => {}
 
 // Single instance lock
 const gotTheLock = app.requestSingleInstanceLock()
@@ -57,6 +68,7 @@ if (!gotTheLock) {
 
 async function runAutomationWorkerLoop(): Promise<boolean> {
   if (!isBotActive || isProcessingJob) return false
+  lastPollLabel = new Date().toLocaleTimeString("en-IN")
 
   let pollResult: any = null
   try {
@@ -211,6 +223,53 @@ async function triggerNextPoll(): Promise<void> {
   schedulerTimeout = setTimeout(triggerNextPoll, currentPollDelayMs)
 }
 
+function ensureScheduler(): void {
+  if (schedulerStarted) return
+  schedulerStarted = true
+  startDesktopBotScheduler()
+}
+
+const botControl: DesktopBotControl = {
+  isRunning: () => isBotActive,
+  isProcessing: () => isProcessingJob,
+  activeSummary: () => activeJobSummary,
+  nextPollSeconds: () => Math.max(1, Math.round(currentPollDelayMs / 1000)),
+  lastPollTime: () => lastPollLabel,
+  onSignedIn: () => {
+    operatorSignedIn = true
+    isBotActive = true
+    ensureScheduler()
+    void triggerNextPoll()
+    refreshTray()
+  },
+  onSignedOut: () => {
+    operatorSignedIn = false
+    isBotActive = false
+    if (schedulerTimeout) {
+      clearTimeout(schedulerTimeout)
+      schedulerTimeout = null
+    }
+    refreshTray()
+  },
+  pause: () => {
+    isBotActive = false
+    refreshTray()
+  },
+  pollNow: () => {
+    if (!operatorSignedIn) return
+    isBotActive = true
+    consecutiveEmptyPolls = 0
+    ensureScheduler()
+    void triggerNextPoll()
+  },
+  backendUrl: () => agentConfig.backendUrl,
+  setBackendUrl: (url: string) => {
+    const saved = saveAgentConfig({ backendUrl: url })
+    agentConfig.backendUrl = saved.backendUrl
+    client = new AgentBackendClient(agentConfig)
+  },
+}
+
 function startDesktopBotScheduler(): void {
   // Prune legacy temporary evidence directories on startup to keep disk usage minimal
   void client.pruneOldEvidenceFiles()
@@ -250,7 +309,7 @@ function createMainWindow(): void {
     height: 900,
     minWidth: 1024,
     minHeight: 680,
-    title: "Return App · Youthnic VB Exports",
+    title: "Return App · 24/7 Claim Bot",
     icon: appIcon,
     backgroundColor: "#0b1311",
     autoHideMenuBar: true,
@@ -271,8 +330,8 @@ function createMainWindow(): void {
     mainWindow?.show()
   })
 
-  function showOfflinePage(targetUrl: string, errorDescription?: string): void {
-    const safeUrl = targetUrl || PRODUCTION_URL
+  function showOfflinePage(_targetUrl?: string, errorDescription?: string): void {
+    const safeUrl = DASHBOARD_URL
     const offlineHtml = `
       <!DOCTYPE html>
       <html>
@@ -347,12 +406,11 @@ function createMainWindow(): void {
       <body>
         <div class="card">
           <div class="icon">🔄</div>
-          <h2>Connecting to Return App Server</h2>
-          <p>Connecting to Return App Cloud Server. Please check your internet connection.${errorDescription ? `<br><small style="color:#64748b">(${errorDescription})</small>` : ""}</p>
+          <h2>Opening the claim bot</h2>
+          <p>This window is the 24/7 claim bot. It does not open return scanning.${errorDescription ? `<br><small style="color:#64748b">(${errorDescription})</small>` : ""}</p>
           <div class="url-box">${safeUrl}</div>
           <div class="btn-group">
-            <button class="btn" onclick="retryConnection('${safeUrl}')">Retry Connection Now</button>
-            <button class="btn btn-secondary" onclick="retryConnection('${PRODUCTION_URL}')">Connect to Production Cloud (return.youthnic.shop)</button>
+            <button class="btn" onclick="retryConnection('${safeUrl}')">Open the claim bot</button>
           </div>
           <div class="countdown" id="timer">Retrying automatically in 6 seconds...</div>
         </div>
@@ -377,18 +435,26 @@ function createMainWindow(): void {
     mainWindow?.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(offlineHtml)}`)
   }
 
-  // Load production web application
-  logger.info(`Loading Return App from: ${APP_URL}`)
-  mainWindow.loadURL(APP_URL).catch((err) => {
-    logger.error("Failed to load APP_URL:", err)
-    showOfflinePage(APP_URL, err?.message)
+  // Claim-bot window only. The warehouse scan screen stays on the web app and the phone.
+  logger.info(`Opening claim bot window at ${DASHBOARD_URL}`)
+  mainWindow.loadURL(DASHBOARD_URL).catch((err) => {
+    logger.error("Failed to open the claim bot window:", err)
+    showOfflinePage(DASHBOARD_URL, err?.message)
   })
 
-  // Handle network drops or navigation failure
+  mainWindow.webContents.on("will-navigate", (event, url) => {
+    if (!url.startsWith(DASHBOARD_URL) && !url.startsWith("data:")) {
+      event.preventDefault()
+    }
+  })
+
   mainWindow.webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL) => {
-    if (validatedURL && !validatedURL.startsWith("data:")) {
-      logger.warn(`Failed loading ${validatedURL} (code ${errorCode}: ${errorDescription})`)
-      showOfflinePage(validatedURL, errorDescription)
+    if (validatedURL && !validatedURL.startsWith("data:") && !validatedURL.startsWith(DASHBOARD_URL)) {
+      logger.warn(`Blocked navigation away from the claim bot (${errorCode}: ${errorDescription})`)
+      showOfflinePage(DASHBOARD_URL, errorDescription)
+    } else if (validatedURL?.startsWith(DASHBOARD_URL)) {
+      logger.warn(`Claim bot window failed to load (${errorCode}: ${errorDescription})`)
+      showOfflinePage(DASHBOARD_URL, errorDescription)
     }
   })
 
@@ -408,7 +474,7 @@ function createMainWindow(): void {
       if (Notification.isSupported()) {
         new Notification({
           title: "Return App Minimized to Tray",
-          body: "The 24/7 Claim Desktop Bot is still running in the background.",
+          body: "The claim bot is still running. Return scanning is not open in this app.",
           silent: true,
         }).show()
       }
@@ -430,12 +496,12 @@ function createTray(): void {
   }
 
   tray = new Tray(trayIcon)
-  tray.setToolTip("Return App · 24/7 Desktop Bot Active")
+  tray.setToolTip("Return App · 24/7 claim bot")
 
   const updateContextMenu = () => {
     const contextMenu = Menu.buildFromTemplate([
       {
-        label: "Return App · Open Window",
+        label: "Open claim bot",
         click: () => {
           if (mainWindow) {
             mainWindow.show()
@@ -445,7 +511,7 @@ function createTray(): void {
       },
       { type: "separator" },
       {
-        label: isBotActive ? "● 24/7 Bot: Active" : "○ 24/7 Bot: Paused",
+        label: !operatorSignedIn ? "Sign in to run the claim bot" : isBotActive ? "● Claim bot: running" : "○ Claim bot: paused",
         enabled: false,
       },
       {
@@ -453,18 +519,29 @@ function createTray(): void {
         enabled: false,
       },
       {
-        label: isBotActive ? "Pause Background Bot" : "Resume Background Bot",
+        label: isBotActive ? "Pause claim bot" : "Resume claim bot",
+        enabled: operatorSignedIn,
         click: () => {
+          if (!operatorSignedIn) return
           isBotActive = !isBotActive
+          if (isBotActive) {
+            ensureScheduler()
+            void triggerNextPoll()
+          }
           updateContextMenu()
         },
       },
       { type: "separator" },
       {
         label: "Check for Claims Now",
+        enabled: operatorSignedIn,
         click: () => {
+          if (!operatorSignedIn) return
+          isBotActive = true
           consecutiveEmptyPolls = 0
+          ensureScheduler()
           void triggerNextPoll()
+          updateContextMenu()
         },
       },
       { type: "separator" },
@@ -479,6 +556,7 @@ function createTray(): void {
     tray?.setContextMenu(contextMenu)
   }
 
+  refreshTray = updateContextMenu
   updateContextMenu()
 
   tray.on("double-click", () => {
@@ -507,18 +585,29 @@ ipcMain.handle("desktop:get-bot-status", () => ({
 }))
 
 ipcMain.handle("desktop:toggle-bot", () => {
+  if (!operatorSignedIn) return { isBotActive: false, operatorSignedIn }
   isBotActive = !isBotActive
-  return { isBotActive }
+  if (isBotActive) {
+    ensureScheduler()
+    void triggerNextPoll()
+  }
+  refreshTray()
+  return { isBotActive, operatorSignedIn }
 })
 
 // ---------------------------------------------------------------------------------------------------------------
 // App Lifecycle
 // ---------------------------------------------------------------------------------------------------------------
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  try {
+    await startDesktopAppServer(DASHBOARD_PORT, botControl)
+    await resumeClaimBotIfSignedIn()
+  } catch (err) {
+    logger.error("Claim bot window failed to start. Scanning was not opened.", err)
+  }
   createMainWindow()
   createTray()
-  startDesktopBotScheduler()
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {

@@ -28,7 +28,7 @@ This document explains the end-to-end architecture, field mappings, mobile captu
                             ▼                                            ▼
 ┌───────────────────────────────────────┐            ┌───────────────────────────────────────────────────┐
 │           Web App Register            │            │       Windows Desktop Claim Bot (Node SEA EXE)    │
-│  - /register (Return Scan Register)   │            │  - TaskFlowClaimAgent.exe (Single Binary)         │
+│  - /register (Return Scan Register)   │            │  - Electron claim bot (npm run desktop)           │
 │  - Real-time Ticket ID & Status Badge │            │  - Chrome DevTools Protocol (CDP) / Puppeteer     │
 │  - Approved 19-Column CSV/XLSX Export │            │  - Automates Meesho Supplier Portal Submissions   │
 │  - /claims (Claims & Automation Hub)  │            │  - Extracts Meesho Claim Ticket ID -> Database    │
@@ -143,15 +143,15 @@ Placed at `android/app/google-services.json`:
 
 ---
 
-## 6. Windows Desktop EXE Claim Automation Bot
+## 6. Windows Desktop Claim Bot
 
-### Standalone Executable Build
-The desktop bot is packaged into a self-contained Single Executable Application (SEA) using Node's official SEA framework and postject:
+The claim bot runs inside the Return App desktop window:
+
 ```bash
-npm run build:agent
+npm run desktop
 ```
-Output:
-`desktop-agent/dist/TaskFlowClaimAgent.exe`
+
+Sign in on that window. The bot then keeps polling while the app is running, including after the window is closed to the tray. Scan stays on the website and the phone.
 
 ### Key Features of the Desktop Bot
 1. **Agent Registration & Heartbeat**:

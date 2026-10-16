@@ -26,13 +26,18 @@ if not exist "node_modules\" (
   )
 )
 
-echo Starting always-on desktop claim bot loop. Keep this window running 24/7.
-echo To stop the bot, press Ctrl+C in this window.
+echo Starting the Return App claim bot. Sign in inside the window.
+echo Closing the window leaves the bot in the system tray.
+echo Quit from the tray menu to stop it. This window restarts the app only if it crashes.
 echo.
 
 :loop
-echo [%date% %time%] Starting 24/7 claim desktop bot...
-call npm run bot
-echo [%date% %time%] Desktop bot stopped or connection dropped. Reconnecting in 10 seconds...
-timeout /t 10 /nobreak >nul
-goto loop
+echo [%date% %time%] Starting the claim bot...
+call npm run desktop
+if errorlevel 1 (
+  echo [%date% %time%] The claim bot stopped unexpectedly. Restarting in 10 seconds...
+  timeout /t 10 /nobreak >nul
+  goto loop
+)
+echo [%date% %time%] The claim bot was closed.
+exit /b 0

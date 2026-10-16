@@ -1,10 +1,10 @@
 @echo off
 setlocal
-title TaskFlow Pro - 24/7 Desktop Bot Installer
+title Return App - 24/7 Claim Bot Installer
 cd /d "%~dp0"
 
 echo ======================================================================
-echo   TaskFlow Pro · 24/7 Desktop Claim Processing Bot Installer
+echo   Return App · 24/7 Claim Bot Installer
 echo   Automated Marketplace Return Claims & Evidence Engine (Meesho, etc.)
 echo ======================================================================
 echo.
@@ -37,10 +37,10 @@ echo [3/3] Creating Windows Desktop shortcut for 24/7 Bot...
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$ws = New-Object -ComObject WScript.Shell; " ^
   "$desktop = [Environment]::GetFolderPath('Desktop'); " ^
-  "$s = $ws.CreateShortcut(\"$desktop\TaskFlow Pro 24-7 Bot.lnk\"); " ^
+  "$s = $ws.CreateShortcut(\"$desktop\Return App Claim Bot.lnk\"); " ^
   "$s.TargetPath = '%~dp0START-BOT.bat'; " ^
   "$s.WorkingDirectory = '%~dp0'; " ^
-  "$s.Description = 'TaskFlow Pro 24/7 Desktop Claim Processing Bot'; " ^
+  "$s.Description = 'Return App 24/7 claim bot'; " ^
   "$s.Save(); " ^
   "Write-Host 'Desktop shortcut created on your Desktop!'"
 

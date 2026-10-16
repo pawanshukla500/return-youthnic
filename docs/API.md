@@ -203,10 +203,14 @@ Claim management links immutably to a verified `receipt_scans` row and does not 
 
 ### Desktop claim automation
 
-Windows desktop automation agent (`TaskFlowClaimAgent.exe`) endpoints:
+The Windows claim bot (Electron, `npm run desktop`) uses these agent routes. It does not open the scan screen.
 
-- `POST /api/claims/automation/poll-job`: polls for queued jobs with status `ready_for_claim`. Returns job details including download URLs for all photos and unboxing videos, marketplace login profile, and prefilled claim template fields.
-- `POST /api/claims/automation/update-job`: updates automation execution stage (`downloading_media` → `submitting` → `completed` | `failed` | `manual_intervention_required`), captures screenshot artifacts, and records the extracted marketplace ticket code.
+- `POST /api/automation/agent/register`: registers this PC's claim bot.
+- `POST /api/automation/agent/heartbeat`: marks the bot online, busy, or offline.
+- `GET /api/automation/agent/poll`: takes the oldest queued or approved claim job.
+- `GET /api/automation/jobs/:id/bundle`: returns the claim, portal login, and evidence list for that job.
+- `POST /api/automation/jobs/:id/progress`: reports a stage such as prepared or manual action.
+- `POST /api/automation/jobs/:id/complete`: stores the marketplace ticket id and marks the job completed.
 
 ### Product master batched import (Book11 ready)
 
