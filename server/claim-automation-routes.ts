@@ -142,6 +142,41 @@ export function mountClaimAutomationRoutes(app: Express, requireUser: RequestHan
                 ],
               )
               receiptScanId = Number(scanInsert.rows[0].id)
+
+              // Populate receipt_scan_items from expected_return_items
+              const eriList = await client.query(
+                `SELECT eri.id, eri.display_order_item_id, eri.order_line_id, eri.channel_listing_id,
+                        eri.marketplace_sku_identifier, eri.qty, COALESCE(eri.label, s.name, 'Returned Product') AS label,
+                        s.code AS sku_code
+                 FROM expected_return_items eri
+                 LEFT JOIN skus s ON s.id = eri.sku_id
+                 WHERE eri.expected_return_id = $1
+                 ORDER BY eri.id ASC`,
+                [expectedReturnId],
+              )
+              if (eriList.rows.length > 0) {
+                for (let i = 0; i < eriList.rows.length; i++) {
+                  const erRow = eriList.rows[i]
+                  await client.query(
+                    `INSERT INTO receipt_scan_items (
+                       receipt_scan_id, expected_return_item_id, line_no, order_item_id,
+                       marketplace_sku, product_sku, product_sku_source, product_name,
+                       expected_qty, received_qty, verified
+                     )
+                     VALUES ($1, $2, $3, $4, $5, $6, 'unrecorded', $7, $8, 1, true)`,
+                    [
+                      receiptScanId,
+                      Number(erRow.id),
+                      i + 1,
+                      String(erRow.display_order_item_id || erRow.order_line_id || ""),
+                      String(erRow.channel_listing_id || erRow.marketplace_sku_identifier || ""),
+                      String(erRow.sku_code || ""),
+                      String(erRow.label || "Returned Product"),
+                      Number(erRow.qty || 1),
+                    ],
+                  )
+                }
+              }
             }
             await client.query("COMMIT")
           } catch (err) {
@@ -171,10 +206,10 @@ export function mountClaimAutomationRoutes(app: Express, requireUser: RequestHan
         // Create claim
         claim = await createClaim(db, actor, scope, {
           receiptScanId,
-          claimReason: text(body.claimReason) || "Wrong Product",
-          claimTitle: text(body.claimTitle) || `Claim for ${text(body.orderId || body.awb)}`,
-          claimDescription: text(body.claimDescription || body.claimContent),
-          remarks: text(body.remarks),
+          claimReason: (text(body.claimReason) || "Wrong Product").slice(0, 200),
+          claimTitle: (text(body.claimTitle) || `Claim for ${text(body.orderId || body.awb)}`).slice(0, 200),
+          claimDescription: text(body.claimDescription || body.claimContent).slice(0, 2000),
+          remarks: text(body.remarks).slice(0, 2000),
           claimTemplateId: positiveId(body.claimTemplateId),
           marketplaceIssueCode: text(body.marketplaceIssueCode),
           packetId: text(body.packetId),
@@ -216,24 +251,33 @@ export function mountClaimAutomationRoutes(app: Express, requireUser: RequestHan
           text(body.subOrderId),
           text(body.awb),
           text(body.packetState || "Tampered"),
-          text(body.claimContent || body.claimDescription),
+          text(body.claimContent || body.claimDescription).slice(0, 2000),
         ],
       )
 
       // Queue automation job
-      const jobId = await createOrQueueAutomationJob(db, claim.id)
+      let jobId: number | null = null
+      try {
+        jobId = await createOrQueueAutomationJob(db, claim.id)
+      } catch (err) {
+        console.warn("[unified-create] createOrQueueAutomationJob warning:", err)
+      }
 
       // Sync ticket ID and Draft status to return register
       const initialTicketCode = text(body.ticketCode) || `CLM-${claim.id}`
-      await syncClaimTicketToRegister(db, {
-        receiptScanId,
-        ticketCode: initialTicketCode,
-        status: "Draft",
-        actorId: actor.id,
-        issueCategoryCode: text(body.marketplaceIssueCode) || "wrong_item",
-        issueCategoryLabel: text(body.claimReason) || "Wrong Product",
-        notes: `Claim created: ${initialTicketCode}`,
-      })
+      try {
+        await syncClaimTicketToRegister(db, {
+          receiptScanId,
+          ticketCode: initialTicketCode,
+          status: "Draft",
+          actorId: actor.id,
+          issueCategoryCode: text(body.marketplaceIssueCode) || "wrong_item",
+          issueCategoryLabel: text(body.claimReason) || "Wrong Product",
+          notes: `Claim created: ${initialTicketCode}`,
+        })
+      } catch (err) {
+        console.warn("[unified-create] syncClaimTicketToRegister warning:", err)
+      }
 
       res.status(201).json({ claim, jobId, ticketCode: initialTicketCode })
     } catch (error) {

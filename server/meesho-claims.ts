@@ -168,7 +168,7 @@ export async function getMeeshoClaimDraft(
   const scanResult = await db.query(
     `SELECT rs.id, er.marketplace_id, m.name AS marketplace,
             COALESCE(NULLIF(rs.order_number_snapshot, ''), er.order_number, '') AS order_id,
-            COALESCE(NULLIF(rs.scanned_tracking, ''), NULLIF(rs.original_tracking_snapshot, ''),
+            COALESCE(NULLIF(rs.scanned_tracking, ''), NULLIF(rs.tracking_id_snapshot, ''),
                      NULLIF(rs.csv_tracking_snapshot, ''), er.tracking_id, '') AS awb,
             COALESCE(rs.flyer_id, '') AS flyer_id, COALESCE(rs.flyer_state, 'not_required') AS flyer_state,
             rs.scanned_at

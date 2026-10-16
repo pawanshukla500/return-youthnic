@@ -921,6 +921,17 @@ export async function createClaim(
 
     // Verify the template if one is named.
     let templateId: number | null = input.claimTemplateId ?? null
+    if (templateId !== null) {
+      const tpl = await client.query(
+        `SELECT id FROM claim_templates
+         WHERE id = $1 AND is_active = true AND (marketplace_id IS NULL OR marketplace_id = $2)`,
+        [templateId, marketplaceId],
+      )
+      if (!tpl.rows[0]) {
+        // Supplied templateId does not match this marketplace; fallback to active template for this marketplace
+        templateId = null
+      }
+    }
     if (templateId === null) {
       const fallback = await client.query(
         `SELECT id FROM claim_templates
@@ -931,15 +942,24 @@ export async function createClaim(
       )
       templateId = fallback.rows[0] ? Number(fallback.rows[0].id) : null
     }
-    if (templateId !== null) {
-      const tpl = await client.query(
-        `SELECT id FROM claim_templates
-         WHERE id = $1 AND is_active = true AND (marketplace_id IS NULL OR marketplace_id = $2)`,
-        [templateId, marketplaceId],
+    if (templateId === null) {
+      // Auto-create default template for this marketplace so claim creation is never blocked
+      const createdTpl = await client.query<{ id: number }>(
+        `INSERT INTO claim_templates (marketplace_id, name, description, is_active, sort_order)
+         VALUES ($1, 'Default claim template', 'Standard claim evidence for this marketplace.', true, 1)
+         RETURNING id`,
+        [marketplaceId],
       )
-      if (!tpl.rows[0]) throw new ServiceError(400, "Choose an active claim template for this marketplace.")
+      templateId = Number(createdTpl.rows[0].id)
+      await client.query(
+        `INSERT INTO claim_template_fields (template_id, field_key, field_label, field_type, required, min_count, max_count, max_file_size_mb, sort_order)
+         VALUES
+           ($1, 'product_images', 'Product images', 'image', true, 1, 10, 25, 1),
+           ($1, 'unboxing_video', 'Unboxing video', 'video', true, 1, 1, 100, 2)
+         ON CONFLICT (template_id, field_key) DO NOTHING`,
+        [templateId],
+      )
     }
-    if (templateId === null) throw new ServiceError(409, "No active claim template is configured for this marketplace.")
 
     const result = await client.query<{ id: number }>(
       `INSERT INTO claims

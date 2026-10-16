@@ -67,3 +67,51 @@ test("mapToReceiptIssueCategory: maps marketplace issue codes and reasons to dat
   assert.deepEqual(mapToReceiptIssueCategory("damaged_item"), { code: "damaged_product", label: "Damaged product" })
   assert.deepEqual(mapToReceiptIssueCategory("other_issue"), { code: "other_issue", label: "Other issue" })
 })
+
+test("sendError: correctly serializes ServiceError and duck-typed status errors as JSON", async () => {
+  const { sendError } = await import("../http.js")
+  const { ServiceError } = await import("../register-service.js")
+
+  let capturedStatus = 0
+  let capturedJson: any = null
+  let nextCalledWith: any = null
+
+  const mockRes: any = {
+    status(code: number) {
+      capturedStatus = code
+      return this
+    },
+    json(body: any) {
+      capturedJson = body
+      return this
+    },
+  }
+
+  const mockNext = (err?: any) => {
+    nextCalledWith = err
+  }
+
+  // 1. ServiceError
+  sendError(mockRes, new ServiceError(400, "Choose an active claim template for this marketplace."), mockNext)
+  assert.equal(capturedStatus, 400)
+  assert.equal(capturedJson?.error, "Choose an active claim template for this marketplace.")
+  assert.equal(nextCalledWith, null)
+
+  // 2. Duck-typed status error
+  capturedStatus = 0
+  capturedJson = null
+  sendError(mockRes, { status: 404, message: "Claim not found." }, mockNext)
+  assert.equal(capturedStatus, 404)
+  assert.equal(capturedJson?.error, "Claim not found.")
+  assert.equal(nextCalledWith, null)
+
+  // 3. Generic Error without status -> forwards to next
+  capturedStatus = 0
+  capturedJson = null
+  const genericErr = new Error("Database connection timed out")
+  sendError(mockRes, genericErr, mockNext)
+  assert.equal(capturedStatus, 0)
+  assert.equal(capturedJson, null)
+  assert.equal(nextCalledWith, genericErr)
+})
+
