@@ -23,6 +23,10 @@ export abstract class BaseMarketplaceAutomation {
 
   abstract execute(action: "prepare" | "submit"): Promise<MarketplaceAutomationResult>
 
+  protected async delay(ms = 1000): Promise<void> {
+    await this.browser.delay(ms)
+  }
+
   protected async waitForSelector(selector: string, timeoutMs = 15000): Promise<boolean> {
     const start = Date.now()
     while (Date.now() - start < timeoutMs) {
@@ -33,27 +37,27 @@ export abstract class BaseMarketplaceAutomation {
     return false
   }
 
+  protected async humanType(selector: string, text: string): Promise<boolean> {
+    logger.info(`[Human Type] Typing ${text.length} characters into: ${selector}`)
+    return this.browser.humanType(selector, text)
+  }
+
+  protected async humanClick(selector: string): Promise<boolean> {
+    logger.info(`[Human Click] Clicking element: ${selector}`)
+    return this.browser.humanClick(selector)
+  }
+
+  protected async uploadFiles(selector: string, filePaths: string[]): Promise<boolean> {
+    logger.info(`[File Upload] Attaching ${filePaths.length} files to input: ${selector}`)
+    return this.browser.setFileInputFiles(selector, filePaths)
+  }
+
   protected async typeText(selector: string, text: string): Promise<void> {
-    await this.browser.evaluate(`
-      (() => {
-        const el = document.querySelector(${JSON.stringify(selector)});
-        if (el) {
-          el.value = ${JSON.stringify(text)};
-          el.dispatchEvent(new Event('input', { bubbles: true }));
-          el.dispatchEvent(new Event('change', { bubbles: true }));
-        }
-      })()
-    `)
+    await this.humanType(selector, text)
   }
 
   protected async clickElement(selector: string): Promise<void> {
-    await this.browser.evaluate(`
-      (() => {
-        const el = document.querySelector(${JSON.stringify(selector)});
-        if (el) {
-          el.click();
-        }
-      })()
-    `)
+    await this.humanClick(selector)
   }
 }
+

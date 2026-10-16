@@ -491,7 +491,12 @@ export async function getJobExecutionBundle(
      JOIN marketplaces m ON m.id = c.marketplace_id
      JOIN receipt_scans rs ON rs.id = c.receipt_scan_id
      JOIN expected_returns er ON er.id = rs.expected_return_id
-     LEFT JOIN marketplace_credentials mc ON mc.id = j.marketplace_credential_id
+     LEFT JOIN LATERAL (
+       SELECT * FROM marketplace_credentials mc
+       WHERE (mc.id = j.marketplace_credential_id OR (j.marketplace_credential_id IS NULL AND mc.marketplace_id = c.marketplace_id AND mc.is_active = true))
+       ORDER BY (mc.id = j.marketplace_credential_id) DESC, mc.id ASC
+       LIMIT 1
+     ) mc ON true
      WHERE j.id = $1`,
     [jobId],
   )

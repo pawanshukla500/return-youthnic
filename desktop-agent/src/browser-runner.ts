@@ -199,6 +199,139 @@ export class BrowserRunner {
     return { challengeDetected: false }
   }
 
+  async delay(ms = 1000): Promise<void> {
+    await new Promise((r) => setTimeout(r, ms))
+  }
+
+  async humanType(selector: string, text: string): Promise<boolean> {
+    const focused = await this.evaluate<boolean>(`
+      (() => {
+        const el = document.querySelector(${JSON.stringify(selector)});
+        if (!el) return false;
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        el.focus();
+        if ('select' in el && typeof el.select === 'function') {
+          el.select();
+        }
+        return true;
+      })()
+    `)
+
+    if (!focused) {
+      logger.warn(`humanType: Element not found for selector: ${selector}`)
+      return false
+    }
+
+    // Short pause after clicking/focusing
+    await this.delay(300)
+
+    // Clear existing text if any
+    await this.evaluate(`
+      (() => {
+        const el = document.querySelector(${JSON.stringify(selector)});
+        if (el) {
+          const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
+            || Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
+          if (nativeSetter) {
+            nativeSetter.call(el, '');
+          } else {
+            el.value = '';
+          }
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+      })()
+    `)
+
+    // Type character by character with human-like randomized intervals (40-90ms)
+    for (let i = 0; i < text.length; i++) {
+      const char = text[i]
+      try {
+        await this.send("Input.dispatchKeyEvent", {
+          type: "keyDown",
+          text: char,
+          unmodifiedText: char,
+          key: char,
+        })
+        await this.send("Input.dispatchKeyEvent", {
+          type: "keyUp",
+          key: char,
+        })
+      } catch {
+        // fallback to JS injection
+      }
+
+      await this.evaluate(`
+        (() => {
+          const el = document.querySelector(${JSON.stringify(selector)});
+          if (el) {
+            const cur = el.value || '';
+            const targetChar = ${JSON.stringify(char)};
+            const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
+              || Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
+            if (nativeSetter) {
+              nativeSetter.call(el, cur + targetChar);
+            } else {
+              el.value = cur + targetChar;
+            }
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+          }
+        })()
+      `)
+
+      const keystrokeInterval = Math.floor(Math.random() * 50) + 40
+      await new Promise((r) => setTimeout(r, keystrokeInterval))
+    }
+
+    // 1-second delay after finishing typing
+    await this.delay(1000)
+    return true
+  }
+
+  async humanClick(selector: string): Promise<boolean> {
+    const clicked = await this.evaluate<boolean>(`
+      (() => {
+        const el = document.querySelector(${JSON.stringify(selector)});
+        if (!el) return false;
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        el.focus();
+        el.click();
+        return true;
+      })()
+    `)
+
+    if (!clicked) {
+      logger.warn(`humanClick: Element not found for selector: ${selector}`)
+      return false
+    }
+
+    // 1-second delay after every click as requested
+    await this.delay(1000)
+    return true
+  }
+
+  async setFileInputFiles(selector: string, filePaths: string[]): Promise<boolean> {
+    try {
+      const doc = await this.send("DOM.getDocument", { depth: -1 })
+      const query = await this.send("DOM.querySelector", {
+        nodeId: doc.root.nodeId,
+        selector,
+      })
+      if (query && query.nodeId) {
+        await this.send("DOM.setFileInputFiles", {
+          nodeId: query.nodeId,
+          files: filePaths,
+        })
+        await this.delay(1000)
+        return true
+      }
+    } catch (err) {
+      logger.warn(`setFileInputFiles failed for selector: ${selector}`, err)
+    }
+    return false
+  }
+
   async close(): Promise<void> {
     if (this.ws) {
       try {

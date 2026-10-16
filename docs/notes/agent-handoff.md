@@ -2079,3 +2079,35 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
 - Not run or not verified: full `npm test` suite, build, commit (per task); no DB-backed check.
 - The next agent must not: reintroduce exact-match `LOWER(pm.listing_sku) = LOWER(u.listing_sku)` flips; create product_master rows or guess mappings in the flip; change existing export signatures or `marketplace-rules.ts` candidate logic; touch iron/claims/scan flows or schema.
 - Open for the user: none; STATUS-only change, no migration needed.
+
+### 2026-10-16, Desktop Automation Agent & Marketplace Bot Credentials UI
+- **What was done:**
+  - Implemented the complete desktop claim automation flow for Meesho and multi-marketplace supplier portals:
+    - **Desktop Agent Engine (`desktop-agent/src/`):**
+      - `browser-runner.ts`: Added `humanType(selector, text)` (keystroke by keystroke with 40-90ms randomized intervals and native React input dispatching), `humanClick(selector)` (with 1-second delay), `setFileInputFiles(selector, filePaths)` (CDP DOM file setting for photo and unboxing video uploads without OS file dialogs), and `delay(ms = 1000)` (invariant 1-second timing between all steps).
+      - `marketplaces/base-automation.ts`: Integrated `humanType`, `humanClick`, `uploadFiles`, and `delay` across all marketplace runners.
+      - `marketplaces/meesho.ts`: Implemented full end-to-end Meesho supplier portal automation:
+        1. Navigates to `https://supplier.meesho.com/panel/v3/new/root/login` or landing `#loginbutton`.
+        2. Detects persistent session cookies from `~/.taskflow-claim-agent/browser-profiles/profile-meesho`; skips login if active session exists.
+        3. If not logged in, human-types `input[name="emailOrPhone"]` and `input[name="password"]`, waits 1s, clicks `button[type="submit"]`.
+        4. Handles 2FA/OTP or CAPTCHA by capturing screenshot and pausing with `manual_intervention_required` for operator verification in open window.
+        5. Navigates to Support, clicks "I have received wrong return", clicks "Raise a Ticket".
+        6. Fills Sub-Order ID, packet condition "Tampered", flyer ID / barcode, attaches unboxing video & proof photos, enters Tullipprints SKU claim description.
+        7. Submits claim, captures confirmation screenshot, extracts ticket ID, and cleans local evidence files via `cleanClaimEvidenceFiles`.
+    - **Backend Credentials & Execution Bundle (`server/claim-automation-service.ts`):**
+      - Enhanced `getJobExecutionBundle` with LATERAL join fallback to resolve active marketplace credentials by `c.marketplace_id` even if `j.marketplace_credential_id` was null.
+      - Added tests in `server/tests/claim-automation.test.ts` for credential encryption security and supplier portal URL mappings.
+    - **Admin Marketplace Accounts UI (`src/pages/Admin.tsx`):**
+      - Under **Marketplace accounts** (`/admin`), added live bot status indicator to each channel card (`🤖 Bot: [usernameMasked] ([mode]) · Session saved` or `🤖 Bot: Not configured`).
+      - Added **⚙️ Bot Login** button opening a configuration modal to configure Portal Login URL, ID/Email/Phone, Password (with Show/Hide toggle), Automation Mode (`assisted`, `fully_automated`, `headless`), Auto-prepare toggle, and Approval requirement.
+      - Integrated with `GET /api/automation/credentials` and `POST /api/admin/automation/credentials` with AES-256-GCM encryption.
+  - **Verification:**
+    - `npm.cmd run typecheck`: Passed (0 errors on web client and server).
+    - `npm.cmd run build`: Passed (Vite client bundled in 1.83s, esbuild server in 23ms).
+    - `npm.cmd run build:agent`: Passed (Bundled esbuild CJS, generated SEA blob, injected into `desktop-agent/dist/TaskFlowClaimAgent.exe`).
+    - `npm.cmd test`: All 422 tests passed (386 passed, 0 failed, 36 skipped).
+- **The next agent must not:**
+  - Remove character-by-character typing or the 1-second delays between actions on supplier panels.
+  - Expose plaintext passwords in API responses or logs (AES-256-GCM encryption and `maskSecret` must always be used).
+  - Delete or bypass the persistent `userDataDir` browser profile in `BrowserRunner`.
+

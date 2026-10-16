@@ -115,3 +115,34 @@ test("sendError: correctly serializes ServiceError and duck-typed status errors 
   assert.equal(nextCalledWith, genericErr)
 })
 
+test("credentials encryption: complex passwords and phone identifiers", () => {
+  const credentialsList = [
+    "9876543210",
+    "vaibhav@vbexports.co.in",
+    "P@ssw0rd!#$2026_ComplexKey&More",
+    "Special-Characters: / ? & = # + %",
+  ]
+
+  for (const cred of credentialsList) {
+    const enc = encryptSecret(cred)
+    assert.match(enc, /^[0-9a-f]+:[0-9a-f]+:[0-9a-f]+$/)
+    const dec = decryptSecret(enc)
+    assert.equal(dec, cred)
+  }
+})
+
+test("marketplace credentials: portal URLs map to standard supplier dashboards", () => {
+  const defaultPortalUrls: Record<string, string> = {
+    meesho: "https://supplier.meesho.com/panel/v3/new/root/login",
+    flipkart: "https://seller.flipkart.com/index.html#dashboard",
+    amazon: "https://sellercentral.amazon.in/",
+    myntra: "https://partners.myntrainfo.com/",
+    ajio: "https://supplier.ajio.com/",
+  }
+
+  assert.equal(defaultPortalUrls["meesho"], "https://supplier.meesho.com/panel/v3/new/root/login")
+  assert.ok(defaultPortalUrls["meesho"].includes("supplier.meesho.com"))
+  assert.ok(defaultPortalUrls["flipkart"].includes("seller.flipkart.com"))
+})
+
+

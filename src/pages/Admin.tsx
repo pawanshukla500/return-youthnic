@@ -66,6 +66,20 @@ type AccountRow = {
   canManage: boolean
 }
 
+type MarketplaceCredentialRow = {
+  id: number
+  marketplaceId: number | null
+  marketplaceName: string
+  accountName: string
+  portalUrl: string
+  usernameMasked: string
+  automationMode: string
+  requireApprovalBeforeSubmit: boolean
+  autoPrepare: boolean
+  isActive: boolean
+  lastLoginAt: string | null
+}
+
 type ReportsConfig = {
   dailyEnabled: boolean
   dailyTime: string
@@ -237,6 +251,89 @@ export function Admin() {
   const [resettingPassword, setResettingPassword] = useState(false)
   const [resetError, setResetError] = useState("")
 
+  // Marketplace Bot Automation Credentials state
+  const [credentials, setCredentials] = useState<MarketplaceCredentialRow[]>([])
+  const [credModalOpen, setCredModalOpen] = useState(false)
+  const [selectedCredAccount, setSelectedCredAccount] = useState<AccountRow | null>(null)
+  const [credPortalUrl, setCredPortalUrl] = useState("")
+  const [credUsername, setCredUsername] = useState("")
+  const [credPassword, setCredPassword] = useState("")
+  const [showCredPassword, setShowCredPassword] = useState(false)
+  const [credAutomationMode, setCredAutomationMode] = useState("assisted")
+  const [credAutoPrepare, setCredAutoPrepare] = useState(true)
+  const [credRequireApproval, setCredRequireApproval] = useState(true)
+  const [credSaving, setCredSaving] = useState(false)
+  const [credNotice, setCredNotice] = useState("")
+  const [credError, setCredError] = useState("")
+
+  const loadCredentials = () =>
+    api<{ credentials: MarketplaceCredentialRow[] }>("/api/automation/credentials")
+      .then((data) => setCredentials(data.credentials || []))
+      .catch(() => undefined)
+
+  const defaultPortalUrl = (name: string): string => {
+    const n = name.toLowerCase()
+    if (n.includes("meesho")) return "https://supplier.meesho.com/panel/v3/new/root/login"
+    if (n.includes("flipkart")) return "https://seller.flipkart.com/index.html#dashboard"
+    if (n.includes("amazon")) return "https://sellercentral.amazon.in/"
+    if (n.includes("myntra")) return "https://partners.myntrainfo.com/"
+    if (n.includes("ajio")) return "https://supplier.ajio.com/"
+    return ""
+  }
+
+  const openCredModal = (account: AccountRow) => {
+    const existing = credentials.find(
+      (c) => c.marketplaceId === account.id || c.accountName.toLowerCase() === account.name.toLowerCase(),
+    )
+    setSelectedCredAccount(account)
+    setCredPortalUrl(existing?.portalUrl || defaultPortalUrl(account.name))
+    setCredUsername("")
+    setCredPassword("")
+    setShowCredPassword(false)
+    setCredAutomationMode(existing?.automationMode || "assisted")
+    setCredAutoPrepare(existing ? existing.autoPrepare : true)
+    setCredRequireApproval(existing ? existing.requireApprovalBeforeSubmit : true)
+    setCredNotice("")
+    setCredError("")
+    setCredModalOpen(true)
+  }
+
+  const handleSaveCredentials = async (e: FormEvent) => {
+    e.preventDefault()
+    if (!selectedCredAccount) return
+    setCredSaving(true)
+    setCredNotice("")
+    setCredError("")
+    try {
+      const existing = credentials.find(
+        (c) => c.marketplaceId === selectedCredAccount.id || c.accountName.toLowerCase() === selectedCredAccount.name.toLowerCase(),
+      )
+      await api("/api/admin/automation/credentials", {
+        method: "POST",
+        body: JSON.stringify({
+          id: existing?.id,
+          marketplaceId: selectedCredAccount.id,
+          accountName: selectedCredAccount.name,
+          portalUrl: credPortalUrl.trim(),
+          username: credUsername.trim() || undefined,
+          password: credPassword.trim() || undefined,
+          automationMode: credAutomationMode,
+          requireApprovalBeforeSubmit: credRequireApproval,
+          autoPrepare: credAutoPrepare,
+        }),
+      })
+      setCredNotice(`Bot credentials for ${selectedCredAccount.name} saved successfully.`)
+      await loadCredentials()
+      setTimeout(() => {
+        setCredModalOpen(false)
+      }, 1200)
+    } catch (err) {
+      setCredError(err instanceof Error ? err.message : "Failed to save bot credentials.")
+    } finally {
+      setCredSaving(false)
+    }
+  }
+
   const loadUsers = () =>
     api<{ users: AdminUser[] }>("/api/admin/users")
       .then((data) => setUsers(data.users))
@@ -404,6 +501,7 @@ export function Admin() {
           if (sessionConfData.config) setSessionConfig(sessionConfData.config)
           loadPaymentStatus()
           loadUnmappedSummary()
+          void loadCredentials()
         },
       )
       .catch((err: Error) => setError(err.message))
@@ -413,6 +511,8 @@ export function Admin() {
     if (tab === "Product SKU master") {
       void loadUnmappedSummary()
       void loadUnmappedList(1, unmappedFilterMp)
+    } else if (tab === "Marketplace accounts") {
+      void loadCredentials()
     }
   }, [tab, unmappedFilterMp])
 
@@ -2124,6 +2224,9 @@ export function Admin() {
           <div className="account-grid-v2">
             {accounts.map((account) => {
               const hasActiveLookup = account.activeLookupCount > 0
+              const cred = credentials.find(
+                (c) => c.marketplaceId === account.id || c.accountName.toLowerCase() === account.name.toLowerCase(),
+              )
               return (
                 <div className="account-card-v2" key={account.id}>
                   <div className="account-card-header">
@@ -2144,6 +2247,39 @@ export function Admin() {
                     </div>
                   </div>
 
+                  {/* Desktop Bot Automation Status */}
+                  <div
+                    style={{
+                      marginTop: 10,
+                      padding: "8px 10px",
+                      background: cred?.usernameMasked ? "#f0fdf4" : "#f8fafc",
+                      borderRadius: 6,
+                      border: `1px solid ${cred?.usernameMasked ? "#bbf7d0" : "#e2e8f0"}`,
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      gap: 6,
+                    }}
+                  >
+                    <div>
+                      <div style={{ fontSize: 11, fontWeight: 600, color: cred?.usernameMasked ? "#166534" : "#64748b" }}>
+                        {cred?.usernameMasked ? `🤖 Bot: ${cred.usernameMasked}` : "🤖 Bot: Not configured"}
+                      </div>
+                      <div style={{ fontSize: 10, color: "#64748b" }}>
+                        {cred?.usernameMasked ? `Mode: ${cred.automationMode} · Session saved` : "Auto-claim login off"}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      className="btn secondary"
+                      style={{ fontSize: 11, padding: "3px 8px", height: "auto", whiteSpace: "nowrap" }}
+                      onClick={() => openCredModal(account)}
+                      title={`Configure bot credentials and auto-login for ${account.name}`}
+                    >
+                      ⚙️ Bot Login
+                    </button>
+                  </div>
+
                   <div className="account-footer">
                     <span className="account-last-sync">
                       <Icon name="calendar" size={13} /> {account.lastSynced}
@@ -2161,6 +2297,151 @@ export function Admin() {
               )
             })}
           </div>
+
+          {/* Modal: Configure Desktop Bot Credentials */}
+          {credModalOpen && selectedCredAccount && (
+            <Modal onClose={() => setCredModalOpen(false)}>
+              <form onSubmit={handleSaveCredentials} style={{ display: "grid", gap: 14, padding: "4px 2px", maxWidth: 520 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
+                  <div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                      <MarketplaceBadge name={selectedCredAccount.name} />
+                      <h3 style={{ margin: 0, fontSize: 17 }}>Desktop Bot Automation Credentials</h3>
+                    </div>
+                    <p style={{ margin: 0, fontSize: 12, color: "#64748b" }}>
+                      Configure automated supplier portal login for <strong>{selectedCredAccount.name}</strong>. The Windows application (TaskFlowClaimAgent.exe) uses these credentials to log in, persist cookies in browser profiles, and file claims.
+                    </p>
+                  </div>
+                </div>
+
+                {credNotice && <div className="form-success" style={{ margin: 0 }}>{credNotice}</div>}
+                {credError && <div className="form-error" style={{ margin: 0 }}>{credError}</div>}
+
+                {(() => {
+                  const existing = credentials.find(
+                    (c) => c.marketplaceId === selectedCredAccount.id || c.accountName.toLowerCase() === selectedCredAccount.name.toLowerCase(),
+                  )
+                  return existing?.usernameMasked ? (
+                    <div style={{ padding: "8px 12px", background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 6, fontSize: 12, color: "#166534" }}>
+                      <strong>Active Saved Profile:</strong> Logged in as <code>{existing.usernameMasked}</code>. Cookies and session tokens are preserved on the local desktop PC under <code>~/.taskflow-claim-agent/browser-profiles</code> so repeated OTP logins are avoided.
+                    </div>
+                  ) : null
+                })()}
+
+                <label style={{ display: "grid", gap: 4, fontSize: 12, fontWeight: 600 }}>
+                  Supplier Portal Login URL
+                  <input
+                    type="url"
+                    value={credPortalUrl}
+                    onChange={(e) => setCredPortalUrl(e.target.value)}
+                    placeholder="https://supplier.meesho.com/panel/v3/new/root/login"
+                    required
+                    style={{ height: 38, padding: "0 10px", borderRadius: 6, border: "1px solid var(--line)", fontSize: 13 }}
+                  />
+                  <small style={{ color: "#64748b", fontWeight: 400 }}>Direct URL to the supplier login or seller dashboard page.</small>
+                </label>
+
+                <label style={{ display: "grid", gap: 4, fontSize: 12, fontWeight: 600 }}>
+                  Supplier ID / Email / Mobile Number
+                  <input
+                    type="text"
+                    value={credUsername}
+                    onChange={(e) => setCredUsername(e.target.value)}
+                    placeholder={
+                      credentials.find(
+                        (c) => c.marketplaceId === selectedCredAccount.id || c.accountName.toLowerCase() === selectedCredAccount.name.toLowerCase(),
+                      )?.usernameMasked
+                        ? `Leave blank to keep existing (${credentials.find(
+                            (c) => c.marketplaceId === selectedCredAccount.id || c.accountName.toLowerCase() === selectedCredAccount.name.toLowerCase(),
+                          )?.usernameMasked})`
+                        : "e.g. vaibhav@vbexports.co.in or 98XXXXXXXX"
+                    }
+                    style={{ height: 38, padding: "0 10px", borderRadius: 6, border: "1px solid var(--line)", fontSize: 13 }}
+                  />
+                  <small style={{ color: "#64748b", fontWeight: 400 }}>Typed character-by-character by the bot into the username/email input.</small>
+                </label>
+
+                <label style={{ display: "grid", gap: 4, fontSize: 12, fontWeight: 600 }}>
+                  Supplier Portal Password
+                  <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
+                    <input
+                      type={showCredPassword ? "text" : "password"}
+                      value={credPassword}
+                      onChange={(e) => setCredPassword(e.target.value)}
+                      placeholder={
+                        credentials.find(
+                          (c) => c.marketplaceId === selectedCredAccount.id || c.accountName.toLowerCase() === selectedCredAccount.name.toLowerCase(),
+                        )?.usernameMasked
+                          ? "Leave blank to keep current encrypted password"
+                          : "Enter supplier portal password"
+                      }
+                      style={{ height: 38, padding: "0 55px 0 10px", width: "100%", borderRadius: 6, border: "1px solid var(--line)", fontSize: 13 }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowCredPassword(!showCredPassword)}
+                      style={{
+                        position: "absolute",
+                        right: 8,
+                        background: "none",
+                        border: "none",
+                        cursor: "pointer",
+                        fontSize: 12,
+                        color: "#64748b",
+                        padding: "4px 6px",
+                      }}
+                      title={showCredPassword ? "Hide password" : "Show password"}
+                    >
+                      {showCredPassword ? "Hide" : "Show"}
+                    </button>
+                  </div>
+                  <small style={{ color: "#64748b", fontWeight: 400 }}>Stored using AES-256-GCM encryption in database. Never exposed in plain text.</small>
+                </label>
+
+                <label style={{ display: "grid", gap: 4, fontSize: 12, fontWeight: 600 }}>
+                  Desktop Automation Mode
+                  <select
+                    value={credAutomationMode}
+                    onChange={(e) => setCredAutomationMode(e.target.value)}
+                    style={{ height: 38, padding: "0 10px", borderRadius: 6, border: "1px solid var(--line)", fontSize: 13, background: "white" }}
+                  >
+                    <option value="assisted">Assisted Mode (Prepares claim form, captures screenshot, awaits 1-click user approval)</option>
+                    <option value="fully_automated">Fully Automated (Enters details, attaches evidence, and submits claim immediately)</option>
+                    <option value="headless">Headless Mode (Silent background execution without opening browser window)</option>
+                  </select>
+                </label>
+
+                <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: "10px 12px", background: "#f8fafc", borderRadius: 6, border: "1px solid #e2e8f0" }}>
+                  <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, cursor: "pointer" }}>
+                    <input
+                      type="checkbox"
+                      checked={credAutoPrepare}
+                      onChange={(e) => setCredAutoPrepare(e.target.checked)}
+                    />
+                    <span><strong>Auto-prepare claims:</strong> Automatically queue newly scanned return claims for desktop bot processing</span>
+                  </label>
+
+                  <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, cursor: "pointer" }}>
+                    <input
+                      type="checkbox"
+                      checked={credRequireApproval}
+                      onChange={(e) => setCredRequireApproval(e.target.checked)}
+                    />
+                    <span><strong>Require approval before final submission:</strong> Operator reviews the filled claim screenshot before final submit</span>
+                  </label>
+                </div>
+
+                <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 6 }}>
+                  <button type="button" className="btn secondary" onClick={() => setCredModalOpen(false)} disabled={credSaving}>
+                    Cancel
+                  </button>
+                  <button type="submit" className="btn primary" disabled={credSaving}>
+                    {credSaving ? "Saving Credentials…" : "Save Bot Credentials"}
+                  </button>
+                </div>
+              </form>
+            </Modal>
+          )}
         </section>
       )}
 
