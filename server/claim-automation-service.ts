@@ -662,11 +662,17 @@ export async function syncClaimTicketToRegister(
     const oldStatus = String(existingTicket.rows[0].status)
 
     if (ticketCode !== oldCode || status !== oldStatus) {
-      const conflict = await dbOrClient.query(
-        `SELECT id FROM claim_tickets WHERE ticket_code = $1 AND id <> $2`,
-        [ticketCode, ticketId],
-      )
-      const safeCode = conflict.rows[0] ? `${ticketCode}-${scanId}` : ticketCode
+      let safeCode = ticketCode
+      let attempts = 0
+      while (true) {
+        const conflict = await dbOrClient.query(
+          `SELECT id FROM claim_tickets WHERE ticket_code = $1 AND id <> $2`,
+          [safeCode, ticketId],
+        )
+        if (!conflict.rows[0]) break
+        attempts++
+        safeCode = `${ticketCode}-${scanId}-${attempts}`
+      }
 
       await dbOrClient.query(
         `UPDATE claim_tickets
@@ -681,11 +687,17 @@ export async function syncClaimTicketToRegister(
       )
     }
   } else {
-    const conflict = await dbOrClient.query(
-      `SELECT id FROM claim_tickets WHERE ticket_code = $1`,
-      [ticketCode],
-    )
-    const safeCode = conflict.rows[0] ? `${ticketCode}-${scanId}` : ticketCode
+    let safeCode = ticketCode
+    let attempts = 0
+    while (true) {
+      const conflict = await dbOrClient.query(
+        `SELECT id FROM claim_tickets WHERE ticket_code = $1`,
+        [safeCode],
+      )
+      if (!conflict.rows[0]) break
+      attempts++
+      safeCode = `${ticketCode}-${scanId}-${attempts}`
+    }
 
     const inserted = await dbOrClient.query(
       `INSERT INTO claim_tickets (receipt_scan_id, ticket_code, status, rejection_reason, created_by, created_at, updated_at)
@@ -759,19 +771,30 @@ export async function syncClaimTicketToRegister(
     [itemId],
   )
 
+  // Verify whether ticketId is already linked to another receipt_scan_issues row (partial unique index)
+  const ticketAlreadyLinked = await dbOrClient.query(
+    `SELECT id FROM receipt_scan_issues WHERE claim_ticket_id = $1`,
+    [ticketId],
+  )
+  const existingLinkedIssueId = ticketAlreadyLinked.rows[0]?.id ? Number(ticketAlreadyLinked.rows[0].id) : null
+
   if (issueRes.rows[0]) {
+    const currentIssueId = Number(issueRes.rows[0].id)
     if (Number(issueRes.rows[0].claim_ticket_id) !== ticketId) {
-      await dbOrClient.query(
-        `UPDATE receipt_scan_issues SET claim_ticket_id = $1 WHERE id = $2`,
-        [ticketId, issueRes.rows[0].id],
-      )
+      if (existingLinkedIssueId === null || existingLinkedIssueId === currentIssueId) {
+        await dbOrClient.query(
+          `UPDATE receipt_scan_issues SET claim_ticket_id = $1 WHERE id = $2`,
+          [ticketId, currentIssueId],
+        )
+      }
     }
   } else {
+    const targetTicketId = existingLinkedIssueId === null ? ticketId : null
     const cat = mapToReceiptIssueCategory(params.issueCategoryCode || params.issueCategoryLabel)
     await dbOrClient.query(
       `INSERT INTO receipt_scan_issues (receipt_scan_item_id, category_code, category_label, sub_issue_label, qty, claim_ticket_id, notes, created_by)
        VALUES ($1, $2, $3, 'Claim Filed', 1, $4, $5, $6)`,
-      [itemId, cat.code, cat.label, ticketId, params.notes || "Linked to claim ticket", actorId],
+      [itemId, cat.code, cat.label, targetTicketId, params.notes || "Linked to claim ticket", actorId],
     )
   }
 

@@ -57,5 +57,15 @@ export function sendError(res: Response, error: unknown, next: NextFunction): vo
     res.status(error.status).json({ error: error.message, details: error.details, ...error.extra })
     return
   }
+  if (error && typeof error === "object" && "status" in error && typeof (error as any).status === "number") {
+    const err = error as any
+    const status = err.status >= 400 && err.status < 600 ? err.status : 500
+    res.status(status).json({
+      error: typeof err.message === "string" ? err.message : "Request failed",
+      details: Array.isArray(err.details) ? err.details : [],
+      ...(typeof err.extra === "object" && err.extra ? err.extra : {}),
+    })
+    return
+  }
   next(error)
 }

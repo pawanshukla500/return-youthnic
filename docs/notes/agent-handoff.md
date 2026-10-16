@@ -1947,6 +1947,33 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
   - Set `receipt_scans.status = 'issue'` (violates `receipt_scans_status_check`; use `outcome = 'issue'` and `status = 'Draft'`).
   - Re-introduce non-existent columns on `receipt_scan_items`.
 
+### 2026-10-16, Hermes Agent / Antigravity, Claim Submission 500 Resolution & Resilient Sync
+
+- **Context:**
+  - In Android Claim Evidence submission ("Upload Images" step in `ClaimCaptureActivity`), tapping Submit resulted in Toast *"An internal server error occurred. Please try again or contact an administrator."*
+  - Traced root causes:
+    1. SQL Error: `server/meesho-claims.ts` queried `rs.original_tracking_snapshot` on `receipt_scans`, which does not exist (`column rs.original_tracking_snapshot does not exist`).
+    2. Template validation: Client passed `claimTemplateId: 1` (default seeded for Myntra VB), which threw a 400 when creating Meesho claims.
+    3. Global error handler: `sendError` in `server/http.ts` only checked `instanceof ServiceError`, falling through to the generic production 500 handler for any unhandled or duck-typed errors.
+    4. Ordering and unique constraints in `receipt_scan_issues` and `claim_tickets` during ticket sync.
+- **Changed:**
+  - `server/meesho-claims.ts`: Changed `rs.original_tracking_snapshot` to `rs.tracking_id_snapshot`.
+  - `server/http.ts`: Broadened `sendError` to handle status-bearing errors (numeric status 400-599) and render them directly as JSON with the appropriate status code.
+  - `server/claims-service.ts`: In `createClaim`, added automatic fallback to the active template for the claim's marketplace if the supplied `claimTemplateId` belongs to a different marketplace; auto-seeds default template and fields if none exist.
+  - `server/claim-automation-routes.ts`: In `POST /api/claims/unified-create`, populated `receipt_scan_items` directly on `receipt_scan` creation; capped `claimReason`, `claimTitle`, and `claimDescription` lengths; safely wrapped `createOrQueueAutomationJob` and `syncClaimTicketToRegister` in try/catch to avoid failing an already created claim.
+  - `server/claim-automation-service.ts`: In `syncClaimTicketToRegister`, made `ticket_code` generation collision-safe with loop and attempt counter; checked if `ticketId` is already linked to another `receipt_scan_issues` row to satisfy `receipt_scan_issues_ticket_uidx`.
+  - `android/app/src/main/java/shop/youthnic/returnscan/ui/ClaimCaptureActivity.kt`: Added `onBackPressedDispatcher` callback to return from step 2 to step 1; set fallback template id to 0; only send `claimTemplateId` and `expectedReturnId` when > 0.
+  - `data/return-scan-release.json` & `server/mobile-release.ts`: Bumped release to `10038` (`1.0.38`).
+  - `server/tests/claim-automation.test.ts`: Added unit tests for `sendError` serialization of ServiceError and duck-typed status errors.
+- **Verification:**
+  - `npm.cmd run typecheck`: Passed (0 errors).
+  - `npm.cmd run build`: Passed (Vite production bundle in 1.55s, server bundled in 19ms).
+  - `npm.cmd test`: 389 tests — 353 passed, 0 failed, 36 skipped (`TEST_DATABASE_URL`).
+- **The next agent must not:**
+  - Query non-existent columns on `receipt_scans` (`original_tracking_snapshot` does not exist).
+  - Bypass account scoping on claim routes.
+
+
 
 
 

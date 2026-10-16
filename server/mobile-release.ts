@@ -19,13 +19,13 @@ export type MobileReleaseInfo = {
 }
 
 const DEFAULT_RELEASE: MobileReleaseInfo = {
-  versionCode: 10037,
-  versionName: "1.0.37",
+  versionCode: 10038,
+  versionName: "1.0.38",
   minRequiredVersionCode: 10001,
   sha256: "db09eb8f2f3e881e74c76414ef20a8fef476113c92f10e5479cebefb7f32e238",
   sizeBytes: 3465554,
-  notes: "Youthnic Native Android Return Scanner · Claim Evidence Capture & Automation Sync\n- Dedicated marketplace return claim capture accessible directly from return scan and home screen\n- High-resolution evidence photo capture, barcode scanning, 480p SD unpacking video recorder, and file attachments\n- Storage and camera permission flow with automatic deletion of local evidence files after successful upload\n- Robust unified claim submission and automatic desktop automation job queueing",
-  publishedAt: "2026-10-15T16:25:00Z",
+  notes: "Youthnic Native Android Return Scanner · Claim Submission & Error Fixes\n- Resolved internal server error (500) on claim evidence submission\n- Automatic marketplace template resolution and fallbacks\n- Fault-tolerant background ticket sync and desktop automation job queueing\n- 480p SD unpacking video with storage permission & auto-cleanup",
+  publishedAt: "2026-10-16T05:50:00Z",
   downloadUrl: "https://github.com/pawanshukla500/return-youthnic/releases/latest",
   pageUrl: "https://github.com/pawanshukla500/return-youthnic/releases",
 }

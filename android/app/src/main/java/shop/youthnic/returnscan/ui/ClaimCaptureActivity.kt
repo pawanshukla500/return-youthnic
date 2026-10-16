@@ -14,6 +14,7 @@ import android.view.LayoutInflater
 import android.view.View
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
+import androidx.activity.addCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
@@ -295,6 +296,14 @@ class ClaimCaptureActivity : AppCompatActivity() {
     }
 
     private fun setupListeners() {
+        onBackPressedDispatcher.addCallback(this) {
+            if (currentStep == 2) {
+                showStep(1)
+            } else {
+                finish()
+            }
+        }
+
         binding.btnClaimBack.setOnClickListener {
             if (currentStep == 2) {
                 showStep(1)
@@ -502,7 +511,7 @@ class ClaimCaptureActivity : AppCompatActivity() {
         selectedTemplate = data.templates.firstOrNull { it.name.contains("Meesho", ignoreCase = true) }
             ?: data.templates.firstOrNull()
             ?: ClaimTemplate(
-                id = 1,
+                id = 0,
                 name = "Meesho Claim Evidence",
                 description = "Standard 5-slot evidence for Meesho Support tickets",
                 fields = getMeeshoStandardEvidenceFields()
@@ -913,14 +922,19 @@ class ClaimCaptureActivity : AppCompatActivity() {
                 if (currentScanId != null && currentScanId > 0) {
                     put("receiptScanId", currentScanId)
                 }
-                put("expectedReturnId", data.expectedReturnId)
+                if (data.expectedReturnId > 0) {
+                    put("expectedReturnId", data.expectedReturnId)
+                }
                 put("claimReason", selectedIssueLabel)
                 put("marketplaceIssueCode", selectedIssueCode)
                 put("claimTitle", binding.etClaimTitle.text?.toString()?.trim().orEmpty())
                 put("claimDescription", binding.etClaimContent.text?.toString()?.trim().orEmpty())
                 put("claimContent", binding.etClaimContent.text?.toString()?.trim().orEmpty())
                 put("remarks", "")
-                put("claimTemplateId", selectedTemplate?.id ?: 1)
+                val tplId = selectedTemplate?.id
+                if (tplId != null && tplId > 0) {
+                    put("claimTemplateId", tplId)
+                }
                 put("customerName", data.customerName)
                 put("totalPrice", data.totalPrice)
                 put("shippedDate", data.shippedDate ?: "")
