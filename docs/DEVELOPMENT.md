@@ -30,6 +30,10 @@ Agents starting new work should read [AGENTS.md](../AGENTS.md) and [notes/agent-
 | `npm run sync:oms -- --list` | Lists the OMSGuru channels without writing to the database. |
 | `npm run sync:oms` | Syncs channel listings and master SKUs from OMSGuru, and runs the nightly listing-to-product-master bridge. Flags: `--channel <id>` for one channel, `--skip-skus` to skip the SKU list, `--skip-master-bridge` to skip master bridge. |
 | `npm run sync:vms` | Syncs product catalog images from read-only VMS database into `product_master.image_url`. |
+| `npm run desktop` | Launches the Native Windows Electron desktop app in local development. |
+| `npm run desktop:build` | Bundles `desktop/main.ts` into CommonJS (`desktop/dist/main.cjs`) using esbuild. |
+| `npm run desktop:pack` | Builds an unpacked directory of the Electron app in `dist-electron/win-unpacked` for rapid testing. |
+| `npm run desktop:dist` | Packages the machine-wide Windows NSIS installer (`Return.App.Setup.1.0.0.exe`) into `dist-electron/` with `perMachine: true`. |
 | `npm run build:agent` | Builds the standalone Windows desktop claim automation agent (`TaskFlowClaimAgent.exe`) into `desktop-agent/dist/` using Node.js SEA (Single Executable Application). |
 | `npm run oms:orders` | Looks up OMSGuru order details for the uploaded return rows. Flags: `--sample` (20 returns, and only the field names of the first response is printed), `--limit <n>`, `--marketplace <name>`, `--refresh` (fetch again when a snapshot exists), `--delay <ms>` (default 1500), `--csv`. Run by hand. |
 | `npm run oms:daily` | Pulls OMSGuru invoices. Flags: `--date YYYY-MM-DD` for one day, or `--from` and `--to` for an inclusive range. With no flags it uses yesterday (IST). Run by hand. |

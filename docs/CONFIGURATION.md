@@ -97,6 +97,26 @@ Common error messages:
 - `.gitignore`: ignores `node_modules`, `dist`, `.env` and log files.
 - `RUN.bat`: Windows helper. It installs packages on the first run, warns when `.env` is missing, opens the web app after six seconds, and runs `npm run dev`.
 
+## Desktop Application Configuration
+
+The Native Windows Desktop Application (`desktop/` & `desktop-agent/`) runs natively on warehouse workstations and reads its configuration from the local user profile:
+
+- **Configuration File:** `~/.taskflow-claim-agent/config.json` (under `%USERPROFILE%\.taskflow-claim-agent\config.json`).
+- **Fields:**
+  | Field | Default | Description |
+  |---|---|---|
+  | `backendUrl` | `https://return.youthnic.shop` | Target Return App backend URL. Localhost/127.0.0.1 entries are automatically migrated to production cloud URL. |
+  | `agentToken` | `""` | 32-byte worker bearer token obtained automatically via `/api/automation/agent/register`. |
+  | `workerId` | Machine hostname / GUID | Identifier for the workstation worker instance. |
+  | `pollIntervalMs` | `10000` (10s) | Polling frequency. Uses adaptive backoff in Electron runtime (5s active, up to 30s idle). |
+  | `headless` | `false` | When true, runs browser automation silently without popping up supplier windows. |
+- **Environment Overrides:**
+  - `APP_URL` or `RETURN_APP_URL`: Overrides the web URL loaded into the desktop window (useful for local development `http://localhost:5173`).
+- **Session & Storage Locations:**
+  - **Persistent App Session:** Electron partition `persist:return-app-desktop` stored in `%APPDATA%\Return App\Partitions\return-app-desktop`. Stores operator authentication cookies and tokens across reboots.
+  - **Browser Profiles:** `~/.taskflow-claim-agent/browser-profiles/profile-[marketplace]` (e.g. `profile-meesho`). Keeps marketplace supplier portal cookies and active logins alive.
+  - **Evidence Cache:** `~/.taskflow-claim-agent/evidence-cache/`. Downloads evidence photos/videos here via stream pipeline, automatically pruning items older than 24 hours on launch.
+
 ## Per-environment settings
 
 The repository has no `.env.development`, `.env.production`, or `.env.test` files. The code does not read `NODE_ENV`. Each machine uses its own `.env`.

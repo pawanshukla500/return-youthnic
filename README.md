@@ -1,9 +1,9 @@
-<!-- Updated 2026-10-16. CI runs 406 tests with postgres:16 service. Android v1.0.54 active. -->
+<!-- Updated 2026-10-16. CI runs 424 tests with postgres:16 service. Android v1.0.56 and Windows Desktop v1.0.2 active. -->
 # return-scanning-app
 
 A return scanning app for VB Exports. Marketplace return reports (Myntra VB and Myntra EJ, Flipkart, Meesho, Amazon, and Ajio) are loaded as lookup data, one account at a time. A scan then records what physically arrived in the return scan register, which is the permanent record. The app also stores channel listings and master SKUs from the OMSGuru API, for product titles and images.
 
-**Status (2026-10-16):** Full local and CI test suites pass with 406 tests (370 pass, 0 fail, 36 database checks run against a dedicated `postgres:16` container). Deployed to production VPS (`https://return.youthnic.shop`). Native Android return scanning app active at `v1.0.54` (`versionCode: 10054`). Single-binary Windows desktop claim automation agent (`TaskFlowClaimAgent.exe`) built in `desktop-agent/`. See [docs/notes/agent-handoff.md](docs/notes/agent-handoff.md).
+**Status (2026-10-16):** Full local and CI test suites pass with 424 tests (388 pass, 0 fail, 36 database checks run against a dedicated `postgres:16` container). Deployed to production VPS (`https://return.youthnic.shop`). Native Android return scanning app active at `v1.0.56` (`versionCode: 10056`). Native Windows Desktop application (`Return.App.Setup.1.0.0.exe`) with 24/7 background claim automation worker published at GitHub Release `desktop-v1.0.2`. See [docs/notes/agent-handoff.md](docs/notes/agent-handoff.md).
 
 ## For agents
 
@@ -65,11 +65,16 @@ The web app has six pages. The Admin page is shown to administrators only.
 - **Data uploads**: choose the account and use the explicit marketplace-return mode for CSV or Excel reports (up to 25 MB). Safe rows can activate with explicit confirmation while pending and invalid rows remain in history. Use the separate bulk-scanned-AWB mode for multi-sheet scanner lists; it validates against active lookups only and never activates or creates scans. Previous lookup rows are kept as history, and scanned returns stay in the register.
 - **Admin** (administrators only): team members, missing-item sub-issues, issue categories (on or off, and whether a ticket ID is needed), logistics partners with their courier names and tracking hosts, marketplace accounts (upload status), product master batched import (up to 500 rows per transaction with progress and cancellation), and system status. Users are created from the command line, as shown above.
 
-## Native Android App & Automation Bot
+## Native Mobile & Desktop Clients
 
-- **Native Android App (`android/`)**: Built with Kotlin and CameraX for fast barcode scanning, runtime camera permissions, photo evidence capture, 480p unboxing video capture, visual upload progress dialogs, instant form reset for back-to-back scanning, and automatic in-app updates (`v1.0.54`).
-- **Windows Desktop Automation Agent (`desktop-agent/`)**: Single-binary executable (`TaskFlowClaimAgent.exe`) automating marketplace claim filing via Chrome DevTools Protocol, extracting ticket codes into the Return Register, and automatically cleaning downloaded media files upon completion.
-
+- **Native Android Scanner (`android/`)**: Built in Kotlin with CameraX for rapid hardware-grade barcode scanning, runtime camera permissions, photo & 480p SD unboxing video evidence capture, visual upload progress dialogs, instant "Start Again with Zero" form reset, and automated in-app updates (`v1.0.56`, `versionCode: 10056`) synchronized with GitHub Releases.
+- **Native Windows Desktop Application (`desktop/` & `desktop-agent/`)**:
+  - **Enterprise NSIS Installer**: Installs natively to `C:\Program Files\Return App\` (`perMachine: true`) with Desktop and Start Menu shortcuts, packaged via `electron-builder` as `Return.App.Setup.1.0.0.exe` (Release `desktop-v1.0.2`).
+  - **4GB RAM & 2-Core CPU Optimization**: Engineered for entry-level warehouse workstations. Operates 24/7 with < 0.5% idle CPU utilization, V8 heap limits (`--max-old-space-size=256`), restricted renderer processes (`renderer-process-limit=2`), background throttling (`backgroundThrottling: true`), and disabled spellcheck dictionaries.
+  - **Persistent Session Storage**: Uses Electron partition `persist:return-app-desktop`. Operators sign in once with standard username/password; session cookies and tokens remain valid across restarts and reboots.
+  - **System Tray 24/7 Automation Worker**: Closing the window minimizes the app into the Windows notification tray. Features an adaptive backoff queue scheduler (5s active / 10s-30s idle) that continuously polls marketplace claims.
+  - **Chrome DevTools Protocol (CDP) Claim Engine**: Automates supplier panel claim filing (e.g. Meesho), human keystroke typing, and automatic process tree termination (`taskkill /T /F`) to prevent zombie browser processes.
+  - **Streaming Media Pipeline**: Direct HTTP chunk-to-disk streaming (`ReadableStream.getReader()`) preventing memory spikes during video downloads, accompanied by automated 24-hour temporary file cache pruning.
 
 For example, to load a Flipkart return report: open **Data uploads**, choose **Flipkart**, drop the file, read the preview, and when it can be activated, click **Activate**.
 

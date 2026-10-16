@@ -185,18 +185,38 @@ The native Android app is written in Kotlin for fast, ergonomics-focused warehou
 - **Resilient Uploads**: Direct upload to Firebase Storage and server media endpoints with fallback to Android `WorkManager` for background retry on network jitter.
 - **In-App Auto-Updates (`AppUpdater.kt`)**: Checks `/api/mobile/release-manifest` on start and prompts the operator to update when a new version is published.
 
-### Windows Desktop Claim Automation Bot (`desktop-agent/`)
+### Native Windows Desktop Application & Automation Bot (`desktop/` & `desktop-agent/`)
 
-The desktop automation bot is packaged as a standalone Windows Single Executable Application (`TaskFlowClaimAgent.exe`):
-- **Job Polling**: Continuously polls `POST /api/claims/automation/poll-job` for claims in state `ready_for_claim`.
-- **Browser Automation**: Uses Chrome DevTools Protocol (CDP) / Puppeteer with persistent `--user-data-dir` profiles, keeping Meesho supplier credentials and cookies alive across runs.
-- **Filing & Ticket Extraction**: Automates selecting Tampered packet state, flyer ID, attaching photos and video, auto-typing Tullipprints team claim description, clicking submit, taking confirmation screenshots, and extracting the marketplace claim ticket code.
-- **Local Disk Cleanup**: Implements `cleanClaimEvidenceFiles(claimId)` to delete downloaded photos and video immediately upon submission completion (`result.stage === 'completed'`), ensuring warehouse PC drives never fill up with large media files.
+The desktop application provides a native Windows runtime for warehouse terminals, pairing full Return App user capabilities with an autonomous background claim filing bot:
+
+- **Electron Architecture & Process Boundary:**
+  - `desktop/main.ts` (Main Process): Orchestrates window lifecycle, native system tray, single instance lock, embedded automation runner, and connection recovery.
+  - `desktop/preload.cjs` (Preload Script): Enforces a secure boundary with `contextIsolation: true` and `nodeIntegration: false`.
+  - **Persistent Session Storage:** Operates inside `session.fromPartition("persist:return-app-desktop")`. Once the operator logs in via ID and password, session cookies and device tokens persist indefinitely across reboots.
+- **Low-Spec Hardware Discipline (4GB RAM & 2-Core CPU):**
+  - **Memory Limits:** Caps V8 heap with `--max-old-space-size=256` and restricts renderer instances with `--renderer-process-limit=2`. Disables spellcheck (`spellcheck: false`) saving ~35MB RAM.
+  - **Background Throttling & Low CPU Idle:** Native window timer throttling (`backgroundThrottling: true`) drops renderer activity to 1Hz when minimized to tray. Adaptive backoff scheduler polls every 5s during active claim queues, backing off smoothly to 10s -> 20s -> 30s when empty (< 0.5% idle CPU).
+  - **Zombie Process Elimination:** `BrowserRunner.close()` tracks the spawned Chrome/Edge child PID and issues an explicit `taskkill /pid ... /T /F` process-tree termination.
+- **Streaming Evidence Media Pipeline:**
+  - Direct HTTP chunk-to-disk streaming (`ReadableStream.getReader()`) in `AgentClient.downloadEvidenceFiles`, eliminating RAM buffering during unboxing video downloads.
+  - Automated disk pruning (`pruneOldEvidenceFiles`) cleans temporary media files older than 24 hours on startup.
+- **Enterprise Installation & Deployment:**
+  - Built with `electron-builder` into a machine-wide NSIS installer (`Return.App.Setup.1.0.0.exe`) installing to `C:\Program Files\Return App\` (`perMachine: true`).
+  - Automated continuous release via GitHub Actions (`.github/workflows/desktop-release.yml`).
 
 ## Directory structure
 
 
 ```text
+desktop/                      Native Windows Electron application
+  main.ts                     Main process, system tray, 24/7 worker, offline card
+  preload.cjs                 Isolated IPC preload bridge
+desktop-agent/                Marketplace claim automation engine
+  src/browser-runner.ts       CDP browser launcher with process-tree cleanup
+  src/agent-client.ts         API polling client with streaming evidence downloads
+  src/marketplaces/meesho.ts  Meesho supplier panel claim filing flow
+android/                      Native Kotlin Android return scanner
+  app/src/main/               CameraX scanning, photo/video evidence, AppUpdater
 server/                       Express API, database setup, file parsers, the register, OMSGuru integration
   index.ts                    Startup, sign-in, overview, claims, Admin pages, static files
   http.ts                     Signed-in user, scope, Admin check, error mapping
@@ -221,6 +241,7 @@ server/                       Express API, database setup, file parsers, the reg
   schema-import.sql           Lookup status, register tables, categories, audit
   schema-register.sql         Partners, tracking evidence, scan snapshots
   schema-scan-history.sql     Scan history snapshots and indexes
+  schema-claim-automation.sql Claim automation queue, worker authorization, partial indexes
   format.ts, dates.ts, lifecycle.ts   Display formatting, IST dates, lifecycle counts
   seed.ts                     Empty. Left from the removed demo seed; safe to delete
   oms/                        OMSGuru client, catalog, SKU, invoice and order code

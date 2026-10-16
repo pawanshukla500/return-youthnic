@@ -57,15 +57,35 @@ The automation engine (`desktop-agent/src/marketplaces/meesho.ts`) implements th
    - In `submit` mode, clicks Submit button, captures confirmation screenshot, extracts ticket ID (e.g. `MSHO-TKT-...`), and updates database record.
    - Automatically cleans local downloaded evidence files from disk cache via `cleanClaimEvidenceFiles(claimId)`.
 
+### 5. Low-Spec Hardware Optimization (4GB RAM & 2-Core CPU Workstations)
+- **V8 Heap Discipline:** Embedded Electron and spawned CDP browsers apply `--max-old-space-size=256` and `--renderer-process-limit=2`.
+- **Process-Tree Teardown (`taskkill /T /F`):** `BrowserRunner.close()` tracks the spawned Chrome/Edge process ID and invokes `taskkill /pid ... /T /F`. This ensures no orphaned or zombie browser processes consume CPU/RAM in the background after claims finish.
+- **Low-Resource Chromium Flags:** Spawned browsers run with `--disable-dev-shm-usage`, `--disable-gpu`, `--no-sandbox`, `--disable-extensions`, `--disable-background-networking`, and `--metrics-recording-only`.
+- **Direct Streaming Evidence Pipeline:** In `AgentClient.downloadEvidenceFiles`, chunks stream directly from HTTP to local disk (`ReadableStream.getReader()`), preventing 50MB+ unboxing videos from consuming memory heap.
+- **Automated Disk Cache Pruning:** `pruneOldEvidenceFiles()` automatically purges temporary media files older than 24 hours upon agent initialization.
+- **Adaptive Backoff Queue Polling:** When claims exist, polls every 5s; when idle, backs off gracefully (10s -> 20s -> 30s) keeping idle CPU utilization < 0.5%.
+
+### 6. Native Desktop App & Enterprise NSIS Installer
+- **Electron Application (`desktop/`):** Full Return App UI + 24/7 background claims worker bundled into a single native Windows application.
+- **Persistent Session Partition:** `session.fromPartition("persist:return-app-desktop")` keeps login cookies and tokens alive indefinitely without re-authenticating.
+- **Installation Target:** `C:\Program Files\Return App\` via NSIS `"perMachine": true`.
+- **Automated GitHub Releases:** `.github/workflows/desktop-release.yml` triggers on desktop code updates, builds `Return.App.Setup.1.0.0.exe`, and publishes directly to GitHub Releases (Release `desktop-v1.0.2`).
+
 ## Build & Run Commands
 
 ```bash
-# Build the standalone Windows EXE
+# Build & run native Electron desktop application
+npm run desktop
+
+# Bundle desktop main process for distribution
+npm run desktop:build
+
+# Package official enterprise Windows NSIS installer (C:\Program Files\Return App\)
+npm run desktop:dist
+
+# Build the standalone Windows CLI EXE agent
 npm run build:agent
 
 # Test browser detection and launch
 .\desktop-agent\dist\TaskFlowClaimAgent.exe --test-browser
-
-# Run continuous background worker
-.\desktop-agent\dist\TaskFlowClaimAgent.exe
 ```
