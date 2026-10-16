@@ -55,6 +55,7 @@ export class AgentBackendClient {
   private apiKey: string
   private agentId = 0
   private authorized = true
+  private isRegistered = false
 
   constructor(private config: AgentConfig) {
     this.apiKey = config.apiKey
@@ -78,6 +79,7 @@ export class AgentBackendClient {
 
       if (!res.ok) {
         logger.error(`Agent registration failed with status ${res.status}: ${await res.text()}`)
+        this.isRegistered = false
         return false
       }
 
@@ -85,18 +87,24 @@ export class AgentBackendClient {
       this.agentId = data.agentId
       this.apiKey = data.apiKey
       this.authorized = data.authorized
+      this.isRegistered = true
       logger.info(`Agent registered successfully (ID: ${this.agentId}, Authorized: ${this.authorized}).`)
       return true
     } catch (err) {
+      this.isRegistered = false
       logger.error("Failed to connect to backend during registration:", err)
       return false
     }
   }
 
   async sendHeartbeat(status: "online" | "busy" | "offline" | "error", taskInfo: Record<string, unknown> = {}): Promise<void> {
+    if (!this.isRegistered) {
+      await this.register()
+      if (!this.isRegistered) return
+    }
     try {
       const url = `${this.config.backendUrl}/api/automation/agent/heartbeat`
-      await fetch(url, {
+      const res = await fetch(url, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -108,12 +116,19 @@ export class AgentBackendClient {
           currentTaskInfo: taskInfo,
         }),
       })
+      if (res.status === 401 || res.status === 404) {
+        this.isRegistered = false
+      }
     } catch {
       // Heartbeat silently fails on network jitter
     }
   }
 
   async pollJob(): Promise<JobPollResult> {
+    if (!this.isRegistered) {
+      const ok = await this.register()
+      if (!ok) return { hasJob: false }
+    }
     try {
       const url = `${this.config.backendUrl}/api/automation/agent/poll?agentUuid=${encodeURIComponent(this.config.agentUuid)}`
       const res = await fetch(url, {
@@ -121,7 +136,12 @@ export class AgentBackendClient {
           "X-Agent-UUID": this.config.agentUuid,
         },
       })
-      if (!res.ok) return { hasJob: false }
+      if (!res.ok) {
+        if (res.status === 401 || res.status === 404) {
+          this.isRegistered = false
+        }
+        return { hasJob: false }
+      }
       return (await res.json()) as JobPollResult
     } catch (err) {
       logger.debug("Poll job check failed:", err)

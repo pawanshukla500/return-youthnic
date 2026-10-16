@@ -227,6 +227,16 @@ export async function listMarketplaceCredentials(
   })
 }
 
+export function defaultMarketplacePortalUrl(accountName: string): string {
+  const n = accountName.toLowerCase()
+  if (n.includes("meesho")) return "https://supplier.meesho.com/panel/v3/new/root/login"
+  if (n.includes("flipkart")) return "https://seller.flipkart.com/index.html#dashboard"
+  if (n.includes("amazon")) return "https://sellercentral.amazon.in/"
+  if (n.includes("myntra")) return "https://partners.myntrainfo.com/"
+  if (n.includes("ajio")) return "https://supplier.ajio.com/"
+  return "https://supplier.meesho.com/panel/v3/new/root/login"
+}
+
 export async function saveMarketplaceCredential(
   db: pg.Pool,
   actor: Actor,
@@ -234,7 +244,7 @@ export async function saveMarketplaceCredential(
     id?: number
     marketplaceId?: number | null
     accountName: string
-    portalUrl: string
+    portalUrl?: string
     username?: string
     password?: string
     automationMode?: string
@@ -245,12 +255,28 @@ export async function saveMarketplaceCredential(
   const name = data.accountName.trim()
   if (!name) throw new ServiceError(400, "Account name is required.")
 
+  const portalUrl = (data.portalUrl || "").trim() || defaultMarketplacePortalUrl(name)
   const userEnc = data.username ? encryptSecret(data.username.trim()) : undefined
   const passEnc = data.password ? encryptSecret(data.password.trim()) : undefined
 
-  if (data.id) {
+  let targetId = data.id
+  if (!targetId) {
+    const existing = await db.query(
+      `SELECT id FROM marketplace_credentials 
+       WHERE is_active = true AND (
+         (marketplace_id IS NOT NULL AND marketplace_id = $1)
+         OR LOWER(account_name) = LOWER($2)
+       ) LIMIT 1`,
+      [data.marketplaceId || null, name],
+    )
+    if (existing.rows.length > 0) {
+      targetId = Number(existing.rows[0].id)
+    }
+  }
+
+  if (targetId) {
     const setClauses: string[] = ["account_name = $1", "portal_url = $2", "updated_at = now()"]
-    const params: unknown[] = [name, data.portalUrl.trim()]
+    const params: unknown[] = [name, portalUrl]
 
     if (data.marketplaceId !== undefined) {
       params.push(data.marketplaceId)
@@ -277,12 +303,12 @@ export async function saveMarketplaceCredential(
       setClauses.push(`auto_prepare = $${params.length}`)
     }
 
-    params.push(data.id)
+    params.push(targetId)
     await db.query(
       `UPDATE marketplace_credentials SET ${setClauses.join(", ")} WHERE id = $${params.length}`,
       params,
     )
-    return data.id
+    return targetId
   } else {
     const res = await db.query(
       `INSERT INTO marketplace_credentials (
@@ -294,7 +320,7 @@ export async function saveMarketplaceCredential(
       [
         data.marketplaceId || null,
         name,
-        data.portalUrl.trim(),
+        portalUrl,
         userEnc || "",
         passEnc || "",
         data.automationMode || "assisted",

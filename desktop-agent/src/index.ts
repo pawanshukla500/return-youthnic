@@ -12,13 +12,14 @@ async function main() {
 
   console.log(`
 ╔═══════════════════════════════════════════════════════════════════════╗
-║    TaskFlow Pro · Windows Desktop Claim Processing Agent v1.0.0      ║
+║    Return App · Always-On 24/7 Desktop Claim Bot Service             ║
 ║    Automated Marketplace Return Claims & Evidence Processing Engine   ║
+║    Continuous background bot for Server PC (Meesho, Flipkart, etc.)   ║
 ╚═══════════════════════════════════════════════════════════════════════╝
 `)
 
   const config = loadAgentConfig()
-  logger.info(`Starting Claim Processing Agent (UUID: ${config.agentUuid}, Backend: ${config.backendUrl})...`)
+  logger.info(`Starting 24/7 Claim Desktop Bot (UUID: ${config.agentUuid}, Backend: ${config.backendUrl})...`)
 
   if (isTestBrowser) {
     const browserPath = findSystemBrowser()
@@ -43,7 +44,7 @@ async function main() {
   const client = new AgentBackendClient(config)
   const registered = await client.register()
   if (!registered) {
-    logger.error("Could not register with Return App backend. Check backend URL and network connectivity.")
+    logger.warn("Initial backend registration will retry in background loop. Check backend URL and network connectivity.")
     if (isStatusOnly) process.exit(1)
   }
 
@@ -57,7 +58,7 @@ async function main() {
     await client.sendHeartbeat("online", { status: "idle", uptime: process.uptime() })
   }, config.heartbeatIntervalMs)
 
-  logger.info(`Worker loop started. Polling backend every ${config.pollIntervalMs / 1000}s for marketplace claims...`)
+  logger.info(`24/7 Worker loop running. Polling backend every ${config.pollIntervalMs / 1000}s for marketplace claims...`)
 
   let isProcessing = false
 

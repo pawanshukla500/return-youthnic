@@ -1422,8 +1422,8 @@ function DesktopAutomationTab() {
       <section className="panel">
         <div className="panel-head" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div>
-            <h2>Connected Windows Desktop Claim Agents</h2>
-            <p>Background EXE daemons performing browser automation across warehouse terminals</p>
+            <h2>Connected 24/7 Desktop Claim Processing Bots</h2>
+            <p>Always-on background automation bot running on the server PC processing marketplace claims</p>
           </div>
           <button className="btn secondary small" onClick={loadData}>↻ Refresh</button>
         </div>
@@ -1432,7 +1432,7 @@ function DesktopAutomationTab() {
           {agents.length === 0 ? (
             <div style={{ padding: 20, textAlign: "center", background: "#f8fafc", borderRadius: 8, gridColumn: "1 / -1" }}>
               <p style={{ margin: 0, color: "var(--muted)" }}>
-                No desktop agents currently connected. Run <code>TaskFlowClaimAgent.exe</code> on a warehouse Windows PC.
+                No desktop bots currently connected. Run the 24/7 claim bot on the server PC (<code>npm run bot</code> or double-click <code>START-BOT.bat</code>).
               </p>
             </div>
           ) : (

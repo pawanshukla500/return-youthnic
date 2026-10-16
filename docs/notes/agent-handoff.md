@@ -2111,3 +2111,33 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
   - Expose plaintext passwords in API responses or logs (AES-256-GCM encryption and `maskSecret` must always be used).
   - Delete or bypass the persistent `userDataDir` browser profile in `BrowserRunner`.
 
+### 2026-10-16, Antigravity Agent, 24/7 Server Desktop Claim Bot & Streamlined Modal Redesign
+- **What was done:**
+  - **Portal URL Removal & Hardcoded Defaults:** Completely eliminated the redundant "Supplier Portal Login URL" input field from the Admin Bot Login modal. All marketplace portal URLs are automatically resolved and hardcoded (`defaultMarketplacePortalUrl` in `server/claim-automation-service.ts` and `defaultPortalUrl` in `src/pages/Admin.tsx`):
+    - Meesho: `https://supplier.meesho.com/panel/v3/new/root/login`
+    - Flipkart: `https://seller.flipkart.com/index.html#dashboard`
+    - Amazon: `https://sellercentral.amazon.in/`
+    - Myntra VB / EJ: `https://partners.myntrainfo.com/`
+    - Ajio: `https://supplier.ajio.com/`
+  - **Bot Login Modal Redesign & Polish (`src/pages/Admin.tsx`):**
+    - Redesigned the modal with modern typography, crisp borders, and visual hierarchy.
+    - Added an active saved session indicator with live status pill (`● Active Saved Session: {usernameMasked}`).
+    - Added clean 2-column mode selector: **Assisted Review** (prepares form & screenshot, waits for 1-click submit) vs **Direct Submit** (submits claim directly, saving ticket ID).
+    - Added clean **Auto-queue claims** toggle for background processing of scanned returns.
+    - Password visibility toggle with Show/Hide button and AES-256-GCM encryption note.
+  - **Always-On 24/7 Desktop Bot Service:**
+    - Bot runs continuously in the background on the server PC without requiring manual EXE builds (`npm run bot` or double-clicking `START-BOT.bat`).
+    - Added `START-BOT.bat` with auto-reconnection/restart loop on server PC restart or network interruption.
+    - In `desktop-agent/src/agent-client.ts`, implemented automatic background re-registration and reconnect resilience for 24/7 uptime.
+    - Updated `src/pages/Claims.tsx` connected bot list to reflect the 24/7 desktop service.
+  - **Backend Defensive Target Resolution (`server/claim-automation-service.ts`):**
+    - Enhanced `saveMarketplaceCredential` to defensively resolve existing rows by `marketplace_id` or `account_name` when `data.id` is not passed, preventing duplicate row conflicts.
+- **Verification:**
+  - `npm.cmd run typecheck`: Passed (0 errors across client, server, and desktop agent).
+  - `npm.cmd run build`: Passed (Vite client bundled in 1.53s, esbuild server in 16ms).
+  - `npm.cmd test`: All 422 tests passed (386 passed, 0 failed, 36 skipped).
+- **The next agent must not:**
+  - Re-add the "Supplier Portal Login URL" field to the UI (all URLs must remain hardcoded).
+  - Remove the 24/7 continuous reconnect loop or persistent browser profiles.
+
+

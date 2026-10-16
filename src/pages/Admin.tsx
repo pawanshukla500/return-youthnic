@@ -255,7 +255,6 @@ export function Admin() {
   const [credentials, setCredentials] = useState<MarketplaceCredentialRow[]>([])
   const [credModalOpen, setCredModalOpen] = useState(false)
   const [selectedCredAccount, setSelectedCredAccount] = useState<AccountRow | null>(null)
-  const [credPortalUrl, setCredPortalUrl] = useState("")
   const [credUsername, setCredUsername] = useState("")
   const [credPassword, setCredPassword] = useState("")
   const [showCredPassword, setShowCredPassword] = useState(false)
@@ -278,7 +277,7 @@ export function Admin() {
     if (n.includes("amazon")) return "https://sellercentral.amazon.in/"
     if (n.includes("myntra")) return "https://partners.myntrainfo.com/"
     if (n.includes("ajio")) return "https://supplier.ajio.com/"
-    return ""
+    return "https://supplier.meesho.com/panel/v3/new/root/login"
   }
 
   const openCredModal = (account: AccountRow) => {
@@ -286,7 +285,6 @@ export function Admin() {
       (c) => c.marketplaceId === account.id || c.accountName.toLowerCase() === account.name.toLowerCase(),
     )
     setSelectedCredAccount(account)
-    setCredPortalUrl(existing?.portalUrl || defaultPortalUrl(account.name))
     setCredUsername("")
     setCredPassword("")
     setShowCredPassword(false)
@@ -314,7 +312,7 @@ export function Admin() {
           id: existing?.id,
           marketplaceId: selectedCredAccount.id,
           accountName: selectedCredAccount.name,
-          portalUrl: credPortalUrl.trim(),
+          portalUrl: defaultPortalUrl(selectedCredAccount.name),
           username: credUsername.trim() || undefined,
           password: credPassword.trim() || undefined,
           automationMode: credAutomationMode,
@@ -326,7 +324,7 @@ export function Admin() {
       await loadCredentials()
       setTimeout(() => {
         setCredModalOpen(false)
-      }, 1200)
+      }, 1000)
     } catch (err) {
       setCredError(err instanceof Error ? err.message : "Failed to save bot credentials.")
     } finally {
@@ -2301,17 +2299,27 @@ export function Admin() {
           {/* Modal: Configure Desktop Bot Credentials */}
           {credModalOpen && selectedCredAccount && (
             <Modal onClose={() => setCredModalOpen(false)}>
-              <form onSubmit={handleSaveCredentials} style={{ display: "grid", gap: 14, padding: "4px 2px", maxWidth: 520 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
-                  <div>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-                      <MarketplaceBadge name={selectedCredAccount.name} />
-                      <h3 style={{ margin: 0, fontSize: 17 }}>Desktop Bot Automation Credentials</h3>
+              <form onSubmit={handleSaveCredentials} style={{ display: "grid", gap: 16, padding: "4px 2px" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, paddingBottom: 10, borderBottom: "1px solid var(--line)" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <MarketplaceBadge name={selectedCredAccount.name} />
+                    <div>
+                      <h3 style={{ margin: 0, fontSize: 17, fontWeight: 700, color: "#1e293b" }}>
+                        {selectedCredAccount.name} Bot Login
+                      </h3>
+                      <p style={{ margin: "2px 0 0", fontSize: 12, color: "#64748b" }}>
+                        24/7 Desktop Bot on server PC · Session cookies & credentials
+                      </p>
                     </div>
-                    <p style={{ margin: 0, fontSize: 12, color: "#64748b" }}>
-                      Configure automated supplier portal login for <strong>{selectedCredAccount.name}</strong>. The Windows application (TaskFlowClaimAgent.exe) uses these credentials to log in, persist cookies in browser profiles, and file claims.
-                    </p>
                   </div>
+                  <button
+                    type="button"
+                    onClick={() => setCredModalOpen(false)}
+                    style={{ background: "none", border: "none", cursor: "pointer", fontSize: 20, color: "#94a3b8", lineHeight: 1 }}
+                    title="Close"
+                  >
+                    ✕
+                  </button>
                 </div>
 
                 {credNotice && <div className="form-success" style={{ margin: 0 }}>{credNotice}</div>}
@@ -2322,26 +2330,16 @@ export function Admin() {
                     (c) => c.marketplaceId === selectedCredAccount.id || c.accountName.toLowerCase() === selectedCredAccount.name.toLowerCase(),
                   )
                   return existing?.usernameMasked ? (
-                    <div style={{ padding: "8px 12px", background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 6, fontSize: 12, color: "#166534" }}>
-                      <strong>Active Saved Profile:</strong> Logged in as <code>{existing.usernameMasked}</code>. Cookies and session tokens are preserved on the local desktop PC under <code>~/.taskflow-claim-agent/browser-profiles</code> so repeated OTP logins are avoided.
+                    <div style={{ padding: "10px 14px", background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 8, fontSize: 12, color: "#166534", display: "flex", alignItems: "center", gap: 8 }}>
+                      <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#16a34a", flexShrink: 0 }} />
+                      <div>
+                        <strong>Active Saved Session:</strong> <code>{existing.usernameMasked}</code>. Cookies remain preserved on server PC so login happens automatically without repeating OTP.
+                      </div>
                     </div>
                   ) : null
                 })()}
 
-                <label style={{ display: "grid", gap: 4, fontSize: 12, fontWeight: 600 }}>
-                  Supplier Portal Login URL
-                  <input
-                    type="url"
-                    value={credPortalUrl}
-                    onChange={(e) => setCredPortalUrl(e.target.value)}
-                    placeholder="https://supplier.meesho.com/panel/v3/new/root/login"
-                    required
-                    style={{ height: 38, padding: "0 10px", borderRadius: 6, border: "1px solid var(--line)", fontSize: 13 }}
-                  />
-                  <small style={{ color: "#64748b", fontWeight: 400 }}>Direct URL to the supplier login or seller dashboard page.</small>
-                </label>
-
-                <label style={{ display: "grid", gap: 4, fontSize: 12, fontWeight: 600 }}>
+                <label style={{ display: "grid", gap: 5, fontSize: 12, fontWeight: 600, color: "#334155" }}>
                   Supplier ID / Email / Mobile Number
                   <input
                     type="text"
@@ -2351,18 +2349,18 @@ export function Admin() {
                       credentials.find(
                         (c) => c.marketplaceId === selectedCredAccount.id || c.accountName.toLowerCase() === selectedCredAccount.name.toLowerCase(),
                       )?.usernameMasked
-                        ? `Leave blank to keep existing (${credentials.find(
+                        ? `Current: ${credentials.find(
                             (c) => c.marketplaceId === selectedCredAccount.id || c.accountName.toLowerCase() === selectedCredAccount.name.toLowerCase(),
-                          )?.usernameMasked})`
+                          )?.usernameMasked} (leave blank to keep)`
                         : "e.g. vaibhav@vbexports.co.in or 98XXXXXXXX"
                     }
-                    style={{ height: 38, padding: "0 10px", borderRadius: 6, border: "1px solid var(--line)", fontSize: 13 }}
+                    style={{ height: 40, padding: "0 12px", borderRadius: 8, border: "1.5px solid #dce2e0", fontSize: 13, background: "white" }}
                   />
-                  <small style={{ color: "#64748b", fontWeight: 400 }}>Typed character-by-character by the bot into the username/email input.</small>
+                  <small style={{ color: "#64748b", fontWeight: 400 }}>Entered character-by-character by the bot into supplier panel login.</small>
                 </label>
 
-                <label style={{ display: "grid", gap: 4, fontSize: 12, fontWeight: 600 }}>
-                  Supplier Portal Password
+                <label style={{ display: "grid", gap: 5, fontSize: 12, fontWeight: 600, color: "#334155" }}>
+                  Supplier Panel Password
                   <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
                     <input
                       type={showCredPassword ? "text" : "password"}
@@ -2375,7 +2373,7 @@ export function Admin() {
                           ? "Leave blank to keep current encrypted password"
                           : "Enter supplier portal password"
                       }
-                      style={{ height: 38, padding: "0 55px 0 10px", width: "100%", borderRadius: 6, border: "1px solid var(--line)", fontSize: 13 }}
+                      style={{ height: 40, padding: "0 60px 0 12px", width: "100%", borderRadius: 8, border: "1.5px solid #dce2e0", fontSize: 13, background: "white" }}
                     />
                     <button
                       type="button"
@@ -2383,60 +2381,109 @@ export function Admin() {
                       style={{
                         position: "absolute",
                         right: 8,
-                        background: "none",
-                        border: "none",
+                        background: "#f1f5f9",
+                        border: "1px solid #cbd5e1",
+                        borderRadius: 4,
                         cursor: "pointer",
-                        fontSize: 12,
-                        color: "#64748b",
-                        padding: "4px 6px",
+                        fontSize: 11,
+                        fontWeight: 600,
+                        color: "#475569",
+                        padding: "3px 8px",
                       }}
                       title={showCredPassword ? "Hide password" : "Show password"}
                     >
                       {showCredPassword ? "Hide" : "Show"}
                     </button>
                   </div>
-                  <small style={{ color: "#64748b", fontWeight: 400 }}>Stored using AES-256-GCM encryption in database. Never exposed in plain text.</small>
+                  <small style={{ color: "#64748b", fontWeight: 400 }}>Encrypted using AES-256-GCM. Never exposed in plain text.</small>
                 </label>
 
-                <label style={{ display: "grid", gap: 4, fontSize: 12, fontWeight: 600 }}>
-                  Desktop Automation Mode
-                  <select
-                    value={credAutomationMode}
-                    onChange={(e) => setCredAutomationMode(e.target.value)}
-                    style={{ height: 38, padding: "0 10px", borderRadius: 6, border: "1px solid var(--line)", fontSize: 13, background: "white" }}
-                  >
-                    <option value="assisted">Assisted Mode (Prepares claim form, captures screenshot, awaits 1-click user approval)</option>
-                    <option value="fully_automated">Fully Automated (Enters details, attaches evidence, and submits claim immediately)</option>
-                    <option value="headless">Headless Mode (Silent background execution without opening browser window)</option>
-                  </select>
-                </label>
+                <div style={{ display: "grid", gap: 8 }}>
+                  <label style={{ fontSize: 12, fontWeight: 600, color: "#334155" }}>
+                    Desktop Bot Automation Mode
+                  </label>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                    <div
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => {
+                        setCredAutomationMode("assisted")
+                        setCredRequireApproval(true)
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          setCredAutomationMode("assisted")
+                          setCredRequireApproval(true)
+                        }
+                      }}
+                      style={{
+                        padding: "10px 12px",
+                        borderRadius: 8,
+                        border: `1.5px solid ${credAutomationMode === "assisted" ? "#0f766e" : "#e2e8f0"}`,
+                        background: credAutomationMode === "assisted" ? "#f0fdfa" : "white",
+                        cursor: "pointer",
+                        transition: "all 0.15s ease",
+                      }}
+                    >
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, fontWeight: 600, fontSize: 12, color: credAutomationMode === "assisted" ? "#0f766e" : "#1e293b" }}>
+                        <span style={{ width: 8, height: 8, borderRadius: "50%", background: credAutomationMode === "assisted" ? "#0f766e" : "#cbd5e1" }} />
+                        Assisted Review
+                      </div>
+                      <div style={{ fontSize: 11, color: "#64748b", marginTop: 4, lineHeight: 1.3 }}>
+                        Prepares form & screenshot; waits for 1-click submit.
+                      </div>
+                    </div>
 
-                <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: "10px 12px", background: "#f8fafc", borderRadius: 6, border: "1px solid #e2e8f0" }}>
-                  <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, cursor: "pointer" }}>
+                    <div
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => {
+                        setCredAutomationMode("autonomous")
+                        setCredRequireApproval(false)
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          setCredAutomationMode("autonomous")
+                          setCredRequireApproval(false)
+                        }
+                      }}
+                      style={{
+                        padding: "10px 12px",
+                        borderRadius: 8,
+                        border: `1.5px solid ${credAutomationMode === "autonomous" ? "#0f766e" : "#e2e8f0"}`,
+                        background: credAutomationMode === "autonomous" ? "#f0fdfa" : "white",
+                        cursor: "pointer",
+                        transition: "all 0.15s ease",
+                      }}
+                    >
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, fontWeight: 600, fontSize: 12, color: credAutomationMode === "autonomous" ? "#0f766e" : "#1e293b" }}>
+                        <span style={{ width: 8, height: 8, borderRadius: "50%", background: credAutomationMode === "autonomous" ? "#0f766e" : "#cbd5e1" }} />
+                        Direct Submit
+                      </div>
+                      <div style={{ fontSize: 11, color: "#64748b", marginTop: 4, lineHeight: 1.3 }}>
+                        Files & submits claim directly, saving ticket ID.
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div style={{ padding: "10px 12px", background: "#f8fafc", borderRadius: 8, border: "1px solid #e2e8f0" }}>
+                  <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, cursor: "pointer", color: "#334155" }}>
                     <input
                       type="checkbox"
                       checked={credAutoPrepare}
                       onChange={(e) => setCredAutoPrepare(e.target.checked)}
                     />
-                    <span><strong>Auto-prepare claims:</strong> Automatically queue newly scanned return claims for desktop bot processing</span>
-                  </label>
-
-                  <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, cursor: "pointer" }}>
-                    <input
-                      type="checkbox"
-                      checked={credRequireApproval}
-                      onChange={(e) => setCredRequireApproval(e.target.checked)}
-                    />
-                    <span><strong>Require approval before final submission:</strong> Operator reviews the filled claim screenshot before final submit</span>
+                    <span><strong>Auto-queue claims:</strong> Automatically send newly scanned return claims to 24/7 bot</span>
                   </label>
                 </div>
 
-                <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 6 }}>
+                <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 4 }}>
                   <button type="button" className="btn secondary" onClick={() => setCredModalOpen(false)} disabled={credSaving}>
                     Cancel
                   </button>
-                  <button type="submit" className="btn primary" disabled={credSaving}>
-                    {credSaving ? "Saving Credentials…" : "Save Bot Credentials"}
+                  <button type="submit" className="btn primary" disabled={credSaving} style={{ padding: "0 18px" }}>
+                    {credSaving ? "Saving..." : "Save Bot Credentials"}
                   </button>
                 </div>
               </form>
