@@ -2,13 +2,20 @@
   "name": "return-scanning-app",
   "private": true,
   "version": "1.0.0",
+  "description": "Youthnic Return App - Automated Return Scanning & Marketplace Claims Desktop Application",
+  "author": "Youthnic VB Exports",
   "type": "module",
+  "main": "desktop/dist/main.cjs",
   "scripts": {
     "dev": "concurrently -n web,api -c green,blue \"vite\" \"tsx watch server/index.ts\"",
     "dev:web": "vite",
     "dev:api": "tsx watch server/index.ts",
     "build": "vite build && esbuild server/index.ts --bundle --platform=node --format=esm --packages=external --outfile=server/dist.js",
     "build:server": "esbuild server/index.ts --bundle --platform=node --format=esm --packages=external --outfile=server/dist.js",
+    "desktop": "npm run desktop:build && electron desktop/dist/main.cjs",
+    "desktop:build": "esbuild desktop/main.ts --bundle --platform=node --target=node20 --format=cjs --outfile=desktop/dist/main.cjs --external:electron --external:ws",
+    "desktop:pack": "npm run desktop:build && electron-builder --win dir",
+    "desktop:dist": "npm run desktop:build && electron-builder --win nsis",
     "bot": "tsx desktop-agent/src/desktop-app-server.ts",
     "desktop-app": "tsx desktop-agent/src/desktop-app-server.ts",
     "start": "node --max-old-space-size=384 server/dist.js",
@@ -52,8 +59,36 @@
     "@types/ws": "^8.5.12",
     "@vitejs/plugin-react": "^4.7.0",
     "concurrently": "^9.2.1",
+    "electron": "^44.8.0",
+    "electron-builder": "^26.15.3",
     "tailwindcss": "^4.1.12",
     "typescript": "^5.9.2",
     "vite": "^6.3.5"
+  },
+  "build": {
+    "appId": "com.youthnic.returnapp",
+    "productName": "Return App",
+    "directories": {
+      "output": "dist-electron"
+    },
+    "files": [
+      "desktop/dist/**/*",
+      "desktop/preload.cjs",
+      "public/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "public/app-icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Return App"
+    }
   }
 }

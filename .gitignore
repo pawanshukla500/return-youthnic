@@ -1,5 +1,7 @@
 node_modules
 dist
+dist-electron
+desktop/dist
 desktop-agent/dist
 server/dist.js
 .env
