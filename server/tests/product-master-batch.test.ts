@@ -24,6 +24,8 @@ function synRow(n: number): MasterRow {
   }
 }
 
+const NOW = 2_000_000
+
 function synEntry(overrides: Partial<StagedMasterImport> = {}): StagedMasterImport {
   return {
     rows: [synRow(1), synRow(2)],
@@ -31,7 +33,7 @@ function synEntry(overrides: Partial<StagedMasterImport> = {}): StagedMasterImpo
     scope: "",
     mode: "merge",
     ownerId: 7,
-    createdAt: 1_000_000,
+    createdAt: NOW - 60_000,
     processed: 0,
     inserted: 0,
     removed: 0,
@@ -39,8 +41,6 @@ function synEntry(overrides: Partial<StagedMasterImport> = {}): StagedMasterImpo
     ...overrides,
   }
 }
-
-const NOW = 2_000_000
 
 function statusOf(fn: () => void): { status: number; message: string } {
   try {
