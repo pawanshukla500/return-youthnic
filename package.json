@@ -15,7 +15,7 @@
     "desktop": "npm run desktop:build && electron desktop/dist/main.cjs",
     "desktop:build": "esbuild desktop/main.ts --bundle --platform=node --target=node20 --format=cjs --outfile=desktop/dist/main.cjs --external:electron --external:ws",
     "desktop:pack": "npm run desktop:build && electron-builder --win dir",
-    "desktop:dist": "npm run desktop:build && electron-builder --win nsis",
+    "desktop:dist": "npm run desktop:build && electron-builder --win nsis --publish never",
     "bot": "tsx desktop-agent/src/desktop-app-server.ts",
     "desktop-app": "tsx desktop-agent/src/desktop-app-server.ts",
     "start": "node --max-old-space-size=384 server/dist.js",

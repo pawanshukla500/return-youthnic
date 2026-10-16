@@ -22,6 +22,8 @@ COPY tsconfig.json tsconfig.server.json vite.config.ts index.html ./
 COPY public/ ./public/
 COPY src/ ./src/
 COPY server/ ./server/
+COPY desktop/ ./desktop/
+COPY desktop-agent/ ./desktop-agent/
 
 # Run static type checking and production Vite bundle build
 RUN npm run typecheck
