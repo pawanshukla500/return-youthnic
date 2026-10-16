@@ -1998,6 +1998,47 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
   - Map any myntra-labelled OMSGuru channel to Myntra VB/EJ by guessing — null means skipped and counted.
   - Change the bridge INSERT to update existing `product_master` rows (it is `ON CONFLICT DO NOTHING` by design).
 
+### 2026-10-16, Antigravity, Mobile Upload Progress Bar, Claim Reset Flow, Overview & Analytics Tab, Modal Redesign & Bot Evidence Cleanup
+
+- **Context & User Request:**
+  1. Mobile app: show an upload progress bar after submit, then automatically reset claim fields to zero so the operator can immediately scan/file the next order.
+  2. Claim overview tab: must work properly without issues, pulling real total ₹ amounts, claims count, and status breakdown.
+  3. View Details modal: fix layout and remove horizontal scrollbars, modernize UI, add copy buttons, media thumbnail gallery, click-to-zoom lightbox, and HTML5 video player.
+  4. Evidence lifecycle: evidence uploaded to Firebase Storage and server; desktop automation agent deletes downloaded local files after processing and submitting claim so disk space is not wasted.
+- **Changed:**
+  - `server/format.ts`: Added and exported `formatInr(value: number): string` using standard Indian numbering format (e.g. `₹1,250.00`).
+  - `server/dashboard.ts`:
+    - Updated `claimTone` to recognize modern claim statuses (`ready_for_claim`, `submitted`, `processing`, `waiting_for_approval`, `approved`, `rejected`, `failed`, `manual_action_required`).
+    - Synchronized `loadHeadline` across both `claims` and legacy `claim_tickets` tables.
+    - Rewrote `loadClaims` to aggregate real claim values (`total_price_snapshot`), status slices, and marketplace breakdown with currency values (`formatInr`).
+  - `server/claims-service.ts`:
+    - Added `totalPrice: number` to `ClaimRow` and `ClaimDetail`.
+    - Updated `listClaims` and `getClaim` SQL queries to select `COALESCE(c.total_price_snapshot, 0) AS total_price` and map into returned objects.
+  - `src/types.ts`: Added `totalPrice: number` to `ClaimRow`.
+  - `desktop-agent/src/agent-client.ts`: Added `cleanClaimEvidenceFiles(claimId: number): Promise<void>` to clean up local downloaded files in `claim-${claimId}` folder.
+  - `desktop-agent/src/index.ts`: Invoked `cleanClaimEvidenceFiles(bundle.claimId)` immediately after successful desktop automation execution (`result.stage === "completed"`).
+  - `src/index.css`:
+    - Widened `.modal.modal-wide` to `min(1080px, 95vw)` with `overflow-y: auto; overflow-x: hidden;`, eliminating horizontal scrollbars.
+    - Added styles: `.claim-meta-bar`, `.claim-copy-pill`, `.claim-amount-pill`, `.claim-detail-grid`, `.claim-detail-card`, `.claim-desc-block`, `.claim-gallery-section`, `.claim-gallery-layout`, `.claim-catalog-box`, `.claim-evidence-grid`, `.claim-slot-card`, `.claim-media-preview-box`, `.claim-media-meta`, `.claim-lightbox-backdrop`, `.claim-lightbox-content`, `.claim-lightbox-close`.
+  - `src/pages/Claims.tsx`:
+    - Added auto-reload on tab activation and manual `↻ Refresh` button to `Overview & Analytics` tab.
+    - Redesigned `ClaimDetailModal` with copy-to-clipboard pills, 2-column responsive layout, desktop automation status card, visual evidence gallery with inline thumbnails, click-to-enlarge lightbox, and HTML5 video player.
+  - `android/app/src/main/java/shop/youthnic/returnscan/ui/ClaimCaptureActivity.kt`:
+    - In `submitCompleteClaim()`, added a visual upload progress dialog showing active file-by-file upload (`Uploading evidence files (1 of 3)...`) with a determinate progress bar and percentage indicator.
+    - Added fallback to `WorkManager` for any file that encounters network jitter.
+    - Added success dialog with "File Next Return (Start Again)" button calling `resetFormForNextClaim()`, clearing all inputs, files, and state, and focusing on the search bar for the next order.
+  - `data/return-scan-release.json` & `server/mobile-release.ts`: Bumped APK version to `v1.0.54` (`versionCode: 10054`).
+  - `server/tests/product-master-batch.test.ts`: Fixed synthetic staging timestamp to be within `MASTER_STAGING_TTL_MS`.
+- **Verification:**
+  - `npm run typecheck`: Passed (0 errors on client, server, and desktop-agent).
+  - `npm run build`: Passed (Vite client 1.48s, esbuild server 21ms).
+  - `npm test`: 406 tests — 370 passed, 0 failed, 36 skipped (`TEST_DATABASE_URL`).
+- **The next agent must not:**
+  - Re-introduce `overflow: auto` or fixed widths on `.modal.modal-wide` that induce horizontal scrollbars.
+  - Hardcode dashboard overview claim metrics or bypass account scoping.
+  - Remove local file cleanup on the desktop bot upon completed claim automation.
+
+
 
 
 

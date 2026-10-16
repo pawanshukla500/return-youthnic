@@ -54,13 +54,25 @@ export function Claims() {
 
   // Overview data
   const [data, setData] = useState<ClaimsData | null>(null)
+  const [loadingOverview, setLoadingOverview] = useState(false)
   const [error, setError] = useState("")
 
-  useEffect(() => {
-    api<ClaimsData>("/api/claims").then(setData).catch((err: Error) => setError(err.message))
-  }, [])
+  const loadOverview = () => {
+    setLoadingOverview(true)
+    api<ClaimsData>("/api/claims")
+      .then((d) => {
+        setData(d)
+        setError("")
+      })
+      .catch((err: Error) => setError(err.message))
+      .finally(() => setLoadingOverview(false))
+  }
 
-  if (error && tab === "overview") return <PageError message={error} />
+  useEffect(() => {
+    loadOverview()
+  }, [tab])
+
+  if (error && tab === "overview" && !data) return <PageError message={error} />
 
   return (
     <div className="page-content">
@@ -87,13 +99,21 @@ export function Claims() {
 
       {tab === "queue" && <ClaimQueue />}
       {tab === "automation" && <DesktopAutomationTab />}
-      {tab === "overview" && <Overview data={data} />}
+      {tab === "overview" && <Overview data={data} loading={loadingOverview} onRefresh={loadOverview} />}
     </div>
   )
 }
 
-function Overview({ data }: { data: ClaimsData | null }) {
-  if (!data) return <Loading label="Loading claims…" />
+function Overview({
+  data,
+  loading,
+  onRefresh,
+}: {
+  data: ClaimsData | null
+  loading: boolean
+  onRefresh: () => void
+}) {
+  if (!data) return <Loading label="Loading claims overview & analytics…" />
 
   const exportClaims = () => {
     saveCsv(
@@ -107,6 +127,23 @@ function Overview({ data }: { data: ClaimsData | null }) {
 
   return (
     <>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+        <div>
+          <h2 style={{ margin: 0 }}>Claim Overview & Metrics</h2>
+          <p style={{ margin: "4px 0 0", color: "var(--muted)", fontSize: 13 }}>
+            Real-time aggregate claim values and settlement metrics across all marketplaces
+          </p>
+        </div>
+        <div style={{ display: "flex", gap: 10 }}>
+          <button className="btn secondary" onClick={onRefresh} disabled={loading}>
+            {loading ? "Refreshing…" : "↻ Refresh"}
+          </button>
+          <button className="btn secondary" onClick={exportClaims} disabled={!data.rows.length}>
+            <Icon name="upload" /> Export CSV
+          </button>
+        </div>
+      </div>
+
       <section className="stats-grid claims-stats">
         {data.stats.map((stat) => (
           <StatCard key={stat.label} {...stat} />
@@ -117,7 +154,7 @@ function Overview({ data }: { data: ClaimsData | null }) {
           <div className="panel-head">
             <div>
               <h2>Claim status</h2>
-              <p>All claim tickets</p>
+              <p>All active & completed claims</p>
             </div>
             <span className="filter-button">All time</span>
           </div>
@@ -145,11 +182,8 @@ function Overview({ data }: { data: ClaimsData | null }) {
         <div className="panel-head">
           <div>
             <h2>Marketplace performance</h2>
-            <p>Claim outcomes by channel</p>
+            <p>Claim outcomes & financial recovery by channel</p>
           </div>
-          <button className="btn secondary" onClick={exportClaims} disabled={!data.rows.length}>
-            <Icon name="upload" /> Export CSV
-          </button>
         </div>
         <DataTable
           columns={[
@@ -403,6 +437,16 @@ function ClaimDetailModal({
   const [manualModalOpen, setManualModalOpen] = useState(false)
   const [manualClaimRef, setManualClaimRef] = useState("")
   const [approving, setApproving] = useState(false)
+  const [previewMediaUrl, setPreviewMediaUrl] = useState<string | null>(null)
+  const [copiedKey, setCopiedKey] = useState("")
+
+  const copyText = (val: string, key: string) => {
+    if (!val) return
+    navigator.clipboard.writeText(val).then(() => {
+      setCopiedKey(key)
+      setTimeout(() => setCopiedKey(""), 2000)
+    }).catch(() => {})
+  }
 
   const load = () => {
     api<{ claim: ClaimDetail }>(`/api/claims/${claimId}`)
@@ -510,242 +554,384 @@ function ClaimDetailModal({
   if (error && !claim) return <Modal onClose={onClose}><PageError message={error} /></Modal>
   if (!claim) return <Modal onClose={onClose}><Loading label="Loading claim…" /></Modal>
 
+  const templateFields = (templates.find((t) => t.id === claim.claimTemplateId)?.fields || []).filter((f) => f.active)
+
   return (
-    <Modal onClose={onClose} wide>
-      <div className="modal-head" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <h2>Claim #{claim.id} · {claim.marketplace}</h2>
-        <button className="btn-icon" onClick={onClose}><Icon name="close" /></button>
-      </div>
-      <div className="modal-body" style={{ display: "grid", gap: 20 }}>
-        {error && <div className="form-error">{error}</div>}
-
-        {/* Top Details Grid */}
-        <div className="detail-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
-          <div className="detail-section" style={{ background: "#f8fafc", padding: 16, borderRadius: 8 }}>
-            <div className="detail-row"><span className="label">Status</span><Badge tone={CLAIM_STATUS_TONES[claim.status as ClaimStatus] || "neutral"}>{CLAIM_STATUS_LABELS[claim.status as ClaimStatus] || claim.status}</Badge></div>
-            <div className="detail-row"><span className="label">Marketplace</span><MarketplaceBadge name={claim.marketplace} /></div>
-            <div className="detail-row"><span className="label">Tracking ID / AWB</span><strong>{claim.trackingId}</strong></div>
-            <div className="detail-row"><span className="label">Order ID</span><span>{claim.orderId}</span></div>
-            {claim.subOrderId && <div className="detail-row"><span className="label">Sub Order ID</span><span>{claim.subOrderId}</span></div>}
-            {claim.packetId && <div className="detail-row"><span className="label">Packet ID</span><span>{claim.packetId}</span></div>}
-            {claim.dueDate && (
-              <div className="detail-row">
-                <span className="label">Claim Due Date</span>
-                <Badge tone={claim.overdue ? "danger" : "success"}>
-                  {claim.dueDate} {claim.daysRemaining !== null ? `(${claim.overdue ? `${Math.abs(claim.daysRemaining)}d overdue` : `${claim.daysRemaining}d left`})` : ""}
-                </Badge>
-              </div>
-            )}
-          </div>
-
-          <div className="detail-section" style={{ background: "#f8fafc", padding: 16, borderRadius: 8 }}>
-            <div className="detail-row"><span className="label">Claim Reason</span><strong>{claim.claimReason}</strong></div>
-            <div className="detail-row"><span className="label">Claim Title</span><span>{claim.claimTitle}</span></div>
-            <div className="detail-row"><span className="label">Description</span><span style={{ fontSize: 13 }}>{claim.claimDescription || "—"}</span></div>
-            {claim.remarks && <div className="detail-row"><span className="label">Remarks</span><span style={{ fontSize: 12, color: "var(--muted)" }}>{claim.remarks}</span></div>}
-            <div className="detail-row"><span className="label">Created By</span><span>{claim.createdBy} · {new Date(claim.createdAt).toLocaleDateString("en-IN")}</span></div>
-          </div>
-        </div>
-
-        {/* Desktop Automation Status Card */}
-        {automationJob && (
-          <div style={{ background: "#eff6ff", border: "1px solid #bfdbfe", padding: 16, borderRadius: 8 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <span style={{ fontSize: 18 }}>🤖</span>
-                <div>
-                  <h4 style={{ margin: 0 }}>Windows Desktop EXE Claim Automation</h4>
-                  <small style={{ color: "#1e40af" }}>
-                    Stage: <strong>{automationJob.stage}</strong> · Mode: {automationJob.browserMode} · Attempts: {automationJob.attempts}/{automationJob.maxAttempts}
-                  </small>
-                </div>
-              </div>
-              <div style={{ display: "flex", gap: 8 }}>
-                {(automationJob.stage === "prepared" || automationJob.stage === "waiting_approval") && canApprove && (
-                  <button className="btn primary" onClick={handleApproveAutomation} disabled={approving}>
-                    {approving ? "Approving…" : "✓ Approve for Submission"}
-                  </button>
-                )}
-                {(automationJob.stage === "failed" || automationJob.stage === "manual_intervention_required") && (
-                  <>
-                    <button className="btn secondary small" onClick={handleRetryAutomation}>Retry Automation</button>
-                    <button className="btn secondary small" onClick={() => setManualModalOpen(true)}>Record Manual Claim</button>
-                  </>
-                )}
-              </div>
-            </div>
-
-            {automationJob.manualActionReason && (
-              <div style={{ background: "#fef3c7", padding: "8px 12px", borderRadius: 6, fontSize: 13, color: "#92400e", marginBottom: 10 }}>
-                ⚠️ <strong>Manual Action Required:</strong> {automationJob.manualActionReason}
-              </div>
-            )}
-
-            {automationJob.marketplaceClaimId && (
-              <div style={{ background: "#ecfdf5", padding: "8px 12px", borderRadius: 6, fontSize: 13, color: "#065f46" }}>
-                ✅ <strong>Marketplace Claim Reference:</strong> {automationJob.marketplaceClaimId}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Product Reference vs Evidence Section */}
-        <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: 16 }}>
-          <h3 style={{ margin: "0 0 14px", display: "flex", alignItems: "center", gap: 8 }}>
-            <Icon name="box" size={18} /> Product Reference & Captured Evidence
-          </h3>
-          <div style={{ display: "flex", gap: 20, flexWrap: "wrap", alignItems: "flex-start" }}>
-            {/* Original reference image */}
-            <div style={{ width: 140, textAlign: "center" }}>
-              <span style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)", display: "block", marginBottom: 6 }}>
-                Catalog Reference
-              </span>
-              {refImage ? (
-                <img
-                  src={refImage}
-                  alt="Original Product"
-                  style={{ width: 130, height: 130, objectFit: "cover", borderRadius: 8, border: "1px solid var(--border)" }}
-                />
-              ) : (
-                <div style={{ width: 130, height: 130, background: "#f1f5f9", borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, color: "var(--muted)" }}>
-                  No Catalog Photo
-                </div>
+    <>
+      <Modal onClose={onClose} wide>
+        {/* Header */}
+        <div className="modal-head" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+          <div>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <h2 style={{ margin: 0 }}>Claim #{claim.id}</h2>
+              <MarketplaceBadge name={claim.marketplace} />
+              <Badge tone={CLAIM_STATUS_TONES[claim.status as ClaimStatus] || "neutral"}>
+                {CLAIM_STATUS_LABELS[claim.status as ClaimStatus] || claim.status}
+              </Badge>
+              {claim.totalPrice > 0 && (
+                <span className="claim-amount-pill">₹{claim.totalPrice.toFixed(2)}</span>
               )}
             </div>
 
-            {/* Evidence fields grid */}
-            <div style={{ flex: 1 }}>
-              <div className="account-grid-v2" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 12 }}>
-                {(templates.find((t) => t.id === claim.claimTemplateId)?.fields || [])
-                  .filter((f) => f.active)
-                  .map((field) => {
-                    const count = claim.media.filter((m) => m.active && m.fieldKey === field.fieldKey).length
-                    const accept =
-                      field.fieldType === "image"
-                        ? "image/*"
-                        : field.fieldType === "video"
-                          ? "video/*"
-                          : "application/pdf,image/*"
-                    return (
-                      <div className="account-card-v2" key={field.id} style={{ padding: 12, border: "1px solid var(--border)", borderRadius: 8, background: count >= field.minCount ? "#f0fdf4" : "#fff" }}>
-                        <strong style={{ fontSize: 13 }}>{field.fieldLabel}{field.required ? " *" : ""}</strong>
-                        <p style={{ margin: "4px 0 8px", fontSize: 12, color: "var(--muted)" }}>
-                          {count} / {field.maxCount} uploaded (min {field.minCount})
-                        </p>
-                        <label className="btn secondary small" style={{ display: "inline-block", cursor: "pointer" }}>
-                          {uploadingField === field.fieldKey ? "Uploading…" : `+ Add ${field.fieldType}`}
-                          <input
-                            type="file"
-                            accept={accept}
-                            hidden
-                            disabled={Boolean(uploadingField) || count >= field.maxCount}
-                            onChange={(e) => void uploadEvidence(field.fieldKey, e.target.files?.[0] || null)}
-                          />
-                        </label>
+            {/* Quick Copy & Meta Bar */}
+            <div className="claim-meta-bar">
+              <button
+                type="button"
+                className="claim-copy-pill"
+                onClick={() => copyText(claim.trackingId, "awb")}
+                title="Click to copy Tracking ID / AWB"
+              >
+                📋 AWB: <strong>{claim.trackingId}</strong> {copiedKey === "awb" && <span style={{ color: "var(--green)" }}>✓ Copied</span>}
+              </button>
+              {(claim.subOrderId || claim.orderId) && (
+                <button
+                  type="button"
+                  className="claim-copy-pill"
+                  onClick={() => copyText(claim.subOrderId || claim.orderId, "order")}
+                  title="Click to copy Order ID"
+                >
+                  📋 SubOrder: <strong>{claim.subOrderId || claim.orderId}</strong> {copiedKey === "order" && <span style={{ color: "var(--green)" }}>✓ Copied</span>}
+                </button>
+              )}
+              {claim.packetId && claim.packetId !== claim.trackingId && (
+                <span className="claim-copy-pill" style={{ cursor: "default" }}>
+                  📦 Packet: {claim.packetId}
+                </span>
+              )}
+              {claim.dueDate && (
+                <Badge tone={claim.overdue ? "danger" : "success"}>
+                  Due: {claim.dueDate} {claim.daysRemaining !== null ? `(${claim.overdue ? `${Math.abs(claim.daysRemaining)}d overdue` : `${claim.daysRemaining}d left`})` : ""}
+                </Badge>
+              )}
+            </div>
+          </div>
+          <button className="btn-icon" onClick={onClose} title="Close"><Icon name="close" /></button>
+        </div>
+
+        <div className="modal-body" style={{ display: "grid", gap: 18 }}>
+          {error && <div className="form-error">{error}</div>}
+
+          {/* Details 2-Column Responsive Grid */}
+          <div className="claim-detail-grid">
+            {/* Left Card: Shipment & Order */}
+            <div className="claim-detail-card">
+              <h4>📦 Shipment & Order Details</h4>
+              <div className="claim-detail-row">
+                <span className="label">AWB / Tracking ID</span>
+                <span className="val" style={{ fontFamily: "monospace", fontSize: 14 }}>{claim.trackingId}</span>
+              </div>
+              <div className="claim-detail-row">
+                <span className="label">Order ID</span>
+                <span className="val">{claim.orderId || "—"}</span>
+              </div>
+              {claim.subOrderId && (
+                <div className="claim-detail-row">
+                  <span className="label">Sub Order ID</span>
+                  <span className="val">{claim.subOrderId}</span>
+                </div>
+              )}
+              {claim.packetId && (
+                <div className="claim-detail-row">
+                  <span className="label">Packet ID</span>
+                  <span className="val">{claim.packetId}</span>
+                </div>
+              )}
+              <div className="claim-detail-row">
+                <span className="label">Packet State</span>
+                <span className="val"><Badge tone="warning">Tampered</Badge></span>
+              </div>
+              {claim.totalPrice > 0 && (
+                <div className="claim-detail-row">
+                  <span className="label">Merchandise Value</span>
+                  <span className="val" style={{ color: "#059669", fontWeight: 700 }}>₹{claim.totalPrice.toFixed(2)}</span>
+                </div>
+              )}
+              <div className="claim-detail-row">
+                <span className="label">Filed On</span>
+                <span className="val">{new Date(claim.createdAt).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}</span>
+              </div>
+              <div className="claim-detail-row">
+                <span className="label">Created By</span>
+                <span className="val">{claim.createdBy}</span>
+              </div>
+            </div>
+
+            {/* Right Card: Claim Case & Description */}
+            <div className="claim-detail-card">
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                <h4 style={{ margin: 0 }}>📝 Claim Issue & Statement</h4>
+                {claim.claimDescription && (
+                  <button
+                    type="button"
+                    className="claim-copy-pill"
+                    onClick={() => copyText(claim.claimDescription, "desc")}
+                    title="Copy full description for seller portal"
+                  >
+                    📋 {copiedKey === "desc" ? "Copied!" : "Copy Description"}
+                  </button>
+                )}
+              </div>
+              <div className="claim-detail-row">
+                <span className="label">Claim Reason</span>
+                <span className="val"><strong>{claim.claimReason}</strong></span>
+              </div>
+              {claim.claimTitle && (
+                <div className="claim-detail-row">
+                  <span className="label">Claim Title</span>
+                  <span className="val">{claim.claimTitle}</span>
+                </div>
+              )}
+              <div style={{ marginTop: 10 }}>
+                <span className="label" style={{ display: "block", marginBottom: 4 }}>Full Description:</span>
+                <div className="claim-desc-block">
+                  {claim.claimDescription || "No detailed description entered."}
+                </div>
+              </div>
+              {claim.remarks && (
+                <div style={{ marginTop: 10, fontSize: 12, color: "var(--muted)" }}>
+                  <strong>Remarks:</strong> {claim.remarks}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Desktop Automation Status Card */}
+          {automationJob && (
+            <div style={{ background: "#eff6ff", border: "1px solid #bfdbfe", padding: 16, borderRadius: 10 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 10 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <span style={{ fontSize: 22 }}>🤖</span>
+                  <div>
+                    <h4 style={{ margin: 0, fontSize: 14 }}>Windows Desktop EXE Claim Automation</h4>
+                    <small style={{ color: "#1e40af" }}>
+                      Stage: <strong>{automationJob.stage}</strong> · Mode: {automationJob.browserMode} · Attempts: {automationJob.attempts}/{automationJob.maxAttempts}
+                    </small>
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  {(automationJob.stage === "prepared" || automationJob.stage === "waiting_approval") && canApprove && (
+                    <button className="btn primary" onClick={handleApproveAutomation} disabled={approving}>
+                      {approving ? "Approving…" : "✓ Approve for Submission"}
+                    </button>
+                  )}
+                  {(automationJob.stage === "failed" || automationJob.stage === "manual_intervention_required") && (
+                    <>
+                      <button className="btn secondary small" onClick={handleRetryAutomation}>Retry Automation</button>
+                      <button className="btn secondary small" onClick={() => setManualModalOpen(true)}>Record Manual Claim</button>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              {automationJob.manualActionReason && (
+                <div style={{ background: "#fef3c7", padding: "10px 14px", borderRadius: 6, fontSize: 13, color: "#92400e", marginBottom: 8 }}>
+                  ⚠️ <strong>Manual Action Required:</strong> {automationJob.manualActionReason}
+                </div>
+              )}
+
+              {automationJob.marketplaceClaimId && (
+                <div style={{ background: "#ecfdf5", padding: "10px 14px", borderRadius: 6, fontSize: 13, color: "#065f46", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span>✅ <strong>Marketplace Claim Reference:</strong> <code>{automationJob.marketplaceClaimId}</code></span>
+                  <button
+                    type="button"
+                    className="claim-copy-pill"
+                    onClick={() => copyText(automationJob.marketplaceClaimId, "ticket")}
+                  >
+                    📋 {copiedKey === "ticket" ? "Copied!" : "Copy"}
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Product Reference & Captured Evidence Visual Gallery */}
+          <div className="claim-gallery-section">
+            <h3 style={{ margin: "0 0 16px", display: "flex", alignItems: "center", gap: 8, fontSize: 15 }}>
+              <Icon name="box" size={18} /> Product Reference & Captured Evidence Gallery ({claim.media.length} files)
+            </h3>
+            
+            <div className="claim-gallery-layout">
+              {/* Left Catalog Photo Box */}
+              <div className="claim-catalog-box">
+                <span style={{ fontSize: 12, fontWeight: 700, color: "var(--muted)", display: "block", marginBottom: 8, textTransform: "uppercase" }}>
+                  Catalog Photo
+                </span>
+                {refImage ? (
+                  <div title="Click to view full catalog image">
+                    <img
+                      src={refImage}
+                      alt="Catalog Reference"
+                      onClick={() => setPreviewMediaUrl(refImage)}
+                    />
+                    <small style={{ display: "block", marginTop: 6, color: "var(--muted)", fontSize: 11 }}>
+                      🔍 Click to enlarge
+                    </small>
+                  </div>
+                ) : (
+                  <div style={{ width: "100%", aspectRatio: "1", background: "#f1f5f9", borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, color: "var(--muted)" }}>
+                    No Catalog Photo
+                  </div>
+                )}
+              </div>
+
+              {/* Right: Slot-by-Slot Evidence Grid */}
+              <div className="claim-evidence-grid">
+                {templateFields.map((field) => {
+                  const slotMedia = claim.media.filter((m) => m.active && m.fieldKey === field.fieldKey)
+                  const count = slotMedia.length
+                  const isFulfilled = count >= field.minCount
+                  const accept =
+                    field.fieldType === "image"
+                      ? "image/*"
+                      : field.fieldType === "video"
+                        ? "video/*"
+                        : "application/pdf,image/*"
+
+                  return (
+                    <div className={`claim-slot-card ${isFulfilled ? "fulfilled" : ""}`} key={field.id}>
+                      <div className="claim-slot-header">
+                        <strong>{field.fieldLabel}{field.required ? " *" : ""}</strong>
+                        <span className="slot-badge">
+                          {count} / {field.maxCount}
+                        </span>
                       </div>
-                    )
-                  })}
+
+                      {/* Render uploaded items for this slot */}
+                      {slotMedia.map((m) => {
+                        const isImage = m.mimeType.startsWith("image/")
+                        const isVideo = m.mimeType.startsWith("video/")
+                        const mediaUrl = `/api/claims/${claim.id}/media/${m.id}`
+                        const sizeMb = m.sizeBytes > 0 ? (m.sizeBytes / (1024 * 1024)).toFixed(2) : null
+
+                        return (
+                          <div key={m.id} className="claim-media-item">
+                            <div className="claim-media-preview-box">
+                              {isImage ? (
+                                <div onClick={() => setPreviewMediaUrl(mediaUrl)} style={{ cursor: "pointer" }}>
+                                  <img
+                                    src={mediaUrl}
+                                    alt={m.originalFilename || field.fieldLabel}
+                                    loading="lazy"
+                                  />
+                                  <div className="zoom-hint">🔍 Enlarge Photo</div>
+                                </div>
+                              ) : isVideo ? (
+                                <video
+                                  src={mediaUrl}
+                                  controls
+                                  preload="metadata"
+                                  className="claim-video-player"
+                                />
+                              ) : (
+                                <div style={{ padding: 24, textAlign: "center", background: "#f8fafc", color: "#334155" }}>
+                                  📄 Document File
+                                </div>
+                              )}
+                            </div>
+                            <div className="claim-media-meta">
+                              <span title={m.originalFilename} style={{ maxWidth: 130, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                {m.originalFilename || `${field.fieldKey}.${m.mimeType.split("/")[1] || "dat"}`}
+                              </span>
+                              <div>
+                                {sizeMb && <span style={{ marginRight: 6 }}>{sizeMb} MB</span>}
+                                <a href={mediaUrl} target="_blank" rel="noopener noreferrer" style={{ fontWeight: 600 }}>
+                                  Open ↗
+                                </a>
+                              </div>
+                            </div>
+                          </div>
+                        )
+                      })}
+
+                      {/* If more uploads allowed for this slot */}
+                      {count < field.maxCount && (
+                        <div style={{ marginTop: "auto", paddingTop: 8 }}>
+                          <label className="btn secondary small" style={{ display: "block", textAlign: "center", cursor: "pointer" }}>
+                            {uploadingField === field.fieldKey ? "Uploading…" : `+ Add ${field.fieldType}`}
+                            <input
+                              type="file"
+                              accept={accept}
+                              hidden
+                              disabled={Boolean(uploadingField)}
+                              onChange={(e) => void uploadEvidence(field.fieldKey, e.target.files?.[0] || null)}
+                            />
+                          </label>
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
               </div>
             </div>
           </div>
-        </div>
 
-        {/* Media List Table */}
-        <div className="panel-sub">
-          <h3>Uploaded Evidence Media ({claim.media.length})</h3>
-          {claim.media.length === 0 ? (
-            <p className="muted">No evidence media uploaded yet.</p>
-          ) : (
-            <table className="media-table" style={{ width: "100%", fontSize: 13 }}>
-              <thead>
-                <tr style={{ textAlign: "left" }}>
-                  <th>Field Slot</th>
-                  <th>Original Filename</th>
-                  <th>Type</th>
-                  <th>Size</th>
-                  <th>Uploaded By</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {claim.media.map((m) => (
-                  <tr key={m.id}>
-                    <td><strong>{m.fieldKey}</strong></td>
-                    <td>{m.originalFilename || "—"}</td>
-                    <td>{m.mimeType}</td>
-                    <td>{m.sizeBytes > 0 ? `${(m.sizeBytes / (1024 * 1024)).toFixed(2)} MB` : "—"}</td>
-                    <td>{m.uploadedBy}</td>
-                    <td>
-                      <a
-                        href={`/api/claims/${claim.id}/media/${m.id}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="btn secondary small"
-                      >
-                        Preview / Download
-                      </a>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          {/* Supervisor Status Transition Footer */}
+          {canApprove && (
+            <div className="panel-sub" style={{ background: "#f8fafc", padding: 14, borderRadius: 8 }}>
+              <h4 style={{ margin: "0 0 10px", fontSize: 13, textTransform: "uppercase", color: "#64748b" }}>
+                Update Lifecycle Status
+              </h4>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <select value={newStatus} onChange={(e) => setNewStatus(e.target.value)} style={{ minWidth: 180 }}>
+                  <option value="">Select new status…</option>
+                  {(NEXT_STATUSES[claim.status as ClaimStatus] || []).map((s) => (
+                    <option key={s} value={s}>{CLAIM_STATUS_LABELS[s]}</option>
+                  ))}
+                </select>
+                <input
+                  type="text"
+                  placeholder="Reason for status change (optional)"
+                  value={statusReason}
+                  onChange={(e) => setStatusReason(e.target.value)}
+                  style={{ flex: 1, minWidth: 200 }}
+                />
+                <button className="btn primary" disabled={!newStatus || statusUpdating} onClick={updateStatus}>
+                  {statusUpdating ? "Updating…" : "Update Status"}
+                </button>
+              </div>
+            </div>
           )}
         </div>
 
-        {/* Supervisor Status Transition */}
-        {canApprove && (
-          <div className="panel-sub" style={{ background: "#f8fafc", padding: 14, borderRadius: 8 }}>
-            <h4 style={{ margin: "0 0 10px" }}>Change Claim Lifecycle Status</h4>
-            <div style={{ display: "flex", gap: 10 }}>
-              <select value={newStatus} onChange={(e) => setNewStatus(e.target.value)}>
-                <option value="">Select status…</option>
-                {(NEXT_STATUSES[claim.status as ClaimStatus] || []).map((s) => (
-                  <option key={s} value={s}>{CLAIM_STATUS_LABELS[s]}</option>
-                ))}
-              </select>
-              <input
-                type="text"
-                placeholder="Reason for status change (optional)"
-                value={statusReason}
-                onChange={(e) => setStatusReason(e.target.value)}
-                style={{ flex: 1 }}
-              />
-              <button className="btn primary" disabled={!newStatus || statusUpdating} onClick={updateStatus}>
-                {statusUpdating ? "Updating…" : "Update"}
-              </button>
+        {/* Manual Claim Submission Dialog */}
+        {manualModalOpen && (
+          <Modal onClose={() => setManualModalOpen(false)}>
+            <div style={{ padding: 10 }}>
+              <h3>Record Marketplace Claim Submission</h3>
+              <p style={{ fontSize: 13, color: "var(--muted)" }}>
+                If you submitted this claim manually through the seller portal, enter the marketplace confirmation number below.
+              </p>
+              <div style={{ margin: "16px 0" }}>
+                <label style={{ fontSize: 13, fontWeight: 600 }}>Marketplace Claim Reference / Ticket ID</label>
+                <input
+                  type="text"
+                  placeholder="e.g. MCL-8492049, SPF-92049"
+                  value={manualClaimRef}
+                  onChange={(e) => setManualClaimRef(e.target.value)}
+                  style={{ width: "100%", marginTop: 6 }}
+                />
+              </div>
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+                <button className="btn secondary" onClick={() => setManualModalOpen(false)}>Cancel</button>
+                <button className="btn primary" disabled={!manualClaimRef.trim()} onClick={handleManualResolve}>
+                  Save & Mark Submitted
+                </button>
+              </div>
             </div>
-          </div>
+          </Modal>
         )}
-      </div>
+      </Modal>
 
-      {/* Manual Claim Submission Dialog */}
-      {manualModalOpen && (
-        <Modal onClose={() => setManualModalOpen(false)}>
-          <div style={{ padding: 10 }}>
-            <h3>Record Marketplace Claim Submission</h3>
-            <p style={{ fontSize: 13, color: "var(--muted)" }}>
-              If you submitted this claim manually through the seller portal, enter the marketplace confirmation number below.
-            </p>
-            <div style={{ margin: "16px 0" }}>
-              <label style={{ fontSize: 13, fontWeight: 600 }}>Marketplace Claim Reference / Ticket ID</label>
-              <input
-                type="text"
-                placeholder="e.g. MCL-8492049, SPF-92049"
-                value={manualClaimRef}
-                onChange={(e) => setManualClaimRef(e.target.value)}
-                style={{ width: "100%", marginTop: 6 }}
-              />
-            </div>
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
-              <button className="btn secondary" onClick={() => setManualModalOpen(false)}>Cancel</button>
-              <button className="btn primary" disabled={!manualClaimRef.trim()} onClick={handleManualResolve}>
-                Save & Mark Submitted
-              </button>
-            </div>
+      {/* Lightbox Modal */}
+      {previewMediaUrl && (
+        <div className="claim-lightbox-backdrop" onClick={() => setPreviewMediaUrl(null)}>
+          <div className="claim-lightbox-content" onClick={(e) => e.stopPropagation()}>
+            <button className="claim-lightbox-close" onClick={() => setPreviewMediaUrl(null)}>×</button>
+            <img src={previewMediaUrl} alt="Evidence Full Resolution" />
           </div>
-        </Modal>
+        </div>
       )}
-    </Modal>
+    </>
   )
 }
 

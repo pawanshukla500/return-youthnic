@@ -124,6 +124,8 @@ async function main() {
             marketplaceClaimId: result.marketplaceClaimId || "CONFIRMED",
             screenshotPath: result.screenshotPath,
           })
+          // Clean up local downloaded evidence files so they don't occupy disk space after portal submission
+          await client.cleanClaimEvidenceFiles(bundle.claimId)
         } else if (result.stage === "manual_intervention_required") {
           await client.updateProgress(jobHeader.jobId, {
             stage: "manual_intervention_required",

@@ -1082,7 +1082,280 @@ button.catalog-image-wrap { width: 100%; padding: 0; border: 0; display: block; 
 .partner-mark > img, .partner-mark > span { width: 28px; height: 28px; border-radius: 6px; }
 .partner-mark > img { object-fit: contain; background: white; }
 .partner-mark > span { display: grid; place-items: center; background: #e7f4ef; color: var(--green); font-size: 12px; font-weight: 800; }
-.modal.modal-wide { width: min(820px, 100%); max-height: min(88vh, 860px); overflow: auto; }
+.modal.modal-wide { width: min(1080px, 95vw); max-height: min(90vh, 920px); overflow-y: auto; overflow-x: hidden; }
+
+/* Modern Claim Details Modal */
+.claim-meta-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line, #e2e8f0);
+}
+.claim-copy-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: #f1f5f9;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #334155;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.claim-copy-pill:hover {
+  background: #e2e8f0;
+  border-color: #94a3b8;
+  color: #0f172a;
+}
+.claim-amount-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  background: #ecfdf5;
+  border: 1px solid #a7f3d0;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #065f46;
+}
+.claim-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 16px;
+}
+.claim-detail-card {
+  background: #ffffff;
+  border: 1px solid var(--line, #e2e8f0);
+  border-radius: 10px;
+  padding: 16px;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
+}
+.claim-detail-card h4 {
+  margin: 0 0 12px;
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #64748b;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.claim-detail-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 7px 0;
+  border-bottom: 1px solid #f1f5f9;
+  font-size: 13px;
+}
+.claim-detail-row:last-child {
+  border-bottom: none;
+}
+.claim-detail-row .label {
+  color: #64748b;
+  font-weight: 500;
+  flex: none;
+  min-width: 120px;
+}
+.claim-detail-row .val {
+  color: #0f172a;
+  font-weight: 600;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+.claim-desc-block {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 12px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #334155;
+  margin-top: 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 160px;
+  overflow-y: auto;
+}
+.claim-gallery-section {
+  border: 1px solid var(--line, #e2e8f0);
+  border-radius: 10px;
+  padding: 16px;
+  background: #ffffff;
+}
+.claim-gallery-layout {
+  display: grid;
+  grid-template-columns: 180px minmax(0, 1fr);
+  gap: 20px;
+  align-items: flex-start;
+}
+@media (max-width: 768px) {
+  .claim-gallery-layout {
+    grid-template-columns: 1fr;
+  }
+}
+.claim-catalog-box {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 12px;
+  text-align: center;
+}
+.claim-catalog-box img {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  border-radius: 8px;
+  border: 1px solid #cbd5e1;
+  cursor: pointer;
+  transition: transform 0.2s ease;
+}
+.claim-catalog-box img:hover {
+  transform: scale(1.03);
+}
+.claim-evidence-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 14px;
+}
+.claim-slot-card {
+  border: 1px solid var(--line, #e2e8f0);
+  border-radius: 8px;
+  padding: 12px;
+  background: #ffffff;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  transition: border-color 0.15s ease;
+}
+.claim-slot-card.fulfilled {
+  border-color: #86efac;
+  background: #fcfdfc;
+}
+.claim-slot-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.claim-slot-header strong {
+  font-size: 13px;
+  color: #0f172a;
+}
+.claim-slot-header .slot-badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 10px;
+  background: #f1f5f9;
+  color: #475569;
+}
+.claim-slot-card.fulfilled .slot-badge {
+  background: #dcfce7;
+  color: #166534;
+}
+.claim-media-preview-box {
+  position: relative;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #0f172a;
+  border: 1px solid #cbd5e1;
+}
+.claim-media-preview-box img {
+  width: 100%;
+  height: 140px;
+  object-fit: cover;
+  display: block;
+  cursor: pointer;
+  transition: opacity 0.2s ease;
+}
+.claim-media-preview-box img:hover {
+  opacity: 0.9;
+}
+.claim-media-preview-box .zoom-hint {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.4);
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 600;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  pointer-events: none;
+}
+.claim-media-preview-box:hover .zoom-hint {
+  opacity: 1;
+}
+.claim-media-preview-box video {
+  width: 100%;
+  max-height: 160px;
+  display: block;
+  background: #000;
+}
+.claim-media-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 11px;
+  color: #64748b;
+  margin-top: 4px;
+}
+.claim-lightbox-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 999;
+  background: rgba(15, 23, 42, 0.88);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+.claim-lightbox-content {
+  position: relative;
+  max-width: 90vw;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.claim-lightbox-content img {
+  max-width: 100%;
+  max-height: 84vh;
+  object-fit: contain;
+  border-radius: 8px;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+}
+.claim-lightbox-close {
+  position: absolute;
+  top: -40px;
+  right: 0;
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.2);
+  border: none;
+  border-radius: 50%;
+  width: 36px;
+  height: 36px;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  font-size: 20px;
+  transition: background 0.15s ease;
+}
+.claim-lightbox-close:hover {
+  background: rgba(255, 255, 255, 0.4);
+}
+
 .record-modal .eyebrow { color: var(--green); font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
 .record-lead { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; margin: 0 0 16px; color: #5f6b67; font-size: 14px; }
 .record-sheet { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }

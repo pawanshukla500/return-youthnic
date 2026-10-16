@@ -7,7 +7,7 @@
 
 import type pg from "pg"
 import { accountCondition, type AccountScope } from "./access.js"
-import { formatCount, percentOf } from "./format.js"
+import { formatCount, formatInr, percentOf } from "./format.js"
 
 const TODAY_IST = "(now() AT TIME ZONE 'Asia/Kolkata')::date"
 const SCAN_DAY_IST = "(rs.scanned_at AT TIME ZONE 'Asia/Kolkata')::date"
@@ -91,9 +91,9 @@ export function mapReturn(row: ReturnRecord) {
 
 // Claim tone used by the claims page colour key.
 export function claimTone(status: string) {
-  if (status === "Approved") return "approved"
-  if (status === "Rejected") return "rejected"
-  if (status === "Review" || status === "Raised") return "review"
+  if (status === "Approved" || status === "submitted") return "approved"
+  if (status === "Rejected" || status === "failed" || status === "manual_action_required") return "rejected"
+  if (status === "Review" || status === "Raised" || status === "ready_for_claim" || status === "processing" || status === "waiting_for_approval") return "review"
   return "draft"
 }
 
@@ -112,9 +112,13 @@ export async function listRecentReturns(db: pg.Pool, scope: AccountScope, limit:
 export async function loadHeadline(db: pg.Pool, scope: AccountScope): Promise<HeadlineTotals> {
   const params: unknown[] = []
   const scans = accountCondition(scope, "er.marketplace_id", params)
-  const allClaims = accountCondition(scope, "ce1.marketplace_id", params)
-  const openClaims = accountCondition(scope, "ce2.marketplace_id", params)
-  const approvedClaims = accountCondition(scope, "ce3.marketplace_id", params)
+  const allClaimsModern = accountCondition(scope, "c1.marketplace_id", params)
+  const allClaimsLegacy = accountCondition(scope, "ce1.marketplace_id", params)
+  const openClaimsModern = accountCondition(scope, "c2.marketplace_id", params)
+  const openClaimsLegacy = accountCondition(scope, "ce2.marketplace_id", params)
+  const approvedClaimsModern = accountCondition(scope, "c3.marketplace_id", params)
+  const approvedClaimsLegacy = accountCondition(scope, "ce3.marketplace_id", params)
+
   const result = await db.query(
     `
     SELECT
@@ -124,20 +128,34 @@ export async function loadHeadline(db: pg.Pool, scope: AccountScope): Promise<He
       (COUNT(rs.id) FILTER (WHERE ${SCAN_DAY_IST} = ${TODAY_IST}))::int AS received_today,
       (COUNT(rs.id) FILTER (WHERE rs.outcome = 'issue' AND ${SCAN_DAY_IST} = ${TODAY_IST}))::int AS issues_today,
       (SELECT COUNT(*)::int
-         FROM claim_tickets ct
-         JOIN receipt_scans cs1 ON cs1.id = ct.receipt_scan_id
-         JOIN expected_returns ce1 ON ce1.id = cs1.expected_return_id
-        WHERE ${allClaims}) AS claims,
+         FROM (
+           SELECT c1.id FROM claims c1 WHERE ${allClaimsModern}
+           UNION ALL
+           SELECT ct1.id FROM claim_tickets ct1
+           JOIN receipt_scans cs1 ON cs1.id = ct1.receipt_scan_id
+           JOIN expected_returns ce1 ON ce1.id = cs1.expected_return_id
+           WHERE ${allClaimsLegacy} AND NOT EXISTS (SELECT 1 FROM claims cx WHERE cx.receipt_scan_id = ct1.receipt_scan_id)
+         ) u1) AS claims,
       (SELECT COUNT(*)::int
-         FROM claim_tickets ct
-         JOIN receipt_scans cs2 ON cs2.id = ct.receipt_scan_id
-         JOIN expected_returns ce2 ON ce2.id = cs2.expected_return_id
-        WHERE ct.status NOT IN ('Approved', 'Rejected') AND ${openClaims}) AS open_claims,
+         FROM (
+           SELECT c2.id FROM claims c2 WHERE c2.status NOT IN ('submitted', 'failed') AND ${openClaimsModern}
+           UNION ALL
+           SELECT ct2.id FROM claim_tickets ct2
+           JOIN receipt_scans cs2 ON cs2.id = ct2.receipt_scan_id
+           JOIN expected_returns ce2 ON ce2.id = cs2.expected_return_id
+           WHERE ct2.status NOT IN ('Approved', 'Rejected') AND ${openClaimsLegacy}
+             AND NOT EXISTS (SELECT 1 FROM claims cx WHERE cx.receipt_scan_id = ct2.receipt_scan_id)
+         ) u2) AS open_claims,
       (SELECT COUNT(*)::int
-         FROM claim_tickets ct
-         JOIN receipt_scans cs3 ON cs3.id = ct.receipt_scan_id
-         JOIN expected_returns ce3 ON ce3.id = cs3.expected_return_id
-        WHERE ct.status = 'Approved' AND ${approvedClaims}) AS approved_claims
+         FROM (
+           SELECT c3.id FROM claims c3 WHERE c3.status = 'submitted' AND ${approvedClaimsModern}
+           UNION ALL
+           SELECT ct3.id FROM claim_tickets ct3
+           JOIN receipt_scans cs3 ON cs3.id = ct3.receipt_scan_id
+           JOIN expected_returns ce3 ON ce3.id = cs3.expected_return_id
+           WHERE ct3.status = 'Approved' AND ${approvedClaimsLegacy}
+             AND NOT EXISTS (SELECT 1 FROM claims cx WHERE cx.receipt_scan_id = ct3.receipt_scan_id)
+         ) u3) AS approved_claims
     FROM receipt_scans rs
     JOIN expected_returns er ON er.id = rs.expected_return_id
     WHERE ${scans}
@@ -556,22 +574,61 @@ export async function loadDashboard(db: pg.Pool, scope: AccountScope) {
   }
 }
 
+const STATUS_LABELS: Record<string, string> = {
+  pending_evidence: "Pending Evidence",
+  ready_for_claim: "Ready for Claim",
+  waiting_for_approval: "Waiting for Approval",
+  processing: "Processing",
+  submitted: "Submitted",
+  failed: "Failed",
+  manual_action_required: "Manual Action Required",
+  Approved: "Approved",
+  Rejected: "Rejected",
+  Review: "Under Review",
+  Raised: "Raised",
+}
+
 export async function loadClaims(db: pg.Pool, scope: AccountScope) {
+  const totalsParams: unknown[] = []
+  const totalsCondition = accountCondition(scope, "c.marketplace_id", totalsParams)
+
   const sliceParams: unknown[] = []
-  const sliceCondition = accountCondition(scope, "er.marketplace_id", sliceParams)
+  const sliceModernCondition = accountCondition(scope, "c.marketplace_id", sliceParams)
+  const sliceLegacyCondition = accountCondition(scope, "er.marketplace_id", sliceParams)
+
   const rowParams: unknown[] = []
   const rowCondition = accountCondition(scope, "m.id", rowParams)
-  const [headline, slices, rows] = await Promise.all([
+
+  const [headline, totalsRes, slices, rows] = await Promise.all([
     loadHeadline(db, scope),
     db.query(
       `
-      SELECT ct.status AS status_name, COUNT(*)::int AS claim_count
-      FROM claim_tickets ct
-      JOIN receipt_scans rs ON rs.id = ct.receipt_scan_id
-      JOIN expected_returns er ON er.id = rs.expected_return_id
-      WHERE ${sliceCondition}
-      GROUP BY ct.status
-      ORDER BY claim_count DESC, ct.status
+      SELECT
+        COUNT(c.id)::int AS total_claims,
+        (COUNT(c.id) FILTER (WHERE c.status NOT IN ('submitted', 'failed')))::int AS open_claims,
+        (COUNT(c.id) FILTER (WHERE c.status = 'submitted'))::int AS submitted_claims,
+        COALESCE(SUM(c.total_price_snapshot), 0)::numeric(12,2) AS total_value,
+        COALESCE(SUM(c.total_price_snapshot) FILTER (WHERE c.status = 'submitted'), 0)::numeric(12,2) AS recovered_value
+      FROM claims c
+      WHERE ${totalsCondition}
+      `,
+      totalsParams,
+    ),
+    db.query(
+      `
+      SELECT status_name, COUNT(*)::int AS claim_count FROM (
+        SELECT c.status AS status_name
+        FROM claims c
+        WHERE ${sliceModernCondition}
+        UNION ALL
+        SELECT ct.status AS status_name
+        FROM claim_tickets ct
+        JOIN receipt_scans rs ON rs.id = ct.receipt_scan_id
+        JOIN expected_returns er ON er.id = rs.expected_return_id
+        WHERE ${sliceLegacyCondition} AND NOT EXISTS (SELECT 1 FROM claims cx WHERE cx.receipt_scan_id = ct.receipt_scan_id)
+      ) combined
+      GROUP BY status_name
+      ORDER BY claim_count DESC, status_name
       `,
       sliceParams,
     ),
@@ -579,14 +636,20 @@ export async function loadClaims(db: pg.Pool, scope: AccountScope) {
       `
       SELECT
         m.name AS market,
-        COUNT(ct.id)::int AS raised,
-        (COUNT(ct.id) FILTER (WHERE ct.status = 'Approved'))::int AS approved,
-        (COUNT(ct.id) FILTER (WHERE ct.status IN ('Review', 'Raised')))::int AS review,
-        (COUNT(ct.id) FILTER (WHERE ct.status = 'Rejected'))::int AS rejected
+        (COUNT(DISTINCT c.id) + COUNT(DISTINCT ct.id))::int AS raised,
+        (COUNT(DISTINCT c.id) FILTER (WHERE c.status = 'submitted') + COUNT(DISTINCT ct.id) FILTER (WHERE ct.status = 'Approved'))::int AS approved,
+        (COUNT(DISTINCT c.id) FILTER (WHERE c.status IN ('ready_for_claim', 'waiting_for_approval', 'processing', 'pending_evidence')) + COUNT(DISTINCT ct.id) FILTER (WHERE ct.status IN ('Review', 'Raised')))::int AS review,
+        (COUNT(DISTINCT c.id) FILTER (WHERE c.status IN ('failed', 'manual_action_required')) + COUNT(DISTINCT ct.id) FILTER (WHERE ct.status = 'Rejected'))::int AS rejected,
+        COALESCE(SUM(c.total_price_snapshot), 0)::numeric(12,2) AS total_val
       FROM marketplaces m
-      LEFT JOIN expected_returns er ON er.marketplace_id = m.id
-      LEFT JOIN receipt_scans rs ON rs.expected_return_id = er.id
-      LEFT JOIN claim_tickets ct ON ct.receipt_scan_id = rs.id
+      LEFT JOIN claims c ON c.marketplace_id = m.id
+      LEFT JOIN (
+        SELECT ct.id, ct.status, er.marketplace_id
+        FROM claim_tickets ct
+        JOIN receipt_scans rs ON rs.id = ct.receipt_scan_id
+        JOIN expected_returns er ON er.id = rs.expected_return_id
+        WHERE NOT EXISTS (SELECT 1 FROM claims cx WHERE cx.receipt_scan_id = ct.receipt_scan_id)
+      ) ct ON ct.marketplace_id = m.id
       WHERE ${rowCondition}
       GROUP BY m.id, m.name, m.sort_order
       ORDER BY m.sort_order, m.id
@@ -594,7 +657,20 @@ export async function loadClaims(db: pg.Pool, scope: AccountScope) {
       rowParams,
     ),
   ])
+
+  const totals = totalsRes.rows[0] || {
+    total_claims: 0,
+    open_claims: 0,
+    submitted_claims: 0,
+    total_value: "0.00",
+    recovered_value: "0.00",
+  }
+
   const claims = Number(headline.claims)
+  const totalVal = Number(totals.total_value)
+  const recoveredVal = Number(totals.recovered_value)
+  const submittedClaims = Number(totals.submitted_claims)
+
   return {
     stats: [
       {
@@ -606,29 +682,29 @@ export async function loadClaims(db: pg.Pool, scope: AccountScope) {
       },
       {
         label: "Claim value",
-        value: "—",
-        delta: "No claim values recorded",
+        value: totalVal > 0 ? formatInr(totalVal) : "₹0.00",
+        delta: totalVal > 0 ? `${formatCount(Number(totals.total_claims))} valued claims` : "No claim values recorded",
         icon: "file",
         tone: "blue",
       },
       {
         label: "Amount recovered",
-        value: "—",
-        delta: "No recovery amounts recorded",
+        value: recoveredVal > 0 ? formatInr(recoveredVal) : "₹0.00",
+        delta: recoveredVal > 0 ? `${percentOf(submittedClaims, claims)} submitted / confirmed` : "No recovery amounts recorded",
         icon: "check",
         tone: "green",
       },
       {
         label: "Approval rate",
-        value: percentOf(headline.approved_claims, claims),
-        delta: "Approved out of all claim tickets",
+        value: percentOf(Number(headline.approved_claims), claims),
+        delta: "Approved / submitted out of all claims",
         icon: "alert",
         tone: "orange",
       },
     ],
     total: formatCount(claims),
     slices: slices.rows.map((row) => ({
-      name: row.status_name,
+      name: STATUS_LABELS[row.status_name] || row.status_name,
       count: formatCount(row.claim_count),
       pct: percentOf(row.claim_count, claims),
       tone: claimTone(row.status_name),
@@ -639,8 +715,7 @@ export async function loadClaims(db: pg.Pool, scope: AccountScope) {
       approved: formatCount(row.approved),
       review: formatCount(row.review),
       rejected: formatCount(row.rejected),
-      // No claim value is recorded yet.
-      value: "—",
+      value: Number(row.total_val) > 0 ? formatInr(Number(row.total_val)) : "—",
       rate: row.raised ? Math.round((row.approved / row.raised) * 100) : 0,
     })),
   }

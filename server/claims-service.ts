@@ -112,6 +112,7 @@ export type ClaimRow = {
   daysRemaining: number | null
   overdue: boolean
   missingAmount: number
+  totalPrice: number
 }
 
 export type ClaimDetail = ClaimRow & {
@@ -606,6 +607,7 @@ export async function listClaims(
             c.marketplace_issue_code, c.marketplace_issue_label, c.sub_order_id_snapshot,
             c.packet_state_snapshot, c.packet_id_snapshot, c.return_type_snapshot,
             c.received_date, c.claim_due_date, c.missing_item_amount,
+            COALESCE(c.total_price_snapshot, 0) AS total_price,
             CASE WHEN c.claim_due_date IS NULL THEN NULL
                  ELSE c.claim_due_date - (now() AT TIME ZONE 'Asia/Kolkata')::date END AS days_remaining,
             (SELECT COUNT(*)::int FROM claim_media cm WHERE cm.claim_id = c.id AND cm.is_active = true) AS media_count
@@ -650,6 +652,7 @@ export async function listClaims(
       daysRemaining: row.days_remaining === null || row.days_remaining === undefined ? null : Number(row.days_remaining),
       overdue: row.days_remaining !== null && row.days_remaining !== undefined && Number(row.days_remaining) < 0,
       missingAmount: Number(row.missing_item_amount || 0),
+      totalPrice: Number(row.total_price || 0),
     })),
     total,
     page,
@@ -669,6 +672,7 @@ export async function getClaim(db: pg.Pool, scope: AccountScope, claimId: number
             c.marketplace_issue_code, c.marketplace_issue_label, c.sub_order_id_snapshot,
             c.packet_state_snapshot, c.packet_id_snapshot, c.return_type_snapshot,
             c.received_date, c.claim_due_date, c.missing_item_amount,
+            COALESCE(c.total_price_snapshot, 0) AS total_price,
             CASE WHEN c.claim_due_date IS NULL THEN NULL
                  ELSE c.claim_due_date - (now() AT TIME ZONE 'Asia/Kolkata')::date END AS days_remaining
      FROM claims c
@@ -754,6 +758,7 @@ export async function getClaim(db: pg.Pool, scope: AccountScope, claimId: number
     daysRemaining: row.days_remaining === null || row.days_remaining === undefined ? null : Number(row.days_remaining),
     overdue: row.days_remaining !== null && row.days_remaining !== undefined && Number(row.days_remaining) < 0,
     missingAmount: Number(row.missing_item_amount || 0),
+    totalPrice: Number(row.total_price || 0),
     media: mediaResult.rows.map((r: Record<string, unknown>) => ({
       id: Number(r.id),
       fieldKey: String(r.field_key || ""),

@@ -33,3 +33,4 @@ android/.cxx
 # IDE & Editor caches
 .idea
 .vscode
+scratch/

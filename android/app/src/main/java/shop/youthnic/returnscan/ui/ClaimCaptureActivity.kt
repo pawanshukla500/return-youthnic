@@ -951,15 +951,96 @@ class ClaimCaptureActivity : AppCompatActivity() {
 
             createResult.onSuccess { result ->
                 val claimId = result.claimId
-                // Enqueue all captured files into WorkManager
-                queueAllFilesForUpload(claimId)
 
-                MaterialAlertDialogBuilder(this@ClaimCaptureActivity)
-                    .setTitle("Claim Submitted")
-                    .setMessage("Meesho claim #$claimId created successfully! Evidence files are saved safely on device and uploading in background.")
-                    .setPositiveButton("Done") { _, _ -> finish() }
+                // Flatten all captured files
+                val allFiles = mutableListOf<CapturedFile>()
+                for (list in capturedFiles.values) {
+                    allFiles.addAll(list)
+                }
+                val totalCount = allFiles.size
+
+                // Construct visual upload progress dialog
+                val container = android.widget.LinearLayout(this@ClaimCaptureActivity).apply {
+                    orientation = android.widget.LinearLayout.VERTICAL
+                    setPadding(60, 40, 60, 40)
+                }
+                val tvStatus = android.widget.TextView(this@ClaimCaptureActivity).apply {
+                    text = "Uploading evidence files (0 / $totalCount)..."
+                    textSize = 14f
+                    setTextColor(android.graphics.Color.parseColor("#334155"))
+                    setPadding(0, 0, 0, 24)
+                }
+                val progressBar = android.widget.ProgressBar(
+                    this@ClaimCaptureActivity,
+                    null,
+                    android.R.attr.progressBarStyleHorizontal
+                ).apply {
+                    isIndeterminate = false
+                    max = 100
+                    progress = 0
+                    progressTintList = ColorStateList.valueOf(android.graphics.Color.parseColor("#059669"))
+                }
+                val tvPercent = android.widget.TextView(this@ClaimCaptureActivity).apply {
+                    text = "0%"
+                    textSize = 12f
+                    setTextColor(android.graphics.Color.parseColor("#64748b"))
+                    gravity = android.view.Gravity.END
+                    setPadding(0, 12, 0, 0)
+                }
+                container.addView(tvStatus)
+                container.addView(progressBar)
+                container.addView(tvPercent)
+
+                val progressDialog = MaterialAlertDialogBuilder(this@ClaimCaptureActivity)
+                    .setTitle("Uploading Claim Evidence")
+                    .setView(container)
                     .setCancelable(false)
-                    .show()
+                    .create()
+
+                progressDialog.show()
+
+                lifecycleScope.launch {
+                    var uploadedCount = 0
+                    val failedFiles = mutableListOf<CapturedFile>()
+
+                    for (cf in allFiles) {
+                        tvStatus.text = "Uploading ${uploadedCount + 1} of $totalCount (${cf.fieldKey})..."
+                        val uploadRes = api.uploadClaimEvidence(claimId, cf.fieldKey, cf.file, cf.mimeType)
+                        if (uploadRes.isSuccess) {
+                            uploadedCount++
+                            try { if (cf.file.exists()) cf.file.delete() } catch (_: Exception) {}
+                        } else {
+                            failedFiles.add(cf)
+                        }
+                        val pct = if (totalCount > 0) ((uploadedCount.toFloat() / totalCount.toFloat()) * 100).toInt() else 100
+                        progressBar.progress = pct
+                        tvPercent.text = "$pct%"
+                    }
+
+                    if (failedFiles.isNotEmpty()) {
+                        queueFilesForUpload(claimId, failedFiles)
+                    }
+
+                    try { progressDialog.dismiss() } catch (_: Exception) {}
+
+                    val successMessage = if (failedFiles.isEmpty()) {
+                        "Meesho claim #$claimId created successfully! All $uploadedCount evidence files uploaded to cloud storage."
+                    } else {
+                        "Meesho claim #$claimId created. $uploadedCount files uploaded, ${failedFiles.size} queued for background retry."
+                    }
+
+                    MaterialAlertDialogBuilder(this@ClaimCaptureActivity)
+                        .setTitle("Claim Submitted Successfully")
+                        .setMessage(successMessage)
+                        .setPositiveButton("File Next Return (Start Again)") { _, _ ->
+                            resetFormForNextClaim()
+                        }
+                        .setNegativeButton("Done") { _, _ ->
+                            finish()
+                        }
+                        .setCancelable(false)
+                        .show()
+                }
             }.onFailure { err ->
                 binding.btnSubmitClaim.isEnabled = true
                 showMessage(err.message ?: "Failed to submit claim.")
@@ -967,26 +1048,69 @@ class ClaimCaptureActivity : AppCompatActivity() {
         }
     }
 
-    private fun queueAllFilesForUpload(claimId: Int) {
+    private fun queueFilesForUpload(claimId: Int, filesToQueue: List<CapturedFile>) {
         val wm = WorkManager.getInstance(this)
-        for ((fieldKey, files) in capturedFiles) {
-            for (cf in files) {
-                val inputData = Data.Builder()
-                    .putInt(ClaimEvidenceUploadWorker.KEY_CLAIM_ID, claimId)
-                    .putString(ClaimEvidenceUploadWorker.KEY_FIELD_KEY, fieldKey)
-                    .putString(ClaimEvidenceUploadWorker.KEY_FILE_PATH, cf.file.absolutePath)
-                    .putString(ClaimEvidenceUploadWorker.KEY_MIME_TYPE, cf.mimeType)
-                    .build()
+        for (cf in filesToQueue) {
+            val inputData = Data.Builder()
+                .putInt(ClaimEvidenceUploadWorker.KEY_CLAIM_ID, claimId)
+                .putString(ClaimEvidenceUploadWorker.KEY_FIELD_KEY, cf.fieldKey)
+                .putString(ClaimEvidenceUploadWorker.KEY_FILE_PATH, cf.file.absolutePath)
+                .putString(ClaimEvidenceUploadWorker.KEY_MIME_TYPE, cf.mimeType)
+                .build()
 
-                val workRequest = OneTimeWorkRequestBuilder<ClaimEvidenceUploadWorker>()
-                    .setInputData(inputData)
-                    .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
-                    .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 15, TimeUnit.SECONDS)
-                    .build()
+            val workRequest = OneTimeWorkRequestBuilder<ClaimEvidenceUploadWorker>()
+                .setInputData(inputData)
+                .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 15, TimeUnit.SECONDS)
+                .build()
 
-                wm.enqueue(workRequest)
-            }
+            wm.enqueue(workRequest)
         }
+    }
+
+    private fun resetFormForNextClaim() {
+        // 1. Clear input text fields
+        binding.etClaimSearch.setText("")
+        binding.etSubOrderNumber.setText("")
+        binding.etAwbNumber.setText("")
+        binding.etPacketId.setText("")
+        binding.etClaimTitle.setText("")
+        binding.etClaimContent.setText("")
+        binding.tvClaimMessage.visibility = View.GONE
+
+        // 2. Clear captured evidence files from memory and disk
+        for (list in capturedFiles.values) {
+            for (item in list) {
+                try {
+                    if (item.file.exists()) item.file.delete()
+                } catch (_: Exception) {}
+            }
+            list.clear()
+        }
+        capturedFiles.clear()
+
+        // 3. Reset all evidence card views
+        for ((_, card) in evidenceCardBindings) {
+            card.layoutEvidencePreview.visibility = View.GONE
+            card.tvEvidenceCount.text = "0 / 1"
+        }
+
+        // 4. Reset state variables
+        lookupData = null
+        binding.cardProductPreview.visibility = View.GONE
+        binding.cardOrderSummary.visibility = View.GONE
+        selectedIssueCode = "wrong_return"
+        selectedIssueLabel = "I have received wrong return"
+        binding.spinnerMeeshoIssue.setSelection(0)
+        binding.btnSubmitClaim.isEnabled = true
+        binding.progressClaim.visibility = View.GONE
+
+        // 5. Switch back to Step 1: Return Details
+        showStep(1)
+
+        // 6. Request focus on search input
+        binding.etClaimSearch.requestFocus()
+        showMessage("Ready for next return claim. Enter or scan SubOrder ID / AWB.")
     }
 
     private fun showInfoDialog() {
