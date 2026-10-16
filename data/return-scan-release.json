@@ -1,9 +1,9 @@
 {
-  "versionCode": 10038,
-  "versionName": "1.0.38",
+  "versionCode": 10053,
+  "versionName": "1.0.53",
   "minRequiredVersionCode": 10001,
-  "sha256": "db09eb8f2f3e881e74c76414ef20a8fef476113c92f10e5479cebefb7f32e238",
-  "sizeBytes": 3465554,
+  "sha256": "5ae8cfafd088093f68936a47602fa5be05c4906db1dd31f0daa97f19c383dc74",
+  "sizeBytes": 3831281,
   "notes": "Youthnic Native Android Return Scanner · Claim Submission & Error Fixes\n- Resolved internal server error (500) on claim evidence submission\n- Automatic marketplace template resolution and fallbacks\n- Fault-tolerant background ticket sync and desktop automation job queueing\n- 480p SD unpacking video with storage permission & auto-cleanup",
   "publishedAt": "2026-10-16T05:50:00Z",
   "downloadUrl": "https://github.com/pawanshukla500/return-youthnic/releases/latest",
