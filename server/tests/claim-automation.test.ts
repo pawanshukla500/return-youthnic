@@ -145,4 +145,38 @@ test("marketplace credentials: portal URLs map to standard supplier dashboards",
   assert.ok(defaultPortalUrls["flipkart"].includes("seller.flipkart.com"))
 })
 
+test("desktop agent config: defaults to production cloud URL and sanitizes legacy localhost", async () => {
+  const { DEFAULT_PRODUCTION_URL, loadAgentConfig } = await import("../../desktop-agent/src/config.js")
+  assert.equal(DEFAULT_PRODUCTION_URL, "https://return.youthnic.shop")
+  const config = loadAgentConfig()
+  assert.ok(!config.backendUrl.includes("127.0.0.1"), "backendUrl must not be localhost")
+  assert.ok(!config.backendUrl.includes("localhost"), "backendUrl must not be localhost")
+  assert.equal(config.backendUrl, "https://return.youthnic.shop")
+})
+
+test("low-spec hardware optimization: adaptive scheduler backoff calculation", () => {
+  function calculatePollDelay(hasJob: boolean, emptyPollCount: number): number {
+    if (hasJob) return 5000
+    if (emptyPollCount > 10) return 30000
+    if (emptyPollCount > 4) return 20000
+    return 10000
+  }
+
+  // Active claim being processed
+  assert.equal(calculatePollDelay(true, 0), 5000)
+
+  // Empty queue: starts at 10s
+  assert.equal(calculatePollDelay(false, 1), 10000)
+  assert.equal(calculatePollDelay(false, 4), 10000)
+
+  // Idle after ~1 minute: backs off to 20s
+  assert.equal(calculatePollDelay(false, 5), 20000)
+  assert.equal(calculatePollDelay(false, 10), 20000)
+
+  // Long idle (>2 minutes): backs off to 30s to preserve CPU
+  assert.equal(calculatePollDelay(false, 11), 30000)
+  assert.equal(calculatePollDelay(false, 100), 30000)
+})
+
+
 

@@ -62,6 +62,7 @@ CREATE TABLE IF NOT EXISTS claim_automation_jobs (
 CREATE INDEX IF NOT EXISTS claim_automation_jobs_claim_idx ON claim_automation_jobs (claim_id);
 CREATE INDEX IF NOT EXISTS claim_automation_jobs_stage_idx ON claim_automation_jobs (stage);
 CREATE INDEX IF NOT EXISTS claim_automation_jobs_agent_idx ON claim_automation_jobs (agent_id);
+CREATE INDEX IF NOT EXISTS claim_automation_jobs_stage_created_idx ON claim_automation_jobs (stage, created_at ASC) WHERE stage IN ('queued', 'approved');
 
 -- 4. Additional claim snapshot and description fields on claims table
 ALTER TABLE claims ADD COLUMN IF NOT EXISTS customer_name_snapshot text NOT NULL DEFAULT '';

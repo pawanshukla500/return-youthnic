@@ -33,6 +33,7 @@ export type BrowserSession = {
 
 export class BrowserRunner {
   private ws: WebSocket | null = null
+  private proc: child_process.ChildProcess | null = null
   private nextId = 1
   private pendingCallbacks = new Map<number, { resolve: (res: any) => void; reject: (err: any) => void }>()
 
@@ -60,6 +61,15 @@ export class BrowserRunner {
       "--no-default-browser-check",
       "--disable-blink-features=AutomationControlled",
       "--window-size=1280,900",
+      "--disable-dev-shm-usage",
+      "--disable-gpu",
+      "--no-sandbox",
+      "--disable-extensions",
+      "--disable-background-networking",
+      "--disable-sync",
+      "--disable-default-apps",
+      "--metrics-recording-only",
+      "--js-flags=--max-old-space-size=256",
     ]
 
     if (options.headless) {
@@ -71,6 +81,7 @@ export class BrowserRunner {
       detached: false,
       stdio: "ignore",
     })
+    this.proc = proc
 
     // Poll until browser debugging port is ready
     let wsUrl = ""
@@ -335,11 +346,35 @@ export class BrowserRunner {
   async close(): Promise<void> {
     if (this.ws) {
       try {
+        await this.send("Browser.close", {}).catch(() => undefined)
+      } catch {
+        // ignore
+      }
+      try {
         this.ws.close()
       } catch {
         // ignore
       }
       this.ws = null
+    }
+
+    if (this.proc) {
+      try {
+        if (!this.proc.killed && this.proc.pid) {
+          if (process.platform === "win32") {
+            try {
+              child_process.execSync(`taskkill /pid ${this.proc.pid} /T /F`, { stdio: "ignore" })
+            } catch {
+              this.proc.kill("SIGKILL")
+            }
+          } else {
+            this.proc.kill("SIGKILL")
+          }
+        }
+      } catch {
+        // ignore
+      }
+      this.proc = null
     }
   }
 }

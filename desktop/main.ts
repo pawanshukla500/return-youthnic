@@ -8,6 +8,12 @@ import { BrowserRunner } from "../desktop-agent/src/browser-runner.js"
 import { getAutomationEngine } from "../desktop-agent/src/marketplaces/registry.js"
 import { logger } from "../desktop-agent/src/logger.js"
 
+// Hardware efficiency switches for low-spec PCs (4GB RAM, 2-Core CPUs)
+app.commandLine.appendSwitch("js-flags", "--max-old-space-size=256")
+app.commandLine.appendSwitch("renderer-process-limit", "2")
+app.commandLine.appendSwitch("disable-features", "CalculateNativeWinOcclusion")
+app.commandLine.appendSwitch("disable-background-timer-throttling", "false")
+
 let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null
 let isQuitting = false
@@ -49,15 +55,16 @@ if (!gotTheLock) {
 // 24/7 Background Claim Automation Worker
 // ---------------------------------------------------------------------------------------------------------------
 
-async function runAutomationWorkerLoop(): Promise<void> {
-  if (!isBotActive || isProcessingJob) return
+async function runAutomationWorkerLoop(): Promise<boolean> {
+  if (!isBotActive || isProcessingJob) return false
 
+  let pollResult: any = null
   try {
-    const poll = await client.pollJob()
-    if (!poll.hasJob || !poll.job) return
+    pollResult = await client.pollJob()
+    if (!pollResult.hasJob || !pollResult.job) return false
 
     isProcessingJob = true
-    const jobHeader = poll.job
+    const jobHeader = pollResult.job
     activeJobSummary = `${jobHeader.marketplace} #${jobHeader.jobId} (${jobHeader.orderNumber})`
 
     logger.info(`[Desktop App Bot] Received Claim Job #${jobHeader.jobId} (${jobHeader.marketplace} · Order: ${jobHeader.orderNumber})`)
@@ -153,31 +160,75 @@ async function runAutomationWorkerLoop(): Promise<void> {
     }
   } catch (err: any) {
     logger.error("[Desktop App Bot] Automation error:", err)
+    if (pollResult?.job?.claimId) {
+      await client.cleanClaimEvidenceFiles(pollResult.job.claimId).catch(() => undefined)
+    }
+    return false
   } finally {
     isProcessingJob = false
     activeJobSummary = null
-    await client.sendHeartbeat("online", { status: "idle" })
+    await client.sendHeartbeat("online", { status: "idle" }).catch(() => undefined)
   }
+  return true
+}
+
+let schedulerTimeout: NodeJS.Timeout | null = null
+let currentPollDelayMs = 10000
+let consecutiveEmptyPolls = 0
+
+async function triggerNextPoll(): Promise<void> {
+  if (schedulerTimeout) {
+    clearTimeout(schedulerTimeout)
+    schedulerTimeout = null
+  }
+
+  if (!isBotActive) {
+    schedulerTimeout = setTimeout(triggerNextPoll, 15000)
+    return
+  }
+
+  try {
+    const processedJob = await runAutomationWorkerLoop()
+    if (processedJob) {
+      consecutiveEmptyPolls = 0
+      currentPollDelayMs = 5000 // Fast-poll when active claims are being processed
+    } else {
+      consecutiveEmptyPolls++
+      // Dynamic backoff for 4GB RAM / 2-core CPU efficiency
+      if (consecutiveEmptyPolls > 10) {
+        currentPollDelayMs = 30000 // 30s when completely idle
+      } else if (consecutiveEmptyPolls > 4) {
+        currentPollDelayMs = 20000 // 20s after a minute of idle
+      } else {
+        currentPollDelayMs = 10000 // default 10s
+      }
+    }
+  } catch (err) {
+    logger.error("[Desktop Scheduler] Poll error:", err)
+    currentPollDelayMs = 20000
+  }
+
+  schedulerTimeout = setTimeout(triggerNextPoll, currentPollDelayMs)
 }
 
 function startDesktopBotScheduler(): void {
+  // Prune legacy temporary evidence directories on startup to keep disk usage minimal
+  void client.pruneOldEvidenceFiles()
+
   // Register with backend
   void client.register()
 
-  // Heartbeat every 15s
+  // Heartbeat every 20s with memory metrics
   setInterval(() => {
-    void client.sendHeartbeat("online", { status: isProcessingJob ? "busy" : "idle", uptime: process.uptime() })
-  }, agentConfig.heartbeatIntervalMs)
+    void client.sendHeartbeat("online", {
+      status: isProcessingJob ? "busy" : "idle",
+      uptime: process.uptime(),
+      memoryRssMb: Math.round(process.memoryUsage().rss / (1024 * 1024)),
+    }).catch(() => undefined)
+  }, 20000)
 
-  // Polling every 10s
-  setInterval(() => {
-    void runAutomationWorkerLoop()
-  }, agentConfig.pollIntervalMs)
-
-  // Initial poll
-  setTimeout(() => {
-    void runAutomationWorkerLoop()
-  }, 3000)
+  // Start adaptive polling loop
+  schedulerTimeout = setTimeout(triggerNextPoll, 2500)
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -210,6 +261,8 @@ function createMainWindow(): void {
       contextIsolation: true,
       preload: path.join(__dirname, "preload.cjs"),
       webSecurity: true,
+      backgroundThrottling: true,
+      spellcheck: false,
     },
   })
 
@@ -410,7 +463,8 @@ function createTray(): void {
       {
         label: "Check for Claims Now",
         click: () => {
-          void runAutomationWorkerLoop()
+          consecutiveEmptyPolls = 0
+          void triggerNextPoll()
         },
       },
       { type: "separator" },

@@ -1,0 +1,107 @@
+name: Build & Release Return App Windows Desktop
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "desktop/**"
+      - "desktop-agent/**"
+      - "package.json"
+      - ".github/workflows/desktop-release.yml"
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish GitHub Release artifact"
+        type: boolean
+        required: false
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: desktop-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-desktop:
+    name: Build Native Windows Electron Installer
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: "npm"
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: TypeScript Typecheck
+        run: npm run typecheck
+
+      - name: Build Web Client & Server
+        run: npm run build
+
+      - name: Bundle Electron Main
+        run: npm run desktop:build
+
+      - name: Build Windows NSIS Setup Installer
+        run: npm run desktop:dist
+
+      - name: Upload Windows Setup Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: return-app-windows-setup
+          path: dist-electron/Return App Setup 1.0.0.exe
+          if-no-files-found: error
+
+  publish-release:
+    name: Publish Desktop Release to GitHub
+    needs: build-desktop
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish)
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Download Windows Setup Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: return-app-windows-setup
+          path: release-input
+
+      - name: Publish or Update GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          SETUP_EXE="release-input/Return App Setup 1.0.0.exe"
+          if [ ! -f "$SETUP_EXE" ]; then
+            echo "::error::No Setup EXE found in downloaded artifact."
+            exit 1
+          fi
+
+          TAG_NAME="desktop-v1.0.${GITHUB_RUN_NUMBER}"
+          echo "Publishing GitHub Release $TAG_NAME..."
+
+          gh release create "$TAG_NAME" \
+            "$SETUP_EXE" \
+            --target "${{ github.sha }}" \
+            --title "Return App Desktop $TAG_NAME" \
+            --notes "Official Windows Desktop NSIS Installer for Return App ($TAG_NAME).
+
+          ### System Specifications & Optimizations:
+          * **Low-Spec Optimized**: Runs smoothly on **4GB RAM and 2-Core CPUs** 24/7 with V8 heap constraints (\`--max-old-space-size=256\`) and Chromium background throttling.
+          * **Program Files Standard Location**: NSIS installer configures per-machine installation into \`Program Files\` with Desktop and Start Menu shortcuts.
+          * **Persistent Session Storage**: Sign in once with ID and password; authentication cookies persist indefinitely across restarts.
+          * **24/7 Background Claim Bot**: Embedded worker loop connects directly to production VPS (\`https://return.youthnic.shop\`), polls return claim disputes, downloads media, and automates seller portal claims (Myntra, Flipkart, Meesho).
+          * **Zero Memory Leaks**: Native process tree teardown and streaming evidence downloads." || \
+          gh release upload "$TAG_NAME" "$SETUP_EXE" --clobber

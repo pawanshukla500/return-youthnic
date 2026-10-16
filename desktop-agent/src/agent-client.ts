@@ -189,11 +189,22 @@ export class AgentBackendClient {
           headers: { "X-Agent-UUID": this.config.agentUuid },
         })
 
-        if (res.ok) {
-          const buffer = Buffer.from(await res.arrayBuffer())
-          fs.writeFileSync(localPath, buffer)
+        if (res.ok && res.body) {
+          const fileStream = fs.createWriteStream(localPath)
+          const reader = res.body.getReader()
+          let totalBytes = 0
+          while (true) {
+            const { done, value } = await reader.read()
+            if (done) break
+            fileStream.write(value)
+            totalBytes += value.length
+          }
+          await new Promise<void>((resolve, reject) => {
+            fileStream.end(() => resolve())
+            fileStream.on("error", reject)
+          })
           downloadedMap.set(f.fieldKey, localPath)
-          logger.info(`Saved ${f.fieldKey} to ${localPath} (${buffer.length} bytes).`)
+          logger.info(`Saved ${f.fieldKey} to ${localPath} (${totalBytes} bytes).`)
         } else {
           logger.warn(`Could not download ${f.fieldKey} (${res.status}).`)
         }
@@ -214,6 +225,27 @@ export class AgentBackendClient {
       } catch (err) {
         logger.warn(`[Cleanup] Failed to delete temporary claim directory ${claimDir}:`, err)
       }
+    }
+  }
+
+  async pruneOldEvidenceFiles(maxAgeHours = 24): Promise<void> {
+    if (!fs.existsSync(this.config.workDir)) return
+    try {
+      const now = Date.now()
+      const maxAgeMs = maxAgeHours * 60 * 60 * 1000
+      const entries = await fs.promises.readdir(this.config.workDir, { withFileTypes: true })
+      for (const entry of entries) {
+        if (entry.isDirectory() && entry.name.startsWith("claim-")) {
+          const fullPath = path.join(this.config.workDir, entry.name)
+          const stats = await fs.promises.stat(fullPath)
+          if (now - stats.mtimeMs > maxAgeMs) {
+            await fs.promises.rm(fullPath, { recursive: true, force: true }).catch(() => undefined)
+            logger.info(`[Prune] Pruned old temporary claim directory: ${entry.name}`)
+          }
+        }
+      }
+    } catch (err) {
+      logger.warn("[Prune] Failed to prune old evidence files:", err)
     }
   }
 
