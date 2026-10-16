@@ -31,6 +31,15 @@ export function formatUploadLabel(date = new Date()): string {
   return `${day}, ${formatScanTime(date)}`
 }
 
+// Unambiguous timestamp for API strings the client re-parses (e.g. unmapped SKU last-seen).
+// formatUploadLabel drops the year, so `new Date(label)` on the client defaults to 2001 —
+// never send that display-only shape where the client needs the true date. ISO keeps year + timezone.
+export function toIsoTimestamp(value: Date | string | null | undefined): string {
+  if (!value) return ""
+  const date = value instanceof Date ? value : new Date(value)
+  return Number.isNaN(date.getTime()) ? "" : date.toISOString()
+}
+
 // For example "9 Oct 2026".
 export function formatDay(value: Date): string {
   return new Intl.DateTimeFormat("en-GB", {

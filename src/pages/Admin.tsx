@@ -107,6 +107,26 @@ const TABS = [
 
 const count = (value: number) => value.toLocaleString("en-US")
 
+const UNMAPPED_SEEN_FORMAT = new Intl.DateTimeFormat("en-IN", {
+  day: "numeric",
+  month: "short",
+  year: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+  hour12: true,
+  timeZone: "Asia/Kolkata",
+})
+
+// LAST SEEN arrives as an ISO string. Older responses sent a year-less display label
+// ("16 Oct, 2:30 PM") which `new Date()` mis-parses as year 2001 — show that legacy
+// shape as-is rather than fabricate a year. NULL/invalid timestamps render "—".
+function formatUnmappedSeen(value: string | null | undefined): string {
+  if (!value) return "—"
+  if (!/\d{4}|T\d{2}:/.test(value)) return value
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? "—" : UNMAPPED_SEEN_FORMAT.format(date)
+}
+
 type AliasDraft = { alias: string; marketplace: string }
 
 export function Admin() {
@@ -1805,7 +1825,7 @@ export function Admin() {
                         header: "Last Seen",
                         render: (item) => (
                           <span style={{ fontSize: 12, color: "#64748b" }}>
-                            {item.lastSeenAt ? new Date(item.lastSeenAt).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" }) : "—"}
+                            {formatUnmappedSeen(item.lastSeenAt)}
                           </span>
                         ),
                       },

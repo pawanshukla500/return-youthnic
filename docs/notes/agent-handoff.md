@@ -1629,6 +1629,16 @@ Append new entries at the end. Do not edit earlier entries, except to correct a 
 - **Left untouched:** the concurrent claims-branch worktree (Claims.tsx, dashboard, desktop-agent, scratch/, release manifests) was never staged or committed here; PR #23 contains only the 10 batched-import/bridge files.
 - **Still open for the user:** Book11 Sheet2 ignore-confirmation; first big import via the batched UI; Myntra bridge disambiguation (seller-ID decision); `--apply` runs (VMS + OMSGuru bridge) against production data + daily scheduling.
 
+### 2026-10-16, OpenCode, unmapped-queue resolution + last-seen date fix (PR #25)
+
+- **Why 1,192 stayed unmapped:** two causes. (1) The queue used exact-match logic while scan-time lookup resolves variants (spaceless, parent `_KL`/`_A` article suffixes) — SKUs that scan fine sat as "Pending Linkup". (2) 693 are Myntra (EJ 397 + VB 296), which the OMSGuru bridge skips by design (VB-vs-EJ ambiguity) — plus live OMSGuru auth is currently 401, so no live bridge run is possible until `OMSGURU_API_TOKEN`/`CLIENT_ID` are refreshed (tried `sync:oms -- --list`, got 401; did not touch credentials).
+- **Fix (2 agents):** candidate-aware queue resolution (`unmappedIsResolved` + `loadMasterLookupKeys`, mirroring `masterSkusForListings` keys incl. `all` fallback and `marketplaceRank`) applied to refresh + all flips (upsert/replace/batch/bridge share `markUnmappedListingSkusMapped`); status-only change, no mappings guessed, no master rows created. LAST SEEN "2001" bug: server sent year-less labels, client `new Date()` defaulted missing year to 2001 — server now emits ISO (`toIsoTimestamp`, "" when unknown), client formats IST with year or "—" and never re-parses legacy labels.
+- **Also fixed:** new `format-unmapped.test.ts` was not registered in the test script — appended.
+- **Ran:** typecheck pass (0 errors), build pass, `npm test` → 420 tests: 384 pass, 0 fail, 36 skipped (DB-gated; 14 new tests pass).
+- **Changed (this commit only):** `server/product-master.ts`, `server/oms/master-bridge.ts`, `server/format.ts`, `src/pages/Admin.tsx`, `package.json`, 2 new test files, handoff entry.
+- **Next agent must not:** fuzzy-match when CREATING mappings (candidate logic is queue-status only), reintroduce year-less date strings into the API, or widen the Myntra bridge without the seller-ID decision.
+- **Open for the user:** refresh OMSGuru credentials then run `sync:oms` (bridge included) for the Myntra-ambiguous remainder; re-scan missing in Admin to collapse the queue with the new logic.
+
 ## STOP — needs the user to resume
 
 
@@ -2049,3 +2059,23 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
 
 
 
+### 2026-10-16, OpenCode, Unmapped-table LAST SEEN year-2001 fix
+- **Symptom:** Admin -> Product SKU master -> unmapped table showed "16 Oct 2001" in every LAST SEEN cell.
+- **Root cause chain:** `unmapped_listing_skus.last_seen_at timestamptz` (correct) -> `server/product-master.ts` `listUnmappedListingSkus`/`getUnmappedListingSkusSummary` formatted it with `formatUploadLabel` (`server/format.ts`, emits "16 Oct, 2:30 PM" with NO year) -> `src/pages/Admin.tsx` LAST SEEN cell re-parsed that label with `new Date()`, and JS defaults a missing year to 2001 (verified: `new Date("16 Oct, 2:30 PM").getFullYear() === 2001`); the date-only render also dropped the time.
+- **Changed (this agent only):**
+  - `server/format.ts`: added pure `toIsoTimestamp(value)` (NULL/invalid -> "", else ISO string with year+timezone).
+  - `server/product-master.ts`: `lastSeenAt`/`firstSeenAt` in both unmapped queries now use `toIsoTimestamp` (API shape unchanged, still strings).
+  - `src/pages/Admin.tsx`: added tolerant `formatUnmappedSeen` (IST day+month+year+time; NULL/invalid -> "�"; legacy year-less labels shown as-is, never re-parsed) and used it in the LAST SEEN cell.
+  - `server/tests/format-unmapped.test.ts`: new, 5 pure tests locking the contract (year-loss mechanism, ISO round-trip, no fabricated dates, legacy tolerance).
+- **Verification:**
+  - `node --import tsx --test server/tests/format-unmapped.test.ts`: 5 pass, 0 fail.
+  - `npm.cmd run typecheck`: passed (0 errors, client + server).
+  - Did NOT run build or full suite; did NOT commit. Uncommitted work from other agents (`server/oms/master-bridge.ts`, other `product-master.ts` hunks) left untouched.
+- **The next agent must not:** send `formatUploadLabel` output anywhere the client re-parses with `new Date()`; route all re-parsed timestamps through `toIsoTimestamp` + tolerant client formatting.
+
+### 2026-10-16, OpenCode, phantom unmapped listing SKUs (candidate-aware queue flip)
+- Changed: `server/product-master.ts` (new exported `unmappedIsResolved` + `loadMasterLookupKeys`, all flips now JS-decided set-based LOWER() updates, refresh skips variant-resolved inserts); `server/oms/master-bridge.ts` (bridge calls shared `markUnmappedListingSkusMapped`); `server/tests/unmapped-candidates.test.ts` (new, 9 pure SYN- tests); `package.json` (test script appends the new file).
+- Ran: `npm.cmd run typecheck` -> passed (0 errors); `node --import tsx --test server/tests/unmapped-candidates.test.ts` -> 9 pass, 0 fail.
+- Not run or not verified: full `npm test` suite, build, commit (per task); no DB-backed check.
+- The next agent must not: reintroduce exact-match `LOWER(pm.listing_sku) = LOWER(u.listing_sku)` flips; create product_master rows or guess mappings in the flip; change existing export signatures or `marketplace-rules.ts` candidate logic; touch iron/claims/scan flows or schema.
+- Open for the user: none; STATUS-only change, no migration needed.

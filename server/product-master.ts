@@ -9,9 +9,85 @@
 // Parsing and the preview summary are pure and live in server/sheets.ts.
 
 import type pg from "pg"
-import { formatUploadLabel } from "./format.js"
+import { formatUploadLabel, toIsoTimestamp } from "./format.js"
+import { compactSkuKey, listingSkuCandidates, marketplaceRank } from "./marketplace-rules.js"
 import { ServiceError, writeAudit, type Actor } from "./register-service.js"
 import type { MasterRow } from "./sheets.js"
+
+// Candidate-aware unmapped-queue resolution. Mirrors scan-time lookup
+// (masterSkusForListings in server/lookup-import.ts): a queue row resolves when ANY
+// candidate of its listing SKU (exact first, then spaceless form, then parent
+// article-suffix form via listingSkuCandidates) hits a stored master candidate for
+// the same account, or for the 'all'/blank scope fallback. marketplaceRank covers
+// the generic-scope case (e.g. "myntra" for "Myntra VB"); exact and 'all' hit via a
+// fast hash lookup, generic scopes via a rank-checked scan only when needed.
+export function unmappedIsResolved(
+  listingSku: string,
+  marketplace: string,
+  masterKeys: Set<string>,
+): boolean {
+  const account = (marketplace ?? "").trim().toLowerCase()
+  const exact = (listingSku ?? "").trim()
+  if (!exact || !account) return false
+  const candidates = listingSkuCandidates(exact).map((c) => compactSkuKey(c))
+  if (!candidates.length) return false
+  for (const cand of candidates) {
+    if (masterKeys.has(`${account}|${cand}`)) return true
+    if (masterKeys.has(`all|${cand}`)) return true
+    if (masterKeys.has(`|${cand}`)) return true
+  }
+  const wanted = new Set(candidates)
+  for (const key of masterKeys) {
+    const sep = key.indexOf("|")
+    if (sep < 0) continue
+    const scope = key.slice(0, sep)
+    if (scope === account || scope === "all" || scope === "") continue
+    if (!wanted.has(key.slice(sep + 1))) continue
+    if (marketplaceRank(scope, account) > 0) return true
+  }
+  return false
+}
+
+// One query over product_master, candidates expanded in JS. 63k rows fit in memory.
+// Key format mirrors lookup: `${marketplaceLower}|${compactCandidateLower}` for every
+// candidate of every stored listing.
+export async function loadMasterLookupKeys(db: pg.Pool | pg.PoolClient): Promise<Set<string>> {
+  const res = await db.query("SELECT marketplace, listing_sku FROM product_master")
+  const keys = new Set<string>()
+  for (const row of res.rows) {
+    const scope = String(row.marketplace ?? "").trim().toLowerCase()
+    const listing = String(row.listing_sku ?? "")
+    for (const candidate of listingSkuCandidates(listing)) {
+      keys.add(`${scope}|${compactSkuKey(candidate)}`)
+    }
+  }
+  return keys
+}
+
+// Candidate-aware flip shared by every writer. Resolution is decided in JS via
+// unmappedIsResolved; SQL stays a set-based exact update keyed on LOWER() equality.
+async function flipResolvedUnmappedRows(db: pg.Pool | pg.PoolClient): Promise<void> {
+  const masterKeys = await loadMasterLookupKeys(db)
+  const unmapped = await db.query(
+    "SELECT DISTINCT marketplace, listing_sku FROM unmapped_listing_skus WHERE status = 'unmapped'",
+  )
+  const resolved: string[] = []
+  for (const row of unmapped.rows) {
+    const mp = String(row.marketplace ?? "")
+    const sku = String(row.listing_sku ?? "")
+    if (mp.trim() && sku.trim() && unmappedIsResolved(sku, mp, masterKeys)) {
+      resolved.push(`${mp.trim().toLowerCase()}|${sku.trim().toLowerCase()}`)
+    }
+  }
+  if (!resolved.length) return
+  await db.query(
+    `UPDATE unmapped_listing_skus u
+     SET status = 'mapped'
+     WHERE u.status = 'unmapped'
+       AND (LOWER(u.marketplace) || '|' || LOWER(u.listing_sku)) = ANY($1::text[])`,
+    [resolved],
+  )
+}
 
 const CHUNK = 1000
 
@@ -118,14 +194,8 @@ export async function upsertProductMaster(
       affected,
     })
 
-    // Automatically mark matching entries in unmapped_listing_skus as mapped
-    await client.query(`
-      UPDATE unmapped_listing_skus u
-      SET status = 'mapped'
-      FROM product_master pm
-      WHERE u.status = 'unmapped'
-        AND LOWER(pm.listing_sku) = LOWER(u.listing_sku)
-    `)
+    // Candidate-aware flip: variant rows (spaceless, parent article-suffix) resolve too.
+    await flipResolvedUnmappedRows(client)
 
     await client.query("COMMIT")
     return { inserted: affected, total: rows.length, lastLoadedAt: formatUploadLabel() }
@@ -172,14 +242,8 @@ export async function replaceProductMaster(
       removed: removed.rowCount ?? 0,
     })
 
-    // Automatically mark matching entries in unmapped_listing_skus as mapped
-    await client.query(`
-      UPDATE unmapped_listing_skus u
-      SET status = 'mapped'
-      FROM product_master pm
-      WHERE u.status = 'unmapped'
-        AND LOWER(pm.listing_sku) = LOWER(u.listing_sku)
-    `)
+    // Candidate-aware flip: variant rows (spaceless, parent article-suffix) resolve too.
+    await flipResolvedUnmappedRows(client)
 
     await client.query("COMMIT")
     return { inserted: rows.length, removed: removed.rowCount ?? 0, lastLoadedAt: formatUploadLabel() }
@@ -244,14 +308,8 @@ export async function recordUnmappedListingSkus(
 }
 
 export async function getUnmappedListingSkusSummary(db: pg.Pool): Promise<UnmappedSkuSummary> {
-  // Sync status against product_master first
-  await db.query(`
-    UPDATE unmapped_listing_skus u
-    SET status = 'mapped'
-    FROM product_master pm
-    WHERE u.status = 'unmapped'
-      AND LOWER(pm.listing_sku) = LOWER(u.listing_sku)
-  `)
+  // Sync status against product_master first (candidate-aware: variants resolve too)
+  await flipResolvedUnmappedRows(db)
 
   const totalRes = await db.query(
     "SELECT COUNT(*)::int AS count FROM unmapped_listing_skus WHERE status = 'unmapped'",
@@ -286,7 +344,7 @@ export async function getUnmappedListingSkusSummary(db: pg.Pool): Promise<Unmapp
       listingSku: String(r.listing_sku),
       sampleOrderNumber: String(r.sample_order_number || ""),
       sampleTrackingId: String(r.sample_tracking_id || ""),
-      lastSeenAt: r.last_seen_at ? formatUploadLabel(new Date(r.last_seen_at)) : "",
+      lastSeenAt: toIsoTimestamp(r.last_seen_at),
     })),
   }
 }
@@ -346,8 +404,8 @@ export async function listUnmappedListingSkus(
     listingSku: String(r.listing_sku),
     sampleOrderNumber: String(r.sample_order_number || ""),
     sampleTrackingId: String(r.sample_tracking_id || ""),
-    firstSeenAt: r.first_seen_at ? formatUploadLabel(new Date(r.first_seen_at)) : "",
-    lastSeenAt: r.last_seen_at ? formatUploadLabel(new Date(r.last_seen_at)) : "",
+    firstSeenAt: toIsoTimestamp(r.first_seen_at),
+    lastSeenAt: toIsoTimestamp(r.last_seen_at),
     status: String(r.status),
   }))
 
@@ -375,6 +433,9 @@ export async function refreshUnmappedListingSkus(db: pg.Pool): Promise<number> {
     ORDER BY m.name, COALESCE(NULLIF(eri.channel_listing_id, ''), eri.marketplace_sku_identifier), er.id DESC
   `)
 
+  // Candidate-aware: the SELECT above is exact-match, so variant-resolved rows are
+  // filtered here in JS (skip the insert) instead of entering the queue.
+  const masterKeys = await loadMasterLookupKeys(db)
   let count = 0
   for (const row of res.rows) {
     const mp = String(row.marketplace || "").trim()
@@ -382,6 +443,7 @@ export async function refreshUnmappedListingSkus(db: pg.Pool): Promise<number> {
     const sampleOrder = String(row.sample_order_number || "").trim()
     const sampleTracking = String(row.sample_tracking_id || "").trim()
     if (mp && sku) {
+      if (unmappedIsResolved(sku, mp, masterKeys)) continue
       await db.query(
         `INSERT INTO unmapped_listing_skus (marketplace, listing_sku, sample_order_number, sample_tracking_id, last_seen_at)
          VALUES ($1, $2, $3, $4, now())
@@ -395,14 +457,8 @@ export async function refreshUnmappedListingSkus(db: pg.Pool): Promise<number> {
     }
   }
 
-  // Also sync mapped status
-  await db.query(`
-    UPDATE unmapped_listing_skus u
-    SET status = 'mapped'
-    FROM product_master pm
-    WHERE u.status = 'unmapped'
-      AND LOWER(pm.listing_sku) = LOWER(u.listing_sku)
-  `)
+  // Flip existing unmapped rows that now resolve via a variant ( decided in JS ).
+  await flipResolvedUnmappedRows(db)
 
   return count
 }
@@ -549,12 +605,7 @@ export async function insertMasterRows(client: pg.PoolClient, rows: MasterRow[])
 }
 
 // Flips matching unmapped_listing_skus to mapped. Shared by every batch so the logic lives in one place.
+// Candidate-aware: resolution is decided in JS, SQL stays a set-based LOWER() update.
 export async function markUnmappedListingSkusMapped(client: pg.PoolClient): Promise<void> {
-  await client.query(`
-    UPDATE unmapped_listing_skus u
-    SET status = 'mapped'
-    FROM product_master pm
-    WHERE u.status = 'unmapped'
-      AND LOWER(pm.listing_sku) = LOWER(u.listing_sku)
-  `)
+  await flipResolvedUnmappedRows(client)
 }
