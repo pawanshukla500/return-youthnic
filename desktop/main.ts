@@ -13,14 +13,23 @@ let tray: Tray | null = null
 let isQuitting = false
 
 // Agent State
+const PRODUCTION_URL = "https://return.youthnic.shop"
 const agentConfig = loadAgentConfig()
+
+// Server URL: Production VPS default, fallback to explicit env if specified
+const APP_URL =
+  process.env.APP_URL ||
+  process.env.BACKEND_URL ||
+  (agentConfig.backendUrl && !agentConfig.backendUrl.includes("127.0.0.1") && !agentConfig.backendUrl.includes("localhost")
+    ? agentConfig.backendUrl
+    : PRODUCTION_URL)
+
+// Ensure agent backend client connects to the exact same production endpoint
+agentConfig.backendUrl = APP_URL
 const client = new AgentBackendClient(agentConfig)
 let isBotActive = true
 let isProcessingJob = false
 let activeJobSummary: string | null = null
-
-// Server URL: Production VPS default, fallback to env or localhost if specified
-const APP_URL = process.env.APP_URL || process.env.BACKEND_URL || agentConfig.backendUrl || "https://return.youthnic.shop"
 
 // Single instance lock
 const gotTheLock = app.requestSingleInstanceLock()
@@ -209,11 +218,8 @@ function createMainWindow(): void {
     mainWindow?.show()
   })
 
-  // Load production web application
-  logger.info(`Loading Return App from: ${APP_URL}`)
-  mainWindow.loadURL(APP_URL).catch((err) => {
-    logger.error("Failed to load APP_URL:", err)
-    // Offline / Connection retry page
+  function showOfflinePage(targetUrl: string, errorDescription?: string): void {
+    const safeUrl = targetUrl || PRODUCTION_URL
     const offlineHtml = `
       <!DOCTYPE html>
       <html>
@@ -221,29 +227,116 @@ function createMainWindow(): void {
         <meta charset="utf-8">
         <title>Connecting to Return App...</title>
         <style>
-          body { background: #0b1311; color: #f0fdf4; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; display: grid; place-items: center; min-height: 100vh; margin: 0; text-align: center; }
-          .card { background: #111e1b; border: 1px solid #1a2f2a; border-radius: 14px; padding: 36px 42px; max-width: 460px; box-shadow: 0 20px 40px rgba(0,0,0,0.4); }
-          .icon { font-size: 42px; margin-bottom: 16px; }
-          h2 { margin: 0 0 10px; font-size: 20px; font-weight: 700; color: #34d399; }
-          p { margin: 0 0 24px; color: #84a99d; font-size: 13px; line-height: 1.5; }
-          .btn { background: #10b981; color: #052e16; border: none; padding: 10px 24px; border-radius: 8px; font-weight: 600; font-size: 13px; cursor: pointer; transition: 0.15s; text-decoration: none; display: inline-block; }
-          .btn:hover { background: #34d399; }
+          * { box-sizing: border-box; }
+          body { 
+            background: #060b09; 
+            color: #f0fdf4; 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; 
+            display: flex; 
+            align-items: center; 
+            justify-content: center; 
+            min-height: 100vh; 
+            margin: 0; 
+            padding: 24px;
+            text-align: center; 
+          }
+          .card { 
+            background: #0f1c18; 
+            border: 1px solid #1a332a; 
+            border-radius: 16px; 
+            padding: 40px 36px; 
+            max-width: 480px; 
+            width: 100%;
+            box-shadow: 0 24px 48px rgba(0,0,0,0.5); 
+          }
+          .icon { 
+            font-size: 38px; 
+            margin-bottom: 16px; 
+            display: inline-block;
+          }
+          h2 { margin: 0 0 10px; font-size: 22px; font-weight: 700; color: #34d399; }
+          p { margin: 0 0 20px; color: #94a3b8; font-size: 13px; line-height: 1.6; }
+          .url-box { 
+            background: #060b09; 
+            border: 1px solid #1a332a; 
+            border-radius: 8px; 
+            padding: 10px 14px; 
+            font-family: monospace; 
+            color: #34d399; 
+            font-size: 13px; 
+            word-break: break-all;
+            margin-bottom: 24px;
+          }
+          .btn-group { display: flex; flex-direction: column; gap: 10px; }
+          .btn { 
+            background: #10b981; 
+            color: #022c22; 
+            border: none; 
+            padding: 12px 24px; 
+            border-radius: 8px; 
+            font-weight: 600; 
+            font-size: 14px; 
+            cursor: pointer; 
+            transition: all 0.15s ease; 
+            display: block; 
+            text-decoration: none;
+          }
+          .btn:hover { background: #34d399; transform: translateY(-1px); }
+          .btn-secondary {
+            background: transparent;
+            color: #a7f3d0;
+            border: 1px solid #1a332a;
+          }
+          .btn-secondary:hover { background: #162d25; color: #f0fdf4; }
+          .countdown { font-size: 12px; color: #64748b; margin-top: 20px; }
         </style>
       </head>
       <body>
         <div class="card">
           <div class="icon">🔄</div>
           <h2>Connecting to Return App Server</h2>
-          <p>Connecting to <code>${APP_URL}</code>. Please check your internet connection.</p>
-          <button class="btn" onclick="window.location.href='${APP_URL}'">Retry Connection Now</button>
+          <p>Connecting to Return App Cloud Server. Please check your internet connection.${errorDescription ? `<br><small style="color:#64748b">(${errorDescription})</small>` : ""}</p>
+          <div class="url-box">${safeUrl}</div>
+          <div class="btn-group">
+            <button class="btn" onclick="retryConnection('${safeUrl}')">Retry Connection Now</button>
+            <button class="btn btn-secondary" onclick="retryConnection('${PRODUCTION_URL}')">Connect to Production Cloud (return.youthnic.shop)</button>
+          </div>
+          <div class="countdown" id="timer">Retrying automatically in 6 seconds...</div>
         </div>
         <script>
-          setTimeout(() => { window.location.href = '${APP_URL}'; }, 6000);
+          let seconds = 6;
+          const timerEl = document.getElementById('timer');
+          function retryConnection(url) {
+            window.location.href = url;
+          }
+          setInterval(() => {
+            seconds--;
+            if (seconds <= 0) {
+              retryConnection('${safeUrl}');
+            } else {
+              timerEl.innerText = 'Retrying automatically in ' + seconds + ' seconds...';
+            }
+          }, 1000);
         </script>
       </body>
       </html>
     `
     mainWindow?.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(offlineHtml)}`)
+  }
+
+  // Load production web application
+  logger.info(`Loading Return App from: ${APP_URL}`)
+  mainWindow.loadURL(APP_URL).catch((err) => {
+    logger.error("Failed to load APP_URL:", err)
+    showOfflinePage(APP_URL, err?.message)
+  })
+
+  // Handle network drops or navigation failure
+  mainWindow.webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL) => {
+    if (validatedURL && !validatedURL.startsWith("data:")) {
+      logger.warn(`Failed loading ${validatedURL} (code ${errorCode}: ${errorDescription})`)
+      showOfflinePage(validatedURL, errorDescription)
+    }
   })
 
   // Prevent opening untrusted URLs in the app window; open external links in system browser
