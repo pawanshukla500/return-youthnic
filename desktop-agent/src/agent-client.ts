@@ -185,6 +185,18 @@ export class AgentBackendClient {
     return downloadedMap
   }
 
+  async cleanClaimEvidenceFiles(claimId: number): Promise<void> {
+    const claimDir = path.join(this.config.workDir, `claim-${claimId}`)
+    if (fs.existsSync(claimDir)) {
+      try {
+        await fs.promises.rm(claimDir, { recursive: true, force: true })
+        logger.info(`[Cleanup] Deleted local temporary evidence directory for claim #${claimId}`)
+      } catch (err) {
+        logger.warn(`[Cleanup] Failed to delete temporary claim directory ${claimDir}:`, err)
+      }
+    }
+  }
+
   async updateProgress(jobId: number, data: { stage: string; logMessage?: string; screenshotPath?: string; manualActionReason?: string }): Promise<void> {
     try {
       const url = `${this.config.backendUrl}/api/automation/jobs/${jobId}/progress`

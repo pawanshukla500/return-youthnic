@@ -55,3 +55,13 @@ export function headerDateLabel(date = new Date()): string {
 export function lastSignInLabel(value: Date | null): string {
   return value ? formatUploadLabel(value) : "—"
 }
+
+// Indian Rupee currency display (e.g. ₹ 1,249.00)
+export function formatInr(value: number): string {
+  if (value === 0 || isNaN(value)) return "₹0.00"
+  return new Intl.NumberFormat("en-IN", {
+    style: "currency",
+    currency: "INR",
+    maximumFractionDigits: 2,
+  }).format(value)
+}
