@@ -2311,3 +2311,9 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
 - **Ran:** `npm run typecheck` passed. `npm test`: 428 tests, 391 pass, 0 fail, 37 skipped (no `TEST_DATABASE_URL`, so the new in-house DB test did not run). `npm run build` passed. Live: job 1 (Meesho, AWB VLR083002308587) reached the form, Meesho showed its packaging-policy "not eligible" message, the bot set the job to `not_eligible`, closed Edge and kept polling. Meesho's ticket list still shows no ticket after 14 Oct, so nothing was filed.
 - **Did not run:** deploy (the live server does not yet set the claim status for `not_eligible`, and job 1 still carries the old "Raise" value in `marketplace_claim_id` until a real ticket overwrites it), `npm run desktop:pack`, or the update of `C:\Return App`.
 - **The next agent must not:** Claim an order Meesho marks not eligible. Count anything but a new numeric Meesho ticket as filed. Let anyone but Inward/Admin receive ironed units. Send Iron Send units to OMSGuru.
+
+### 2026-10-16, Cursor, Claim bot writes a daily log file
+- **What changed:** The installed desktop app has no console, so bot messages were lost. `desktop-agent/src/logger.ts` now also appends every line to `~/.taskflow-claim-agent/logs/bot-YYYY-MM-DD.log` (asynchronous writes) and deletes log files older than 7 days once a day. Nothing logged contains a password, token or cookie value.
+- **Ran:** `npm run typecheck` passed. `npm run desktop:pack` built `dist-electron/win-unpacked`, copied to `C:\Return App` and relaunched. `/api/status` showed signed in and polling; `bot-2026-10-16.log` holds the startup, sign-in and registration lines.
+- **Did not run:** `npm test` (no test touches the logger). A real Meesho ticket is still not filed: the only queued claim is not eligible on Meesho.
+- **The next agent must not:** Log portal passwords, the operator token or cookies; they would now land on disk.
