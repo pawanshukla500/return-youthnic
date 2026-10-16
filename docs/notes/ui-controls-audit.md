@@ -50,8 +50,20 @@ The figures on this page are read from `GET /api/dashboard`, limited to the acco
 
 | Control | Where | Calls or effect | Status |
 |---|---|---|---|
-| All time | Claim status header | A label. Every claim ticket is counted | Label |
-| Export CSV | Marketplace performance | Saves the table on this page as `claims-by-marketplace.csv`, built in the browser. Disabled when the table is empty | Works (code) |
+| Overview & Analytics, Claims List, Templates | Main page tabs | Switches active tab view | Local |
+| ↻ Refresh | Overview header | Reloads `GET /api/claims` metrics and status distribution | Works (code) |
+| Export CSV | Overview marketplace table | Saves marketplace claim summary as CSV | Works (code) |
+| Search filter | Claims list | Filters table by AWB, Order ID, Product Name, SKU | Local |
+| Status filter | Claims list | Filters by claim status (`ready_for_claim`, `submitted`, `approved`, etc.) | Works (code) |
+| Marketplace filter | Claims list | Filters by account in user scope | Works (code) |
+| ↻ Refresh | Claims list header | Reloads `GET /api/claims/queue` | Works (code) |
+| View Details | Claims table row | Opens `ClaimDetailModal` with full evidence & job details | Local |
+| Copy pills (AWB, Order, Description) | ClaimDetailModal | Copies text to clipboard and flashes `Copied!` tooltip | Local |
+| Media thumbnail click | ClaimDetailModal gallery | Opens full-screen click-to-zoom Lightbox modal | Local |
+| Lightbox Close (× / ESC) | Lightbox modal | Closes the full-screen photo zoom view | Local |
+| HTML5 Video Player | ClaimDetailModal unboxing slot | Native video playback streaming 480p SD unboxing video via `/api/claims/:id/media/:mediaId` | Works (code) |
+| Close modal (× / ESC) | ClaimDetailModal | Closes the details modal | Local |
+
 
 ## Scan returns (`src/pages/ScanReturns.tsx`)
 

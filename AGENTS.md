@@ -6,15 +6,18 @@ This file is for any agent, human or AI, that starts work on the Return App. Rea
 
 A return-scanning app for VB Exports. Marketplace return reports (Myntra VB and EJ, Flipkart, Meesho, Amazon, Ajio) are loaded as lookup data, one account at a time. A scan records what physically arrived in the return scan register, which is the permanent record. The stack is Express 4 and PostgreSQL on the server, React 19 with Vite on the client, strict TypeScript, and `node:test` through `tsx`. It runs on Windows, and PowerShell is the primary shell.
 
-## Current state (2026-10-13)
+## Current state (2026-10-16)
 
-- The app runs locally and in production on Hostinger VPS (`https://return.youthnic.shop`). Local checks: `npm run typecheck` passed (0 errors), `npm run build` passed (Vite in 1.66s, server bundled with esbuild in 13ms), and `npm test` finished with 306 tests: 282 pass, 0 fail, 24 skipped (`TEST_DATABASE_URL`).
+- The app runs locally and in production on Hostinger VPS (`https://return.youthnic.shop`). Local checks: `npm run typecheck` passed (0 errors), `npm run build` passed (Vite in 1.54s, server bundled with esbuild in 19ms), and `npm test` finished with 406 tests: all pass in CI using a dedicated `postgres:16` container (370 pass, 0 fail, 36 skipped locally when `TEST_DATABASE_URL` is unset).
 - `GET /api/health` returns HTTP 200, database connected, name `return-scan_youthnic`.
-- Native Kotlin Android client is active in `android/` at release `v1.0.20` (`versionCode: 10020`), featuring CameraX barcode scanning, runtime camera permission flow, server contract alignment (`ScanPayload.kt`), and automated in-app updates (`AppUpdater.kt`) synchronized via GitHub Actions (`.github/workflows/return-scan-apk.yml`).
-- The product master has 34,795 rows loaded. On 2026-10-13, all test/scanned data was cleanly wiped in a database transaction, leaving active return lookups (2,539 returns, 2,548 items), `product_master`, and user credentials completely intact and ready for live warehouse scanning tomorrow.
-- 2026-10-14 (Claude Code): Iron Send is an operational category, tracked on the Iron tracking page (`/iron`); only the Inward Team (role `Inward`) or an Admin records ironed units received. Live sync over WebSocket `/api/live` with a polling fallback. Return analytics under Register > Return Analytics. The database tests now really run (CI uses a `postgres:16` service); see the handoff session log.
+- Native Kotlin Android client is active in `android/` at release `v1.0.54` (`versionCode: 10054`), featuring CameraX barcode scanning, runtime camera permission flow, photo & 480p SD unboxing video evidence capture, visual upload progress dialog, instant form reset ("Start Again with Zero"), unified claim creation (`POST /api/claims/unified-create`), and automated in-app updates (`AppUpdater.kt`) synchronized via GitHub Actions (`.github/workflows/return-scan-apk.yml`).
+- The product master has 34,795 rows loaded. Batched staged import (`/api/admin/product-master/import/start` and `/batch`) processes up to 500 rows per transaction with progress tracking, pause/retry, and cancellation, verified against the 126,176-row `Book11.xlsx`.
+- Nightly OMSGuru listing-to-master bridge (`server/oms/master-bridge.ts`) runs during `npm run sync:oms`, mapping active channel listings, backfilling catalog images, and resolving unmatched return SKUs.
+- Claims management system (`/claims`) features real-time aggregated ₹ totals (`formatInr`), modern lifecycle status tracking, and a redesigned View Details modal (1-click copy buttons, responsive 2-column layout, visual evidence gallery, full-screen lightbox, and HTML5 video streaming player).
+- Windows Desktop Automation Agent (`desktop-agent/` - `TaskFlowClaimAgent.exe`) polls queued claims (`POST /api/claims/automation/poll-job`), automates supplier panel claim filing via Chrome DevTools Protocol, extracts marketplace ticket IDs, and automatically deletes local downloaded evidence files upon completion (`cleanClaimEvidenceFiles`).
+- Iron Send is an operational category, tracked on the Iron tracking page (`/iron`); only the Inward Team (role `Inward`) or an Admin records ironed units received. Live sync over WebSocket `/api/live` with a polling fallback. Return analytics under Register > Return Analytics.
 - `CLAUDE.md` is not in the project folder. Until it is restored, the rules in this file and in [docs/notes/agent-handoff.md](docs/notes/agent-handoff.md) are what the code follows. Do not invent a replacement.
-- What is written, what was run, and what is waiting on the user are in [docs/notes/agent-handoff.md](docs/notes/agent-handoff.md#current-state). Read the section **Start here (2026-10-13)** before the older session log.
+- What is written, what was run, and what is waiting on the user are in [docs/notes/agent-handoff.md](docs/notes/agent-handoff.md#current-state). Read the latest session logs at the end of that file.
 
 ## Read in this order
 

@@ -88,8 +88,27 @@ No coverage tool or threshold is configured.
 
 ## Continuous integration
 
-The repository has no `.github/workflows` directory and no other CI configuration. The tests run only when someone runs `npm test`.
+The repository includes automated GitHub Actions workflows:
+
+1. **`.github/workflows/ci.yml`**:
+   - Triggers on every push and pull request to `main`.
+   - Provisions a dedicated `postgres:16` service container with SSL disabled for the internal test runner network.
+   - Runs `npm run typecheck`, `npm run build`, and `npm test` with `TEST_DATABASE_URL` pointing at the container database `return_scan_test`.
+   - Runs all 406 tests (0 skipped in CI).
+   - Verifies the Docker production container build.
+
+2. **`.github/workflows/return-scan-apk.yml`**:
+   - Triggers on pull requests and pushes affecting `android/**` or release manifests.
+   - Compiles native Android Kotlin app, runs native unit tests and Android Lint, prepares keystore, and assembles release APK with R8 and resource shrinking.
+   - Verifies package ID (`shop.youthnic.returnscan`), version code, camera permissions, signing certificate, and size budget.
+   - Uploads APK artifact and publishes GitHub Releases.
+
+3. **`.github/workflows/deploy.yml`**:
+   - Automatically deploys the web client and Express server to the Hostinger production VPS (`https://return.youthnic.shop`) upon push to `main`.
 
 ## Verification status
 
-No test in this repository has been run in the sessions that wrote the 2026-10-10 changes. Those sessions had no shell. The first verification is `npm run typecheck`, then `npm run build`, then `npm test`, then `npm test` with `TEST_DATABASE_URL` set. The results are recorded in [notes/phase1-register-status.md](notes/phase1-register-status.md#verification-handoff).
+The test suite runs 406 tests with 0 failures:
+- Locally: 370 tests pass without a test database (36 database tests report skipped).
+- In CI: 406 tests pass (100% pass, 0 fail, 0 skipped) against the `postgres:16` container.
+

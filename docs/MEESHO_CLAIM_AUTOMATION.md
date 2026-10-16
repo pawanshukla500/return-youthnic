@@ -171,8 +171,35 @@ Output:
      - Leaves browser open for human supervisor to solve challenge.
 5. **Form Submission & Ticket Extraction**:
    - Types `subOrderId`, sets packet state to `Tampered`, fills `packetId`.
-   - Attaches received product photos, reverse waybill photo, and 720p unpacking video.
+   - Attaches received product photos, reverse waybill photo, and 480p SD unpacking video.
    - Puts auto-generated description.
    - Clicks `Submit Claim`.
    - Captures confirmation screenshot and extracts Meesho Claim Ref ID.
    - Calls `/api/automation/agent/jobs/:id/complete` which triggers `syncClaimTicketToRegister()`.
+6. **Local Disk Space Cleanup (`cleanClaimEvidenceFiles`)**:
+   - Once the submission completes successfully (`stage === 'completed'`), the agent immediately invokes `cleanClaimEvidenceFiles(claimId)`.
+   - Recursively deletes the temporary `claim-${claimId}` directory, removing downloaded photos and unboxing videos so the workstation disk never runs out of space.
+
+---
+
+## 7. Web Claims Portal & Evidence Review (`/claims`)
+
+- **Overview & Analytics**:
+  - Live aggregated merchandise values in Indian Rupees (`₹`) via `formatInr()`.
+  - Status lifecycle breakdown: `Ready for Claim`, `Submitted`, `Processing`, `Waiting for Approval`, `Approved`, `Rejected`, and `Manual Action Required`.
+  - Manual `↻ Refresh` button and auto-reload on tab activation.
+- **View Details Modal**:
+  - Eliminates horizontal scrollbars with responsive styling (`max-width: min(1080px, 95vw)` and `overflow-x: hidden`).
+  - 1-click quick-copy pills with visual tooltip (`Copied!`) for Tracking ID, Order ID, and Description.
+  - Automation status card showing bot host, stage, attempts, and error logs.
+  - Visual Evidence Gallery displaying master catalog photo alongside received photos.
+  - High-resolution click-to-zoom Lightbox modal with keyboard `ESC` and backdrop dismissal.
+  - Embedded HTML5 `<video>` player streaming 480p unboxing videos directly via `GET /api/claims/:id/media/:mediaId`.
+
+---
+
+## 8. Mobile Capture & Reset Lifecycle (`ClaimCaptureActivity`)
+
+- **Upload Progress Bar**: Visual determinate dialog tracking file-by-file upload (`Uploading evidence files (x of y)...`) with percentage progress. If network jitter occurs, background sync automatically hands off to Android `WorkManager`.
+- **Instant Form Reset**: After submission, the operator is prompted with **"File Next Return (Start Again)"**, which calls `resetFormForNextClaim()` to clear all photo slots, video URI, inputs, and claim state back to zero, focusing the barcode input for the next return.
+

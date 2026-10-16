@@ -28,10 +28,13 @@ Agents starting new work should read [AGENTS.md](../AGENTS.md) and [notes/agent-
 | `npm run layout:inspect -- "<file>" "<marketplace>"` | Prints a file's headers and whether its required headers are present. The first row's buyer fields are masked. Saves nothing, and does not check numbers (`server/scripts/inspect-layout.ts`). |
 | `npx tsx server/scripts/diagnose-file.ts "<file>" "<marketplace>"` | Read-only diagnostic: runs the full preview parser and prints the same row counts the upload preview would show (rows, validRows, scannableRows, pendingRows, errorRows, duplicateRows, cancelledRows, blank-tracking, zero-quantity, unverified-tracking, untrusted identifiers, warnings). Nothing is stored. Nothing is activated. Use this when an agent or user wants to verify a real file's counts without uploading it. |
 | `npm run sync:oms -- --list` | Lists the OMSGuru channels without writing to the database. |
-| `npm run sync:oms` | Syncs channel listings and master SKUs from OMSGuru. Flags: `--channel <id>` for one channel, `--skip-skus` to skip the SKU list. |
+| `npm run sync:oms` | Syncs channel listings and master SKUs from OMSGuru, and runs the nightly listing-to-product-master bridge. Flags: `--channel <id>` for one channel, `--skip-skus` to skip the SKU list, `--skip-master-bridge` to skip master bridge. |
+| `npm run sync:vms` | Syncs product catalog images from read-only VMS database into `product_master.image_url`. |
+| `npm run build:agent` | Builds the standalone Windows desktop claim automation agent (`TaskFlowClaimAgent.exe`) into `desktop-agent/dist/` using Node.js SEA (Single Executable Application). |
 | `npm run oms:orders` | Looks up OMSGuru order details for the uploaded return rows. Flags: `--sample` (20 returns, and only the field names of the first response is printed), `--limit <n>`, `--marketplace <name>`, `--refresh` (fetch again when a snapshot exists), `--delay <ms>` (default 1500), `--csv`. Run by hand. |
 | `npm run oms:daily` | Pulls OMSGuru invoices. Flags: `--date YYYY-MM-DD` for one day, or `--from` and `--to` for an inclusive range. With no flags it uses yesterday (IST). Run by hand. |
 | `npm run report:returns` | Prints a report that reads only the database. Flags: `--date YYYY-MM-DD` for one IST day, and `--csv`, which also writes CSV files to `exports\`. |
+
 
 ## Rules for every change
 
@@ -70,9 +73,14 @@ These rules protect the business logic. They apply to people and to agents. The 
 | Upload activation | `server/upload-policy.ts` (rules), `server/upload-routes.ts` (checks), `server/lookup-import.ts` (commit) |
 | A marketplace layout | `server/import-profiles.ts`, the row mappers in `server/sheets.ts`, `server/marketplace-rules.ts`, and the test `server/tests/import.test.ts` |
 | A logistics partner | `server/admin-config.ts`, `server/marketplace-rules.ts` (verified links), `server/logistics.ts` |
-| The schema | the four `server/schema*.sql` files, and `SCHEMA_FILES` in `server/db.ts` |
+| The schema | the five `server/schema*.sql` files, and `SCHEMA_FILES` in `server/db.ts` |
 | A screen | `src/pages/*.tsx`, `src/shell.tsx`, `src/types.ts`, `src/api.ts`. Check every control against the UI audit |
-| OMSGuru | `server/oms/*`, and `server/scripts/sync-oms-*.ts`. The API is in [notes/omsguru-api.md](notes/omsguru-api.md) |
+| Claims & evidence | `server/claims-routes.ts`, `server/claims-service.ts`, `server/claim-automation-routes.ts`, `server/claim-automation-service.ts` |
+| Batched product master | `server/product-master.ts`, `server/product-master-routes.ts` |
+| Windows Desktop claim bot | `desktop-agent/src/` (`agent-client.ts`, `automation-engine.ts`, `index.ts`) |
+| Native Android scanner | `android/app/src/main/java/shop/youthnic/returnscan/` (`ClaimCaptureActivity.kt`, `ScanActivity.kt`, `AppUpdater.kt`) |
+| OMSGuru & catalog bridge | `server/oms/*`, `server/oms/master-bridge.ts`, and `server/scripts/sync-oms-*.ts`. The API is in [notes/omsguru-api.md](notes/omsguru-api.md) |
+
 
 ## Adding a route, a schema change, a layout or a test
 

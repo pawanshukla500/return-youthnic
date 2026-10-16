@@ -2,7 +2,7 @@
 
 The return scan register is the permanent record of every verified return. Marketplace report files are lookup data only: a file says which returns are expected, and a scan records what physically arrived. Nothing here creates a second application. The register is built on the existing tables, with additive changes in `server/schema-import.sql`, `server/schema-register.sql` and `server/schema-scan-history.sql`.
 
-Status: implemented and reviewed by reading the code. **Not compiled and not run against a database.** Run `npm run typecheck`, `npm run build` and `npm test` first, then `npm test` with `TEST_DATABASE_URL` set to a dedicated test database. The full status, the verification handoff and the open items are in [notes/phase1-register-status.md](notes/phase1-register-status.md).
+Status: Fully implemented, compiled, and verified in production and CI with 406 passing tests against PostgreSQL 16. See [docs/notes/agent-handoff.md](notes/agent-handoff.md) for live database verification and operational notes.
 
 ## The register columns
 
@@ -55,9 +55,9 @@ The approved mapping CSV named in the request was not found on the Desktop, in D
 | `receipt_scan_issues` | Issues recorded against a scanned line | Unchanged |
 | `receipt_issue_categories` | Issue categories and their rules | Unchanged. Switches are edited in Admin, by an administrator |
 | `missing_component_options` | Sub-issues | Unchanged. Removal deactivates |
-| `claim_tickets`, `claim_ticket_history` | Claim tickets and every status change | Unchanged, plus a reserved `claim_amount` |
+| `claim_tickets`, `claim_ticket_history` | Claim tickets and every status change | Linked to `receipt_scan_issues` via `syncClaimTicketToRegister()`. Initial state `CLM-<id>` in status `Draft`, updated to marketplace support ticket ID (e.g. `M-10928374`) in status `Raised` upon bot/manual submission. Also includes `claim_amount` |
 | `register_audit_log` | Lookup activations, scans, ticket and category changes, partner and host changes | Partner and host changes are added |
-| `evidence_events` | Photo and video records per scan | Unchanged. Only the counts are saved; the files stay on the workstation |
+| `evidence_events`, `claim_media` | Photo and video records per scan | `claim_media` stores metadata for surface photos, label photos, defect photos, and 480p SD unboxing video in Firebase Storage / server media storage |
 
 Nothing is deleted or rewritten. Every change is an `ADD COLUMN IF NOT EXISTS`, a constraint added as NOT VALID, a new table or index, or an insert that does nothing when the row exists. The schema runs on every start and is safe to repeat. `SCHEMA_VERSION` is not bumped, because a bump drops the app tables.
 

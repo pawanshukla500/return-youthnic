@@ -110,6 +110,14 @@ No rate limiting is configured. No rate-limit package is in `package.json`. CORS
 | GET | `/api/admin/product-master` | Admin | The VB EXPORT product master as it stands, with sample rows. |
 | GET | `/api/admin/product-master/template` | Admin | A header-only CSV for the product SKU master. It has no data rows. |
 | POST | `/api/admin/product-master/preview` | Admin | Reads one file and reports what it holds, for a chosen marketplace. Changes nothing. |
+| POST | `/api/claims/unified-create` | Yes | Unified mobile claim submission: creates claim, records scan, attaches media, and synchronizes Return Register ticket ID. |
+| POST | `/api/claims/automation/poll-job` | Agent/Admin | Polls for a queued claim automation job (`ready_for_claim`) for desktop bot execution. |
+| POST | `/api/claims/automation/update-job` | Agent/Admin | Updates claim automation execution stage, screenshots, ticket code, or error state. |
+| GET | `/api/mobile/release-manifest` | No | Version metadata and changelog for Android app in-app updates. |
+| GET | `/api/mobile/download-latest` | No | Streams the latest signed Android APK binary for warehouse scanners. |
+| POST | `/api/admin/product-master/import/start` | Admin | Stages product master import in memory and returns batch progress plan. |
+| POST | `/api/admin/product-master/import/batch` | Admin | Commits up to 500 rows of staged product master per transaction with progress indicator. |
+| POST | `/api/admin/product-master/import/cancel` | Admin | Cancels and clears a staged product master import. |
 | POST | `/api/admin/product-master/import` | Admin | Replaces the whole product master from one file, for a chosen marketplace. Needs `confirm`. |
 
 Removed: `GET /api/returns`, `GET /api/returns/export` and `PATCH /api/returns/:id/ticket`. Use `/api/register`, `/api/register/export` and `/api/tickets/:id/status`.
@@ -182,19 +190,37 @@ The scan, upload and register screens fill their account lists from this route. 
 
 `chartBars` covers the last seven IST days, oldest first. `weekday` is the day name, `d` is the day of the month, and `received` and `issues` are the counts. `v` and `i` are those counts as percentages of the busiest day, used only to draw the bars. A day with no scans is zero, not a minimum bar. `share` on each marketplace slice is the percentage used to draw the ring. `dailyAvg` is the seven-day total divided by seven. `recent` has the four latest scans, with the first ticket of each scan. The `recent` rows use the field names shown above, not the register's.
 
-`GET /api/claims` returns `{ "stats", "total", "slices", "rows" }`. Each slice has `name`, `count`, `pct` and `tone`. Each row has `market`, `raised`, `approved`, `review` (tickets with status `Review` or `Raised`), `rejected`, `value` (always `—`) and `rate`, which is approved as a whole-number percentage of raised. A claim is open until it is approved or rejected.
+`GET /api/claims` returns `{ "stats", "total", "slices", "rows" }`. `stats` includes Total Claim Value (aggregated in Indian Rupees formatted via `formatInr()`), Active Claims, Approved Claims, and Approval Rate. Each slice represents status distribution (`ready_for_claim`, `submitted`, `processing`, `waiting_for_approval`, `approved`, `rejected`, `failed`, `manual_action_required`). Each row contains `market`, `raised`, `approved`, `review`, `rejected`, `value` (formatted currency string, e.g. `₹12,450.00`) and `rate` (approved percentage).
 
-### Claim management
+### Claim management & evidence
 
-Claim management is separate from return inventory. A claim links to one saved `receipt_scans` row and never changes received or accepted quantities.
+Claim management links immutably to a verified `receipt_scans` row and does not modify received quantities.
 
-`POST /api/claims` accepts `receiptScanId`, `claimReason`, `claimTitle`, `claimDescription`, `remarks`, and `claimTemplateId`. One claim is allowed per scan. The template must be active for that marketplace.
+- `POST /api/claims`: accepts `receiptScanId`, `claimReason`, `claimTitle`, `claimDescription`, `remarks`, and `claimTemplateId`. One claim per scan. Auto-falls back to the marketplace's default active template if template ID is mismatched.
+- `GET /api/claims/:id`: returns `{ claim, media, statusHistory }`. `claim` includes `totalPrice` (merchandise value), `trackingId`, `orderId`, `claimReason`, `status`, and linked `scan`. `media` contains uploaded photos and video entries.
+- `GET /api/claims/:id/media/:mediaId`: securely streams evidence files inline with MIME type (`image/jpeg`, `image/png`, `video/mp4`) and session/bearer authentication, allowing direct browser `<img>` rendering and `<video controls>` HTML5 streaming.
+- `POST /api/claims/unified-create`: mobile-first atomic submission endpoint. Accepts `expectedReturnId`, `receiptScanId`, `marketplaceId`, `trackingId`, `orderId`, `claimReason`, `claimTitle`, `claimDescription`, `claimTemplateId`, and `evidenceFiles` (array of `{ fieldKey, fileName, fileType, byteSize, storagePath, downloadUrl }`). Atomically creates the `receipt_scan`, `receipt_scan_items`, `receipt_scan_issues`, `claims` row, `claim_media` records, and calls `syncClaimTicketToRegister()` to link the ticket directly to the Return Register.
 
-Evidence uploads are multipart forms with `fieldKey` and `file`. The server enforces the template's type, minimum/maximum count, and per-file size limit, verifies common file signatures, hashes the content for duplicate prevention, and stores it under `claim-evidence/<marketplace>/<order>/claim-<id>/`. Required evidence automatically moves a claim from `pending_evidence` to `ready_for_claim`.
+### Desktop claim automation
 
-Only a Supervisor or Admin may change lifecycle status. The allowed path requires approval before submission: `ready_for_claim` → `waiting_for_approval` → `processing` → `submitted`. Failed and manual-action states keep their complete status history.
+Windows desktop automation agent (`TaskFlowClaimAgent.exe`) endpoints:
 
-Admin-only endpoints under `/api/admin/claims/templates` create, activate/deactivate, and add/deactivate configurable template fields. Template rows and evidence history are never deleted.
+- `POST /api/claims/automation/poll-job`: polls for queued jobs with status `ready_for_claim`. Returns job details including download URLs for all photos and unboxing videos, marketplace login profile, and prefilled claim template fields.
+- `POST /api/claims/automation/update-job`: updates automation execution stage (`downloading_media` → `submitting` → `completed` | `failed` | `manual_intervention_required`), captures screenshot artifacts, and records the extracted marketplace ticket code.
+
+### Product master batched import (Book11 ready)
+
+High-volume product catalog imports are broken into 500-row transactional chunks to avoid PostgreSQL lock escalation:
+
+- `POST /api/admin/product-master/import/start`: accepts `multipart/form-data` with `file` and optional `marketplace`. Stages up to 150,000+ rows in memory for 15 minutes (`MASTER_STAGING_TTL_MS = 900,000`), returning `{ importId, totalRows, batchCount }`.
+- `POST /api/admin/product-master/import/batch`: accepts `{ importId, batchIndex, batchSize }`. Commits up to 500 rows per transaction. If a batch fails, the UI allows retrying or cancelling.
+- `POST /api/admin/product-master/import/cancel`: accepts `{ importId }`, instantly clearing staged data from server memory.
+
+### Mobile release & updates
+
+- `GET /api/mobile/release-manifest`: returns JSON release metadata (`versionCode`, `versionName`, `downloadUrl`, `releaseNotes`, `minSupportedVersionCode`) from `data/return-scan-release.json`.
+- `GET /api/mobile/download-latest`: downloads the latest signed production APK binary.
+
 
 ## Uploads
 

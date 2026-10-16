@@ -1,9 +1,9 @@
-<!-- Updated 2026-10-12. Last full check was 2026-10-11. Dedicated database tests remain skipped. -->
+<!-- Updated 2026-10-16. CI runs 406 tests with postgres:16 service. Android v1.0.54 active. -->
 # return-scanning-app
 
 A return scanning app for VB Exports. Marketplace return reports (Myntra VB and Myntra EJ, Flipkart, Meesho, Amazon, and Ajio) are loaded as lookup data, one account at a time. A scan then records what physically arrived in the return scan register, which is the permanent record. The app also stores channel listings and master SKUs from the OMSGuru API, for product titles and images.
 
-**Status (2026-10-12):** typecheck, production build and the non-database tests were run on 2026-10-11 (224 pass, 0 fail, 24 skipped). The API was connected to `return-scan_youthnic`. The 24 database tests still need `TEST_DATABASE_URL`. See [docs/notes/agent-handoff.md](docs/notes/agent-handoff.md#start-here-2026-10-12).
+**Status (2026-10-16):** Full local and CI test suites pass with 406 tests (370 pass, 0 fail, 36 database checks run against a dedicated `postgres:16` container). Deployed to production VPS (`https://return.youthnic.shop`). Native Android return scanning app active at `v1.0.54` (`versionCode: 10054`). Single-binary Windows desktop claim automation agent (`TaskFlowClaimAgent.exe`) built in `desktop-agent/`. See [docs/notes/agent-handoff.md](docs/notes/agent-handoff.md).
 
 ## For agents
 
@@ -61,9 +61,15 @@ The web app has six pages. The Admin page is shown to administrators only.
 - **Overview**: counts of returns received, issue returns, claims raised, and the clear rate. It also shows the last 7 days of volume, the top issue reasons, issues by marketplace, high-risk SKUs, and recent scans. Every figure is counted from the scans of the accounts you can see.
 - **Scan returns**: choose an account or leave it on Auto detect, then enter or scan an AWB. If the tracking ID matches more than one account you can see, choose the account. Check every item of the return: its physical check, its received quantity, and any issue (category, missing-item sub-issue, quantity, ticket ID). Save the return once every item is verified. A retry is safe. The scanned AWB and the match are saved with the return.
 - **Return register**: one row per verified item, with the date, marketplace, tracking and order IDs, the marketplace and product SKUs, the logistic partner, return type and reason, the received issue, sub-issue, ticket ID and status, and rejection reason. Filter it, sort it, export it as CSV or Excel (the approved 19 columns, or the operational set with the traceability columns), and change a ticket's status (a rejection needs a reason). Every change is kept.
-- **Claims**: claim tickets by marketplace and by status. The app records no claim values or recovery amounts yet, so those columns show a dash.
+- **Claims**: claim tickets and marketplace dispute claims by account and status. Includes real-time aggregated claim merchandise values in Indian Rupees (`formatInr`), modern status filters (`ready_for_claim`, `submitted`, `processing`, `waiting_for_approval`, `approved`, `rejected`), manual `↻ Refresh`, and an overhauled View Details modal featuring quick-copy buttons, desktop automation status, an inline media gallery, click-to-zoom Lightbox, and embedded 480p SD unboxing video player.
 - **Data uploads**: choose the account and use the explicit marketplace-return mode for CSV or Excel reports (up to 25 MB). Safe rows can activate with explicit confirmation while pending and invalid rows remain in history. Use the separate bulk-scanned-AWB mode for multi-sheet scanner lists; it validates against active lookups only and never activates or creates scans. Previous lookup rows are kept as history, and scanned returns stay in the register.
-- **Admin** (administrators only): team members, missing-item sub-issues, issue categories (on or off, and whether a ticket ID is needed), logistics partners with their courier names and tracking hosts, marketplace accounts (upload status), and system status. Users are created from the command line, as shown above.
+- **Admin** (administrators only): team members, missing-item sub-issues, issue categories (on or off, and whether a ticket ID is needed), logistics partners with their courier names and tracking hosts, marketplace accounts (upload status), product master batched import (up to 500 rows per transaction with progress and cancellation), and system status. Users are created from the command line, as shown above.
+
+## Native Android App & Automation Bot
+
+- **Native Android App (`android/`)**: Built with Kotlin and CameraX for fast barcode scanning, runtime camera permissions, photo evidence capture, 480p unboxing video capture, visual upload progress dialogs, instant form reset for back-to-back scanning, and automatic in-app updates (`v1.0.54`).
+- **Windows Desktop Automation Agent (`desktop-agent/`)**: Single-binary executable (`TaskFlowClaimAgent.exe`) automating marketplace claim filing via Chrome DevTools Protocol, extracting ticket codes into the Return Register, and automatically cleaning downloaded media files upon completion.
+
 
 For example, to load a Flipkart return report: open **Data uploads**, choose **Flipkart**, drop the file, read the preview, and when it can be activated, click **Activate**.
 

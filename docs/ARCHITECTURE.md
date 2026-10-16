@@ -132,17 +132,18 @@ Every statement is idempotent. A normal start drops nothing. The app tables are 
 | `server/marketplace-rules.ts` | Pure | Header normalization, return types, SKU variation, listing candidates, tracking links, partner detection from the courier name | `normalizeHeader`, `normalizeReturnType`, `skuWithVariation`, `listingSkuCandidates`, `parentListingSku`, `compactSkuKey`, `resolveTrackingId`, `detectPartner` |
 | `server/catalog-image.ts` | HTTP | Fetches and caches a stored catalog image | `sendCatalogImage` |
 | `server/logistics.ts` | Database | The partner index used by detection. Detection uses the courier name, not the tracking link | `loadPartnerIndex`, `applyPartners` |
-| `server/format.ts` | Pure | Display formatting | `formatCount`, `percentOf`, `formatScanTime`, `formatUploadLabel`, `headerDateLabel`, `lastSignInLabel` |
-| `server/dates.ts` | Pure | IST days and report dates | `istDay`, `istDayUnixRange`, `parseReportDate`, `istYesterday` |
-| `server/lifecycle.ts` | Pure | Return lifecycle counts, used by `report:returns` | `summarizeLifecycle`, `emptyCounts` |
-| `server/oms/client.ts` | HTTP client | OMSGuru requests: authentication headers, paging, retries, throttling | `OmsClient`, `omsConfigFromEnv`, `normalizeSkuKey` |
-| `server/oms/catalog.ts` | Database | Listing records and the catalog | `syncChannelListings`, `storeListingPage`, `catalogEntry` |
-| `server/oms/skus.ts` | Database | OMSGuru master SKUs | `syncSkuMaster`, `storeSkuPage` |
-| `server/oms/invoices.ts` | Database | Invoices by day | `syncInvoicesForDay`, `storeInvoiceRows` |
-| `server/oms/orders.ts` | Database | Order lookups and removal of personal data | `normalizeOrderRow`, `redactPersonalData`, `storeOrderRows` |
+| `server/claim-automation-routes.ts` | Routes | Unified claim creation, desktop bot polling and status updates | `mountClaimAutomationRoutes` |
+| `server/claim-automation-service.ts` | Database | Ticket synchronizer linking claims to the register, job queue management | `syncClaimTicketToRegister`, `createOrQueueAutomationJob`, `pollAutomationJob`, `updateAutomationJob` |
+| `server/product-master-routes.ts` | Routes | Staged batched product master import routes (`/start`, `/batch`, `/cancel`) | `mountProductMasterRoutes` |
+| `server/product-master.ts` | Database | 500-row chunking, in-memory staging with TTL, and isolated batch commits | `stageMasterImport`, `commitMasterBatch`, `cancelMasterImport` |
+| `server/oms/master-bridge.ts` | Database | Pure channel mapping and nightly OMSGuru to product master mapping bridge | `marketplaceForChannel`, `bridgeMasterMappings` |
+| `server/mobile-release.ts` | Routes & Meta | Mobile APK release manifest and binary download streamer | `getMobileReleaseManifest`, `streamLatestApk` |
+| `server/vms-catalog.ts` | Database | Read-only VMS catalog image sync into `product_master` | `syncVmsCatalog` |
+| `server/format.ts` | Pure | Display formatting and INR currency formatting | `formatCount`, `formatInr`, `percentOf`, `formatScanTime`, `formatUploadLabel`, `headerDateLabel`, `lastSignInLabel` |
 | `server/seed.ts` | Empty | Left from the removed demo seed. Safe to delete | none |
-| `server/scripts/` | Command-line jobs | `create-user`, `load-product-master`, `inspect-layout`, `sync-oms-catalog`, `sync-oms-daily`, `fetch-oms-orders`, `report-returns` | none |
+| `server/scripts/` | Command-line jobs | `create-user`, `load-product-master`, `inspect-layout`, `sync-oms-catalog`, `sync-oms-daily`, `sync-vms-catalog`, `fetch-oms-orders`, `report-returns` | none |
 | `server/tests/` | Tests | `node:test` files. See [TESTING.md](TESTING.md) | none |
+
 
 ### Schema files
 
@@ -175,7 +176,25 @@ Every file is additive and runs on every start. A change to the schema goes into
 | `src/types.ts` | Shared client types for the lookup, the scan, the register, accounts, uploads and the Admin pages |
 | `src/pages/` | `Login`, `Dashboard` (Overview), `ScanReturns`, `Reports` (Return register), `Claims`, `Uploads`, `Admin` |
 
+### Native Android warehouse client (`android/`)
+
+The native Android app is written in Kotlin for fast, ergonomics-focused warehouse scanning:
+- **Barcode & Label Scanning**: CameraX integration with automatic continuous autofocus and barcode decoding.
+- **Claim Capture (`ClaimCaptureActivity`)**: Multi-step photographic and video evidence capture. Enforces 480p SD unboxing video (minimum 15s, maximum 120s, bounded bitrate) to stay reliably under 25 MB.
+- **Upload Progress & Reset**: Visual determinate upload dialog showing file-by-file progress (`Uploading evidence files (x of y)...`). On submit completion, prompts "File Next Return (Start Again)", resetting all photo/video slots and claim state back to zero and focusing the search bar for the next order.
+- **Resilient Uploads**: Direct upload to Firebase Storage and server media endpoints with fallback to Android `WorkManager` for background retry on network jitter.
+- **In-App Auto-Updates (`AppUpdater.kt`)**: Checks `/api/mobile/release-manifest` on start and prompts the operator to update when a new version is published.
+
+### Windows Desktop Claim Automation Bot (`desktop-agent/`)
+
+The desktop automation bot is packaged as a standalone Windows Single Executable Application (`TaskFlowClaimAgent.exe`):
+- **Job Polling**: Continuously polls `POST /api/claims/automation/poll-job` for claims in state `ready_for_claim`.
+- **Browser Automation**: Uses Chrome DevTools Protocol (CDP) / Puppeteer with persistent `--user-data-dir` profiles, keeping Meesho supplier credentials and cookies alive across runs.
+- **Filing & Ticket Extraction**: Automates selecting Tampered packet state, flyer ID, attaching photos and video, auto-typing Tullipprints team claim description, clicking submit, taking confirmation screenshots, and extracting the marketplace claim ticket code.
+- **Local Disk Cleanup**: Implements `cleanClaimEvidenceFiles(claimId)` to delete downloaded photos and video immediately upon submission completion (`result.stage === 'completed'`), ensuring warehouse PC drives never fill up with large media files.
+
 ## Directory structure
+
 
 ```text
 server/                       Express API, database setup, file parsers, the register, OMSGuru integration
