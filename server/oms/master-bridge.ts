@@ -12,6 +12,7 @@
 // Synthetic-tested only (server/tests/oms-master-bridge.test.ts). No live API, no database tests.
 
 import type pg from "pg"
+import { markUnmappedListingSkusMapped } from "../product-master.js"
 
 export type BridgeChannel = { id: number; name: string; channel_name: string }
 
@@ -80,13 +81,9 @@ const FILL_IMAGES_SQL = `
     AND COALESCE(pm.image_url, '') = ''
     AND COALESCE(l.image_url, '') <> ''`
 
-// Same flip as server/product-master.ts: resolve the unmapped queue against the master.
-const FLIP_UNMAPPED_SQL = `
-  UPDATE unmapped_listing_skus u
-  SET status = 'mapped'
-  FROM product_master pm
-  WHERE u.status = 'unmapped'
-    AND LOWER(pm.listing_sku) = LOWER(u.listing_sku)`
+// Candidate-aware flip lives in server/product-master.ts (markUnmappedListingSkusMapped):
+// resolution is decided in JS over listingSkuCandidates, SQL stays a set-based
+// LOWER() update. The bridge calls it below so variants resolve here too.
 
 // Inserts new mappings, fills blank images, then flips the unmapped queue, all in one transaction.
 export async function bridgeMasterMappings(
@@ -113,7 +110,7 @@ export async function bridgeMasterMappings(
       const filled = await client.query(FILL_IMAGES_SQL, [marketplace, id])
       imageFilled += filled.rowCount ?? 0
     }
-    await client.query(FLIP_UNMAPPED_SQL)
+    await markUnmappedListingSkusMapped(client)
     await client.query("COMMIT")
   } catch (error) {
     await client.query("ROLLBACK")
