@@ -1611,6 +1611,17 @@ Append new entries at the end. Do not edit earlier entries, except to correct a 
 - **Next agent must not:** widen the VMS allowlist past SELECT/WITH, log the VMS URL/host, create product_master rows from VMS SKUs, overwrite existing images, or run `--apply` against production without the user's explicit approval.
 - **Open for the user:** approve `--apply` (first a `--dry-run` where production data lives) + daily scheduling; confirm whether VMS-only SKUs should later auto-create listing rows (needs mapping decision first).
 
+### 2026-10-16, OpenCode, Book11 verification + 500-row batched import + nightly OMSGuru bridge
+
+- **Book11.xlsx (read-only inspection):** matches the "Product SKU Codes" layout exactly — no new parser needed. Sheet1: 126,176 data rows, all with both SKUs, 126,139 valid images, 37 invalid (left blank), no scope column (→ `all`), 44 duplicate-listing conflicts (last wins, reported), 89 numeric listing SKUs (8–9 digits, safe). Sheet2 (92k rows, no listing column) is ignored by design — user should confirm that sheet was not meant to load.
+- **500-row batched import with progress:** new staged flow `POST /api/admin/product-master/import/start` (parse once, stage 15 min, owner-checked) + `POST .../import/batch` (≤500 rows per transaction; replace DELETEs once on first batch; one audit row at the end). Old single-shot `/import` kept for compat. Admin UI drains batches in a loop with a progress bar (%, rows, batch count), Cancel (abandons staged) and Retry (same uploadId). Each batch is its own transaction, so a 126k-row file never holds one giant transaction.
+- **Nightly OMSGuru bridge (no new endpoint needed):** listings + master SKUs are already synced nightly; new `bridgeMasterMappings` appends new (marketplace, listing) rows `ON CONFLICT DO NOTHING`, fills blank master images, flips unmapped→mapped — one transaction, zero new API calls. Runs in `sync-oms-catalog.ts` by default (`--skip-master-bridge` opts out), logged as `oms_sync_runs kind='master-bridge'`. Myntra/unknown channels are skipped+counted, never guessed. Complements (does not replace) the VMS image backfill.
+- **Built with 3 parallel agents** (batch API, bridge+script, Admin UI) under file-ownership contracts; 2 parallel reviewers checked the VMS work earlier. This tree also holds another workstream's uncommitted Claims/desktop-agent edits (Claims.tsx has 4 of their typecheck errors) — deliberately NOT touched and NOT committed here.
+- **Ran:** full `npm test` → 388 tests: 352 pass, 0 fail, 36 skipped (DB-gated). Server project typechecks clean; the only full-typecheck errors are the other workstream's Claims.tsx (theirs, excluded from this commit; CI on the PR branch sees a clean tree).
+- **Changed (this commit only):** `server/product-master.ts`, `server/product-master-routes.ts`, `server/oms/master-bridge.ts` (new), `server/scripts/sync-oms-catalog.ts`, `server/tests/oms-master-bridge.test.ts` + `server/tests/product-master-batch.test.ts` (new), `src/pages/Admin.tsx`, `src/types.ts`, `package.json` (2 test entries), `docs/notes/agent-handoff.md`.
+- **Next agent must not:** widen the bridge channel map by guessing (myntra→null stays), turn the bridge INSERT into an update, or commit the other workstream's files (Claims.tsx, dashboard.ts, format.ts, index.css, desktop-agent/, scratch/) with this work.
+- **Open for the user:** confirm Sheet2 of Book11 is intentionally ignored; run the first big Book11 import via the new batched UI; Myntra channel disambiguation for the bridge (needs seller-ID decision #4).
+
 ## STOP — needs the user to resume
 
 
@@ -1972,6 +1983,20 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
 - **The next agent must not:**
   - Query non-existent columns on `receipt_scans` (`original_tracking_snapshot` does not exist).
   - Bypass account scoping on claim routes.
+
+### 2026-10-16, OpenCode, nightly OMSGuru listing→product-master bridge
+
+- **Changed:**
+  - `server/oms/master-bridge.ts` (new): pure `marketplaceForChannel(channelName, name)` (exact account names; whole-word case-insensitive, channel_name first; anything containing myntra → null; unknown → null) plus `bridgeMasterMappings(db, channels)` — INSERT new mappings from `oms_listings JOIN oms_skus`, blank-image fill, unmapped→mapped flip, all in one transaction with rollback.
+  - `server/scripts/sync-oms-catalog.ts` (bridge step + header Writes comment only): master-bridge runs after the SKUs step by default, `--skip-master-bridge` opts out, own `oms_sync_runs` row `kind='master-bridge'`, per-channel skip lines, never throws past the step. Zero new API calls.
+  - `server/tests/oms-master-bridge.test.ts` (new): 7 synthetic pure-mapping tests, SYN- values only.
+  - `package.json`: appended the new test file to the `test` script (one token; mechanical registration required so `npm test` picks it up).
+- **Verification:**
+  - `npm.cmd run typecheck`: passed (0 errors, client + server).
+  - New test file only: 7 pass, 0 fail. Did not run build or the full suite (per task scope).
+- **The next agent must not:**
+  - Map any myntra-labelled OMSGuru channel to Myntra VB/EJ by guessing — null means skipped and counted.
+  - Change the bridge INSERT to update existing `product_master` rows (it is `ON CONFLICT DO NOTHING` by design).
 
 
 

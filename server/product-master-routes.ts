@@ -5,20 +5,28 @@
 // what is stored. The image link in this file wins over the OMSGuru catalog image when a return file is activated
 // (server/lookup-import.ts).
 
+import crypto from "node:crypto"
 import type { Express, RequestHandler } from "express"
 import multer from "multer"
 import { getPool } from "./db.js"
 import { actorOf, requireAdmin, sendError } from "./http.js"
 import {
+  MASTER_STAGING_TTL_MS,
+  insertMasterRows,
+  markUnmappedListingSkusMapped,
   productMasterState,
   replaceProductMaster,
+  requireStagedMasterImport,
+  takeMasterBatch,
+  upsertMasterRows,
   upsertProductMaster,
   getUnmappedListingSkusSummary,
   listUnmappedListingSkus,
   generateUnmappedSkusTemplateCsv,
   refreshUnmappedListingSkus,
+  type StagedMasterImport,
 } from "./product-master.js"
-import { ServiceError } from "./register-service.js"
+import { ServiceError, writeAudit } from "./register-service.js"
 import { parseProductMaster, previewProductMaster, productMasterTemplateCsv } from "./sheets.js"
 
 const uploadFile = multer({
@@ -34,6 +42,16 @@ async function resolveScope(raw: unknown): Promise<string> {
   const result = await getPool().query("SELECT 1 FROM marketplaces WHERE lower(name) = lower($1)", [name])
   if (!result.rows[0]) throw new ServiceError(400, "Choose a connected marketplace, or All marketplaces.")
   return name
+}
+
+// Staged product-master imports: parsed rows kept in memory for 15 minutes so large files can be committed
+// 500 rows at a time. Keyed by UUID, owned by the administrator who started the import.
+const stagedMasterImports = new Map<string, StagedMasterImport>()
+
+function forgetExpiredMasterImports(now: number): void {
+  for (const [id, item] of stagedMasterImports) {
+    if (now - item.createdAt > MASTER_STAGING_TTL_MS) stagedMasterImports.delete(id)
+  }
 }
 
 export function mountProductMasterRoutes(app: Express, requireUser: RequestHandler): void {
@@ -163,6 +181,144 @@ export function mountProductMasterRoutes(app: Express, requireUser: RequestHandl
       const count = await refreshUnmappedListingSkus(getPool())
       const summary = await getUnmappedListingSkusSummary(getPool())
       res.json({ count, unmapped: summary, summary })
+    } catch (error) {
+      sendError(res, error, next)
+    }
+  })
+
+  // Stages one product-master file for batched import. Parses once and keeps the rows in memory for 15 minutes;
+  // nothing is written yet. The preview is recomputed from the same buffer (double parse is deliberate), so a
+  // stale client preview can never decide what is stored.
+  // mode="merge" (default): upserts rows preserving all existing mappings.
+  // mode="replace": requires explicit confirm=true and replaces the whole master across the batches.
+  app.post(
+    "/api/admin/product-master/import/start",
+    requireUser,
+    requireAdmin,
+    uploadFile.single("file"),
+    async (req, res, next) => {
+      try {
+        const file = req.file
+        if (!file) return res.status(400).json({ error: "Choose a CSV or XLSX file" })
+        const mode = String(req.body?.mode || "merge").toLowerCase() === "replace" ? "replace" : "merge"
+        const confirmed = req.body?.confirm === true || req.body?.confirm === "true"
+
+        if (mode === "replace" && !confirmed) {
+          return res.status(409).json({ error: "Confirm that this replaces the whole product master before loading." })
+        }
+
+        const scope = await resolveScope(req.body?.marketplace)
+        const parsed = parseProductMaster(file.buffer, file.originalname, scope)
+        if (parsed.fatal) return res.status(400).json({ error: parsed.fatal })
+        if (!parsed.rows.length) {
+          return res.status(400).json({ error: "No row has both a listing SKU and a product SKU. Nothing was loaded." })
+        }
+
+        const now = Date.now()
+        forgetExpiredMasterImports(now)
+        const uploadId = crypto.randomUUID()
+        stagedMasterImports.set(uploadId, {
+          rows: parsed.rows,
+          filename: file.originalname,
+          scope,
+          mode,
+          ownerId: actorOf(req).id,
+          createdAt: now,
+          processed: 0,
+          inserted: 0,
+          removed: 0,
+          replaced: false,
+        })
+
+        res.json({
+          uploadId,
+          total: parsed.rows.length,
+          filename: file.originalname,
+          marketplace: scope,
+          mode,
+          preview: previewProductMaster(file.buffer, file.originalname, scope),
+        })
+      } catch (error) {
+        sendError(res, error, next)
+      }
+    },
+  )
+
+  // Commits the next batch of a staged product-master import: at most 500 rows in one transaction, then one
+  // commit. Merge mode upserts the chunk; replace mode DELETEs product_master once on the first batch
+  // (tracked by the staged replaced flag) and then inserts each chunk. History tables are never touched.
+  // Progress calls return {uploadId, processed, total, done, batchInserted}. The final call also writes ONE
+  // audit row and returns {result, state}.
+  app.post("/api/admin/product-master/import/batch", requireUser, requireAdmin, async (req, res, next) => {
+    try {
+      const ownerId = actorOf(req).id
+      const uploadId = String(req.body?.uploadId || "")
+      const entry = requireStagedMasterImport(stagedMasterImports, uploadId, ownerId)
+      const { chunk, nextProcessed } = takeMasterBatch(entry.rows, entry.processed, req.body?.limit)
+      const total = entry.rows.length
+      const isReplace = entry.mode === "replace"
+
+      const client = await getPool().connect()
+      let batchInserted = 0
+      let removed = entry.removed
+      let didReplace = false
+      try {
+        await client.query("BEGIN")
+        if (isReplace && !entry.replaced) {
+          const deleted = await client.query("DELETE FROM product_master")
+          removed = deleted.rowCount ?? 0
+          didReplace = true
+        }
+        batchInserted = isReplace ? await insertMasterRows(client, chunk) : await upsertMasterRows(client, chunk)
+        await markUnmappedListingSkusMapped(client)
+        const done = nextProcessed >= total
+        if (done) {
+          if (isReplace) {
+            await writeAudit(client, ownerId, "product_master.replace", "product_master", "all", {
+              filename: entry.filename,
+              rows: total,
+              removed,
+            })
+          } else {
+            await writeAudit(client, ownerId, "product_master.upsert", "product_master", "all", {
+              filename: entry.filename,
+              rows: total,
+              affected: entry.inserted + batchInserted,
+            })
+          }
+        }
+        await client.query("COMMIT")
+      } catch (error) {
+        await client.query("ROLLBACK")
+        throw error
+      } finally {
+        client.release()
+      }
+
+      if (didReplace) {
+        entry.removed = removed
+        entry.replaced = true
+      }
+      entry.processed = nextProcessed
+      entry.inserted += batchInserted
+
+      const done = entry.processed >= total
+      if (!done) {
+        return res.json({ uploadId, processed: entry.processed, total, done: false, batchInserted })
+      }
+      const result = isReplace
+        ? { inserted: entry.inserted, removed: entry.removed }
+        : { inserted: entry.inserted }
+      stagedMasterImports.delete(uploadId)
+      res.json({
+        uploadId,
+        processed: entry.processed,
+        total,
+        done: true,
+        batchInserted,
+        result,
+        state: await productMasterState(getPool()),
+      })
     } catch (error) {
       sendError(res, error, next)
     }
