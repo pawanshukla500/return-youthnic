@@ -5,7 +5,21 @@ import {
   encryptSecret,
   maskSecret,
   mapToReceiptIssueCategory,
+  updateJobProgress,
 } from "../claim-automation-service.js"
+import type pg from "pg"
+
+function fakePool() {
+  const queries: Array<{ sql: string; params: unknown[] }> = []
+  const client = {
+    query: async (sql: string, params: unknown[] = []) => {
+      queries.push({ sql, params })
+      return { rows: [], rowCount: 0 }
+    },
+    release: () => undefined,
+  }
+  return { pool: { connect: async () => client } as unknown as pg.Pool, queries }
+}
 
 test("credentials encryption: round-trips plaintext correctly using AES-256-GCM", () => {
   const password = "SuperSecretMarketplacePassword#2026!"
@@ -176,6 +190,32 @@ test("low-spec hardware optimization: adaptive scheduler backoff calculation", (
   // Long idle (>2 minutes): backs off to 30s to preserve CPU
   assert.equal(calculatePollDelay(false, 11), 30000)
   assert.equal(calculatePollDelay(false, 100), 30000)
+})
+
+test("job progress: not eligible clears a stale reference and sends the claim to manual review", async () => {
+  const { pool, queries } = fakePool()
+  await updateJobProgress(pool, 7, { stage: "not_eligible", manualActionReason: "SYN-packaging policy" })
+
+  const jobUpdate = queries.find((q) => q.sql.includes("UPDATE claim_automation_jobs"))
+  assert.ok(jobUpdate)
+  assert.match(jobUpdate.sql, /marketplace_claim_id = ''/)
+  assert.match(jobUpdate.sql, /completed_at = NULL/)
+
+  const claimUpdate = queries.find((q) => q.sql.includes("UPDATE claims"))
+  assert.ok(claimUpdate)
+  assert.match(claimUpdate.sql, /status = 'manual_action_required'/)
+  assert.deepEqual(claimUpdate.params, [7, "SYN-packaging policy"])
+  assert.equal(queries.at(-1)?.sql, "COMMIT")
+})
+
+test("job progress: other stages keep the marketplace reference", async () => {
+  const { pool, queries } = fakePool()
+  await updateJobProgress(pool, 7, { stage: "submitting", logMessage: "SYN-submitting" })
+
+  const jobUpdate = queries.find((q) => q.sql.includes("UPDATE claim_automation_jobs"))
+  assert.ok(jobUpdate)
+  assert.doesNotMatch(jobUpdate.sql, /marketplace_claim_id/)
+  assert.equal(queries.some((q) => q.sql.includes("UPDATE claims")), false)
 })
 
 

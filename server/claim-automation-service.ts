@@ -639,6 +639,10 @@ export async function updateJobProgress(
       params.push(data.manualActionReason)
       setClauses.push(`manual_action_reason = $${params.length}`)
     }
+    // A refused order was never filed; any earlier reference or completion time is stale. The job log keeps it.
+    if (data.stage === "not_eligible") {
+      setClauses.push("marketplace_claim_id = ''", "completed_at = NULL")
+    }
 
     await client.query(
       `UPDATE claim_automation_jobs SET ${setClauses.join(", ")} WHERE id = $1`,

@@ -2317,3 +2317,8 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
 - **Ran:** `npm run typecheck` passed. `npm run desktop:pack` built `dist-electron/win-unpacked`, copied to `C:\Return App` and relaunched. `/api/status` showed signed in and polling; `bot-2026-10-16.log` holds the startup, sign-in and registration lines.
 - **Did not run:** `npm test` (no test touches the logger). A real Meesho ticket is still not filed: the only queued claim is not eligible on Meesho.
 - **The next agent must not:** Log portal passwords, the operator token or cookies; they would now land on disk.
+
+### 2026-10-16, Cursor, Not-eligible jobs drop a stale ticket reference
+- **What changed:** `updateJobProgress` in `server/claim-automation-service.ts` now sets `marketplace_claim_id = ''` and `completed_at = NULL` when a job reaches `not_eligible`. Job 1 still showed the false reference "Raise" and a completed time from an earlier run. The job log keeps the old value. Two unit tests in `server/tests/claim-automation.test.ts` use a fake pool to check the SQL.
+- **Ran:** `npm run typecheck` passed. `npm test`: 430 tests, 393 pass, 0 fail, 37 skipped (no `TEST_DATABASE_URL`).
+- **The next agent must not:** Show a marketplace reference for a job that was not filed.
