@@ -1,7 +1,10 @@
+import crypto from "node:crypto"
 import fs from "node:fs"
 import path from "node:path"
 import os from "node:os"
-import type { AgentConfig } from "./config.js"
+import { Readable } from "node:stream"
+import { pipeline } from "node:stream/promises"
+import { loadAgentConfig, saveAgentConfig, type AgentConfig } from "./config.js"
 import { operatorAuthorization } from "./operator-session.js"
 import { logger } from "./logger.js"
 
@@ -48,6 +51,7 @@ export type JobExecutionBundle = {
     originalFilename: string
     mimeType: string
     sizeBytes: number
+    contentHash: string
     storageObjectPath: string
   }>
 }
@@ -67,13 +71,16 @@ export class AgentBackendClient {
       const url = `${this.config.backendUrl}/api/automation/agent/register`
       const res = await fetch(url, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(operatorAuthorization() ? { Authorization: operatorAuthorization()! } : {}),
+        },
         body: JSON.stringify({
           agentUuid: this.config.agentUuid,
           agentName: this.config.agentName,
           hostname: os.hostname(),
           platform: process.platform,
-          version: "1.0.0",
+          version: process.env.RETURN_APP_VERSION || process.env.npm_package_version || "1.1.0",
           apiKey: this.apiKey,
         }),
       })
@@ -87,6 +94,7 @@ export class AgentBackendClient {
       const data = (await res.json()) as { agentId: number; apiKey: string; authorized: boolean }
       this.agentId = data.agentId
       this.apiKey = data.apiKey
+      saveAgentConfig({ apiKey: data.apiKey })
       this.authorized = data.authorized
       this.isRegistered = true
       logger.info(`Agent registered successfully (ID: ${this.agentId}, Authorized: ${this.authorized}).`)
@@ -110,6 +118,7 @@ export class AgentBackendClient {
         headers: {
           "Content-Type": "application/json",
           "X-Agent-UUID": this.config.agentUuid,
+          "X-Agent-Key": this.apiKey,
         },
         body: JSON.stringify({
           agentUuid: this.config.agentUuid,
@@ -135,6 +144,7 @@ export class AgentBackendClient {
       const res = await fetch(url, {
         headers: {
           "X-Agent-UUID": this.config.agentUuid,
+          "X-Agent-Key": this.apiKey,
         },
       })
       if (!res.ok) {
@@ -154,7 +164,7 @@ export class AgentBackendClient {
     try {
       const url = `${this.config.backendUrl}/api/automation/jobs/${jobId}/bundle`
       const res = await fetch(url, {
-        headers: { "X-Agent-UUID": this.config.agentUuid },
+        headers: { "X-Agent-UUID": this.config.agentUuid, "X-Agent-Key": this.apiKey },
       })
       if (!res.ok) {
         logger.error(`Failed to fetch job bundle (${res.status}): ${await res.text()}`)
@@ -167,21 +177,24 @@ export class AgentBackendClient {
     }
   }
 
-  async downloadEvidenceFiles(claimId: number, files: JobExecutionBundle["evidenceFiles"]): Promise<Map<string, string>> {
-    const downloadedMap = new Map<string, string>()
+  async downloadEvidenceFiles(claimId: number, files: JobExecutionBundle["evidenceFiles"]): Promise<Map<string, string[]>> {
+    const downloadedMap = new Map<string, string[]>()
     const claimDir = path.join(this.config.workDir, `claim-${claimId}`)
     if (!fs.existsSync(claimDir)) {
       fs.mkdirSync(claimDir, { recursive: true })
     }
 
     for (const f of files) {
-      const safeName = `${f.fieldKey}_${path.basename(f.originalFilename)}`
+      const safeName = `${f.id}_${f.fieldKey}_${path.basename(f.originalFilename)}`
       const localPath = path.join(claimDir, safeName)
+      const partialPath = `${localPath}.part`
 
-      if (fs.existsSync(localPath) && fs.statSync(localPath).size > 0) {
-        downloadedMap.set(f.fieldKey, localPath)
+      if (await this.isCompleteEvidenceFile(localPath, f.sizeBytes, f.contentHash)) {
+        downloadedMap.set(f.fieldKey, [...(downloadedMap.get(f.fieldKey) || []), localPath])
         continue
       }
+      await fs.promises.rm(localPath, { force: true }).catch(() => undefined)
+      await fs.promises.rm(partialPath, { force: true }).catch(() => undefined)
 
       try {
         const mediaUrl = `${this.config.backendUrl}/api/claims/${claimId}/media/${f.id}`
@@ -192,30 +205,45 @@ export class AgentBackendClient {
         const res = await fetch(mediaUrl, { headers })
 
         if (res.ok && res.body) {
-          const fileStream = fs.createWriteStream(localPath)
-          const reader = res.body.getReader()
-          let totalBytes = 0
-          while (true) {
-            const { done, value } = await reader.read()
-            if (done) break
-            fileStream.write(value)
-            totalBytes += value.length
+          await pipeline(Readable.fromWeb(res.body as any), fs.createWriteStream(partialPath))
+          const totalBytes = (await fs.promises.stat(partialPath)).size
+          if (f.sizeBytes > 0 && totalBytes !== f.sizeBytes) {
+            throw new Error(`Evidence size mismatch for ${f.originalFilename}.`)
           }
-          await new Promise<void>((resolve, reject) => {
-            fileStream.end(() => resolve())
-            fileStream.on("error", reject)
-          })
-          downloadedMap.set(f.fieldKey, localPath)
+          if (!(await this.isCompleteEvidenceFile(partialPath, f.sizeBytes, f.contentHash))) {
+            throw new Error(`Evidence integrity check failed for ${f.originalFilename}.`)
+          }
+          await fs.promises.rename(partialPath, localPath)
+          downloadedMap.set(f.fieldKey, [...(downloadedMap.get(f.fieldKey) || []), localPath])
           logger.info(`Saved ${f.fieldKey} to ${localPath} (${totalBytes} bytes).`)
         } else {
           logger.warn(`Could not download ${f.fieldKey} (${res.status}).`)
         }
       } catch (err) {
+        await fs.promises.rm(partialPath, { force: true }).catch(() => undefined)
         logger.error(`Failed downloading ${f.fieldKey}:`, err)
       }
     }
 
+    const downloadedCount = Array.from(downloadedMap.values()).reduce((total, entries) => total + entries.length, 0)
+    if (downloadedCount !== files.length) {
+      throw new Error(`Downloaded ${downloadedCount} of ${files.length} evidence files. The claim will be retried.`)
+    }
     return downloadedMap
+  }
+
+  private async isCompleteEvidenceFile(filePath: string, sizeBytes: number, contentHash: string): Promise<boolean> {
+    try {
+      const stat = await fs.promises.stat(filePath)
+      if (!stat.isFile() || stat.size <= 0 || (sizeBytes > 0 && stat.size !== sizeBytes)) return false
+      if (!contentHash) return true
+      const hash = crypto.createHash("sha256")
+      const stream = fs.createReadStream(filePath)
+      for await (const chunk of stream) hash.update(chunk)
+      return hash.digest("hex") === contentHash
+    } catch {
+      return false
+    }
   }
 
   async cleanClaimEvidenceFiles(claimId: number): Promise<void> {
@@ -254,27 +282,31 @@ export class AgentBackendClient {
   async updateProgress(jobId: number, data: { stage: string; logMessage?: string; screenshotPath?: string; manualActionReason?: string }): Promise<void> {
     try {
       const url = `${this.config.backendUrl}/api/automation/jobs/${jobId}/progress`
-      await fetch(url, {
+      const res = await fetch(url, {
         method: "POST",
-        headers: { "Content-Type": "application/json", "X-Agent-UUID": this.config.agentUuid },
+        headers: { "Content-Type": "application/json", "X-Agent-UUID": this.config.agentUuid, "X-Agent-Key": this.apiKey },
         body: JSON.stringify(data),
       })
+      if (!res.ok) throw new Error(`Progress update failed with HTTP ${res.status}.`)
     } catch (err) {
       logger.error("Failed to report progress to backend:", err)
+      throw err
     }
   }
 
   async completeJob(jobId: number, data: { marketplaceClaimId: string; screenshotPath?: string; notes?: string }): Promise<void> {
     try {
       const url = `${this.config.backendUrl}/api/automation/jobs/${jobId}/complete`
-      await fetch(url, {
+      const res = await fetch(url, {
         method: "POST",
-        headers: { "Content-Type": "application/json", "X-Agent-UUID": this.config.agentUuid },
+        headers: { "Content-Type": "application/json", "X-Agent-UUID": this.config.agentUuid, "X-Agent-Key": this.apiKey },
         body: JSON.stringify(data),
       })
+      if (!res.ok) throw new Error(`Completion update failed with HTTP ${res.status}.`)
       logger.info(`Job #${jobId} reported as COMPLETED (Marketplace Ref: ${data.marketplaceClaimId}).`)
     } catch (err) {
       logger.error("Failed to report job completion:", err)
+      throw err
     }
   }
 
@@ -295,6 +327,7 @@ export class AgentBackendClient {
 
   async getRecentJobs(filter: { stage?: string; search?: string; page?: number; pageSize?: number } = {}): Promise<{ rows: any[]; total: number }> {
     try {
+      this.apiKey = loadAgentConfig().apiKey
       const q = new URLSearchParams()
       q.set("agentUuid", this.config.agentUuid)
       if (filter.stage) q.set("stage", filter.stage)
@@ -303,7 +336,7 @@ export class AgentBackendClient {
       if (filter.pageSize) q.set("pageSize", String(filter.pageSize))
       const url = `${this.config.backendUrl}/api/automation/agent/jobs?${q.toString()}`
       const res = await fetch(url, {
-        headers: { "X-Agent-UUID": this.config.agentUuid },
+        headers: { "X-Agent-UUID": this.config.agentUuid, "X-Agent-Key": this.apiKey },
       })
       if (!res.ok) return { rows: [], total: 0 }
       return (await res.json()) as { rows: any[]; total: number }

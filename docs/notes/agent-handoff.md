@@ -1,6 +1,6 @@
 # Agent handoff: Return App
 
-Status date: 2026-10-10.
+Status date: 2026-10-17.
 
 Who this is for: any agent or person who picks up the Return App, whether a Claude Code session, one of the project's role agents in `.claude/agents/`, or a reviewer. It gives you the state of the work, the map of the code, the rules that must hold after any change, how to verify, what is waiting on the user, and how to hand back.
 
@@ -9,7 +9,7 @@ It does not replace [CLAUDE.md](../../CLAUDE.md), which holds the business and t
 ## Summary
 
 - **What the app is.** A return-scanning app for VB Exports. Marketplace return reports (Myntra VB and EJ, Flipkart, Meesho, Amazon, Ajio) are loaded as lookup data, one account at a time. A scan records what physically arrived. The register is the permanent record. An Express 4 API and PostgreSQL run on the server, and a React 19 app built with Vite is the client. The code is strict TypeScript. Tests use `node:test` through `tsx`.
-- **The state.** The Phase 1 code has been typechecked, built and tested in the shell. The dedicated database checks remain skipped because `TEST_DATABASE_URL` is not set. The real Ajio workbook was parsed read-only; no return upload was activated.
+- **The state.** The code has been typechecked, built, tested and packaged in the shell. The dedicated database checks remain skipped because `TEST_DATABASE_URL` is not set. The real Ajio workbook was parsed read-only; no return upload was activated.
 - **Your first action.** Check the latest session-log entry and run only the remaining verification needed for the task.
 - **Do not.** Mark anything verified that you did not run. Read `.env`. Print a secret. Activate an upload against production data without the user's approval. Delete history.
 
@@ -27,9 +27,9 @@ It does not replace [CLAUDE.md](../../CLAUDE.md), which holds the business and t
 
 ## Current state
 
-Status words used here: **Written** means the code exists and was read back. **Tested** means an automated check exists. **Verified** means the check was run and its output was read. On 2026-10-16 the local typecheck, build and test suite finished with 424 tests: 388 pass, 0 fail, 36 database checks run in CI against a dedicated `postgres:16` container.
+Status words used here: **Written** means the code exists and was read back. **Tested** means an automated check exists. **Verified** means the check was run and its output was read. On 2026-10-17 the local typecheck, build and test suite finished with 432 tests: 395 pass, 0 fail, 37 skipped because `TEST_DATABASE_URL` was not set.
 
-## Start here (2026-10-16)
+## Start here (2026-10-17)
 
 Read this before the session log. The log below is history. This section is the state the next agent should trust.
 
@@ -42,10 +42,10 @@ Read this before the session log. The log below is history. This section is the 
 - **Multi return & Iron Send.** Multi-item/multi-order return verification supports Iron Send seamlessly across Web and Mobile app. Distinct theme colors apply to each issue category (Clear = Emerald, Iron Send = Vibrant Blue, Damaged = Crimson Red, Wrong Product = Amber, Missing = Rose, SKU Change = Purple, Size Change = Teal, Other = Slate).
 - **Register.** Filters are three rows. Empty dates say "Any day". Details opens a two-column record sheet.
 - **Mobile Android Client.** Production release `v1.0.56` (`versionCode: 10056`), in `android/app`, built with CameraX continuous scanning, camera permission onboarding dialog, photo & 480p SD unboxing video evidence capture, visual progress dialogs, instant form reset ("Start Again with Zero"), unified claim creation (`POST /api/claims/unified-create`), and automated in-app updates (`AppUpdater.kt`) synchronized via GitHub Actions (`.github/workflows/return-scan-apk.yml`).
-- **Native Windows Desktop Application & 24/7 Automation Worker.** Release `desktop-v1.0.2` (`Return.App.Setup.1.0.0.exe`) published via `.github/workflows/desktop-release.yml`. Packages full Return App + background claims bot into an enterprise NSIS installer targeting `C:\Program Files\Return App\` (`perMachine: true`). Includes persistent session storage (`persist:return-app-desktop`), system tray minimization, adaptive backoff queue scheduler (< 0.5% idle CPU), strict low-spec controls for 4GB RAM / 2-core CPU hardware (V8 heap 256MB, process-tree termination `taskkill /T /F`, direct chunk-to-disk streaming media download, automated 24-hr cache pruning).
+- **Native Windows Desktop Application & 24/7 Automation Worker.** Published release remains `desktop-v1.0.2`; source version 1.1.0 builds a machine-wide `Return.App.Setup.1.1.0.exe`. Admin/Supervisor enrollment issues a per-PC API key and preserves the enrolling user's account scope. Only Meesho jobs are leased automatically. Expired pre-submit work has bounded retries; an uncertain submission requires manual reconciliation instead of automatic resubmission. Evidence streams to `.part` files and is verified by byte count and SHA-256. Packaged installs auto-start hidden in the tray.
 - **Iron Send.** Iron Send is an operational category (`is_operational`), not a return issue: an Iron-only scan is `clear` / `Clear`, never a claim, never in issue figures, never in the OMSGuru file. Each line sent for ironing opens an `iron_send_records` row; the Inward Team (role `Inward`, or Admin) records units that come back on the **Iron tracking** page (`/iron`).
 - **Live sync.** WebSocket `/api/live` plus a 3.5 s (web) / 4 s (Android) poll of `/api/sync/state` as the fallback. The cursor is the newest audit id. Clients reload through the normal scoped routes.
-- **Database tests run.** 424 tests total. 388 pass, 0 fail, 36 skipped locally when `TEST_DATABASE_URL` is unset; all pass in CI against a dedicated `postgres:16` service container.
+- **Database tests run.** 432 tests total. 395 pass, 0 fail, 37 skipped locally when `TEST_DATABASE_URL` is unset. The current uncommitted change has not run remotely in CI yet.
 - **Not done.** `CLAUDE.md` is missing from the folder.
 
 | Area | Status | Tests | Notes |
@@ -63,6 +63,7 @@ Read this before the session log. The log below is history. This section is the 
 | Admin: issue categories and sub-issues | Written | None direct. The admin check itself is in `access.test.ts` | Categories can be switched only. Codes are fixed. |
 | Admin: logistics partners, courier names, tracking hosts | Written 2026-10-11 | `marketplace-rules.test.ts` (name match) | The screen shows the brand mark and courier names. Tracking hosts are not on the screen. A tracking link does not name the partner. Prefix aliases: `delhiveryexpress` and `delhiversurface` are Delhivery. |
 | Overview and claims figures, scoped | Written 2026-10-10 | `access-db.test.ts` (headline) | Type on the overview is larger as of 2026-10-11. Figure definitions are proposals until the user confirms them. |
+| Claims lifecycle, evidence, reconciliation and Meesho desktop filing | Verified locally 2026-10-17 | `claims.test.ts`, `claim-automation.test.ts` | Full lifecycle and financial fields, scoped CSV/XLSX export, live updates, authenticated Server PC leases, and Meesho-only automation. PostgreSQL-backed checks remain skipped locally. |
 | Marketplace parsers: Flipkart, Meesho, Amazon and Ajio (headers confirmed by sample); Myntra EJ (not confirmed) | Verified 2026-10-10 | `import.test.ts`, `marketplace-rules.test.ts` | Amazon and Ajio were parsed read-only from the real files; no upload was activated. |
 | Identifier number rules (Excel precision) | Verified 2026-10-10 | `spreadsheet-numbers.test.ts`, `scanner-list.test.ts` | Real Amazon and Meesho files were read-only diagnosed; numeric/scientific lookup values remain pending or malformed, never guessed. |
 | OMSGuru sync: listings, SKUs, invoices, orders | Written from the spec | `oms.test.ts`, `oms-orders.test.ts` | Not run against the live API. Not scheduled. |
@@ -86,7 +87,7 @@ These are not in the code. Each one is stated on the screen or in the docs, wher
 - The daily OMSGuru schedule (Windows Task Scheduler or a `.bat`), the scan-data archive job, and a screen for OMS listings and master SKUs.
 - Return lifecycle pulls from `return_details`.
 - Upload of the unboxing video, and its link to the return.
-- The Sales Database integration (`Amount`, `sales_amount`) and the claims integration (`Claim Amount`, `claim_amount`). The columns are reserved and empty.
+- Automated marketplace filing for Myntra, Flipkart, Amazon and Ajio. Only Meesho is automated; other marketplaces remain manual.
 - Automated tests for the UI. There is no UI test runner.
 - (Kotlin mobile client is built: see `android/app`, features CameraX ML Kit scanning, SHA-256 integrity verification, and in-app auto updater).
 
@@ -117,7 +118,7 @@ These need a person's decision or input. Do not guess them. Full detail is in [C
 
 ### Startup
 
-`server/index.ts` starts the listener, then calls `initDatabase()` (`server/db.ts`). That runs `SELECT 1`, applies the four schema files in one transaction (`schema.sql`, `schema-import.sql`, `schema-register.sql`, `schema-scan-history.sql`), and adds the six marketplace channels. The schema is idempotent. Until the database is ready, routes that need it return 503.
+`server/index.ts` starts the listener, then calls `initDatabase()` (`server/db.ts`). That runs `SELECT 1`, applies the ordered `SCHEMA_FILES` list in one transaction, and adds the marketplace channels. The schema is idempotent. Until the database is ready, routes that need it return 503.
 
 ### Sign-in and scope
 
@@ -2333,3 +2334,15 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
 - **What changed:** `docs/MEESHO_CLAIM_AUTOMATION.md` now documents the `C:\Return App` install path and `desktop:pack`, the strict numeric ticket verification, the `not_eligible` handling (browser closed, claim to manual review, stale ticket id cleared), the bot log file, Sign out confirmation, and the Claims desktop-automation tabs. `docs/notes/claims-automation.md`: same corrections to the Meesho flow (old `MSHO-TKT-` example removed), install target lines, a 4b log-file section, and the `desktop:pack` command. `docs/notes/iron-send.md`: status date to 2026-10-17 and a new `In-house ironing (high-running pieces)` section. `docs/API.md`: the job progress route documents `not_eligible`, the iron batch routes document `location` and in-house sheets.
 - **Docs only; no code or behavior changed.** Nothing to run beyond the doc edits.
 - **The next agent must not:** Repeat the `MSHO-TKT-` ticket example; real Meesho ticket ids are 9-15 digit numbers.
+
+### 2026-10-17, Factory Droid, Server PC claim processing and Windows installer 1.1.0
+- **Changed:** Claims lifecycle and reconciliation in `server/claims-service.ts`, `server/claims-routes.ts`, `server/dashboard.ts`, `server/live.ts`, `server/schema-claims.sql`, `src/pages/Claims.tsx`, and `src/types.ts`. Added review/approval/rejection/reconciliation/payment/reclaim/escalation states, financial and payout fields, scoped date filters, CSV/XLSX export, audit/history rows, and claim live refresh.
+- **Changed:** Secured Meesho-only automation in `server/claim-automation-service.ts`, `server/claim-automation-routes.ts`, and `server/schema-claim-automation.sql`. Enrollment requires Admin/Supervisor, every PC receives an API key, Supervisor agents retain the enrolling user's account scope, credential encryption requires `AUTOMATION_SECRET_KEY`, queue work uses leases and bounded attempts, and uncertain submissions stop for manual reconciliation instead of being filed twice.
+- **Changed:** Desktop runtime in `desktop/main.ts` and `desktop-agent/src/`. Packaged installs register Windows auto-start with a hidden tray launch. The worker verifies all evidence by size/SHA-256 using `.part` files, preserves multiple files per field, honors stream backpressure, checks server acknowledgements, escapes dashboard HTML, restricts local claim/log/config routes to a verified Admin/Supervisor session, and has no automation fallback for unsupported marketplaces.
+- **Changed:** Packaging/release in `package.json`, `package-lock.json`, and `.github/workflows/desktop-release.yml`; source version is 1.1.0, the artifact is `Return.App.Setup.<version>.exe`, pull requests build with read-only permissions, and only a qualifying `main` push or opted-in manual run publishes. Updated safe environment templates, batch-file copy, README, architecture/API/development notes, claims automation note, and audit matrix.
+- **Ran:** `npm run typecheck` -> exit 0, no errors. `npm test` -> 432 tests: 395 pass, 0 fail, 37 skipped because local `TEST_DATABASE_URL` is unset. Focused claims/automation/portal tests -> 38 pass, 0 fail. `npm run build` -> exit 0 (Vite and server bundle passed; Vite reported the existing >500 kB chunk warning). `npm run build:desktop` -> exit 0; NSIS reported `oneClick=false`, `perMachine=true`.
+- **Artifact:** `dist-electron/Return.App.Setup.1.1.0.exe`, 118,869,446 bytes, SHA-256 `93A20428582845F3EBC25E71293711EDB45DD1C204B913A6898598C8513D5EEC`. Generated output remains gitignored.
+- **Also checked:** desktop release workflow parsed successfully as YAML; `git diff --check` returned no whitespace errors (only line-ending conversion warnings).
+- **Not run or not verified:** 37 PostgreSQL-backed checks, because no dedicated local `TEST_DATABASE_URL` was provided. No live Meesho claim was filed. The installer was built but not installed over the live warehouse PC. GitHub pull-request checks and release publishing have not run yet.
+- **The next agent must not:** automate a marketplace other than Meesho; expose or restore a fallback encryption key; remove account scope from Server PC agents; retry an expired/uncertain submission without first reconciling the Meesho portal; commit generated `dist-electron/` or secrets.
+- **Open for the user:** after CI passes and the change merges, install the published 1.1.0 setup on the Server PC and perform one explicitly authorized safe Meesho claim check.

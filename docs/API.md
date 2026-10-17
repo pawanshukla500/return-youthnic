@@ -111,8 +111,9 @@ No rate limiting is configured. No rate-limit package is in `package.json`. CORS
 | GET | `/api/admin/product-master/template` | Admin | A header-only CSV for the product SKU master. It has no data rows. |
 | POST | `/api/admin/product-master/preview` | Admin | Reads one file and reports what it holds, for a chosen marketplace. Changes nothing. |
 | POST | `/api/claims/unified-create` | Yes | Unified mobile claim submission: creates claim, records scan, attaches media, and synchronizes Return Register ticket ID. |
-| POST | `/api/claims/automation/poll-job` | Agent/Admin | Polls for a queued claim automation job (`ready_for_claim`) for desktop bot execution. |
-| POST | `/api/claims/automation/update-job` | Agent/Admin | Updates claim automation execution stage, screenshots, ticket code, or error state. |
+| POST | `/api/automation/agent/register` | Admin/Supervisor | Enrolls one Server PC and returns its API key once. |
+| POST | `/api/automation/agent/heartbeat` | Agent key | Reports online, busy, or offline state. |
+| GET | `/api/automation/agent/poll` | Agent key | Leases the oldest eligible Meesho job for this Server PC. |
 | GET | `/api/mobile/release-manifest` | No | Version metadata and changelog for Android app in-app updates. |
 | GET | `/api/mobile/download-latest` | No | Streams the latest signed Android APK binary for warehouse scanners. |
 | POST | `/api/admin/product-master/import/start` | Admin | Stages product master import in memory and returns batch progress plan. |
@@ -190,7 +191,7 @@ The scan, upload and register screens fill their account lists from this route. 
 
 `chartBars` covers the last seven IST days, oldest first. `weekday` is the day name, `d` is the day of the month, and `received` and `issues` are the counts. `v` and `i` are those counts as percentages of the busiest day, used only to draw the bars. A day with no scans is zero, not a minimum bar. `share` on each marketplace slice is the percentage used to draw the ring. `dailyAvg` is the seven-day total divided by seven. `recent` has the four latest scans, with the first ticket of each scan. The `recent` rows use the field names shown above, not the register's.
 
-`GET /api/claims` returns `{ "stats", "total", "slices", "rows" }`. `stats` includes Total Claim Value (aggregated in Indian Rupees formatted via `formatInr()`), Active Claims, Approved Claims, and Approval Rate. Each slice represents status distribution (`ready_for_claim`, `submitted`, `processing`, `waiting_for_approval`, `approved`, `rejected`, `failed`, `manual_action_required`). Each row contains `market`, `raised`, `approved`, `review`, `rejected`, `value` (formatted currency string, e.g. `₹12,450.00`) and `rate` (approved percentage).
+`GET /api/claims` returns `{ "stats", "total", "slices", "rows" }`. Submitted claims are not counted as approved or paid. The lifecycle is `pending_evidence`, `ready_for_claim`, `waiting_for_approval`, `processing`, `submitted`, `under_review`, `approved`, `rejected`, `reconciled`, `paid`, `reclaim`, `escalated`, `failed`, and `manual_action_required`.
 
 ### Claim management & evidence
 
@@ -200,17 +201,22 @@ Claim management links immutably to a verified `receipt_scans` row and does not 
 - `GET /api/claims/:id`: returns `{ claim, media, statusHistory }`. `claim` includes `totalPrice` (merchandise value), `trackingId`, `orderId`, `claimReason`, `status`, and linked `scan`. `media` contains uploaded photos and video entries.
 - `GET /api/claims/:id/media/:mediaId`: securely streams evidence files inline with MIME type (`image/jpeg`, `image/png`, `video/mp4`) and session/bearer authentication, allowing direct browser `<img>` rendering and `<video controls>` HTML5 streaming.
 - `POST /api/claims/unified-create`: mobile-first atomic submission endpoint. Accepts `expectedReturnId`, `receiptScanId`, `marketplaceId`, `trackingId`, `orderId`, `claimReason`, `claimTitle`, `claimDescription`, `claimTemplateId`, and `evidenceFiles` (array of `{ fieldKey, fileName, fileType, byteSize, storagePath, downloadUrl }`). Atomically creates the `receipt_scan`, `receipt_scan_items`, `receipt_scan_issues`, `claims` row, `claim_media` records, and calls `syncClaimTicketToRegister()` to link the ticket directly to the Return Register.
+- `GET /api/claims/queue`: accepts lifecycle, search, marketplace, `dateFrom`, and `dateTo` filters.
+- `GET /api/claims/export?format=csv|xlsx`: exports the same scoped and filtered reconciliation rows, up to 50,000 rows. Larger results return 413 and must be narrowed with date or marketplace filters.
+- `PATCH /api/claims/:id/status`: records lifecycle transitions plus the transition reason and, where applicable, approved amount, paid amount, payout reference, and payout date.
 
 ### Desktop claim automation
 
 The Windows claim bot (Electron, `npm run desktop`) uses these agent routes. It does not open the scan screen.
 
-- `POST /api/automation/agent/register`: registers this PC's claim bot.
-- `POST /api/automation/agent/heartbeat`: marks the bot online, busy, or offline.
-- `GET /api/automation/agent/poll`: takes the oldest queued or approved claim job.
+- `POST /api/automation/agent/register`: Admin/Supervisor enrollment. The client supplies its generated UUID; the returned API key is stored in the Windows user-data directory.
+- `POST /api/automation/agent/heartbeat`: agent UUID plus API key; marks the bot online, busy, or offline.
+- `GET /api/automation/agent/poll`: atomically leases the oldest queued or approved Meesho job. Expired leases retry up to the configured maximum.
 - `GET /api/automation/jobs/:id/bundle`: returns the claim, portal login, and evidence list for that job.
 - `POST /api/automation/jobs/:id/progress`: reports a stage such as prepared or manual action. Stage `not_eligible` (the marketplace refused the order) sets the claim to `manual_action_required` with the refusal text as a remark and clears any stale marketplace ticket id and completion time on the job.
 - `POST /api/automation/jobs/:id/complete`: stores the marketplace ticket id and marks the job completed.
+
+All routes after enrollment require `X-Agent-UUID` and `X-Agent-Key`. Bundle and progress routes also verify that the job belongs to that agent. `AUTOMATION_SECRET_KEY` is mandatory and must contain at least 32 characters before marketplace credentials can be encrypted or decrypted.
 
 ### Product master batched import (Book11 ready)
 

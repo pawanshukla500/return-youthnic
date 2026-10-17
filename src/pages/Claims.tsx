@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { ApiError, api } from "../api"
+import { ApiError, api, downloadFile } from "../api"
 import { Loading, PageError } from "../shell"
 import { saveCsv, toCsv } from "../csv"
 import {
@@ -21,6 +21,7 @@ import {
 import { DataTable, Icon, MarketplaceBadge, Modal, StatCard, Badge } from "../ui"
 import { isSupervisorOrAdminUser } from "../access"
 import { useWorkspace } from "../workspace"
+import { useLiveChanges } from "../live"
 
 type ClaimsData = {
   stats: Stat[]
@@ -35,6 +36,13 @@ const STATUS_VALUES: ClaimStatus[] = [
   "waiting_for_approval",
   "processing",
   "submitted",
+  "under_review",
+  "approved",
+  "rejected",
+  "reconciled",
+  "paid",
+  "reclaim",
+  "escalated",
   "failed",
   "manual_action_required",
 ]
@@ -44,9 +52,16 @@ const NEXT_STATUSES: Record<ClaimStatus, ClaimStatus[]> = {
   ready_for_claim: ["waiting_for_approval"],
   waiting_for_approval: ["ready_for_claim", "processing", "manual_action_required"],
   processing: ["submitted", "failed", "manual_action_required"],
-  submitted: [],
-  failed: ["processing", "manual_action_required"],
-  manual_action_required: ["processing", "failed"],
+  submitted: ["under_review", "approved", "rejected", "escalated"],
+  under_review: ["approved", "rejected", "escalated"],
+  approved: ["reconciled"],
+  rejected: ["reclaim", "escalated"],
+  reconciled: ["paid", "escalated"],
+  paid: [],
+  reclaim: ["processing", "submitted", "under_review", "rejected", "escalated"],
+  escalated: ["under_review", "approved", "rejected", "reclaim"],
+  failed: ["processing", "manual_action_required", "reclaim", "escalated"],
+  manual_action_required: ["processing", "failed", "reclaim", "escalated"],
 }
 
 export function Claims() {
@@ -71,6 +86,9 @@ export function Claims() {
   useEffect(() => {
     loadOverview()
   }, [tab])
+  useLiveChanges((change) => {
+    if (change.kind === "claim.updated" && tab === "overview") loadOverview()
+  }, 800)
 
   if (error && tab === "overview" && !data) return <PageError message={error} />
 
@@ -225,6 +243,8 @@ function ClaimQueue() {
   const [statusFilter, setStatusFilter] = useState("")
   const [marketplaceFilter, setMarketplaceFilter] = useState("")
   const [search, setSearch] = useState("")
+  const [dateFrom, setDateFrom] = useState("")
+  const [dateTo, setDateTo] = useState("")
   const [page, setPage] = useState(1)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState("")
@@ -249,6 +269,8 @@ function ClaimQueue() {
     if (statusFilter) params.set("status", statusFilter)
     if (marketplaceFilter) params.set("marketplaceId", marketplaceFilter)
     if (search) params.set("search", search)
+    if (dateFrom) params.set("dateFrom", dateFrom)
+    if (dateTo) params.set("dateTo", dateTo)
     params.set("page", String(page))
     params.set("pageSize", "25")
     api<ClaimListResult>(`/api/claims/queue?${params.toString()}`)
@@ -259,7 +281,25 @@ function ClaimQueue() {
 
   useEffect(() => {
     loadClaims()
-  }, [statusFilter, marketplaceFilter, search, page])
+  }, [statusFilter, marketplaceFilter, search, dateFrom, dateTo, page])
+  useLiveChanges((change) => {
+    if (change.kind === "claim.updated") loadClaims()
+  }, 800)
+
+  const exportQueue = async (format: "csv" | "xlsx") => {
+    try {
+      const params = new URLSearchParams({ format })
+      if (statusFilter) params.set("status", statusFilter)
+      if (marketplaceFilter) params.set("marketplaceId", marketplaceFilter)
+      if (search) params.set("search", search)
+      if (dateFrom) params.set("dateFrom", dateFrom)
+      if (dateTo) params.set("dateTo", dateTo)
+      await downloadFile(`/api/claims/export?${params.toString()}`, `claim-reconciliation.${format}`)
+      setError("")
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Claim export failed.")
+    }
+  }
 
   if (loading && !claims) return <Loading label="Loading claim queue…" />
   if (error && !claims) return <PageError message={error} />
@@ -276,6 +316,7 @@ function ClaimQueue() {
             <Icon name="file" /> Capture Claim Evidence
           </button>
         </div>
+        {error && <div className="form-error">{error}</div>}
 
         {/* Filter row */}
         <div className="filter-row" style={{ display: "flex", gap: 12, flexWrap: "wrap", margin: "16px 0" }}>
@@ -298,6 +339,10 @@ function ClaimQueue() {
             onChange={(e) => { setSearch(e.target.value); setPage(1) }}
             style={{ flex: 1, minWidth: 200 }}
           />
+          <input type="date" aria-label="Claims from date" value={dateFrom} onChange={(e) => { setDateFrom(e.target.value); setPage(1) }} />
+          <input type="date" aria-label="Claims to date" value={dateTo} onChange={(e) => { setDateTo(e.target.value); setPage(1) }} />
+          <button className="btn secondary small" onClick={() => void exportQueue("csv")}>Export CSV</button>
+          <button className="btn secondary small" onClick={() => void exportQueue("xlsx")}>Export Excel</button>
         </div>
 
         {/* Claims Table */}
@@ -431,6 +476,10 @@ function ClaimDetailModal({
   const [statusUpdating, setStatusUpdating] = useState(false)
   const [newStatus, setNewStatus] = useState("")
   const [statusReason, setStatusReason] = useState("")
+  const [approvedAmount, setApprovedAmount] = useState("")
+  const [paidAmount, setPaidAmount] = useState("")
+  const [payoutReference, setPayoutReference] = useState("")
+  const [payoutDate, setPayoutDate] = useState("")
   const [uploadingField, setUploadingField] = useState("")
   const [refImage, setRefImage] = useState<string | null>(null)
   const [automationJob, setAutomationJob] = useState<AutomationJob | null>(null)
@@ -480,15 +529,30 @@ function ClaimDetailModal({
 
   const updateStatus = async () => {
     if (!newStatus) return
+    if ((approvedAmount !== "" && Number(approvedAmount) < 0) || (paidAmount !== "" && Number(paidAmount) < 0)) {
+      setError("Claim amounts cannot be negative.")
+      return
+    }
     setStatusUpdating(true)
     try {
       await api(`/api/claims/${claimId}/status`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: newStatus, reason: statusReason }),
+        body: JSON.stringify({
+          status: newStatus,
+          reason: statusReason,
+          approvedAmount: approvedAmount === "" ? undefined : Number(approvedAmount),
+          paidAmount: paidAmount === "" ? undefined : Number(paidAmount),
+          payoutReference,
+          payoutDate,
+        }),
       })
       setNewStatus("")
       setStatusReason("")
+      setApprovedAmount("")
+      setPaidAmount("")
+      setPayoutReference("")
+      setPayoutDate("")
       load()
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to update status")
@@ -889,6 +953,18 @@ function ClaimDetailModal({
                   onChange={(e) => setStatusReason(e.target.value)}
                   style={{ flex: 1, minWidth: 200 }}
                 />
+                {newStatus === "approved" && (
+                  <input type="number" min="0" step="0.01" placeholder="Approved amount" value={approvedAmount} onChange={(e) => setApprovedAmount(e.target.value)} />
+                )}
+                {(newStatus === "reconciled" || newStatus === "paid") && (
+                  <input type="text" placeholder="Payout / reconciliation reference" value={payoutReference} onChange={(e) => setPayoutReference(e.target.value)} />
+                )}
+                {newStatus === "paid" && (
+                  <>
+                    <input type="number" min="0" step="0.01" placeholder="Paid amount" value={paidAmount} onChange={(e) => setPaidAmount(e.target.value)} required />
+                    <input type="date" aria-label="Payout date" value={payoutDate} onChange={(e) => setPayoutDate(e.target.value)} />
+                  </>
+                )}
                 <button className="btn primary" disabled={!newStatus || statusUpdating} onClick={updateStatus}>
                   {statusUpdating ? "Updating…" : "Update Status"}
                 </button>
@@ -1060,7 +1136,7 @@ function CreateClaimModal({
     setFormError("")
     try {
       const selectedReasonObj = lookupResult.standardReasons.find((r) => r.code === selectedReason)
-      const res = await api<{ claim: ClaimDetail; jobId: number }>("/api/claims/unified-create", {
+      const res = await api<{ claim: ClaimDetail; jobId: number | null }>("/api/claims/unified-create", {
         method: "POST",
         body: JSON.stringify({
           receiptScanId: lookupResult.scanId || undefined,

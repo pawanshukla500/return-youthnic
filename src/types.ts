@@ -667,6 +667,13 @@ export type ClaimStatus =
   | "waiting_for_approval"
   | "processing"
   | "submitted"
+  | "under_review"
+  | "approved"
+  | "rejected"
+  | "reconciled"
+  | "paid"
+  | "reclaim"
+  | "escalated"
   | "failed"
   | "manual_action_required"
 
@@ -676,6 +683,13 @@ export const CLAIM_STATUS_LABELS: Record<ClaimStatus, string> = {
   waiting_for_approval: "Waiting for Approval",
   processing: "Processing",
   submitted: "Submitted",
+  under_review: "Under Review",
+  approved: "Approved",
+  rejected: "Rejected",
+  reconciled: "Reconciled",
+  paid: "Paid",
+  reclaim: "Re-claim",
+  escalated: "Escalated",
   failed: "Failed",
   manual_action_required: "Manual Action Required",
 }
@@ -686,6 +700,13 @@ export const CLAIM_STATUS_TONES: Record<ClaimStatus, string> = {
   waiting_for_approval: "purple",
   processing: "orange",
   submitted: "green",
+  under_review: "purple",
+  approved: "green",
+  rejected: "danger",
+  reconciled: "blue",
+  paid: "green",
+  reclaim: "warning",
+  escalated: "orange",
   failed: "danger",
   manual_action_required: "danger",
 }
@@ -766,6 +787,11 @@ export type ClaimRow = {
   overdue: boolean
   missingAmount: number
   totalPrice: number
+  claimAmount: number
+  approvedAmount: number
+  paidAmount: number
+  payoutReference: string
+  payoutDate: string
 }
 
 export type ClaimDetail = ClaimRow & {

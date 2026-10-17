@@ -5,7 +5,7 @@ cd /d "%~dp0"
 
 echo ======================================================================
 echo   Return App - 24/7 Marketplace Claim Desktop Bot Service
-echo   Continuous background automation for Meesho, Flipkart, Amazon, etc.
+echo   Continuous Meesho automation; other marketplaces stay assisted/manual.
 echo ======================================================================
 echo.
 

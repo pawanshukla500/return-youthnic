@@ -31,19 +31,26 @@ import {
 } from "../claims-service.js"
 import { meeshoClaimDescription, meeshoClaimDueDate, MEESHO_PACKET_STATE } from "../meesho-claims.js"
 
-test("the seven claim lifecycle statuses are defined in order", () => {
+test("the complete claim lifecycle statuses are defined in order", () => {
   assert.deepEqual([...CLAIM_STATUSES], [
     "pending_evidence",
     "ready_for_claim",
     "waiting_for_approval",
     "processing",
     "submitted",
+    "under_review",
+    "approved",
+    "rejected",
+    "reconciled",
+    "paid",
+    "reclaim",
+    "escalated",
     "failed",
     "manual_action_required",
   ])
 })
 
-test("isValidStatus accepts the seven lifecycle statuses and rejects others", () => {
+test("isValidStatus accepts the lifecycle statuses and rejects others", () => {
   for (const s of CLAIM_STATUSES) {
     assert.equal(isValidStatus(s), true)
   }
@@ -57,6 +64,12 @@ test("claim transitions require approval before processing and submission", () =
   assert.equal(claimTransitionError("ready_for_claim", "waiting_for_approval"), null)
   assert.equal(claimTransitionError("waiting_for_approval", "processing"), null)
   assert.equal(claimTransitionError("processing", "submitted"), null)
+  assert.equal(claimTransitionError("submitted", "under_review"), null)
+  assert.equal(claimTransitionError("under_review", "approved"), null)
+  assert.equal(claimTransitionError("approved", "reconciled"), null)
+  assert.equal(claimTransitionError("reconciled", "paid"), null)
+  assert.equal(claimTransitionError("rejected", "reclaim"), null)
+  assert.equal(claimTransitionError("reclaim", "escalated"), null)
   assert.match(claimTransitionError("ready_for_claim", "submitted") ?? "", /cannot move/)
   assert.match(claimTransitionError("pending_evidence", "processing") ?? "", /cannot move/)
   assert.match(claimTransitionError("waiting_for_approval", "submitted") ?? "", /cannot move/)

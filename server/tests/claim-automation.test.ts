@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 import {
+  authenticateAutomationAgent,
   decryptSecret,
   encryptSecret,
   maskSecret,
@@ -9,11 +10,16 @@ import {
 } from "../claim-automation-service.js"
 import type pg from "pg"
 
+process.env.AUTOMATION_SECRET_KEY ||= "SYN-TEST-AUTOMATION-KEY-AT-LEAST-32-CHARS"
+
 function fakePool() {
   const queries: Array<{ sql: string; params: unknown[] }> = []
   const client = {
     query: async (sql: string, params: unknown[] = []) => {
       queries.push({ sql, params })
+      if (sql.includes("SELECT j.attempts, j.max_attempts")) {
+        return { rows: [{ attempts: 1, max_attempts: 3, marketplace_id: 3 }], rowCount: 1 }
+      }
       return { rows: [], rowCount: 0 }
     },
     release: () => undefined,
@@ -36,6 +42,32 @@ test("credentials encryption: handles empty string and malformed ciphertext safe
   assert.equal(decryptSecret(""), "")
   assert.equal(decryptSecret("invalid-cipher-text"), "")
   assert.equal(decryptSecret("12:34:56"), "")
+})
+
+test("credentials encryption: refuses to use a source-code fallback key", () => {
+  const previous = process.env.AUTOMATION_SECRET_KEY
+  delete process.env.AUTOMATION_SECRET_KEY
+  assert.throws(() => encryptSecret("SYN-secret"), /encryption is not configured/)
+  process.env.AUTOMATION_SECRET_KEY = previous || "SYN-TEST-AUTOMATION-KEY-AT-LEAST-32-CHARS"
+})
+
+test("agent authentication requires the UUID, API key, authorization, and assigned job", async () => {
+  const key = "SYN-agent-key"
+  const hash = (await import("node:crypto")).createHash("sha256").update(key).digest("hex")
+  const db = {
+    query: async (sql: string, params: unknown[]) => {
+      if (sql.includes("FROM claim_automation_agents")) {
+        return { rows: [{ id: 9, agent_uuid: "SYN-agent", api_key_hash: hash, is_authorized: true }] }
+      }
+      if (sql.includes("FROM claim_automation_jobs")) {
+        return { rows: params[1] === 9 ? [{ "?column?": 1 }] : [] }
+      }
+      return { rows: [] }
+    },
+  } as unknown as pg.Pool
+
+  assert.deepEqual(await authenticateAutomationAgent(db, "SYN-agent", key, 42), { id: 9, uuid: "SYN-agent" })
+  await assert.rejects(authenticateAutomationAgent(db, "SYN-agent", "SYN-wrong", 42), /authentication failed/)
 })
 
 test("credentials masking: masks username safely without leaking plaintext", () => {
@@ -68,9 +100,10 @@ test("automation job stages: valid progression and states", () => {
     "completed",
     "failed",
     "manual_intervention_required",
+    "not_eligible",
   ]
 
-  assert.equal(validStages.length, 9)
+  assert.equal(validStages.length, 10)
   assert.ok(validStages.includes("prepared"))
   assert.ok(validStages.includes("manual_intervention_required"))
 })

@@ -33,7 +33,8 @@ Agents starting new work should read [AGENTS.md](../AGENTS.md) and [notes/agent-
 | `npm run desktop` | Launches the Native Windows Electron desktop app in local development. |
 | `npm run desktop:build` | Bundles `desktop/main.ts` into CommonJS (`desktop/dist/main.cjs`) using esbuild. |
 | `npm run desktop:pack` | Builds an unpacked directory of the Electron app in `dist-electron/win-unpacked` for rapid testing. |
-| `npm run desktop:dist` | Packages the machine-wide Windows NSIS installer (`Return.App.Setup.1.0.0.exe`) into `dist-electron/` with `perMachine: true`. The installer output is local and is not committed. |
+| `npm run desktop:dist` | Packages the machine-wide Windows NSIS installer (`Return.App.Setup.<version>.exe`) into `dist-electron/` with `perMachine: true`. The installer output is local and is not committed. |
+| `npm run build:desktop` | Runs the complete distributable desktop build, including the Electron bundle and versioned NSIS installer. |
 | `npm run bot` | Runs the claim-bot dashboard in this terminal. The warehouse app is `npm run desktop`, which opens the same bot after sign-in and keeps it in the tray. |
 | `npm run oms:orders` | Looks up OMSGuru order details for the uploaded return rows. Flags: `--sample` (20 returns, and only the field names of the first response is printed), `--limit <n>`, `--marketplace <name>`, `--refresh` (fetch again when a snapshot exists), `--delay <ms>` (default 1500), `--csv`. Run by hand. |
 | `npm run oms:daily` | Pulls OMSGuru invoices. Flags: `--date YYYY-MM-DD` for one day, or `--from` and `--to` for an inclusive range. With no flags it uses yesterday (IST). Run by hand. |

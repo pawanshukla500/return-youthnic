@@ -60,6 +60,7 @@ async function pollAndProcessJob(): Promise<void> {
   if (!isWorkerRunning || isCurrentlyProcessing || holdPortalBrowser()) return
   lastPollTime = new Date().toLocaleTimeString("en-IN")
   nextPollCountdown = Math.round(config.pollIntervalMs / 1000)
+  let submissionOutcomeUnknown = false
 
   try {
     const poll = await client.pollJob()
@@ -121,10 +122,12 @@ async function pollAndProcessJob(): Promise<void> {
           screenshotPath: result.screenshotPath,
         })
       } else if (result.stage === "completed" && result.marketplaceClaimId) {
+        submissionOutcomeUnknown = true
         await client.completeJob(jobHeader.jobId, {
           marketplaceClaimId: result.marketplaceClaimId,
           screenshotPath: result.screenshotPath,
         })
+        submissionOutcomeUnknown = false
         // Clean up local downloaded evidence files so they don't occupy disk space
         await client.cleanClaimEvidenceFiles(bundle.claimId)
       } else if (result.stage === "manual_intervention_required") {
@@ -151,6 +154,15 @@ async function pollAndProcessJob(): Promise<void> {
     }
   } catch (err: any) {
     logger.error("Error processing automation job:", err)
+    if (activeJobInfo?.jobId) {
+      await client.updateProgress(activeJobInfo.jobId, {
+        stage: submissionOutcomeUnknown ? "manual_intervention_required" : "failed",
+        logMessage: err instanceof Error ? err.message : "Desktop automation failed.",
+        manualActionReason: submissionOutcomeUnknown
+          ? "Meesho returned a ticket, but the server acknowledgement was lost. Verify the ticket before retrying."
+          : err instanceof Error ? err.message : "Desktop automation failed.",
+      }).catch(() => undefined)
+    }
   } finally {
     isCurrentlyProcessing = false
     activeJobInfo = null
@@ -471,6 +483,15 @@ function getDashboardHtml(): string {
     let allJobs = [];
     let isRunning = true;
 
+    function escapeHtml(value) {
+      return String(value == null ? '' : value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    }
+
     function setWorkspaceLocked(locked) {
       document.querySelectorAll('header, .top-toolbar, main').forEach((el) => {
         el.inert = locked;
@@ -635,7 +656,7 @@ function getDashboardHtml(): string {
       }
 
       tbody.innerHTML = filtered.map(j => {
-        const mpClass = 'badge-' + (j.marketplace || '').toLowerCase();
+        const mpClass = 'badge-' + (j.marketplace || '').toLowerCase().replace(/[^a-z0-9_-]/g, '');
         let stageClass = 'stage-queued';
         if (j.stage === 'completed') stageClass = 'stage-completed';
         else if (['downloading_media', 'opening_portal', 'filling_form', 'submitting'].includes(j.stage)) stageClass = 'stage-' + j.stage;
@@ -652,11 +673,11 @@ function getDashboardHtml(): string {
           nextStep += '<button class="btn btn-secondary" style="margin: 2px;" data-market="' + String(j.marketplace || "Meesho").replace(/[^a-zA-Z0-9 ]/g, "") + '" onclick="focusLogin(this.dataset.market)">Set up login</button>';
         }
         return '<tr>' +
-          '<td><span class="badge ' + mpClass + '">' + (j.marketplace || 'Channel') + '</span></td>' +
-          '<td><strong>' + (j.trackingId || j.orderNumber || '—') + '</strong><br><small style="color: var(--muted); font-family: monospace;">' + (j.orderNumber || '') + '</small></td>' +
-          '<td>' + (j.claimReason || 'Damaged / Wrong') + '</td>' +
-          '<td><span class="badge ' + stageClass + '">' + j.stage + '</span>' + (j.manualActionReason ? '<br><small style="color: #fca5a5;">' + j.manualActionReason + '</small>' : '') + '</td>' +
-          '<td>' + (j.marketplaceClaimId ? '<strong style="color: #34d399; font-family: monospace;">' + j.marketplaceClaimId + '</strong>' : '<span style="color: var(--muted);">Pending Submit</span>') + '</td>' +
+          '<td><span class="badge ' + mpClass + '">' + escapeHtml(j.marketplace || 'Channel') + '</span></td>' +
+          '<td><strong>' + escapeHtml(j.trackingId || j.orderNumber || '—') + '</strong><br><small style="color: var(--muted); font-family: monospace;">' + escapeHtml(j.orderNumber || '') + '</small></td>' +
+          '<td>' + escapeHtml(j.claimReason || 'Damaged / Wrong') + '</td>' +
+          '<td><span class="badge ' + stageClass + '">' + escapeHtml(j.stage) + '</span>' + (j.manualActionReason ? '<br><small style="color: #fca5a5;">' + escapeHtml(j.manualActionReason) + '</small>' : '') + '</td>' +
+          '<td>' + (j.marketplaceClaimId ? '<strong style="color: #34d399; font-family: monospace;">' + escapeHtml(j.marketplaceClaimId) + '</strong>' : '<span style="color: var(--muted);">Pending Submit</span>') + '</td>' +
           '<td><small style="color: var(--muted);">' + (j.updatedAt ? new Date(j.updatedAt).toLocaleTimeString('en-IN') : '—') + '</small></td>' +
           '<td>' + (nextStep || '—') + '</td>' +
         '</tr>';
@@ -797,7 +818,8 @@ function getDashboardHtml(): string {
       const div = document.createElement('div');
       div.className = 'log-line';
       const timeStr = entry.timestamp ? entry.timestamp.split('T')[1].split('.')[0] : '';
-      div.innerHTML = '<span class="log-time">[' + timeStr + ']</span> <span class="log-' + entry.level + '">' + entry.message + '</span>';
+      const safeLevel = ['info', 'warn', 'error', 'debug'].includes(entry.level) ? entry.level : 'info';
+      div.innerHTML = '<span class="log-time">[' + escapeHtml(timeStr) + ']</span> <span class="log-' + safeLevel + '">' + escapeHtml(entry.message) + '</span>';
       term.appendChild(div);
       term.scrollTop = term.scrollHeight;
     }
@@ -835,6 +857,11 @@ function getDashboardHtml(): string {
 
 let operatorSignedIn = false
 let portalLoginBusy = false
+
+function canRunClaimBot(role: string): boolean {
+  const normalized = role.trim().toLowerCase()
+  return normalized === "admin" || normalized === "supervisor"
+}
 
 function sendJson(res: http.ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { "Content-Type": "application/json" })
@@ -879,6 +906,11 @@ export async function resumeClaimBotIfSignedIn(): Promise<boolean> {
     logger.info("Claim bot is waiting for sign-in. Return scanning is not opened in this window.")
     return false
   }
+  if (!canRunClaimBot(user.role)) {
+    operatorSignedIn = false
+    logger.warn("The saved user is not an Admin or Supervisor. The claim bot remains paused.")
+    return false
+  }
   logger.info(`Operator ${user.name} is already signed in. The 24/7 claim bot is starting.`)
   await beginClaimWork()
   return true
@@ -919,7 +951,7 @@ export function startDesktopAppServer(port = 3005, control?: DesktopBotControl):
 
       if (url.pathname === "/api/operator/session" && req.method === "GET") {
         const user = await currentOperator()
-        operatorSignedIn = Boolean(user)
+        operatorSignedIn = Boolean(user && canRunClaimBot(user.role))
         sendJson(res, 200, { signedIn: operatorSignedIn, user })
         return
       }
@@ -930,6 +962,11 @@ export function startDesktopAppServer(port = 3005, control?: DesktopBotControl):
           const result = await loginOperator(String(body.email || ""), String(body.password || ""))
           if (!result.ok) {
             sendJson(res, result.status, { error: result.message })
+            return
+          }
+          if (!canRunClaimBot(result.user.role)) {
+            await logoutOperator()
+            sendJson(res, 403, { error: "Only an Admin or Supervisor can run the Server PC claim bot." })
             return
           }
           logger.info(`Operator ${result.user.name} signed in. Claim bot is running.`)
@@ -953,6 +990,10 @@ export function startDesktopAppServer(port = 3005, control?: DesktopBotControl):
       }
 
       if (url.pathname === "/api/jobs") {
+        if (!operatorSignedIn) {
+          sendJson(res, 401, { error: "Sign in before viewing claims." })
+          return
+        }
         const jobs = await client.getRecentJobs()
         res.writeHead(200, { "Content-Type": "application/json" })
         res.end(JSON.stringify(jobs))
@@ -993,6 +1034,10 @@ export function startDesktopAppServer(port = 3005, control?: DesktopBotControl):
       }
 
       if (url.pathname === "/api/test-connection") {
+        if (!operatorSignedIn) {
+          sendJson(res, 401, { error: "Sign in before testing the server connection." })
+          return
+        }
         const result = await client.testConnection()
         res.writeHead(200, { "Content-Type": "application/json" })
         res.end(JSON.stringify(result))
@@ -1086,6 +1131,10 @@ export function startDesktopAppServer(port = 3005, control?: DesktopBotControl):
       }
 
       if (url.pathname === "/api/config" && req.method === "POST") {
+        if (!operatorSignedIn) {
+          sendJson(res, 401, { error: "Sign in before changing the server connection." })
+          return
+        }
         let body = ""
         req.on("data", (chunk) => { body += chunk })
         req.on("end", async () => {
@@ -1109,6 +1158,10 @@ export function startDesktopAppServer(port = 3005, control?: DesktopBotControl):
       }
 
       if (url.pathname === "/api/logs/stream") {
+        if (!operatorSignedIn) {
+          sendJson(res, 401, { error: "Sign in before viewing bot logs." })
+          return
+        }
         res.writeHead(200, {
           "Content-Type": "text/event-stream",
           "Cache-Control": "no-cache",

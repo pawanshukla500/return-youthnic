@@ -29,6 +29,8 @@ The claim bot runs inside the Windows desktop app (`npm run desktop`). After sig
   - Auto-prepare toggle
   - Require approval before final submit toggle
 - **Security (Rule 8: No secrets)**: Stored in PostgreSQL table `marketplace_credentials` with AES-256-GCM encryption (`username_encrypted`, `password_encrypted`). Passwords are never sent to the client; usernames are masked (`maskSecret`).
+- **Encryption key**: `AUTOMATION_SECRET_KEY` is mandatory and must contain at least 32 characters. There is no source-code fallback.
+- **Server PC enrollment**: Only an Admin or Supervisor may register a PC. The client supplies its generated UUID and the server returns an API key. Queue, bundle, progress and completion calls require both. Evidence media remains protected by the signed-in operator session and account scope.
 
 ### 4. Meesho Supplier Flow Automation
 The automation engine (`desktop-agent/src/marketplaces/meesho.ts`) implements the exact Meesho flow:
@@ -68,14 +70,18 @@ The automation engine (`desktop-agent/src/marketplaces/meesho.ts`) implements th
 - **Process-Tree Teardown (`taskkill /T /F`):** `BrowserRunner.close()` tracks the spawned Chrome/Edge process ID and invokes `taskkill /pid ... /T /F`. This ensures no orphaned or zombie browser processes consume CPU/RAM in the background after claims finish.
 - **Low-Resource Chromium Flags:** Spawned browsers run with `--disable-dev-shm-usage`, `--disable-gpu`, `--no-sandbox`, `--disable-extensions`, `--disable-background-networking`, and `--metrics-recording-only`.
 - **Direct Streaming Evidence Pipeline:** In `AgentClient.downloadEvidenceFiles`, chunks stream directly from HTTP to local disk (`ReadableStream.getReader()`), preventing 50MB+ unboxing videos from consuming memory heap.
+- **Integrity & Multiplicity:** Every downloaded file is written as `.part`, verified against its expected byte count and SHA-256 hash, then renamed. Multiple files for one evidence field are preserved.
 - **Automated Disk Cache Pruning:** `pruneOldEvidenceFiles()` automatically purges temporary media files older than 24 hours upon agent initialization.
 - **Adaptive Backoff Queue Polling:** When claims exist, polls every 5s; when idle, backs off gracefully (10s -> 20s -> 30s) keeping idle CPU utilization < 0.5%.
+- **Lease Recovery:** Polling atomically leases each Meesho job. Expired work returns to the queue until its bounded attempt limit is reached.
 
 ### 6. Native Desktop App & Enterprise NSIS Installer
 - **Electron Application (`desktop/`):** Full Return App UI + 24/7 background claims worker bundled into a single native Windows application.
 - **Persistent Session Partition:** `session.fromPartition("persist:return-app-desktop")` keeps login cookies and tokens alive indefinitely without re-authenticating.
-- **Installation Target:** NSIS installer (`perMachine: true`) at `C:\Program Files\Return App\`. The warehouse terminal currently runs the standalone build from `npm run desktop:pack` copied to `C:\Return App\`, which starts with Windows.
-- **Automated GitHub Releases:** `.github/workflows/desktop-release.yml` triggers on desktop code updates, builds `Return.App.Setup.1.0.0.exe`, and publishes directly to GitHub Releases (Release `desktop-v1.0.2`).
+- **Installation Target:** Versioned NSIS installer (`perMachine: true`) at `C:\Program Files\Return App\`.
+- **Windows Auto-start:** Packaged installs register auto-start by default and launch hidden in the tray. Processing remains paused unless the saved operator is an Admin or Supervisor.
+- **Marketplace boundary:** Only Meesho jobs enter the automatic queue. Myntra, Flipkart, Amazon and Ajio remain manual workflows.
+- **Automated GitHub Releases:** `.github/workflows/desktop-release.yml` validates pull requests and publishes a versioned setup executable after a qualifying merge to `main`.
 
 ## Build & Run Commands
 
@@ -91,6 +97,9 @@ npm run desktop:pack
 
 # Package official enterprise Windows NSIS installer (C:\Program Files\Return App\)
 npm run desktop:dist
+
+# Complete distributable build (same installer step used for release)
+npm run build:desktop
 ```
 
 The claim bot window's **Sign out** button asks for confirmation, because signing out pauses the 24/7 bot until the next sign-in. An expired operator token clears the saved session; a network error keeps it, so a short outage never stops the bot.

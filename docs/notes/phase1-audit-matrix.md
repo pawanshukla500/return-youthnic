@@ -46,7 +46,7 @@ The matrix replaces the earlier version, whose statuses were written before the 
 
 | Requirement | Status |
 |---|---|
-| Claim Management System not built; ticket ID, ticket status, claim amount and rejection reason kept nullable | Kept. `claim_amount` is reserved, empty |
+| Claim Management System not built; ticket ID, ticket status, claim amount and rejection reason kept nullable | Superseded on 2026-10-17. The claims lifecycle, evidence, Server PC Meesho automation, financial reconciliation and CSV/XLSX export are now implemented. |
 | Sales Amount and the OMSGuru integration left pending | Kept. `sales_amount` is reserved, empty |
 | No demo data added | Kept. Nothing was seeded or added |
 | No credentials hardcoded; TLS verification not bypassed | Kept. `connectionSettingsFor()` is unchanged |

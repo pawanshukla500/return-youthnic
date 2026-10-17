@@ -10,7 +10,7 @@ export function getAutomationEngine(
   marketplace: string,
   browser: BrowserRunner,
   job: JobExecutionBundle,
-  evidenceFilesMap: Map<string, string>,
+  evidenceFilesMap: Map<string, string[]>,
   workDir: string,
 ): BaseMarketplaceAutomation {
   const norm = marketplace.toLowerCase()
@@ -28,6 +28,5 @@ export function getAutomationEngine(
     return new AjioAutomation(browser, job, evidenceFilesMap, workDir)
   }
 
-  // Fallback to generic Meesho-style engine
-  return new MeeshoAutomation(browser, job, evidenceFilesMap, workDir)
+  throw new Error(`Marketplace automation is not enabled for ${marketplace}. Use assisted manual filing.`)
 }

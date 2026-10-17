@@ -18,6 +18,19 @@ export type AgentConfig = {
 
 export const DEFAULT_PRODUCTION_URL = "https://return.youthnic.shop"
 
+export function isTrustedBackendUrl(value: string): boolean {
+  try {
+    const target = new URL(value)
+    const trustedOrigins = new Set([new URL(DEFAULT_PRODUCTION_URL).origin])
+    for (const configured of [process.env.BACKEND_URL, process.env.APP_URL]) {
+      if (configured) trustedOrigins.add(new URL(configured).origin)
+    }
+    return trustedOrigins.has(target.origin)
+  } catch {
+    return false
+  }
+}
+
 export function loadAgentConfig(): AgentConfig {
   const homeDir = os.homedir()
   const baseDir = path.join(homeDir, ".taskflow-claim-agent")
@@ -41,6 +54,7 @@ export function loadAgentConfig(): AgentConfig {
   // Always prioritize explicit env variables if set.
   // If saved.backendUrl is empty or points to legacy localhost/127.0.0.1, auto-upgrade to the production cloud VPS
   let backendUrl = process.env.BACKEND_URL || process.env.APP_URL || saved.backendUrl || DEFAULT_PRODUCTION_URL
+  if (!isTrustedBackendUrl(backendUrl)) backendUrl = DEFAULT_PRODUCTION_URL
   if (!process.env.BACKEND_URL && !process.env.APP_URL) {
     if (!backendUrl || backendUrl.includes("127.0.0.1") || backendUrl.includes("localhost")) {
       backendUrl = DEFAULT_PRODUCTION_URL
@@ -74,6 +88,9 @@ export function loadAgentConfig(): AgentConfig {
 }
 
 export function saveAgentConfig(updates: Partial<AgentConfig>): AgentConfig {
+  if (updates.backendUrl && !isTrustedBackendUrl(updates.backendUrl)) {
+    throw new Error("Use the configured Return App server URL.")
+  }
   const current = loadAgentConfig()
   const updated: AgentConfig = { ...current, ...updates }
   const homeDir = os.homedir()

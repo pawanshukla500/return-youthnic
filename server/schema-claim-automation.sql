@@ -33,12 +33,14 @@ CREATE TABLE IF NOT EXISTS claim_automation_agents (
   last_heartbeat_at timestamptz NOT NULL DEFAULT now(),
   current_task_info jsonb NOT NULL DEFAULT '{}',
   api_key_hash text NOT NULL,
-  is_authorized boolean NOT NULL DEFAULT true,
+  registered_by_user_id integer REFERENCES users(id) ON DELETE SET NULL,
+  is_authorized boolean NOT NULL DEFAULT false,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS claim_automation_agents_status_idx ON claim_automation_agents (status);
 CREATE INDEX IF NOT EXISTS claim_automation_agents_heartbeat_idx ON claim_automation_agents (last_heartbeat_at DESC);
+ALTER TABLE claim_automation_agents ADD COLUMN IF NOT EXISTS registered_by_user_id integer REFERENCES users(id) ON DELETE SET NULL;
 
 -- 3. Claim Automation Jobs (Processing queue, browser execution, screenshots, approval)
 CREATE TABLE IF NOT EXISTS claim_automation_jobs (
@@ -56,6 +58,8 @@ CREATE TABLE IF NOT EXISTS claim_automation_jobs (
   logs jsonb NOT NULL DEFAULT '[]',
   started_at timestamptz,
   completed_at timestamptz,
+  lease_expires_at timestamptz,
+  last_error text NOT NULL DEFAULT '',
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );
@@ -63,6 +67,10 @@ CREATE INDEX IF NOT EXISTS claim_automation_jobs_claim_idx ON claim_automation_j
 CREATE INDEX IF NOT EXISTS claim_automation_jobs_stage_idx ON claim_automation_jobs (stage);
 CREATE INDEX IF NOT EXISTS claim_automation_jobs_agent_idx ON claim_automation_jobs (agent_id);
 CREATE INDEX IF NOT EXISTS claim_automation_jobs_stage_created_idx ON claim_automation_jobs (stage, created_at ASC) WHERE stage IN ('queued', 'approved');
+ALTER TABLE claim_automation_jobs ADD COLUMN IF NOT EXISTS lease_expires_at timestamptz;
+ALTER TABLE claim_automation_jobs ADD COLUMN IF NOT EXISTS last_error text NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS claim_automation_jobs_lease_idx ON claim_automation_jobs (lease_expires_at)
+  WHERE lease_expires_at IS NOT NULL;
 
 -- 4. Additional claim snapshot and description fields on claims table
 ALTER TABLE claims ADD COLUMN IF NOT EXISTS customer_name_snapshot text NOT NULL DEFAULT '';

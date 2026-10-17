@@ -60,8 +60,7 @@ END $$;
 -- Claims: the lifecycle record. Each claim links immutably to one scanned return (receipt_scans.id).
 -- The marketplace_id is copied from the scan's expected_return at creation time, so the claim stays scoped
 -- even if the lookup data changes later. One claim per scan (unique index prevents duplicates).
--- Status lifecycle: pending_evidence -> ready_for_claim -> waiting_for_approval -> processing -> submitted.
--- Terminal/failure states: failed, manual_action_required.
+-- Status lifecycle continues after marketplace submission through review, decision, reconciliation, and payout.
 -- ---------------------------------------------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS claims (
   id serial PRIMARY KEY,
@@ -82,8 +81,22 @@ CREATE INDEX IF NOT EXISTS claims_marketplace_idx ON claims (marketplace_id);
 CREATE INDEX IF NOT EXISTS claims_status_idx ON claims (status);
 CREATE INDEX IF NOT EXISTS claims_created_at_idx ON claims (created_at DESC);
 ALTER TABLE claims ADD COLUMN IF NOT EXISTS claim_title text NOT NULL DEFAULT '';
+ALTER TABLE claims ADD COLUMN IF NOT EXISTS claim_amount numeric(12,2) NOT NULL DEFAULT 0;
+ALTER TABLE claims ADD COLUMN IF NOT EXISTS approved_amount numeric(12,2) NOT NULL DEFAULT 0;
+ALTER TABLE claims ADD COLUMN IF NOT EXISTS paid_amount numeric(12,2) NOT NULL DEFAULT 0;
+ALTER TABLE claims ADD COLUMN IF NOT EXISTS payout_reference text NOT NULL DEFAULT '';
+ALTER TABLE claims ADD COLUMN IF NOT EXISTS payout_date date;
 
 DO $$ BEGIN
+  IF EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conrelid = 'claims'::regclass
+      AND conname = 'claims_status_check'
+      AND pg_get_constraintdef(oid) NOT ILIKE '%paid%'
+  ) THEN
+    ALTER TABLE claims DROP CONSTRAINT claims_status_check;
+  END IF;
   IF NOT EXISTS (
     SELECT 1 FROM pg_constraint WHERE conrelid = 'claims'::regclass AND conname = 'claims_status_check'
   ) THEN
@@ -94,9 +107,16 @@ DO $$ BEGIN
         'waiting_for_approval',
         'processing',
         'submitted',
+        'under_review',
+        'approved',
+        'rejected',
+        'reconciled',
+        'paid',
+        'reclaim',
+        'escalated',
         'failed',
         'manual_action_required'
-      ));
+      )) NOT VALID;
   END IF;
 END $$;
 
