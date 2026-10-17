@@ -2322,3 +2322,9 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
 - **What changed:** `updateJobProgress` in `server/claim-automation-service.ts` now sets `marketplace_claim_id = ''` and `completed_at = NULL` when a job reaches `not_eligible`. Job 1 still showed the false reference "Raise" and a completed time from an earlier run. The job log keeps the old value. Two unit tests in `server/tests/claim-automation.test.ts` use a fake pool to check the SQL.
 - **Ran:** `npm run typecheck` passed. `npm test`: 430 tests, 393 pass, 0 fail, 37 skipped (no `TEST_DATABASE_URL`).
 - **The next agent must not:** Show a marketplace reference for a job that was not filed.
+
+### 2026-10-17, Cursor, Reboot check; Sign out now asks first
+- **Found:** The PC rebooted at 11:06 AM. The bot log shows `C:\Return App` started from Windows startup at 11:07, kept the saved operator sign-in while DNS for `return.youthnic.shop` failed, and registered at 11:09 when the network returned. At 11:07:33 the Sign out button was clicked, which deletes `operator-session.json` and stops the bot.
+- **What changed:** Sign out in the claim bot window now asks for confirmation and has a title saying it stops the 24/7 bot (`desktop-agent/src/desktop-app-server.ts`).
+- **Ran:** both `tsc --noEmit` projects exit 0. `npm run desktop:pack` built; files copied over `C:\Return App` and relaunched; `/api/status` answers with `signedIn: false` (waiting for the operator to sign in again).
+- **The next agent must not:** Clear the saved operator sign-in on a network error.

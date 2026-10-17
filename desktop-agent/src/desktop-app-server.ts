@@ -314,7 +314,7 @@ function getDashboardHtml(): string {
         <span class="pulse-dot"></span>
         <span id="agent-status-text">Waiting for sign-in</span>
       </div>
-      <button class="btn btn-secondary" id="sign-out-btn" type="button" onclick="signOut()" hidden>Sign out</button>
+      <button class="btn btn-secondary" id="sign-out-btn" type="button" onclick="signOut()" title="Stops the 24/7 claim bot until someone signs in again" hidden>Sign out</button>
     </div>
   </header>
 
@@ -538,6 +538,7 @@ function getDashboardHtml(): string {
     }
 
     async function signOut() {
+      if (!confirm('Sign out stops the 24/7 claim bot until someone signs in again. Sign out?')) return;
       await fetch('/api/operator/logout', { method: 'POST' });
       showSignedOut();
       await loadStatus();
