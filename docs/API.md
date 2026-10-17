@@ -228,8 +228,8 @@ High-volume product catalog imports are broken into 500-row transactional chunks
 
 ### Mobile release & updates
 
-- `GET /api/mobile/release-manifest`: returns JSON release metadata (`versionCode`, `versionName`, `downloadUrl`, `releaseNotes`, `minSupportedVersionCode`) from `data/return-scan-release.json`.
-- `GET /api/mobile/download-latest`: downloads the latest signed production APK binary.
+- `GET /api/mobile/release-manifest`: returns JSON release metadata (`versionCode`, `versionName`, `downloadUrl`, `releaseNotes`, `minSupportedVersionCode`). The server picks the newest Android release itself from GitHub (tags matching `v1.0.*` only; `desktop-v*` releases are ignored even when one holds the "Latest" badge) and falls back to `data/return-scan-release.json` when GitHub is unreachable.
+- `GET /api/mobile/download-latest`: downloads the latest signed production APK binary; when no local APK exists it redirects to the tag-specific GitHub asset (never `/releases/latest`, which can be a desktop installer).
 
 
 ## Uploads

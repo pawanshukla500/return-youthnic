@@ -125,6 +125,7 @@ jobs:
           gh release create "$TAG_NAME" \
             "$SETUP_EXE" \
             --target "${{ github.sha }}" \
+            --latest=false \
             --title "Return App Desktop $TAG_NAME" \
             --notes "Official Windows Desktop NSIS Installer for Return App ($TAG_NAME).
 

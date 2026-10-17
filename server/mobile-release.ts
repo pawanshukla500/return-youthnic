@@ -19,14 +19,14 @@ export type MobileReleaseInfo = {
 }
 
 const DEFAULT_RELEASE: MobileReleaseInfo = {
-  versionCode: 10054,
-  versionName: "1.0.54",
+  versionCode: 10058,
+  versionName: "1.0.58",
   minRequiredVersionCode: 10001,
-  sha256: "5ae8cfafd088093f68936a47602fa5be05c4906db1dd31f0daa97f19c383dc74",
-  sizeBytes: 3831281,
+  sha256: "c4c522dd83e2c8be711006f9d8914dbfc10e29c7afa750e7f5d39a002d0e69eb",
+  sizeBytes: 3847664,
   notes: "Youthnic Native Android Return Scanner · Mobile Upload Progress & Zero-Reset\n- Live visual evidence upload progress dialog with percentage indicator\n- One-tap start-again reset to zero for scanning subsequent orders\n- Automatic local file cleanup after successful cloud upload\n- Fault-tolerant background retry via WorkManager",
-  publishedAt: "2026-10-16T07:15:00Z",
-  downloadUrl: "https://github.com/pawanshukla500/return-youthnic/releases/latest",
+  publishedAt: "2026-10-17T09:57:55Z",
+  downloadUrl: "https://github.com/pawanshukla500/return-youthnic/releases/download/v1.0.58/ReturnScan-v1.0.58.apk",
   pageUrl: "https://github.com/pawanshukla500/return-youthnic/releases",
 }
 
@@ -36,19 +36,31 @@ const GITHUB_CACHE_TTL_MS = 10 * 60 * 1000 // 10 minutes cache
 
 async function fetchLatestFromGitHub(): Promise<MobileReleaseInfo | null> {
   try {
-    const res = await fetch("https://api.github.com/repos/pawanshukla500/return-youthnic/releases/latest", {
+    // The repo publishes two release families: Android APKs (v1.0.N) and Windows desktop
+    // installers (desktop-v*). /releases/latest can point at either one, so list recent
+    // releases and pick the newest Android tag ourselves.
+    const res = await fetch("https://api.github.com/repos/pawanshukla500/return-youthnic/releases?per_page=30", {
       headers: {
         "User-Agent": "Return-App-Server",
         "Accept": "application/vnd.github.v3+json",
       },
     })
     if (!res.ok) return null
-    const data = await res.json() as any
+    const list = (await res.json()) as any[]
+    let best: { data: any; runNum: number } | null = null
+    for (const data of Array.isArray(list) ? list : []) {
+      if (data?.draft || data?.prerelease) continue
+      const match = String(data?.tag_name || "").match(/^v1\.0\.(\d+)$/)
+      if (match && (!best || parseInt(match[1], 10) > best.runNum)) {
+        best = { data, runNum: parseInt(match[1], 10) }
+      }
+    }
+    if (!best) return null
+    const data = best.data
     const tagName = String(data.tag_name || "")
-    const match = tagName.match(/^v?1\.0\.(\d+)$/)
-    const runNum = match ? parseInt(match[1], 10) : 0
+    const runNum = best.runNum
     const vCode = 10000 + runNum
-    const vName = match ? `1.0.${runNum}` : tagName.replace(/^v/, "")
+    const vName = `1.0.${runNum}`
     
     // Find release apk asset
     const apkAsset = data.assets?.find((a: any) => a.name?.endsWith(".apk") && !a.name.includes("latest")) ||
@@ -143,7 +155,10 @@ export function handleApkDownload(req: Request, res: Response) {
     }
   }
 
-  // If local APK file not compiled on this server, redirect to GitHub release download
-  const redirectUrl = info.downloadUrl || "https://github.com/pawanshukla500/return-youthnic/releases/latest/download/ReturnScan-latest.apk"
+  // If local APK file not compiled on this server, redirect to GitHub release download.
+  // Build the URL from the resolved version: /releases/latest can be a desktop installer.
+  const tag = `v${info.versionName}`
+  const tagUrl = `https://github.com/pawanshukla500/return-youthnic/releases/download/${tag}/ReturnScan-${tag}.apk`
+  const redirectUrl = info.downloadUrl && info.downloadUrl.endsWith(".apk") ? info.downloadUrl : tagUrl
   res.redirect(redirectUrl)
 }
