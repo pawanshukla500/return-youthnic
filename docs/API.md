@@ -114,8 +114,8 @@ No rate limiting is configured. No rate-limit package is in `package.json`. CORS
 | POST | `/api/automation/agent/register` | Admin/Supervisor | Enrolls one Server PC and returns its API key once. |
 | POST | `/api/automation/agent/heartbeat` | Agent key | Reports online, busy, or offline state. |
 | GET | `/api/automation/agent/poll` | Agent key | Leases the oldest eligible Meesho job for this Server PC. |
-| GET | `/api/mobile/release-manifest` | No | Version metadata and changelog for Android app in-app updates. |
-| GET | `/api/mobile/download-latest` | No | Streams the latest signed Android APK binary for warehouse scanners. |
+| GET | `/api/app/latest` | No | Version metadata and changelog for Android app in-app updates (`AppUpdater.kt`). Picks the newest `v1.0.*` GitHub release itself. |
+| GET | `/download/return-scan.apk` | No | Streams the latest signed Android APK binary for warehouse scanners; redirects to the tag-specific GitHub asset. |
 | POST | `/api/admin/product-master/import/start` | Admin | Stages product master import in memory and returns batch progress plan. |
 | POST | `/api/admin/product-master/import/batch` | Admin | Commits up to 500 rows of staged product master per transaction with progress indicator. |
 | POST | `/api/admin/product-master/import/cancel` | Admin | Cancels and clears a staged product master import. |
@@ -228,8 +228,8 @@ High-volume product catalog imports are broken into 500-row transactional chunks
 
 ### Mobile release & updates
 
-- `GET /api/mobile/release-manifest`: returns JSON release metadata (`versionCode`, `versionName`, `downloadUrl`, `releaseNotes`, `minSupportedVersionCode`). The server picks the newest Android release itself from GitHub (tags matching `v1.0.*` only; `desktop-v*` releases are ignored even when one holds the "Latest" badge) and falls back to `data/return-scan-release.json` when GitHub is unreachable.
-- `GET /api/mobile/download-latest`: downloads the latest signed production APK binary; when no local APK exists it redirects to the tag-specific GitHub asset (never `/releases/latest`, which can be a desktop installer).
+- `GET /api/app/latest`: returns JSON release metadata (`versionCode`, `versionName`, `downloadUrl`, `notes`, `minRequiredVersionCode`, `sha256`, `sizeBytes`) for the Android in-app updater (`AppUpdater.kt`). The server picks the newest Android release itself from GitHub (tags matching `v1.0.*` only; `desktop-v*` releases are ignored even when one holds the "Latest" badge) and falls back to `data/return-scan-release.json` when GitHub is unreachable.
+- `GET /download/return-scan.apk`: serves the signed production APK binary; when no local APK exists on the server it redirects to the tag-specific GitHub asset (never `/releases/latest`, which can be a desktop installer).
 
 
 ## Uploads
