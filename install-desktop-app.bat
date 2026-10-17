@@ -5,7 +5,7 @@ cd /d "%~dp0"
 
 echo ======================================================================
 echo   Return App · 24/7 Claim Bot Installer
-echo   Automated Marketplace Return Claims & Evidence Engine (Meesho, etc.)
+echo   Automated Meesho Claims & Assisted Marketplace Evidence Engine
 echo ======================================================================
 echo.
 

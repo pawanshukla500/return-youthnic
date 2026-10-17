@@ -91,9 +91,9 @@ export function mapReturn(row: ReturnRecord) {
 
 // Claim tone used by the claims page colour key.
 export function claimTone(status: string) {
-  if (status === "Approved" || status === "submitted") return "approved"
-  if (status === "Rejected" || status === "failed" || status === "manual_action_required") return "rejected"
-  if (status === "Review" || status === "Raised" || status === "ready_for_claim" || status === "processing" || status === "waiting_for_approval") return "review"
+  if (status === "Approved" || ["approved", "reconciled", "paid"].includes(status)) return "approved"
+  if (status === "Rejected" || status === "rejected" || status === "failed" || status === "manual_action_required") return "rejected"
+  if (status === "Review" || status === "Raised" || ["ready_for_claim", "processing", "waiting_for_approval", "submitted", "under_review", "reclaim", "escalated"].includes(status)) return "review"
   return "draft"
 }
 
@@ -138,7 +138,7 @@ export async function loadHeadline(db: pg.Pool, scope: AccountScope): Promise<He
          ) u1) AS claims,
       (SELECT COUNT(*)::int
          FROM (
-           SELECT c2.id FROM claims c2 WHERE c2.status NOT IN ('submitted', 'failed') AND ${openClaimsModern}
+           SELECT c2.id FROM claims c2 WHERE c2.status NOT IN ('approved', 'reconciled', 'paid', 'rejected', 'failed') AND ${openClaimsModern}
            UNION ALL
            SELECT ct2.id FROM claim_tickets ct2
            JOIN receipt_scans cs2 ON cs2.id = ct2.receipt_scan_id
@@ -148,7 +148,7 @@ export async function loadHeadline(db: pg.Pool, scope: AccountScope): Promise<He
          ) u2) AS open_claims,
       (SELECT COUNT(*)::int
          FROM (
-           SELECT c3.id FROM claims c3 WHERE c3.status = 'submitted' AND ${approvedClaimsModern}
+           SELECT c3.id FROM claims c3 WHERE c3.status IN ('approved', 'reconciled', 'paid') AND ${approvedClaimsModern}
            UNION ALL
            SELECT ct3.id FROM claim_tickets ct3
            JOIN receipt_scans cs3 ON cs3.id = ct3.receipt_scan_id
@@ -580,6 +580,13 @@ const STATUS_LABELS: Record<string, string> = {
   waiting_for_approval: "Waiting for Approval",
   processing: "Processing",
   submitted: "Submitted",
+  under_review: "Under Review",
+  approved: "Approved",
+  rejected: "Rejected",
+  reconciled: "Reconciled",
+  paid: "Paid",
+  reclaim: "Re-claim",
+  escalated: "Escalated",
   failed: "Failed",
   manual_action_required: "Manual Action Required",
   Approved: "Approved",
@@ -605,10 +612,10 @@ export async function loadClaims(db: pg.Pool, scope: AccountScope) {
       `
       SELECT
         COUNT(c.id)::int AS total_claims,
-        (COUNT(c.id) FILTER (WHERE c.status NOT IN ('submitted', 'failed')))::int AS open_claims,
-        (COUNT(c.id) FILTER (WHERE c.status = 'submitted'))::int AS submitted_claims,
-        COALESCE(SUM(c.total_price_snapshot), 0)::numeric(12,2) AS total_value,
-        COALESCE(SUM(c.total_price_snapshot) FILTER (WHERE c.status = 'submitted'), 0)::numeric(12,2) AS recovered_value
+        (COUNT(c.id) FILTER (WHERE c.status NOT IN ('approved', 'reconciled', 'paid', 'rejected', 'failed')))::int AS open_claims,
+        (COUNT(c.id) FILTER (WHERE c.status IN ('approved', 'reconciled', 'paid')))::int AS approved_claims,
+        COALESCE(SUM(COALESCE(NULLIF(c.claim_amount, 0), c.total_price_snapshot)), 0)::numeric(12,2) AS total_value,
+        COALESCE(SUM(c.paid_amount) FILTER (WHERE c.status = 'paid'), 0)::numeric(12,2) AS recovered_value
       FROM claims c
       WHERE ${totalsCondition}
       `,
@@ -636,19 +643,33 @@ export async function loadClaims(db: pg.Pool, scope: AccountScope) {
       `
       SELECT
         m.name AS market,
-        (COUNT(DISTINCT c.id) + COUNT(DISTINCT ct.id))::int AS raised,
-        (COUNT(DISTINCT c.id) FILTER (WHERE c.status = 'submitted') + COUNT(DISTINCT ct.id) FILTER (WHERE ct.status = 'Approved'))::int AS approved,
-        (COUNT(DISTINCT c.id) FILTER (WHERE c.status IN ('ready_for_claim', 'waiting_for_approval', 'processing', 'pending_evidence')) + COUNT(DISTINCT ct.id) FILTER (WHERE ct.status IN ('Review', 'Raised')))::int AS review,
-        (COUNT(DISTINCT c.id) FILTER (WHERE c.status IN ('failed', 'manual_action_required')) + COUNT(DISTINCT ct.id) FILTER (WHERE ct.status = 'Rejected'))::int AS rejected,
-        COALESCE(SUM(c.total_price_snapshot), 0)::numeric(12,2) AS total_val
+        (COALESCE(c.raised, 0) + COALESCE(ct.raised, 0))::int AS raised,
+        (COALESCE(c.approved, 0) + COALESCE(ct.approved, 0))::int AS approved,
+        (COALESCE(c.review, 0) + COALESCE(ct.review, 0))::int AS review,
+        (COALESCE(c.rejected, 0) + COALESCE(ct.rejected, 0))::int AS rejected,
+        COALESCE(c.total_val, 0)::numeric(12,2) AS total_val
       FROM marketplaces m
-      LEFT JOIN claims c ON c.marketplace_id = m.id
       LEFT JOIN (
-        SELECT ct.id, ct.status, er.marketplace_id
+        SELECT marketplace_id,
+               COUNT(*)::int AS raised,
+               COUNT(*) FILTER (WHERE status IN ('approved', 'reconciled', 'paid'))::int AS approved,
+               COUNT(*) FILTER (WHERE status IN ('ready_for_claim', 'waiting_for_approval', 'processing', 'pending_evidence', 'submitted', 'under_review', 'reclaim', 'escalated'))::int AS review,
+               COUNT(*) FILTER (WHERE status IN ('rejected', 'failed', 'manual_action_required'))::int AS rejected,
+               SUM(COALESCE(NULLIF(claim_amount, 0), total_price_snapshot))::numeric(12,2) AS total_val
+        FROM claims
+        GROUP BY marketplace_id
+      ) c ON c.marketplace_id = m.id
+      LEFT JOIN (
+        SELECT er.marketplace_id,
+               COUNT(*)::int AS raised,
+               COUNT(*) FILTER (WHERE ct.status = 'Approved')::int AS approved,
+               COUNT(*) FILTER (WHERE ct.status IN ('Review', 'Raised'))::int AS review,
+               COUNT(*) FILTER (WHERE ct.status = 'Rejected')::int AS rejected
         FROM claim_tickets ct
         JOIN receipt_scans rs ON rs.id = ct.receipt_scan_id
         JOIN expected_returns er ON er.id = rs.expected_return_id
         WHERE NOT EXISTS (SELECT 1 FROM claims cx WHERE cx.receipt_scan_id = ct.receipt_scan_id)
+        GROUP BY er.marketplace_id
       ) ct ON ct.marketplace_id = m.id
       WHERE ${rowCondition}
       GROUP BY m.id, m.name, m.sort_order
@@ -661,7 +682,7 @@ export async function loadClaims(db: pg.Pool, scope: AccountScope) {
   const totals = totalsRes.rows[0] || {
     total_claims: 0,
     open_claims: 0,
-    submitted_claims: 0,
+    approved_claims: 0,
     total_value: "0.00",
     recovered_value: "0.00",
   }
@@ -669,7 +690,7 @@ export async function loadClaims(db: pg.Pool, scope: AccountScope) {
   const claims = Number(headline.claims)
   const totalVal = Number(totals.total_value)
   const recoveredVal = Number(totals.recovered_value)
-  const submittedClaims = Number(totals.submitted_claims)
+  const approvedClaims = Number(totals.approved_claims)
 
   return {
     stats: [
@@ -690,14 +711,14 @@ export async function loadClaims(db: pg.Pool, scope: AccountScope) {
       {
         label: "Amount recovered",
         value: recoveredVal > 0 ? formatInr(recoveredVal) : "₹0.00",
-        delta: recoveredVal > 0 ? `${percentOf(submittedClaims, claims)} submitted / confirmed` : "No recovery amounts recorded",
+        delta: recoveredVal > 0 ? `${percentOf(approvedClaims, claims)} approved` : "No paid amounts recorded",
         icon: "check",
         tone: "green",
       },
       {
         label: "Approval rate",
         value: percentOf(Number(headline.approved_claims), claims),
-        delta: "Approved / submitted out of all claims",
+        delta: "Approved, reconciled, or paid out of all claims",
         icon: "alert",
         tone: "orange",
       },

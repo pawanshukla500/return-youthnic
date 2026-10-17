@@ -1,6 +1,6 @@
 import crypto from "node:crypto"
 import type pg from "pg"
-import { accountCondition, type AccountScope } from "./access.js"
+import { accountCondition, scopeFor, type AccountScope } from "./access.js"
 import { ServiceError, type Actor } from "./register-service.js"
 import { listClaimTemplates } from "./claims-service.js"
 import {
@@ -15,16 +15,20 @@ import {
   meeshoClaimDescription,
 } from "./meesho-claims.js"
 
-// AES-256-GCM encryption for marketplace portal credentials
-const ENCRYPTION_KEY = crypto
-  .createHash("sha256")
-  .update(process.env.AUTOMATION_SECRET_KEY || "taskflow-return-claims-agent-2026-secret-master")
-  .digest()
+// AES-256-GCM encryption for marketplace portal credentials. Production must provide a unique key; there is no
+// source-code fallback because that would make every installation's encrypted supplier password recoverable.
+function encryptionKey(): Buffer {
+  const secret = process.env.AUTOMATION_SECRET_KEY?.trim() || ""
+  if (secret.length < 32) {
+    throw new ServiceError(503, "Marketplace credential encryption is not configured.")
+  }
+  return crypto.createHash("sha256").update(secret).digest()
+}
 
 export function encryptSecret(plainText: string): string {
   if (!plainText) return ""
   const iv = crypto.randomBytes(12)
-  const cipher = crypto.createCipheriv("aes-256-gcm", ENCRYPTION_KEY, iv)
+  const cipher = crypto.createCipheriv("aes-256-gcm", encryptionKey(), iv)
   const encrypted = Buffer.concat([cipher.update(plainText, "utf8"), cipher.final()])
   const tag = cipher.getAuthTag()
   return `${iv.toString("hex")}:${tag.toString("hex")}:${encrypted.toString("hex")}`
@@ -38,7 +42,7 @@ export function decryptSecret(cipherText: string): string {
     const iv = Buffer.from(ivHex, "hex")
     const tag = Buffer.from(tagHex, "hex")
     const encrypted = Buffer.from(dataHex, "hex")
-    const decipher = crypto.createDecipheriv("aes-256-gcm", ENCRYPTION_KEY, iv)
+    const decipher = crypto.createDecipheriv("aes-256-gcm", encryptionKey(), iv)
     decipher.setAuthTag(tag)
     return decipher.update(encrypted) + decipher.final("utf8")
   } catch {
@@ -102,6 +106,7 @@ export async function registerOrUpdateAgent(
     platform?: string
     version?: string
     apiKey?: string
+    registeredByUserId: number
   },
 ): Promise<{ agentId: number; apiKey: string; authorized: boolean }> {
   const uuid = data.agentUuid.trim()
@@ -111,18 +116,21 @@ export async function registerOrUpdateAgent(
   const keyHash = crypto.createHash("sha256").update(apiKey).digest("hex")
 
   const res = await db.query(
-    `INSERT INTO claim_automation_agents (agent_uuid, agent_name, hostname, platform, version, status, last_heartbeat_at, api_key_hash)
-     VALUES ($1, $2, $3, $4, $5, 'online', now(), $6)
+    `INSERT INTO claim_automation_agents (agent_uuid, agent_name, hostname, platform, version, status, last_heartbeat_at, api_key_hash, registered_by_user_id, is_authorized)
+     VALUES ($1, $2, $3, $4, $5, 'online', now(), $6, $7, true)
      ON CONFLICT (agent_uuid) DO UPDATE SET
        agent_name = EXCLUDED.agent_name,
        hostname = EXCLUDED.hostname,
        platform = EXCLUDED.platform,
        version = EXCLUDED.version,
+       api_key_hash = EXCLUDED.api_key_hash,
+       registered_by_user_id = EXCLUDED.registered_by_user_id,
+       is_authorized = true,
        status = 'online',
        last_heartbeat_at = now(),
        updated_at = now()
      RETURNING id, is_authorized`,
-    [uuid, name, data.hostname || "", data.platform || "win32", data.version || "1.0.0", keyHash],
+    [uuid, name, data.hostname || "", data.platform || "win32", data.version || "1.0.0", keyHash, data.registeredByUserId],
   )
 
   return {
@@ -130,6 +138,59 @@ export async function registerOrUpdateAgent(
     apiKey,
     authorized: Boolean(res.rows[0].is_authorized),
   }
+}
+
+export async function scopeForAutomationAgent(db: pg.Pool, agentUuid: string): Promise<AccountScope> {
+  const result = await db.query(
+    `SELECT u.role, u.has_all_marketplaces,
+            COALESCE(array_agg(um.marketplace_id) FILTER (WHERE um.marketplace_id IS NOT NULL), '{}') AS marketplace_ids
+     FROM claim_automation_agents a
+     JOIN users u ON u.id = a.registered_by_user_id
+     LEFT JOIN user_marketplaces um ON um.user_id = u.id
+     WHERE a.agent_uuid = $1 AND a.is_authorized = true
+     GROUP BY u.id, u.role, u.has_all_marketplaces`,
+    [agentUuid],
+  )
+  const row = result.rows[0]
+  if (!row) return { all: false, marketplaceIds: [] }
+  return scopeFor({
+    role: String(row.role || ""),
+    hasAllMarketplaces: Boolean(row.has_all_marketplaces),
+    marketplaceIds: Array.isArray(row.marketplace_ids) ? row.marketplace_ids.map(Number) : [],
+  })
+}
+
+export async function authenticateAutomationAgent(
+  db: pg.Pool,
+  agentUuid: string,
+  apiKey: string,
+  jobId?: number,
+): Promise<{ id: number; uuid: string }> {
+  const uuid = agentUuid.trim()
+  const key = apiKey.trim()
+  if (!uuid || !key) throw new ServiceError(401, "Agent authentication required.")
+  const keyHash = crypto.createHash("sha256").update(key).digest("hex")
+  const result = await db.query(
+    `SELECT a.id, a.agent_uuid, a.api_key_hash, a.is_authorized
+     FROM claim_automation_agents a
+     WHERE a.agent_uuid = $1`,
+    [uuid],
+  )
+  const row = result.rows[0]
+  const stored = String(row?.api_key_hash || "")
+  const supplied = Buffer.from(keyHash, "hex")
+  const expected = /^[0-9a-f]{64}$/i.test(stored) ? Buffer.from(stored, "hex") : Buffer.alloc(32)
+  const keyMatches = supplied.length === expected.length && crypto.timingSafeEqual(supplied, expected)
+  if (!row || !row.is_authorized || !keyMatches) throw new ServiceError(401, "Agent authentication failed.")
+
+  if (jobId) {
+    const job = await db.query(
+      `SELECT 1 FROM claim_automation_jobs WHERE id = $1 AND agent_id = $2`,
+      [jobId, Number(row.id)],
+    )
+    if (!job.rows[0]) throw new ServiceError(404, "Automation job not found.")
+  }
+  return { id: Number(row.id), uuid: String(row.agent_uuid) }
 }
 
 export async function recordAgentHeartbeat(
@@ -369,7 +430,17 @@ export async function createOrQueueAutomationJob(
   db: pg.Pool,
   claimId: number,
   options: { browserMode?: string } = {},
-): Promise<number> {
+): Promise<number | null> {
+  const marketplace = await db.query(
+    `SELECT m.name
+     FROM claims c
+     JOIN marketplaces m ON m.id = c.marketplace_id
+     WHERE c.id = $1`,
+    [claimId],
+  )
+  if (String(marketplace.rows[0]?.name || "").trim().toLowerCase() !== "meesho") {
+    return null
+  }
   // Check if job already exists for this claim
   const existing = await db.query(
     `SELECT id, stage FROM claim_automation_jobs WHERE claim_id = $1 ORDER BY id DESC LIMIT 1`,
@@ -409,6 +480,7 @@ export async function createOrQueueAutomationJob(
 export async function pollNextAutomationJob(
   db: pg.Pool,
   agentUuid: string,
+  scope: AccountScope,
 ): Promise<{
   jobId: number
   claimId: number
@@ -432,7 +504,81 @@ export async function pollNextAutomationJob(
     }
     const agentId = Number(agentRes.rows[0].id)
 
+    // Once submission starts, an expired lease has an unknown external outcome. Never submit it again automatically,
+    // because Meesho may have accepted the claim before the worker lost connectivity.
+    const uncertainSubmissions = await client.query(
+      `UPDATE claim_automation_jobs
+       SET stage = 'manual_intervention_required',
+           lease_expires_at = NULL,
+           last_error = 'Submission lease expired; verify the Meesho portal before retrying.',
+           manual_action_reason = 'The desktop lost contact during submission. Verify whether Meesho created a ticket before retrying.',
+           updated_at = now()
+       WHERE stage = 'submitting'
+         AND lease_expires_at IS NOT NULL
+         AND lease_expires_at < now()
+       RETURNING id, claim_id`,
+    )
+    for (const row of uncertainSubmissions.rows) {
+      await client.query(
+        `INSERT INTO claim_status_history (claim_id, from_status, to_status, reason, changed_by)
+         SELECT id, status, 'manual_action_required', 'Desktop submission lease expired; marketplace outcome is unknown.', NULL
+         FROM claims
+         WHERE id = $1 AND status NOT IN ('submitted', 'approved', 'reconciled', 'paid', 'manual_action_required')`,
+        [row.claim_id],
+      )
+      await client.query(
+        `UPDATE claims SET status = 'manual_action_required', updated_at = now()
+         WHERE id = $1 AND status NOT IN ('submitted', 'approved', 'reconciled', 'paid')`,
+        [row.claim_id],
+      )
+      await client.query(
+        `INSERT INTO register_audit_log (actor_user_id, action, entity_type, entity_id, details)
+         VALUES (NULL, 'claim.automation_submission_uncertain', 'claim_automation_job', $1, $2::jsonb)`,
+        [String(row.id), JSON.stringify({ claimId: Number(row.claim_id) })],
+      )
+    }
+
+    // Earlier process stages are safe to retry. Expired leases return to the queue until the bounded attempt count
+    // is reached; exhausted jobs and their claims become explicit failures.
+    const recoveredJobs = await client.query(
+      `UPDATE claim_automation_jobs
+       SET stage = CASE WHEN attempts >= max_attempts THEN 'failed' ELSE 'queued' END,
+           agent_id = CASE WHEN attempts >= max_attempts THEN agent_id ELSE NULL END,
+           lease_expires_at = NULL,
+           last_error = CASE
+             WHEN attempts >= max_attempts THEN 'Desktop worker lease expired after the final attempt.'
+             ELSE 'Desktop worker lease expired; queued for retry.'
+           END,
+           updated_at = now()
+       WHERE stage IN ('downloading_media', 'opening_portal', 'filling_form')
+         AND lease_expires_at IS NOT NULL
+         AND lease_expires_at < now()
+       RETURNING id, claim_id, stage`,
+    )
+    for (const row of recoveredJobs.rows) {
+      if (row.stage !== "failed") continue
+      await client.query(
+        `INSERT INTO claim_status_history (claim_id, from_status, to_status, reason, changed_by)
+         SELECT id, status, 'failed', 'Desktop worker lease expired after the final attempt.', NULL
+         FROM claims
+         WHERE id = $1 AND status NOT IN ('submitted', 'approved', 'reconciled', 'paid', 'failed')`,
+        [row.claim_id],
+      )
+      await client.query(
+        `UPDATE claims SET status = 'failed', updated_at = now()
+         WHERE id = $1 AND status NOT IN ('submitted', 'approved', 'reconciled', 'paid')`,
+        [row.claim_id],
+      )
+      await client.query(
+        `INSERT INTO register_audit_log (actor_user_id, action, entity_type, entity_id, details)
+         VALUES (NULL, 'claim.automation_lease_failed', 'claim_automation_job', $1, $2::jsonb)`,
+        [String(row.id), JSON.stringify({ claimId: Number(row.claim_id) })],
+      )
+    }
+
     // Select oldest queued job or approved job ready for submission
+    const jobParams: unknown[] = []
+    const scopeCondition = accountCondition(scope, "c.marketplace_id", jobParams)
     const jobRes = await client.query(
       `SELECT j.id, j.claim_id, j.stage, m.name AS marketplace, er.order_number, er.tracking_id
        FROM claim_automation_jobs j
@@ -441,9 +587,13 @@ export async function pollNextAutomationJob(
        JOIN receipt_scans rs ON rs.id = c.receipt_scan_id
        JOIN expected_returns er ON er.id = rs.expected_return_id
        WHERE j.stage IN ('queued', 'approved')
+         AND LOWER(m.name) = 'meesho'
+         AND j.attempts < j.max_attempts
+         AND ${scopeCondition}
        ORDER BY j.created_at ASC
        LIMIT 1
        FOR UPDATE SKIP LOCKED`,
+      jobParams,
     )
 
     if (!jobRes.rows[0]) {
@@ -459,6 +609,8 @@ export async function pollNextAutomationJob(
        SET agent_id = $2,
            stage = $3,
            attempts = attempts + 1,
+           lease_expires_at = now() + INTERVAL '15 minutes',
+           last_error = '',
            started_at = COALESCE(started_at, now()),
            updated_at = now(),
            logs = logs || $4::jsonb
@@ -529,6 +681,7 @@ export async function getJobExecutionBundle(
     originalFilename: string
     mimeType: string
     sizeBytes: number
+    contentHash: string
     storageObjectPath: string
   }>
 }> {
@@ -560,7 +713,7 @@ export async function getJobExecutionBundle(
   if (!row) throw new ServiceError(404, "Automation job not found.")
 
   const mediaRes = await db.query(
-    `SELECT id, field_key, mime_type, original_filename, size_bytes, storage_object_path
+    `SELECT id, field_key, mime_type, original_filename, size_bytes, content_hash, storage_object_path
      FROM claim_media
      WHERE claim_id = $1 AND is_active = true
      ORDER BY id ASC`,
@@ -605,6 +758,7 @@ export async function getJobExecutionBundle(
       originalFilename: String(m.original_filename || "evidence"),
       mimeType: String(m.mime_type || "application/octet-stream"),
       sizeBytes: Number(m.size_bytes || 0),
+      contentHash: String(m.content_hash || ""),
       storageObjectPath: String(m.storage_object_path),
     })),
   }
@@ -619,17 +773,49 @@ export async function updateJobProgress(
     screenshotPath?: string
     manualActionReason?: string
   },
-): Promise<void> {
+): Promise<number> {
+  const allowedStages = new Set([
+    "downloading_media",
+    "opening_portal",
+    "filling_form",
+    "prepared",
+    "submitting",
+    "manual_intervention_required",
+    "not_eligible",
+    "failed",
+  ])
+  if (!allowedStages.has(data.stage)) throw new ServiceError(400, "Choose a valid automation job stage.")
   const client = await db.connect()
   try {
     await client.query("BEGIN")
+    const currentJob = await client.query(
+      `SELECT j.attempts, j.max_attempts, j.stage, c.marketplace_id
+       FROM claim_automation_jobs j
+       JOIN claims c ON c.id = j.claim_id
+       WHERE j.id = $1
+       FOR UPDATE OF j`,
+      [jobId],
+    )
+    if (!currentJob.rows[0]) throw new ServiceError(404, "Automation job not found.")
+    if (String(currentJob.rows[0].stage) === "completed") {
+      throw new ServiceError(409, "Completed automation jobs cannot be changed.")
+    }
+    const retryAfterFailure =
+      data.stage === "failed" &&
+      Number(currentJob.rows[0].attempts || 0) < Number(currentJob.rows[0].max_attempts || 0)
+    const storedStage = retryAfterFailure ? "queued" : data.stage
 
     const newLog = data.logMessage
       ? JSON.stringify([{ timestamp: new Date().toISOString(), level: "info", message: data.logMessage }])
       : "[]"
 
-    const setClauses: string[] = ["stage = $2", "updated_at = now()", "logs = logs || $3::jsonb"]
-    const params: unknown[] = [jobId, data.stage, newLog]
+    const setClauses: string[] = [
+      "stage = $2",
+      "updated_at = now()",
+      "logs = logs || $3::jsonb",
+      "lease_expires_at = CASE WHEN $2 IN ('downloading_media', 'opening_portal', 'filling_form', 'submitting') THEN now() + INTERVAL '15 minutes' ELSE NULL END",
+    ]
+    const params: unknown[] = [jobId, storedStage, newLog]
 
     if (data.screenshotPath) {
       params.push(data.screenshotPath)
@@ -640,7 +826,7 @@ export async function updateJobProgress(
       setClauses.push(`manual_action_reason = $${params.length}`)
     }
     // A refused order was never filed; any earlier reference or completion time is stale. The job log keeps it.
-    if (data.stage === "not_eligible") {
+    if (storedStage === "not_eligible") {
       setClauses.push("marketplace_claim_id = ''", "completed_at = NULL")
     }
 
@@ -650,26 +836,56 @@ export async function updateJobProgress(
     )
 
     // Sync claim status with job stage
-    if (data.stage === "prepared") {
+    const targetClaimStatus =
+      storedStage === "prepared"
+        ? "waiting_for_approval"
+        : storedStage === "manual_intervention_required" || storedStage === "not_eligible"
+          ? "manual_action_required"
+          : storedStage === "failed"
+            ? "failed"
+            : ""
+    if (targetClaimStatus) {
+      await client.query(
+        `INSERT INTO claim_status_history (claim_id, from_status, to_status, reason, changed_by)
+         SELECT c.id, c.status, $2, $3, NULL
+         FROM claims c
+         JOIN claim_automation_jobs j ON j.claim_id = c.id
+         WHERE j.id = $1 AND c.status <> $2`,
+        [jobId, targetClaimStatus, data.manualActionReason || data.logMessage || `Desktop automation entered ${storedStage}.`],
+      )
+    }
+    if (storedStage === "prepared") {
       await client.query(
         `UPDATE claims SET status = 'waiting_for_approval', updated_at = now() WHERE id = (SELECT claim_id FROM claim_automation_jobs WHERE id = $1)`,
         [jobId],
       )
-    } else if (data.stage === "manual_intervention_required") {
+    } else if (storedStage === "manual_intervention_required") {
       await client.query(
         `UPDATE claims SET status = 'manual_action_required', remarks = COALESCE(remarks, '') || '\nManual action required: ' || $2, updated_at = now() WHERE id = (SELECT claim_id FROM claim_automation_jobs WHERE id = $1)`,
         [jobId, data.manualActionReason || "Marketplace portal requires manual intervention"],
       )
-    } else if (data.stage === "not_eligible") {
+    } else if (storedStage === "not_eligible") {
       // The marketplace refused the order (for example Meesho's packaging policy). It is not claimed; the claim stays
       // for manual review, and the job is not picked up again unless someone retries it.
       await client.query(
         `UPDATE claims SET status = 'manual_action_required', remarks = COALESCE(remarks, '') || '\nNot eligible on marketplace: ' || $2, updated_at = now() WHERE id = (SELECT claim_id FROM claim_automation_jobs WHERE id = $1)`,
         [jobId, data.manualActionReason || "The marketplace says this order is not eligible for a claim"],
       )
+    } else if (storedStage === "failed") {
+      await client.query(
+        `UPDATE claims SET status = 'failed', remarks = COALESCE(remarks, '') || '\nDesktop automation failed: ' || $2, updated_at = now()
+         WHERE id = (SELECT claim_id FROM claim_automation_jobs WHERE id = $1)`,
+        [jobId, data.manualActionReason || data.logMessage || "Desktop automation failed"],
+      )
     }
+    await client.query(
+      `INSERT INTO register_audit_log (actor_user_id, action, entity_type, entity_id, details)
+       VALUES (NULL, 'claim.automation_progress', 'claim_automation_job', $1, $2::jsonb)`,
+      [String(jobId), JSON.stringify({ stage: storedStage, requestedStage: data.stage, reason: data.manualActionReason || "" })],
+    )
 
     await client.query("COMMIT")
+    return Number(currentJob.rows[0].marketplace_id)
   } catch (err) {
     await client.query("ROLLBACK")
     throw err
@@ -880,17 +1096,25 @@ export async function completeJobSubmission(
     screenshotPath?: string
     notes?: string
   },
-): Promise<void> {
+  scope?: AccountScope,
+): Promise<number> {
+  if (!data.marketplaceClaimId.trim()) throw new ServiceError(400, "Marketplace Claim Reference ID is required.")
   const client = await db.connect()
   try {
     await client.query("BEGIN")
 
+    const params: unknown[] = [jobId]
+    const scopeCondition = scope ? accountCondition(scope, "c.marketplace_id", params) : "TRUE"
     const res = await client.query(
-      `SELECT claim_id FROM claim_automation_jobs WHERE id = $1`,
-      [jobId],
+      `SELECT j.claim_id, c.marketplace_id
+       FROM claim_automation_jobs j
+       JOIN claims c ON c.id = j.claim_id
+       WHERE j.id = $1 AND ${scopeCondition}`,
+      params,
     )
     if (!res.rows[0]) throw new ServiceError(404, "Job not found.")
     const claimId = Number(res.rows[0].claim_id)
+    const marketplaceId = Number(res.rows[0].marketplace_id)
 
     const completedLog = JSON.stringify([
       {
@@ -906,12 +1130,18 @@ export async function completeJobSubmission(
            marketplace_claim_id = $2,
            submission_screenshot_path = COALESCE($3, submission_screenshot_path),
            completed_at = now(),
+           lease_expires_at = NULL,
            updated_at = now(),
            logs = logs || $4::jsonb
        WHERE id = $1`,
       [jobId, data.marketplaceClaimId, data.screenshotPath || null, completedLog],
     )
 
+    await client.query(
+      `INSERT INTO claim_status_history (claim_id, from_status, to_status, reason, changed_by)
+       SELECT id, status, 'submitted', $2, NULL FROM claims WHERE id = $1 AND status <> 'submitted'`,
+      [claimId, `Submitted by desktop automation. Marketplace Claim Ref: ${data.marketplaceClaimId}`],
+    )
     await client.query(
       `UPDATE claims
        SET status = 'submitted',
@@ -920,11 +1150,10 @@ export async function completeJobSubmission(
        WHERE id = $1`,
       [claimId, data.marketplaceClaimId],
     )
-
     await client.query(
-      `INSERT INTO claim_status_history (claim_id, from_status, to_status, reason, changed_by)
-       VALUES ($1, 'processing', 'submitted', $2, NULL)`,
-      [claimId, `Submitted by desktop automation. Marketplace Claim Ref: ${data.marketplaceClaimId}`],
+      `INSERT INTO register_audit_log (actor_user_id, action, entity_type, entity_id, details)
+       VALUES (NULL, 'claim.automation_completed', 'claim', $1, $2::jsonb)`,
+      [String(claimId), JSON.stringify({ jobId, marketplaceClaimId: data.marketplaceClaimId })],
     )
 
     // Sync ticket ID and Raised status into return register
@@ -946,6 +1175,7 @@ export async function completeJobSubmission(
     }
 
     await client.query("COMMIT")
+    return marketplaceId
   } catch (err) {
     await client.query("ROLLBACK")
     throw err
@@ -959,17 +1189,19 @@ export async function approveJobForSubmission(
   actor: Actor,
   scope: AccountScope,
   jobId: number,
-): Promise<void> {
+): Promise<number> {
   const client = await db.connect()
   try {
     await client.query("BEGIN")
 
+    const scopeParams: unknown[] = [jobId]
+    const scopeCondition = accountCondition(scope, "c.marketplace_id", scopeParams)
     const res = await client.query(
       `SELECT j.id, j.claim_id, c.marketplace_id
        FROM claim_automation_jobs j
        JOIN claims c ON c.id = j.claim_id
-       WHERE j.id = $1`,
-      [jobId],
+       WHERE j.id = $1 AND ${scopeCondition}`,
+      scopeParams,
     )
     if (!res.rows[0]) throw new ServiceError(404, "Automation job not found.")
 
@@ -1004,6 +1236,7 @@ export async function approveJobForSubmission(
       [res.rows[0].claim_id, `Submission approved by ${actor.name || "user"} for automated submission (Job #${jobId}).`, actor.id],
     )
     await client.query("COMMIT")
+    return Number(res.rows[0].marketplace_id)
   } catch (err) {
     await client.query("ROLLBACK")
     throw err
@@ -1015,8 +1248,9 @@ export async function approveJobForSubmission(
 export async function retryAutomationJob(
   db: pg.Pool,
   actor: Actor,
+  scope: AccountScope,
   jobId: number,
-): Promise<void> {
+): Promise<number> {
   const log = JSON.stringify([
     {
       timestamp: new Date().toISOString(),
@@ -1025,15 +1259,24 @@ export async function retryAutomationJob(
     },
   ])
 
-  await db.query(
-    `UPDATE claim_automation_jobs
+  const params: unknown[] = [jobId, log]
+  const scopeCondition = accountCondition(scope, "c.marketplace_id", params)
+  const result = await db.query(
+    `UPDATE claim_automation_jobs j
      SET stage = 'queued',
+         attempts = 0,
          manual_action_reason = '',
+         lease_expires_at = NULL,
+         last_error = '',
          updated_at = now(),
          logs = logs || $2::jsonb
-     WHERE id = $1`,
-    [jobId, log],
+     FROM claims c
+     WHERE j.id = $1 AND c.id = j.claim_id AND ${scopeCondition}
+     RETURNING j.id, c.marketplace_id`,
+    params,
   )
+  if (!result.rows[0]) throw new ServiceError(404, "Automation job not found.")
+  return Number(result.rows[0].marketplace_id)
 }
 
 export async function listAutomationJobs(

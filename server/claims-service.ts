@@ -20,6 +20,13 @@ export const CLAIM_STATUSES = [
   "waiting_for_approval",
   "processing",
   "submitted",
+  "under_review",
+  "approved",
+  "rejected",
+  "reconciled",
+  "paid",
+  "reclaim",
+  "escalated",
   "failed",
   "manual_action_required",
 ] as const
@@ -113,6 +120,11 @@ export type ClaimRow = {
   overdue: boolean
   missingAmount: number
   totalPrice: number
+  claimAmount: number
+  approvedAmount: number
+  paidAmount: number
+  payoutReference: string
+  payoutDate: string
 }
 
 export type ClaimDetail = ClaimRow & {
@@ -142,9 +154,16 @@ const CLAIM_TRANSITIONS: Record<ClaimStatus, readonly ClaimStatus[]> = {
   ready_for_claim: ["pending_evidence", "waiting_for_approval"],
   waiting_for_approval: ["ready_for_claim", "processing", "manual_action_required"],
   processing: ["submitted", "failed", "manual_action_required"],
-  submitted: [],
-  failed: ["processing", "manual_action_required"],
-  manual_action_required: ["processing", "failed"],
+  submitted: ["under_review", "approved", "rejected", "escalated"],
+  under_review: ["approved", "rejected", "escalated"],
+  approved: ["reconciled"],
+  rejected: ["reclaim", "escalated"],
+  reconciled: ["paid", "escalated"],
+  paid: [],
+  reclaim: ["processing", "submitted", "under_review", "rejected", "escalated"],
+  escalated: ["under_review", "approved", "rejected", "reclaim"],
+  failed: ["processing", "manual_action_required", "reclaim", "escalated"],
+  manual_action_required: ["processing", "failed", "reclaim", "escalated"],
 }
 
 export function claimTransitionError(from: ClaimStatus, to: ClaimStatus): string | null {
@@ -562,7 +581,16 @@ export async function deactivateTemplateField(db: pg.Pool, actor: Actor, fieldId
 export async function listClaims(
   db: pg.Pool,
   scope: AccountScope,
-  filters: { status?: string; marketplaceId?: number | null; search?: string; page?: number; pageSize?: number },
+  filters: {
+    status?: string
+    marketplaceId?: number | null
+    search?: string
+    dateFrom?: string
+    dateTo?: string
+    page?: number
+    pageSize?: number
+    maxPageSize?: number
+  },
 ): Promise<ClaimListResult> {
   const params: unknown[] = []
   const conditions: string[] = []
@@ -581,10 +609,18 @@ export async function listClaims(
     params.push(`%${search}%`)
     conditions.push(`(c.claim_reason ILIKE $${params.length} OR c.claim_title ILIKE $${params.length} OR er.tracking_id ILIKE $${params.length} OR er.order_number ILIKE $${params.length})`)
   }
+  if (filters.dateFrom && /^\d{4}-\d{2}-\d{2}$/.test(filters.dateFrom)) {
+    params.push(filters.dateFrom)
+    conditions.push(`(c.created_at AT TIME ZONE 'Asia/Kolkata')::date >= $${params.length}::date`)
+  }
+  if (filters.dateTo && /^\d{4}-\d{2}-\d{2}$/.test(filters.dateTo)) {
+    params.push(filters.dateTo)
+    conditions.push(`(c.created_at AT TIME ZONE 'Asia/Kolkata')::date <= $${params.length}::date`)
+  }
 
   const where = conditions.join(" AND ")
   const page = Math.max(1, filters.page || 1)
-  const pageSize = Math.min(100, Math.max(1, filters.pageSize || 25))
+  const pageSize = Math.min(filters.maxPageSize || 100, Math.max(1, filters.pageSize || 25))
 
   const countResult = await db.query(
     `SELECT COUNT(*)::int AS total
@@ -608,6 +644,10 @@ export async function listClaims(
             c.packet_state_snapshot, c.packet_id_snapshot, c.return_type_snapshot,
             c.received_date, c.claim_due_date, c.missing_item_amount,
             COALESCE(c.total_price_snapshot, 0) AS total_price,
+            COALESCE(NULLIF(c.claim_amount, 0), c.total_price_snapshot, 0) AS claim_amount,
+            COALESCE(c.approved_amount, 0) AS approved_amount,
+            COALESCE(c.paid_amount, 0) AS paid_amount,
+            c.payout_reference, c.payout_date,
             CASE WHEN c.claim_due_date IS NULL THEN NULL
                  ELSE c.claim_due_date - (now() AT TIME ZONE 'Asia/Kolkata')::date END AS days_remaining,
             (SELECT COUNT(*)::int FROM claim_media cm WHERE cm.claim_id = c.id AND cm.is_active = true) AS media_count
@@ -653,6 +693,11 @@ export async function listClaims(
       overdue: row.days_remaining !== null && row.days_remaining !== undefined && Number(row.days_remaining) < 0,
       missingAmount: Number(row.missing_item_amount || 0),
       totalPrice: Number(row.total_price || 0),
+      claimAmount: Number(row.claim_amount || 0),
+      approvedAmount: Number(row.approved_amount || 0),
+      paidAmount: Number(row.paid_amount || 0),
+      payoutReference: String(row.payout_reference || ""),
+      payoutDate: row.payout_date ? String(row.payout_date).slice(0, 10) : "",
     })),
     total,
     page,
@@ -673,6 +718,10 @@ export async function getClaim(db: pg.Pool, scope: AccountScope, claimId: number
             c.packet_state_snapshot, c.packet_id_snapshot, c.return_type_snapshot,
             c.received_date, c.claim_due_date, c.missing_item_amount,
             COALESCE(c.total_price_snapshot, 0) AS total_price,
+            COALESCE(NULLIF(c.claim_amount, 0), c.total_price_snapshot, 0) AS claim_amount,
+            COALESCE(c.approved_amount, 0) AS approved_amount,
+            COALESCE(c.paid_amount, 0) AS paid_amount,
+            c.payout_reference, c.payout_date,
             CASE WHEN c.claim_due_date IS NULL THEN NULL
                  ELSE c.claim_due_date - (now() AT TIME ZONE 'Asia/Kolkata')::date END AS days_remaining
      FROM claims c
@@ -759,6 +808,11 @@ export async function getClaim(db: pg.Pool, scope: AccountScope, claimId: number
     overdue: row.days_remaining !== null && row.days_remaining !== undefined && Number(row.days_remaining) < 0,
     missingAmount: Number(row.missing_item_amount || 0),
     totalPrice: Number(row.total_price || 0),
+    claimAmount: Number(row.claim_amount || 0),
+    approvedAmount: Number(row.approved_amount || 0),
+    paidAmount: Number(row.paid_amount || 0),
+    payoutReference: String(row.payout_reference || ""),
+    payoutDate: row.payout_date ? String(row.payout_date).slice(0, 10) : "",
     media: mediaResult.rows.map((r: Record<string, unknown>) => ({
       id: Number(r.id),
       fieldKey: String(r.field_key || ""),
@@ -865,7 +919,8 @@ export async function createClaim(
 
     // Find the scan and verify it is in scope. The scan links to an expected_return which has the marketplace_id.
     const scanResult = await client.query(
-      `SELECT rs.id, er.marketplace_id, er.tracking_id, er.order_number, m.name AS marketplace
+      `SELECT rs.id, er.marketplace_id, er.tracking_id, er.order_number, m.name AS marketplace,
+              COALESCE((SELECT SUM(eri.sales_amount) FROM expected_return_items eri WHERE eri.expected_return_id = er.id), 0)::numeric AS total_price
        FROM receipt_scans rs
        JOIN expected_returns er ON er.id = rs.expected_return_id
        JOIN marketplaces m ON m.id = er.marketplace_id
@@ -875,6 +930,7 @@ export async function createClaim(
     if (!scanResult.rows[0]) throw new ServiceError(404, "Scanned return not found.")
     const scan = scanResult.rows[0]
     const marketplaceId = Number(scan.marketplace_id)
+    const totalPrice = Math.max(0, Number(scan.total_price || 0))
     if (!allowsAccount(scope, marketplaceId)) {
       throw new ServiceError(404, "Scanned return not found.")
     }
@@ -970,8 +1026,9 @@ export async function createClaim(
       `INSERT INTO claims
         (receipt_scan_id, marketplace_id, claim_template_id, claim_reason, claim_title, claim_description, remarks,
          status, created_by, marketplace_issue_code, marketplace_issue_label, sub_order_id_snapshot, awb_snapshot,
-         packet_state_snapshot, packet_id_snapshot, return_type_snapshot, received_date, claim_due_date, missing_item_amount)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending_evidence', $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+         packet_state_snapshot, packet_id_snapshot, return_type_snapshot, received_date, claim_due_date, missing_item_amount,
+         total_price_snapshot, claim_amount)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending_evidence', $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
        RETURNING id`,
       [
         input.receiptScanId,
@@ -992,6 +1049,8 @@ export async function createClaim(
         receivedDate,
         dueDate,
         missingAmount,
+        totalPrice,
+        missingAmount > 0 ? missingAmount : totalPrice,
       ],
     )
     const claimId = result.rows[0].id
@@ -1030,8 +1089,15 @@ export async function updateClaimStatus(
   actor: Actor,
   scope: AccountScope,
   claimId: number,
-  input: { status: string; reason?: string },
-): Promise<{ id: number; status: string }> {
+  input: {
+    status: string
+    reason?: string
+    approvedAmount?: number
+    paidAmount?: number
+    payoutReference?: string
+    payoutDate?: string
+  },
+): Promise<{ id: number; status: string; marketplaceId: number }> {
   if (!isValidStatus(input.status)) throw new ServiceError(400, "Choose a valid claim status.")
   const reason = (input.reason || "").trim()
   const reasonErr = statusReasonError(reason)
@@ -1044,7 +1110,7 @@ export async function updateClaimStatus(
     const params: unknown[] = [claimId]
     const scopeCondition = accountCondition(scope, "c.marketplace_id", params)
     const result = await client.query(
-      `SELECT c.id, c.status FROM claims c WHERE c.id = $1 AND ${scopeCondition}`,
+      `SELECT c.id, c.status, c.marketplace_id FROM claims c WHERE c.id = $1 AND ${scopeCondition}`,
       params,
     )
     if (!result.rows[0]) throw new ServiceError(404, "Claim not found.")
@@ -1061,7 +1127,37 @@ export async function updateClaimStatus(
       }
     }
 
-    await client.query("UPDATE claims SET status = $1, updated_at = now() WHERE id = $2", [input.status, claimId])
+    const approvedAmount = Number.isFinite(input.approvedAmount) ? Number(input.approvedAmount) : null
+    const paidAmount = Number.isFinite(input.paidAmount) ? Number(input.paidAmount) : null
+    const payoutReference = (input.payoutReference || "").trim().slice(0, 200)
+    const payoutDate = input.payoutDate && /^\d{4}-\d{2}-\d{2}$/.test(input.payoutDate) ? input.payoutDate : null
+    if ((approvedAmount !== null && approvedAmount < 0) || (paidAmount !== null && paidAmount < 0)) {
+      throw new ServiceError(400, "Claim amounts cannot be negative.")
+    }
+    if (approvedAmount !== null && input.status !== "approved") {
+      throw new ServiceError(400, "The approved amount can only be recorded when approving a claim.")
+    }
+    if ((paidAmount !== null || payoutDate) && input.status !== "paid") {
+      throw new ServiceError(400, "Payment amount and date can only be recorded when marking a claim paid.")
+    }
+    if (payoutReference && input.status !== "reconciled" && input.status !== "paid") {
+      throw new ServiceError(400, "A payout reference can only be recorded during reconciliation or payment.")
+    }
+    if (input.status === "paid" && (!payoutReference || paidAmount === null)) {
+      throw new ServiceError(400, "Paid claims require the paid amount and payout reference.")
+    }
+
+    await client.query(
+      `UPDATE claims
+       SET status = $1,
+           approved_amount = COALESCE($3, approved_amount),
+           paid_amount = COALESCE($4, paid_amount),
+           payout_reference = CASE WHEN $5 <> '' THEN $5 ELSE payout_reference END,
+           payout_date = COALESCE($6::date, payout_date),
+           updated_at = now()
+       WHERE id = $2`,
+      [input.status, claimId, approvedAmount, paidAmount, payoutReference, payoutDate],
+    )
 
     await client.query(
       `INSERT INTO claim_status_history (claim_id, from_status, to_status, reason, changed_by)
@@ -1073,10 +1169,14 @@ export async function updateClaimStatus(
       from: currentStatus,
       to: input.status,
       reason,
+      approvedAmount,
+      paidAmount,
+      payoutReference,
+      payoutDate,
     })
 
     await client.query("COMMIT")
-    return { id: claimId, status: input.status }
+    return { id: claimId, status: input.status, marketplaceId: Number(result.rows[0].marketplace_id) }
   } catch (error) {
     await client.query("ROLLBACK")
     throw error
@@ -1103,7 +1203,7 @@ export async function addClaimMedia(
     originalFilename: string
     capturedAt: string | null
   },
-): Promise<{ id: number }> {
+): Promise<{ id: number; marketplaceId: number }> {
   if (!input.fieldKey) throw new ServiceError(400, "A field key is required.")
   if (!input.storageObjectPath.trim()) throw new ServiceError(400, "A storage object path is required.")
   if (input.originalFilename.length > MAX_ORIGINAL_FILENAME) throw new ServiceError(400, `Filename must be ${MAX_ORIGINAL_FILENAME} characters or fewer.`)
@@ -1114,7 +1214,7 @@ export async function addClaimMedia(
 
     const params: unknown[] = [claimId]
     const scopeCondition = accountCondition(scope, "c.marketplace_id", params)
-    const claimResult = await client.query(`SELECT c.id FROM claims c WHERE c.id = $1 AND ${scopeCondition}`, params)
+    const claimResult = await client.query(`SELECT c.id, c.marketplace_id FROM claims c WHERE c.id = $1 AND ${scopeCondition}`, params)
     if (!claimResult.rows[0]) throw new ServiceError(404, "Claim not found.")
 
     const result = await client.query<{ id: number }>(
@@ -1163,7 +1263,7 @@ export async function addClaimMedia(
     }
 
     await client.query("COMMIT")
-    return { id: result.rows[0].id }
+    return { id: result.rows[0].id, marketplaceId: Number(claimResult.rows[0].marketplace_id) }
   } catch (error) {
     await client.query("ROLLBACK")
     throw error
@@ -1202,7 +1302,7 @@ export async function deactivateClaimMedia(
   scope: AccountScope,
   claimId: number,
   mediaId: number,
-): Promise<void> {
+): Promise<{ marketplaceId: number }> {
   const client = await db.connect()
   try {
     await client.query("BEGIN")
@@ -1212,29 +1312,29 @@ export async function deactivateClaimMedia(
       `UPDATE claim_media cm SET is_active = false
        FROM claims c
        WHERE cm.claim_id = $1 AND cm.id = $2 AND cm.is_active = true AND c.id = cm.claim_id AND ${scopeCondition}
-       RETURNING cm.id`,
+       RETURNING cm.id, c.marketplace_id`,
       params,
     )
-    if (result.rows[0]) {
-      await auditClaimChange(client, actor.id, "claim.media_deactivate", String(claimId), { mediaId })
-      const readiness = await evidenceReadiness(client, claimId)
-      if (!readiness.complete) {
-        const statusUpdate = await client.query(
-          `UPDATE claims SET status = 'pending_evidence', updated_at = now()
-           WHERE id = $1 AND status = 'ready_for_claim'
-           RETURNING id`,
-          [claimId],
+    if (!result.rows[0]) throw new ServiceError(404, "Media not found.")
+    await auditClaimChange(client, actor.id, "claim.media_deactivate", String(claimId), { mediaId })
+    const readiness = await evidenceReadiness(client, claimId)
+    if (!readiness.complete) {
+      const statusUpdate = await client.query(
+        `UPDATE claims SET status = 'pending_evidence', updated_at = now()
+         WHERE id = $1 AND status = 'ready_for_claim'
+         RETURNING id`,
+        [claimId],
+      )
+      if (statusUpdate.rows[0]) {
+        await client.query(
+          `INSERT INTO claim_status_history (claim_id, from_status, to_status, reason, changed_by)
+           VALUES ($1, 'ready_for_claim', 'pending_evidence', 'Required evidence was removed', $2)`,
+          [claimId, actor.id],
         )
-        if (statusUpdate.rows[0]) {
-          await client.query(
-            `INSERT INTO claim_status_history (claim_id, from_status, to_status, reason, changed_by)
-             VALUES ($1, 'ready_for_claim', 'pending_evidence', 'Required evidence was removed', $2)`,
-            [claimId, actor.id],
-          )
-        }
       }
     }
     await client.query("COMMIT")
+    return { marketplaceId: Number(result.rows[0].marketplace_id) }
   } catch (error) {
     await client.query("ROLLBACK")
     throw error

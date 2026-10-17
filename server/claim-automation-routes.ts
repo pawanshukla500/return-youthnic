@@ -1,9 +1,12 @@
 import type { Express, RequestHandler } from "express"
+import { accountCondition } from "./access.js"
 import { getPool } from "./db.js"
 import { actorOf, requireAdmin, requireSupervisorOrAdmin, scopeOf, sendError } from "./http.js"
 import { ServiceError } from "./register-service.js"
+import { publishChange } from "./live.js"
 import {
   approveJobForSubmission,
+  authenticateAutomationAgent,
   completeJobSubmission,
   createOrQueueAutomationJob,
   getJobExecutionBundle,
@@ -17,6 +20,7 @@ import {
   registerOrUpdateAgent,
   retryAutomationJob,
   saveMarketplaceCredential,
+  scopeForAutomationAgent,
   syncClaimTicketToRegister,
   updateJobProgress,
 } from "./claim-automation-service.js"
@@ -29,6 +33,13 @@ function text(value: unknown): string {
 function positiveId(value: unknown): number | null {
   const id = Number(value)
   return Number.isInteger(id) && id > 0 ? id : null
+}
+
+function agentCredentials(req: Parameters<RequestHandler>[0]): { uuid: string; apiKey: string } {
+  return {
+    uuid: text(req.headers["x-agent-uuid"]),
+    apiKey: text(req.headers["x-agent-key"]),
+  }
 }
 
 export function mountClaimAutomationRoutes(app: Express, requireUser: RequestHandler): void {
@@ -94,12 +105,14 @@ export function mountClaimAutomationRoutes(app: Express, requireUser: RequestHan
           const client = await db.connect()
           try {
             await client.query("BEGIN")
+            const erParams: unknown[] = [expectedReturnId]
+            const erScope = accountCondition(scope, "er.marketplace_id", erParams)
             const erRes = await client.query(
               `SELECT er.id, er.marketplace_id, er.tracking_id, er.order_number, m.name AS marketplace
                FROM expected_returns er
                JOIN marketplaces m ON m.id = er.marketplace_id
-               WHERE er.id = $1`,
-              [expectedReturnId],
+               WHERE er.id = $1 AND ${erScope}`,
+              erParams,
             )
             if (!erRes.rows[0]) throw new ServiceError(404, "Expected return record not found.")
 
@@ -234,6 +247,7 @@ export function mountClaimAutomationRoutes(app: Express, requireUser: RequestHan
         `UPDATE claims
          SET customer_name_snapshot = COALESCE(NULLIF($2, ''), customer_name_snapshot),
              total_price_snapshot = COALESCE(NULLIF($3, 0), total_price_snapshot),
+             claim_amount = COALESCE(NULLIF($11, 0), NULLIF($3, 0), claim_amount),
              shipped_date = COALESCE($4::date, shipped_date),
              sku_snapshot = COALESCE(NULLIF($5, ''), sku_snapshot),
              packet_id_snapshot = COALESCE(NULLIF($6, ''), packet_id_snapshot),
@@ -253,6 +267,7 @@ export function mountClaimAutomationRoutes(app: Express, requireUser: RequestHan
           text(body.awb),
           text(body.packetState || "Tampered"),
           text(body.claimContent || body.claimDescription).slice(0, 2000),
+          Number(body.missingAmount) || 0,
         ],
       )
 
@@ -291,7 +306,7 @@ export function mountClaimAutomationRoutes(app: Express, requireUser: RequestHan
   // Windows Desktop EXE Automation Agent Endpoints
   // -------------------------------------------------------------------------------------------------------------
 
-  app.post("/api/automation/agent/register", async (req, res, next) => {
+  app.post("/api/automation/agent/register", requireUser, requireSupervisorOrAdmin, async (req, res, next) => {
     try {
       const body = (req.body ?? {}) as Record<string, unknown>
       const result = await registerOrUpdateAgent(getPool(), {
@@ -301,6 +316,7 @@ export function mountClaimAutomationRoutes(app: Express, requireUser: RequestHan
         platform: text(body.platform),
         version: text(body.version),
         apiKey: text(body.apiKey),
+        registeredByUserId: actorOf(req).id,
       })
       res.json(result)
     } catch (error) {
@@ -313,6 +329,8 @@ export function mountClaimAutomationRoutes(app: Express, requireUser: RequestHan
       const body = (req.body ?? {}) as Record<string, unknown>
       const uuid = text(body.agentUuid)
       if (!uuid) throw new ServiceError(400, "Agent UUID required.")
+      const credentials = agentCredentials(req)
+      await authenticateAutomationAgent(getPool(), uuid, credentials.apiKey)
       await recordAgentHeartbeat(
         getPool(),
         uuid,
@@ -329,7 +347,9 @@ export function mountClaimAutomationRoutes(app: Express, requireUser: RequestHan
     try {
       const agentUuid = text(req.query.agentUuid || req.headers["x-agent-uuid"])
       if (!agentUuid) throw new ServiceError(400, "Agent UUID required.")
-      const job = await pollNextAutomationJob(getPool(), agentUuid)
+      const db = getPool()
+      await authenticateAutomationAgent(db, agentUuid, agentCredentials(req).apiKey)
+      const job = await pollNextAutomationJob(db, agentUuid, await scopeForAutomationAgent(db, agentUuid))
       res.json({ hasJob: Boolean(job), job })
     } catch (error) {
       sendError(res, error, next)
@@ -340,18 +360,11 @@ export function mountClaimAutomationRoutes(app: Express, requireUser: RequestHan
     try {
       const agentUuid = text(req.query.agentUuid || req.headers["x-agent-uuid"])
       if (!agentUuid) throw new ServiceError(400, "Agent UUID required.")
-
       const db = getPool()
-      const agentRes = await db.query(
-        `SELECT id, is_authorized FROM claim_automation_agents WHERE agent_uuid = $1`,
-        [agentUuid],
-      )
-      if (agentRes.rows.length === 0 || !agentRes.rows[0].is_authorized) {
-        throw new ServiceError(401, "Agent not authorized.")
-      }
+      await authenticateAutomationAgent(db, agentUuid, agentCredentials(req).apiKey)
 
       const q = req.query as Record<string, unknown>
-      const result = await listAutomationJobs(db, { all: true }, {
+      const result = await listAutomationJobs(db, await scopeForAutomationAgent(db, agentUuid), {
         stage: text(q.stage) || undefined,
         marketplaceId: positiveId(q.marketplaceId) || undefined,
         search: text(q.search) || undefined,
@@ -368,6 +381,8 @@ export function mountClaimAutomationRoutes(app: Express, requireUser: RequestHan
     try {
       const id = positiveId(req.params.id)
       if (!id) throw new ServiceError(404, "Job not found.")
+      const credentials = agentCredentials(req)
+      await authenticateAutomationAgent(getPool(), credentials.uuid, credentials.apiKey, id)
       const bundle = await getJobExecutionBundle(getPool(), id)
       res.json(bundle)
     } catch (error) {
@@ -379,13 +394,16 @@ export function mountClaimAutomationRoutes(app: Express, requireUser: RequestHan
     try {
       const id = positiveId(req.params.id)
       if (!id) throw new ServiceError(404, "Job not found.")
+      const credentials = agentCredentials(req)
+      await authenticateAutomationAgent(getPool(), credentials.uuid, credentials.apiKey, id)
       const body = (req.body ?? {}) as Record<string, unknown>
-      await updateJobProgress(getPool(), id, {
+      const marketplaceId = await updateJobProgress(getPool(), id, {
         stage: text(body.stage) || "processing",
         logMessage: text(body.logMessage),
         screenshotPath: text(body.screenshotPath),
         manualActionReason: text(body.manualActionReason),
       })
+      publishChange({ kind: "claim.updated", marketplaceId })
       res.json({ ok: true })
     } catch (error) {
       sendError(res, error, next)
@@ -396,12 +414,15 @@ export function mountClaimAutomationRoutes(app: Express, requireUser: RequestHan
     try {
       const id = positiveId(req.params.id)
       if (!id) throw new ServiceError(404, "Job not found.")
+      const credentials = agentCredentials(req)
+      await authenticateAutomationAgent(getPool(), credentials.uuid, credentials.apiKey, id)
       const body = (req.body ?? {}) as Record<string, unknown>
-      await completeJobSubmission(getPool(), id, {
+      const marketplaceId = await completeJobSubmission(getPool(), id, {
         marketplaceClaimId: text(body.marketplaceClaimId),
         screenshotPath: text(body.screenshotPath),
         notes: text(body.notes),
       })
+      publishChange({ kind: "claim.updated", marketplaceId })
       res.json({ ok: true })
     } catch (error) {
       sendError(res, error, next)
@@ -412,7 +433,7 @@ export function mountClaimAutomationRoutes(app: Express, requireUser: RequestHan
   // Admin & Supervisor Operations (Dashboard, Jobs, Credentials, Approvals)
   // -------------------------------------------------------------------------------------------------------------
 
-  app.get("/api/automation/agents", requireUser, async (_req, res, next) => {
+  app.get("/api/automation/agents", requireUser, requireSupervisorOrAdmin, async (_req, res, next) => {
     try {
       const agents = await listAutomationAgents(getPool())
       res.json({ agents })
@@ -441,7 +462,8 @@ export function mountClaimAutomationRoutes(app: Express, requireUser: RequestHan
     try {
       const id = positiveId(req.params.id)
       if (!id) throw new ServiceError(404, "Job not found.")
-      await approveJobForSubmission(getPool(), actorOf(req), scopeOf(req), id)
+      const marketplaceId = await approveJobForSubmission(getPool(), actorOf(req), scopeOf(req), id)
+      publishChange({ kind: "claim.updated", marketplaceId, actorId: actorOf(req).id })
       res.json({ ok: true })
     } catch (error) {
       sendError(res, error, next)
@@ -452,7 +474,8 @@ export function mountClaimAutomationRoutes(app: Express, requireUser: RequestHan
     try {
       const id = positiveId(req.params.id)
       if (!id) throw new ServiceError(404, "Job not found.")
-      await retryAutomationJob(getPool(), actorOf(req), id)
+      const marketplaceId = await retryAutomationJob(getPool(), actorOf(req), scopeOf(req), id)
+      publishChange({ kind: "claim.updated", marketplaceId, actorId: actorOf(req).id })
       res.json({ ok: true })
     } catch (error) {
       sendError(res, error, next)
@@ -466,11 +489,12 @@ export function mountClaimAutomationRoutes(app: Express, requireUser: RequestHan
       const body = (req.body ?? {}) as Record<string, unknown>
       const refId = text(body.marketplaceClaimId)
       if (!refId) throw new ServiceError(400, "Marketplace Claim Reference ID is required.")
-      await completeJobSubmission(getPool(), id, {
+      const marketplaceId = await completeJobSubmission(getPool(), id, {
         marketplaceClaimId: refId,
         screenshotPath: text(body.screenshotPath),
         notes: text(body.notes),
-      })
+      }, scopeOf(req))
+      publishChange({ kind: "claim.updated", marketplaceId, actorId: actorOf(req).id })
       res.json({ ok: true })
     } catch (error) {
       sendError(res, error, next)

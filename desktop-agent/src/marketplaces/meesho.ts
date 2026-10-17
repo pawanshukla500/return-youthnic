@@ -194,24 +194,26 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
     }
 
     // Evidence Media Upload (Images & Video)
-    const allFiles = Array.from(this.evidenceFilesMap.values())
+    const allFiles = Array.from(this.evidenceFilesMap.values()).flat()
     const imageFiles = allFiles.filter((f) => /\.(jpe?g|png|webp)$/i.test(f))
     const videoFiles = allFiles.filter((f) => /\.(mp4|webm|mov)$/i.test(f))
     const inputIds = await this.browser.evaluate<string[]>(`Array.from(document.querySelectorAll('input[type="file"]')).map((el) => el.id).filter(Boolean)`)
+    const attachedFiles = new Set<string>()
     logger.info(`Attaching evidence to ${inputIds.length} Meesho upload boxes.`)
     for (let index = 0; index < inputIds.length; index++) {
       const id = inputIds[index].toLowerCase()
       const chosen = id.includes("video")
-        ? videoFiles.slice(0, 1)
+        ? (this.evidenceFilesMap.get("unboxing_video") || videoFiles)
         : id.includes("waybill") || id.includes("reverse")
-          ? imageFiles.filter((file) => file.toLowerCase().includes("waybill")).slice(0, 1)
+          ? (this.evidenceFilesMap.get("reverse_waybill") || imageFiles.filter((file) => file.toLowerCase().includes("waybill")))
           : id.includes("product")
-            ? imageFiles.filter((file) => file.toLowerCase().includes("product")).slice(0, 1)
+            ? (this.evidenceFilesMap.get("product_images") || imageFiles.filter((file) => file.toLowerCase().includes("product")))
             : id.includes("barcode")
-              ? imageFiles.filter((file) => file.toLowerCase().includes("barcode")).slice(0, 1)
-              : imageFiles.slice(0, 1)
+              ? (this.evidenceFilesMap.get("barcode_image") || imageFiles.filter((file) => file.toLowerCase().includes("barcode")))
+              : imageFiles.filter((file) => !attachedFiles.has(file)).slice(0, 1)
       if (!chosen.length) continue
       const attached = await this.uploadFiles(`#${inputIds[index]}`, chosen)
+      if (attached) chosen.forEach((file) => attachedFiles.add(file))
       logger.info(`${attached ? "Attached" : "Could not attach"} ${chosen.length} file(s) to ${inputIds[index]}.`)
       await this.delay(1000)
     }

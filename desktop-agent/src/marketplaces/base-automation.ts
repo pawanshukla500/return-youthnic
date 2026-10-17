@@ -19,7 +19,7 @@ export abstract class BaseMarketplaceAutomation {
   constructor(
     protected browser: BrowserRunner,
     protected job: JobExecutionBundle,
-    protected evidenceFilesMap: Map<string, string>,
+    protected evidenceFilesMap: Map<string, string[]>,
     protected workDir: string,
   ) {}
 

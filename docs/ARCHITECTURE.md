@@ -7,7 +7,7 @@ The app is a single-company web application with two parts. An Express 4 API (`s
 
 Every request to a data route is limited to the accounts the signed-in user may use. The limit is applied in SQL, so it is not a screen behaviour. The rules are in `server/access.ts` and are described in [API.md](API.md#authorization).
 
-There are no background workers. The OMSGuru sync, the order lookups, the invoice pull and the reports run as command-line scripts, by hand.
+The Server PC Electron app contains the only continuous background worker. It leases and files Meesho claim jobs while an Admin or Supervisor is signed in. OMSGuru sync, order lookups, invoice pull and reports remain command-line scripts run by hand.
 
 ## Component diagram
 
@@ -201,7 +201,9 @@ The desktop application provides a native Windows runtime for warehouse terminal
   - Direct HTTP chunk-to-disk streaming (`ReadableStream.getReader()`) in `AgentClient.downloadEvidenceFiles`, eliminating RAM buffering during unboxing video downloads.
   - Automated disk pruning (`pruneOldEvidenceFiles`) cleans temporary media files older than 24 hours on startup.
 - **Enterprise Installation & Deployment:**
-  - Built with `electron-builder` into a machine-wide NSIS installer (`Return.App.Setup.1.0.0.exe`) installing to `C:\Program Files\Return App\` (`perMachine: true`).
+  - Built with `electron-builder` into a versioned machine-wide NSIS installer (`Return.App.Setup.<version>.exe`) installing to `C:\Program Files\Return App\` (`perMachine: true`).
+  - Packaged installs register Windows auto-start by default. The app starts hidden in the tray and resumes work only after an Admin or Supervisor session is verified.
+  - Every Server PC has a UUID and API key. Queue, credential, media and progress routes require both values; jobs use expiring leases and bounded retries.
   - Automated continuous release via GitHub Actions (`.github/workflows/desktop-release.yml`).
 
 ## Directory structure
@@ -213,7 +215,7 @@ desktop/                      Native Windows Electron application
   preload.cjs                 Isolated IPC preload bridge
 desktop-agent/                Marketplace claim automation engine
   src/browser-runner.ts       CDP browser launcher with process-tree cleanup
-  src/agent-client.ts         API polling client with streaming evidence downloads
+  src/agent-client.ts         Authenticated API client, leases, streaming and evidence-integrity checks
   src/marketplaces/meesho.ts  Meesho supplier panel claim filing flow
 android/                      Native Kotlin Android return scanner
   app/src/main/               CameraX scanning, photo/video evidence, AppUpdater
@@ -241,6 +243,7 @@ server/                       Express API, database setup, file parsers, the reg
   schema-import.sql           Lookup status, register tables, categories, audit
   schema-register.sql         Partners, tracking evidence, scan snapshots
   schema-scan-history.sql     Scan history snapshots and indexes
+  schema-claims.sql           Claim lifecycle, financial reconciliation, evidence and history
   schema-claim-automation.sql Claim automation queue, worker authorization, partial indexes
   format.ts, dates.ts, lifecycle.ts   Display formatting, IST dates, lifecycle counts
   seed.ts                     Empty. Left from the removed demo seed; safe to delete

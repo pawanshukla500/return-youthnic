@@ -20,8 +20,10 @@ import crypto from "node:crypto"
 import path from "node:path"
 import type { Express, RequestHandler } from "express"
 import multer from "multer"
+import * as XLSX from "xlsx"
 import { downloadFromFirebaseStorage, uploadToFirebaseStorage } from "./firebase-storage.js"
 import { getPool } from "./db.js"
+import { publishChange } from "./live.js"
 import { actorOf, requireAdmin, requireSupervisorOrAdmin, scopeOf, sendError } from "./http.js"
 import {
   addClaimMedia,
@@ -54,6 +56,27 @@ function positiveId(value: unknown): number | null {
   return Number.isInteger(id) && id > 0 ? id : null
 }
 
+function optionalNumber(value: unknown): number | undefined {
+  if (value === "" || value === null || value === undefined) return undefined
+  const result = Number(value)
+  return Number.isFinite(result) ? result : undefined
+}
+
+function safeSheetValue(value: string | number): string | number {
+  if (typeof value !== "string") return value
+  return /^[=+\-@\t\r]/.test(value) ? `'${value}` : value
+}
+
+function claimFilters(q: Record<string, unknown>) {
+  return {
+    status: text(q.status) || undefined,
+    marketplaceId: positiveId(q.marketplaceId),
+    search: text(q.search).slice(0, 80),
+    dateFrom: text(q.dateFrom),
+    dateTo: text(q.dateTo),
+  }
+}
+
 const uploadEvidence = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 100 * 1024 * 1024, files: 1 },
@@ -72,13 +95,52 @@ export function mountClaimsRoutes(app: Express, requireUser: RequestHandler): vo
       const q = req.query as Record<string, unknown>
       res.json(
         await listClaims(getPool(), scopeOf(req), {
-          status: text(q.status) || undefined,
-          marketplaceId: positiveId(q.marketplaceId),
-          search: text(q.search).slice(0, 80),
+          ...claimFilters(q),
           page: positiveId(q.page) || 1,
           pageSize: positiveId(q.pageSize) || 25,
         }),
       )
+    } catch (error) {
+      sendError(res, error, next)
+    }
+  })
+
+  app.get("/api/claims/export", requireUser, async (req, res, next) => {
+    try {
+      const q = req.query as Record<string, unknown>
+      const format = text(q.format).toLowerCase() || "csv"
+      if (!["csv", "xlsx"].includes(format)) throw new ServiceError(400, "The export format is csv or xlsx.")
+      const result = await listClaims(getPool(), scopeOf(req), {
+        ...claimFilters(q),
+        page: 1,
+        pageSize: 50_000,
+        maxPageSize: 50_000,
+      })
+      if (Number(result.total) > result.rows.length) {
+        throw new ServiceError(413, "This export exceeds 50,000 claims. Narrow the date or marketplace filters and try again.")
+      }
+      const headers = [
+        "Claim ID", "Marketplace", "Created", "AWB", "Order ID", "Reason", "Status",
+        "Claim Amount", "Approved Amount", "Paid Amount", "Payout Reference", "Payout Date",
+      ]
+      const rows = result.rows.map((row) => [
+        row.id, row.marketplace, row.createdAt, row.trackingId, row.orderId, row.claimReason, row.status,
+        row.claimAmount, row.approvedAmount, row.paidAmount, row.payoutReference, row.payoutDate,
+      ].map(safeSheetValue))
+      if (format === "xlsx") {
+        const workbook = XLSX.utils.book_new()
+        XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([headers, ...rows]), "Claims")
+        const output = XLSX.write(workbook, { type: "buffer", bookType: "xlsx" })
+        res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        res.setHeader("Content-Disposition", 'attachment; filename="claim-reconciliation.xlsx"')
+        res.send(output)
+        return
+      }
+      const csvCell = (value: string | number) => `"${String(value).replace(/"/g, '""')}"`
+      const csv = [headers, ...rows].map((row) => row.map(csvCell).join(",")).join("\r\n")
+      res.setHeader("Content-Type", "text/csv; charset=utf-8")
+      res.setHeader("Content-Disposition", 'attachment; filename="claim-reconciliation.csv"')
+      res.send(`\uFEFF${csv}`)
     } catch (error) {
       sendError(res, error, next)
     }
@@ -140,6 +202,7 @@ export function mountClaimsRoutes(app: Express, requireUser: RequestHandler): vo
         claimTemplateId: positiveId(body.claimTemplateId),
         marketplaceIssueCode: text(body.marketplaceIssueCode),
       })
+      publishChange({ kind: "claim.updated", marketplaceId: result.marketplaceId, actorId: actorOf(req).id })
       res.status(201).json({ claim: result })
     } catch (error) {
       sendError(res, error, next)
@@ -154,7 +217,12 @@ export function mountClaimsRoutes(app: Express, requireUser: RequestHandler): vo
       const result = await updateClaimStatus(getPool(), actorOf(req), scopeOf(req), id, {
         status: text(body.status),
         reason: text(body.reason),
+        approvedAmount: optionalNumber(body.approvedAmount),
+        paidAmount: optionalNumber(body.paidAmount),
+        payoutReference: text(body.payoutReference),
+        payoutDate: text(body.payoutDate),
       })
+      publishChange({ kind: "claim.updated", marketplaceId: result.marketplaceId, actorId: actorOf(req).id })
       res.json(result)
     } catch (error) {
       sendError(res, error, next)
@@ -195,6 +263,7 @@ export function mountClaimsRoutes(app: Express, requireUser: RequestHandler): vo
         originalFilename: req.file.originalname,
         capturedAt: text(req.body?.capturedAt) || null,
       })
+      publishChange({ kind: "claim.updated", marketplaceId: result.marketplaceId, actorId: actorOf(req).id })
       res.status(201).json(result)
     } catch (error) {
       sendError(res, error, next)
@@ -234,7 +303,8 @@ export function mountClaimsRoutes(app: Express, requireUser: RequestHandler): vo
       const claimId = positiveId(req.params.id)
       const mediaId = positiveId(req.params.mediaId)
       if (!claimId || !mediaId) return next()
-      await deactivateClaimMedia(getPool(), actorOf(req), scopeOf(req), claimId, mediaId)
+      const result = await deactivateClaimMedia(getPool(), actorOf(req), scopeOf(req), claimId, mediaId)
+      publishChange({ kind: "claim.updated", marketplaceId: result.marketplaceId, actorId: actorOf(req).id })
       res.json({ ok: true })
     } catch (error) {
       sendError(res, error, next)

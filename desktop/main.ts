@@ -72,6 +72,7 @@ async function runAutomationWorkerLoop(): Promise<boolean> {
   lastPollLabel = new Date().toLocaleTimeString("en-IN")
 
   let pollResult: any = null
+  let submissionOutcomeUnknown = false
   try {
     pollResult = await client.pollJob()
     if (!pollResult.hasJob || !pollResult.job) return false
@@ -148,10 +149,12 @@ async function runAutomationWorkerLoop(): Promise<boolean> {
           }).show()
         }
       } else if (result.stage === "completed" && result.marketplaceClaimId) {
+        submissionOutcomeUnknown = true
         await client.completeJob(jobHeader.jobId, {
           marketplaceClaimId: result.marketplaceClaimId,
           screenshotPath: result.screenshotPath,
         })
+        submissionOutcomeUnknown = false
         await client.cleanClaimEvidenceFiles(bundle.claimId)
         if (Notification.isSupported()) {
           new Notification({
@@ -189,7 +192,16 @@ async function runAutomationWorkerLoop(): Promise<boolean> {
     }
   } catch (err: any) {
     logger.error("[Desktop App Bot] Automation error:", err)
-    if (pollResult?.job?.claimId) {
+    if (pollResult?.job?.jobId) {
+      await client.updateProgress(pollResult.job.jobId, {
+        stage: submissionOutcomeUnknown ? "manual_intervention_required" : "failed",
+        logMessage: err instanceof Error ? err.message : "Desktop automation failed.",
+        manualActionReason: submissionOutcomeUnknown
+          ? "Meesho returned a ticket, but the server acknowledgement was lost. Verify the ticket before retrying."
+          : err instanceof Error ? err.message : "Desktop automation failed.",
+      }).catch(() => undefined)
+    }
+    if (pollResult?.job?.claimId && !submissionOutcomeUnknown) {
       await client.cleanClaimEvidenceFiles(pollResult.job.claimId).catch(() => undefined)
     }
     return false
@@ -202,6 +214,7 @@ async function runAutomationWorkerLoop(): Promise<boolean> {
 }
 
 let schedulerTimeout: NodeJS.Timeout | null = null
+const startHidden = process.argv.includes("--hidden")
 let currentPollDelayMs = 10000
 let consecutiveEmptyPolls = 0
 
@@ -344,7 +357,7 @@ function createMainWindow(): void {
 
   // Smooth appearance once ready
   mainWindow.once("ready-to-show", () => {
-    mainWindow?.show()
+    if (!startHidden) mainWindow?.show()
   })
 
   function showOfflinePage(_targetUrl?: string, errorDescription?: string): void {
@@ -617,6 +630,14 @@ ipcMain.handle("desktop:toggle-bot", () => {
 // ---------------------------------------------------------------------------------------------------------------
 
 app.whenReady().then(async () => {
+  process.env.RETURN_APP_VERSION = app.getVersion()
+  if (app.isPackaged) {
+    app.setLoginItemSettings({
+      openAtLogin: true,
+      path: process.execPath,
+      args: ["--hidden"],
+    })
+  }
   try {
     await startDesktopAppServer(DASHBOARD_PORT, botControl)
     await resumeClaimBotIfSignedIn()

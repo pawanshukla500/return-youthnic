@@ -73,8 +73,10 @@ The web app has six pages. The Admin page is shown to administrators only.
   - **4GB RAM & 2-Core CPU Optimization**: Engineered for entry-level warehouse workstations. Operates 24/7 with < 0.5% idle CPU utilization, V8 heap limits (`--max-old-space-size=256`), restricted renderer processes (`renderer-process-limit=2`), background throttling (`backgroundThrottling: true`), and disabled spellcheck dictionaries.
   - **Persistent Session Storage**: Uses Electron partition `persist:return-app-desktop`. Operators sign in once with standard username/password; session cookies and tokens remain valid across restarts and reboots.
   - **System Tray 24/7 Automation Worker**: Closing the window minimizes the app into the Windows notification tray. Features an adaptive backoff queue scheduler (5s active / 10s-30s idle) that continuously polls marketplace claims.
-  - **Chrome DevTools Protocol (CDP) Claim Engine**: Automates supplier panel claim filing (e.g. Meesho), human keystroke typing, and automatic process tree termination (`taskkill /T /F`) to prevent zombie browser processes.
-  - **Streaming Media Pipeline**: Direct HTTP chunk-to-disk streaming (`ReadableStream.getReader()`) preventing memory spikes during video downloads, accompanied by automated 24-hour temporary file cache pruning.
+  - **Chrome DevTools Protocol (CDP) Claim Engine**: Automates Meesho supplier claim filing, human keystroke typing, and automatic process tree termination (`taskkill /T /F`) to prevent zombie browser processes. Other marketplaces remain manual.
+  - **Authenticated Worker & Leases**: Admin/Supervisor enrollment issues a per-PC API key. Jobs use expiring leases, bounded retries, and signed-in operator checks.
+  - **Streaming Media Pipeline**: Direct HTTP chunk-to-disk streaming (`ReadableStream.getReader()`), size/SHA-256 verification, multi-file evidence mapping, and automated 24-hour temporary file cache pruning.
+  - **Windows Auto-start**: Packaged installs register auto-start by default and launch hidden in the tray.
 
 For example, to load a Flipkart return report: open **Data uploads**, choose **Flipkart**, drop the file, read the preview, and when it can be activated, click **Activate**.
 

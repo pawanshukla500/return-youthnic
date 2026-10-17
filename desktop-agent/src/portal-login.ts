@@ -115,7 +115,7 @@ async function secretFromJobBundle(accountName: string): Promise<PortalSecret | 
   const config = loadAgentConfig()
   const jobsRes = await fetch(
     `${backend()}/api/automation/agent/jobs?agentUuid=${encodeURIComponent(config.agentUuid)}`,
-    { headers: { "X-Agent-UUID": config.agentUuid } },
+    { headers: { "X-Agent-UUID": config.agentUuid, "X-Agent-Key": config.apiKey } },
   )
   if (!jobsRes.ok) return null
   const jobsBody = (await jobsRes.json()) as { rows?: Array<Record<string, unknown>> }
@@ -124,7 +124,7 @@ async function secretFromJobBundle(accountName: string): Promise<PortalSecret | 
   const jobId = Number(match?.id || match?.jobId || 0)
   if (!jobId) return null
   const bundleRes = await fetch(`${backend()}/api/automation/jobs/${jobId}/bundle`, {
-    headers: { "X-Agent-UUID": config.agentUuid },
+    headers: { "X-Agent-UUID": config.agentUuid, "X-Agent-Key": config.apiKey },
   })
   if (!bundleRes.ok) return null
   const bundle = (await bundleRes.json()) as {
@@ -402,7 +402,7 @@ export async function requeueMarketplaceJobs(accountName: string): Promise<numbe
   const config = loadAgentConfig()
   const jobsRes = await fetch(
     `${backend()}/api/automation/agent/jobs?agentUuid=${encodeURIComponent(config.agentUuid)}`,
-    { headers: { "X-Agent-UUID": config.agentUuid } },
+    { headers: { "X-Agent-UUID": config.agentUuid, "X-Agent-Key": config.apiKey } },
   )
   if (!jobsRes.ok) return 0
   const jobsBody = (await jobsRes.json()) as { rows?: Array<Record<string, unknown>> }

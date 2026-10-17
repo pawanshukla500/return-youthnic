@@ -7,7 +7,33 @@ on:
     paths:
       - "desktop/**"
       - "desktop-agent/**"
+      - "server/claim*.ts"
+      - "server/schema-claims.sql"
+      - "server/schema-claim-automation.sql"
+      - "server/tests/claims.test.ts"
+      - "server/tests/claim-automation.test.ts"
+      - "src/pages/Claims.tsx"
+      - "src/types.ts"
+      - "build/**"
       - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/desktop-release.yml"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "desktop/**"
+      - "desktop-agent/**"
+      - "server/claim*.ts"
+      - "server/schema-claims.sql"
+      - "server/schema-claim-automation.sql"
+      - "server/tests/claims.test.ts"
+      - "server/tests/claim-automation.test.ts"
+      - "src/pages/Claims.tsx"
+      - "src/types.ts"
+      - "build/**"
+      - "package.json"
+      - "package-lock.json"
       - ".github/workflows/desktop-release.yml"
   workflow_dispatch:
     inputs:
@@ -18,7 +44,7 @@ on:
         default: true
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: desktop-release-${{ github.ref }}
@@ -47,6 +73,9 @@ jobs:
       - name: Build Web Client & Server
         run: npm run build
 
+      - name: Run Automated Tests
+        run: npm test
+
       - name: Bundle Electron Main
         run: npm run desktop:build
 
@@ -57,7 +86,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: return-app-windows-setup
-          path: dist-electron/Return App Setup 1.0.0.exe
+          path: dist-electron/Return.App.Setup.*.exe
           if-no-files-found: error
 
   publish-release:
@@ -83,13 +112,14 @@ jobs:
           GH_REPO: ${{ github.repository }}
         shell: bash
         run: |
-          SETUP_EXE="release-input/Return App Setup 1.0.0.exe"
+          SETUP_EXE="$(find release-input -maxdepth 1 -name 'Return.App.Setup.*.exe' -print -quit)"
           if [ ! -f "$SETUP_EXE" ]; then
             echo "::error::No Setup EXE found in downloaded artifact."
             exit 1
           fi
 
-          TAG_NAME="desktop-v1.0.${GITHUB_RUN_NUMBER}"
+          VERSION="$(node -p "require('./package.json').version")"
+          TAG_NAME="desktop-v${VERSION}.${GITHUB_RUN_NUMBER}"
           echo "Publishing GitHub Release $TAG_NAME..."
 
           gh release create "$TAG_NAME" \
@@ -102,6 +132,6 @@ jobs:
           * **Low-Spec Optimized**: Runs smoothly on **4GB RAM and 2-Core CPUs** 24/7 with V8 heap constraints (\`--max-old-space-size=256\`) and Chromium background throttling.
           * **Program Files Standard Location**: NSIS installer configures per-machine installation into \`Program Files\` with Desktop and Start Menu shortcuts.
           * **Persistent Session Storage**: Sign in once with ID and password; authentication cookies persist indefinitely across restarts.
-          * **24/7 Background Claim Bot**: Embedded worker loop connects directly to production VPS (\`https://return.youthnic.shop\`), polls return claim disputes, downloads media, and automates seller portal claims (Myntra, Flipkart, Meesho).
-          * **Zero Memory Leaks**: Native process tree teardown and streaming evidence downloads." || \
+          * **24/7 Meesho Claim Bot**: Embedded worker loop connects directly to the production API, leases Meesho claims, verifies downloaded evidence, and automates the Meesho supplier portal.
+          * **Bounded Resource Use**: Native process-tree teardown, streaming evidence downloads, 24-hour cache pruning, and adaptive idle polling." || \
           gh release upload "$TAG_NAME" "$SETUP_EXE" --clobber
