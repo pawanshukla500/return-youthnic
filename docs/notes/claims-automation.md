@@ -54,8 +54,14 @@ The automation engine (`desktop-agent/src/marketplaces/meesho.ts`) implements th
    - Types detailed claim description with order ID, AWB, SKU, and condition details.
 6. **Submission & Verification**:
    - Captures prepared screenshot. If `action === "prepare"` and `requireApprovalBeforeSubmit`, pauses at `prepared`.
-   - In `submit` mode, clicks Submit button, captures confirmation screenshot, extracts ticket ID (e.g. `MSHO-TKT-...`), and updates database record.
+   - Before submitting, it reads the "Recently raised tickets" list and waits (up to 20s) for Submit to enable. If Submit stays disabled, the field errors are read: the packaging-policy "not eligible" becomes stage `not_eligible`; anything else becomes `manual_intervention_required` with the empty fields listed.
+   - In `submit` mode, clicks Submit button and verifies success only when a **new 9-15 digit ticket number** appears that was not in the "Recently raised tickets" list before Submit (the AWB, sub-order and packet digits are excluded from matching).
+   - Not eligible: the job ends as `not_eligible`, the browser is closed, the evidence cache is cleaned, and the server sets the claim to `manual_action_required` with the refusal text, clearing any stale `marketplace_claim_id` and `completed_at` from earlier runs. The bot moves straight to the next job.
    - Automatically cleans local downloaded evidence files from disk cache via `cleanClaimEvidenceFiles(claimId)`.
+   - Shows in the claims portal as **Record Manual Claim** with the reason; the marketplace reference is shown only for `completed` jobs.
+
+### 4b. Bot Log File
+- The installed app has no console, so every message is appended to `~/.taskflow-claim-agent/logs/bot-YYYY-MM-DD.log` (async writes; files older than 7 days pruned daily). Secrets are never logged.
 
 ### 5. Low-Spec Hardware Optimization (4GB RAM & 2-Core CPU Workstations)
 - **V8 Heap Discipline:** Embedded Electron and spawned CDP browsers apply `--max-old-space-size=256` and `--renderer-process-limit=2`.
@@ -68,7 +74,7 @@ The automation engine (`desktop-agent/src/marketplaces/meesho.ts`) implements th
 ### 6. Native Desktop App & Enterprise NSIS Installer
 - **Electron Application (`desktop/`):** Full Return App UI + 24/7 background claims worker bundled into a single native Windows application.
 - **Persistent Session Partition:** `session.fromPartition("persist:return-app-desktop")` keeps login cookies and tokens alive indefinitely without re-authenticating.
-- **Installation Target:** `C:\Program Files\Return App\` via NSIS `"perMachine": true`.
+- **Installation Target:** NSIS installer (`perMachine: true`) at `C:\Program Files\Return App\`. The warehouse terminal currently runs the standalone build from `npm run desktop:pack` copied to `C:\Return App\`, which starts with Windows.
 - **Automated GitHub Releases:** `.github/workflows/desktop-release.yml` triggers on desktop code updates, builds `Return.App.Setup.1.0.0.exe`, and publishes directly to GitHub Releases (Release `desktop-v1.0.2`).
 
 ## Build & Run Commands
@@ -80,6 +86,11 @@ npm run desktop
 # Bundle desktop main process for distribution
 npm run desktop:build
 
+# Build the running directory (dist-electron/win-unpacked) used for C:\Return App
+npm run desktop:pack
+
 # Package official enterprise Windows NSIS installer (C:\Program Files\Return App\)
 npm run desktop:dist
 ```
+
+The claim bot window's **Sign out** button asks for confirmation, because signing out pauses the 24/7 bot until the next sign-in. An expired operator token clears the saved session; a network error keeps it, so a short outage never stops the bot.

@@ -148,10 +148,21 @@ Placed at `android/app/google-services.json`:
 The claim bot runs inside the Return App desktop window:
 
 ```bash
-npm run desktop
+npm run desktop           # dev: bundle and launch from the repo
+npm run desktop:pack      # production: build dist-electron/win-unpacked (copied to C:\Return App on the warehouse terminal)
 ```
 
-Sign in on that window. The bot then keeps polling while the app is running, including after the window is closed to the tray. Scan stays on the website and the phone.
+Sign in on that window. The bot then keeps polling while the app is running, including after the window is closed to the tray. Scan stays on the website and the phone. The installed app lives in `C:\Return App\` and starts with Windows; the packaged installer (NSIS, `npm run desktop:dist`) defaults to `C:\Program Files\Return App\`.
+
+Sign out asks for confirmation first, because it stops the 24/7 bot until the next sign-in.
+
+A refused order is never claimed. When Meesho shows its red packaging-policy "not eligible" message under the AWB field, the job moves to stage `not_eligible`: the browser is closed, the cached evidence is deleted, the bot continues with the next job, and the server sets the claim to `manual_action_required` with the refusal text as a remark. It also clears any marketplace reference and completion time the job may carry from an earlier run, so a refused order never shows a ticket number. The Claims page shows these jobs under the **Not eligible (manual)** tab with a **Record Manual Claim** action.
+
+Success is strict: only a new 9-15 digit ticket number that was not in Meesho's "Recently raised tickets" list before Submit counts as filed. Text such as "Raise" in that position means the ticket was not created, and the job is not completed.
+
+### Bot log file
+
+The installed app has no console, so every bot message is also appended to a daily log file at `~/.taskflow-claim-agent/logs/bot-YYYY-MM-DD.log` (UTF-8, async writes, files older than 7 days deleted once a day). No password, token or cookie value is ever logged. This file is the first place to look when a claim does not go through.
 
 ### Key Features of the Desktop Bot
 1. **Agent Registration & Heartbeat**:
@@ -188,6 +199,10 @@ Sign in on that window. The bot then keeps polling while the app is running, inc
   - Live aggregated merchandise values in Indian Rupees (`₹`) via `formatInr()`.
   - Status lifecycle breakdown: `Ready for Claim`, `Submitted`, `Processing`, `Waiting for Approval`, `Approved`, `Rejected`, and `Manual Action Required`.
   - Manual `↻ Refresh` button and auto-reload on tab activation.
+- **Desktop Automation Job Tabs** (Claims > Desktop automation):
+  - `All` · `In progress` · `Needs manual action` · `Not eligible (manual)` · `Filed`.
+  - Not-eligible and manual-intervention jobs carry a warning badge with the reason; the claim view offers **Record Manual Claim** for them.
+  - A marketplace reference is shown only when the job stage is `completed`.
 - **View Details Modal**:
   - Eliminates horizontal scrollbars with responsive styling (`max-width: min(1080px, 95vw)` and `overflow-x: hidden`).
   - 1-click quick-copy pills with visual tooltip (`Copied!`) for Tracking ID, Order ID, and Description.

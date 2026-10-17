@@ -1,6 +1,6 @@
 # Iron Send
 
-Status date: 2026-10-14. Code: `server/schema-iron.sql`, `server/iron.ts`, `server/iron-routes.ts`, `src/pages/IronTracking.tsx`.
+Status date: 2026-10-17. Code: `server/schema-iron.sql`, `server/iron.ts`, `server/iron-routes.ts`, `src/pages/IronTracking.tsx`, `src/pages/IronBatches.tsx`.
 
 ## What it is
 
@@ -41,6 +41,15 @@ A bench correction that would change an Iron Send that the Inward Team has alrea
 3. Batches view: Out with khaata, Overdue (past the batch's own date), Part received, Received.
 4. Inward Team: open the batch, **Receive** a line (part quantities allowed) or **Receive whole batch**.
 5. A line that has gone out in a batch cannot be changed from the scan bench.
+
+## In-house ironing (high-running pieces)
+
+High-running pieces are ironed at the return desk instead of going out to a khaata. `iron_batches.iron_location` holds the choice: `khaata` (default, sent out) or `in_house` (`server/schema-iron.sql`).
+
+- **Create batch** has two tabs: **Send to khaata** (the flow above) and **Iron at return desk (high-running)**.
+- An in-house batch starts with nothing ticked. Use the SKU/AWB search and **Tick shown** to pick only the high-running pieces. It gets the fixed name "Return desk (in-house)" instead of a khaata, there is no challan, and the expected-back choice is 1-3 days.
+- The batch list labels where the batch is ironed ("Ironing at return desk"), and the Excel sheet's second row says `Ironed at: Return desk (in-house, high-running pieces)` or `Khaata (sent out)`.
+- Receiving is unchanged for both locations: only the Inward Team (role `Inward`) or an Admin records units received back, by hand. Iron Send units are still never sent to OMSGuru.
 
 ## Creating an Inward user
 

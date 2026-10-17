@@ -2328,3 +2328,8 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
 - **What changed:** Sign out in the claim bot window now asks for confirmation and has a title saying it stops the 24/7 bot (`desktop-agent/src/desktop-app-server.ts`).
 - **Ran:** both `tsc --noEmit` projects exit 0. `npm run desktop:pack` built; files copied over `C:\Return App` and relaunched; `/api/status` answers with `signedIn: false` (waiting for the operator to sign in again).
 - **The next agent must not:** Clear the saved operator sign-in on a network error.
+
+### 2026-10-17, Cursor, Documentation updated for not-eligible claims and in-house ironing
+- **What changed:** `docs/MEESHO_CLAIM_AUTOMATION.md` now documents the `C:\Return App` install path and `desktop:pack`, the strict numeric ticket verification, the `not_eligible` handling (browser closed, claim to manual review, stale ticket id cleared), the bot log file, Sign out confirmation, and the Claims desktop-automation tabs. `docs/notes/claims-automation.md`: same corrections to the Meesho flow (old `MSHO-TKT-` example removed), install target lines, a 4b log-file section, and the `desktop:pack` command. `docs/notes/iron-send.md`: status date to 2026-10-17 and a new `In-house ironing (high-running pieces)` section. `docs/API.md`: the job progress route documents `not_eligible`, the iron batch routes document `location` and in-house sheets.
+- **Docs only; no code or behavior changed.** Nothing to run beyond the doc edits.
+- **The next agent must not:** Repeat the `MSHO-TKT-` ticket example; real Meesho ticket ids are 9-15 digit numbers.

@@ -209,7 +209,7 @@ The Windows claim bot (Electron, `npm run desktop`) uses these agent routes. It 
 - `POST /api/automation/agent/heartbeat`: marks the bot online, busy, or offline.
 - `GET /api/automation/agent/poll`: takes the oldest queued or approved claim job.
 - `GET /api/automation/jobs/:id/bundle`: returns the claim, portal login, and evidence list for that job.
-- `POST /api/automation/jobs/:id/progress`: reports a stage such as prepared or manual action.
+- `POST /api/automation/jobs/:id/progress`: reports a stage such as prepared or manual action. Stage `not_eligible` (the marketplace refused the order) sets the claim to `manual_action_required` with the refusal text as a remark and clears any stale marketplace ticket id and completion time on the job.
 - `POST /api/automation/jobs/:id/complete`: stores the marketplace ticket id and marks the job completed.
 
 ### Product master batched import (Book11 ready)
@@ -871,7 +871,7 @@ Generates and downloads a CSV export of Shopify returns and RTOs matching the cu
 
 ## Iron Send tracking, analytics and live sync
 
-Iron Send is an operational category (`receipt_issue_categories.is_operational`). It is recorded with the scan, but it never makes a scan an issue return (outcome stays `clear`, status `Clear`, no claim), it is never counted in issue figures, and its units are never in the OMSGuru file. The Inward Team records ironed units that came back. Nothing marks them received automatically. Tables: `iron_send_records`, `iron_receive_events`, `iron_settings` (`server/schema-iron.sql`).
+Iron Send is an operational category (`receipt_issue_categories.is_operational`). It is recorded with the scan, but it never makes a scan an issue return (outcome stays `clear`, status `Clear`, no claim), it is never counted in issue figures, and its units are never in the OMSGuru file. The Inward Team records ironed units that came back. Nothing marks them received automatically. Tables: `iron_send_records`, `iron_receive_events`, `iron_batches` (`iron_location`: `khaata` or `in_house`), `iron_settings` (`server/schema-iron.sql`).
 
 | Method | Path | Who | What |
 |---|---|---|---|
@@ -881,8 +881,8 @@ Iron Send is an operational category (`receipt_issue_categories.is_operational`)
 | POST | `/api/iron/:id/receive` `{qty, notes?, clientKey?}` | Role `Inward` or `Admin` | Records units received back. 403 for any other role (the Return Team only sends). 400 when `qty` is not 1..pending. A repeated `clientKey` returns the first result (`replayed: true`). 409 when the record was cancelled at the bench. |
 | PATCH | `/api/admin/iron/settings` `{overdueAfterDays}` | Admin | 1-30 days, default 3. Audited. |
 | GET | `/api/iron/batches?state=open\|overdue\|partial\|received\|all&search=` | Any signed-in user (scoped) | Batches with sent/received/pending totals and state. |
-| POST | `/api/iron/batches` `{recordIds?, khaataName, challanNo?, expectedDays (1-30), notes?, clientKey?}` | Return Team (any role except `Inward`) | Makes batch `IRN-YYMMDD-NNN` from pending, unbatched, not-yet-received lines (all such lines when `recordIds` is omitted). 403 for `Inward`; 409 when a chosen line is already batched or received. A repeated `clientKey` returns the same batch. |
-| GET | `/api/iron/batches/:id` and `/api/iron/batches/:id/download?format=xlsx\|csv` | Any signed-in user (scoped) | One batch with its lines; the khaata challan sheet. |
+| POST | `/api/iron/batches` `{recordIds?, location?, khaataName, challanNo?, expectedDays (1-30; 1-3 for in-house), notes?, clientKey?}` | Return Team (any role except `Inward`) | Makes batch `IRN-YYMMDD-NNN` from pending, unbatched, not-yet-received lines (all such lines when `recordIds` is omitted). `location` is `khaata` (default, sent out) or `in_house` (high-running pieces ironed at the return desk; fixed name "Return desk (in-house)", no challan). 403 for `Inward`; 409 when a chosen line is already batched or received. A repeated `clientKey` returns the same batch. |
+| GET | `/api/iron/batches/:id` and `/api/iron/batches/:id/download?format=xlsx\|csv` | Any signed-in user (scoped) | One batch with its lines; the khaata challan sheet (an in-house batch sheet says where the batch is ironed instead). |
 | PATCH | `/api/iron/batches/:id` `{khaataName?, challanNo?, notes?}` | Return Team | Audited (`iron.batch_update`). |
 | POST | `/api/iron/batches/:id/receive` `{notes?, clientKey?}` | `Inward` or Admin | Receives every pending unit of the batch, one entry per line. Manual; never automatic. |
 | GET | `/api/reports/analytics?dateFrom=&dateTo=&marketplaceId=&category=&format=csv` | Any signed-in user (scoped) | Size-, SKU-, marketplace-, date-, week- and reason-wise figures, received issues (Iron Send flagged `operational`), the previous period and insights. Days are IST. Default: last 30 days; at most 366 days. |
