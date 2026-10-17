@@ -183,7 +183,7 @@ The native Android app is written in Kotlin for fast, ergonomics-focused warehou
 - **Claim Capture (`ClaimCaptureActivity`)**: Multi-step photographic and video evidence capture. Enforces 480p SD unboxing video (minimum 15s, maximum 120s, bounded bitrate) to stay reliably under 25 MB.
 - **Upload Progress & Reset**: Visual determinate upload dialog showing file-by-file progress (`Uploading evidence files (x of y)...`). On submit completion, prompts "File Next Return (Start Again)", resetting all photo/video slots and claim state back to zero and focusing the search bar for the next order.
 - **Resilient Uploads**: Direct upload to Firebase Storage and server media endpoints with fallback to Android `WorkManager` for background retry on network jitter.
-- **In-App Auto-Updates (`AppUpdater.kt`)**: Checks `/api/mobile/release-manifest` on start and prompts the operator to update when a new version is published.
+- **In-App Auto-Updates (`AppUpdater.kt`)**: Checks `/api/app/latest` on start and prompts the operator to update when a new version is published.
 
 ### Native Windows Desktop Application & Automation Bot (`desktop/` & `desktop-agent/`)
 
