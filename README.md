@@ -1,9 +1,9 @@
-<!-- Updated 2026-10-16. CI runs 424 tests with postgres:16 service. Android v1.0.56 and Windows Desktop v1.0.2 active. -->
+<!-- Updated 2026-10-17. CI runs 432 tests with postgres:16 service. Android v1.0.58 and Windows Desktop desktop-v1.1.0.10 active. -->
 # return-scanning-app
 
 A return scanning app for VB Exports. Marketplace return reports (Myntra VB and Myntra EJ, Flipkart, Meesho, Amazon, and Ajio) are loaded as lookup data, one account at a time. A scan then records what physically arrived in the return scan register, which is the permanent record. The app also stores channel listings and master SKUs from the OMSGuru API, for product titles and images.
 
-**Status (2026-10-16):** Full local and CI test suites pass with 424 tests (388 pass, 0 fail, 36 database checks run against a dedicated `postgres:16` container). Deployed to production VPS (`https://return.youthnic.shop`). Native Android return scanning app active at `v1.0.56` (`versionCode: 10056`). Native Windows Desktop application (`Return.App.Setup.1.0.0.exe`) with 24/7 background claim automation worker published at GitHub Release `desktop-v1.0.2`. See [docs/notes/agent-handoff.md](docs/notes/agent-handoff.md).
+**Status (2026-10-17):** Full local and CI test suites pass with 432 tests (395 pass, 0 fail, 37 database checks run against a dedicated `postgres:16` container). Deployed to production VPS (`https://return.youthnic.shop`). Native Android return scanning app active at `v1.0.58` (`versionCode: 10058`). Native Windows Desktop application (`Return.App.Setup.1.1.0.exe`) with 24/7 background claim automation worker published at GitHub Release `desktop-v1.1.0.10`. GitHub keeps only the newest two releases of each family (`v1.0.*` Android, `desktop-v*` Windows). See [docs/notes/agent-handoff.md](docs/notes/agent-handoff.md).
 
 ## For agents
 
@@ -67,9 +67,9 @@ The web app has six pages. The Admin page is shown to administrators only.
 
 ## Native Mobile & Desktop Clients
 
-- **Native Android Scanner (`android/`)**: Built in Kotlin with CameraX for rapid hardware-grade barcode scanning, runtime camera permissions, photo & 480p SD unboxing video evidence capture, visual upload progress dialogs, instant "Start Again with Zero" form reset, and automated in-app updates (`v1.0.56`, `versionCode: 10056`) synchronized with GitHub Releases.
+- **Native Android Scanner (`android/`)**: Built in Kotlin with CameraX for rapid hardware-grade barcode scanning, runtime camera permissions, photo & 480p SD unboxing video evidence capture, visual upload progress dialogs, instant "Start Again with Zero" form reset, and automated in-app updates (`v1.0.58`, `versionCode: 10058`) synchronized with GitHub Releases. Only the newest two `v1.0.*` releases are kept.
 - **Native Windows Desktop Application (`desktop/` & `desktop-agent/`)**:
-  - **Enterprise NSIS Installer**: Installs natively to `C:\Program Files\Return App\` (`perMachine: true`) with Desktop and Start Menu shortcuts, packaged via `electron-builder` as `Return.App.Setup.1.0.0.exe` (Release `desktop-v1.0.2`).
+  - **Enterprise NSIS Installer**: Installs natively to `C:\Program Files\Return App\` (`perMachine: true`) with Desktop and Start Menu shortcuts, packaged via `electron-builder` as `Return.App.Setup.1.1.0.exe` (Release `desktop-v1.1.0.10`). Only the newest two `desktop-v*` releases are kept, and they are never marked "Latest" so the Android APK keeps that badge for in-app updates.
   - **4GB RAM & 2-Core CPU Optimization**: Engineered for entry-level warehouse workstations. Operates 24/7 with < 0.5% idle CPU utilization, V8 heap limits (`--max-old-space-size=256`), restricted renderer processes (`renderer-process-limit=2`), background throttling (`backgroundThrottling: true`), and disabled spellcheck dictionaries.
   - **Persistent Session Storage**: Uses Electron partition `persist:return-app-desktop`. Operators sign in once with standard username/password; session cookies and tokens remain valid across restarts and reboots.
   - **System Tray 24/7 Automation Worker**: Closing the window minimizes the app into the Windows notification tray. Features an adaptive backoff queue scheduler (5s active / 10s-30s idle) that continuously polls marketplace claims.

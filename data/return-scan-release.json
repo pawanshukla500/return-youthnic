@@ -1,11 +1,11 @@
 {
-  "versionCode": 10054,
-  "versionName": "1.0.54",
+  "versionCode": 10058,
+  "versionName": "1.0.58",
   "minRequiredVersionCode": 10001,
-  "sha256": "5ae8cfafd088093f68936a47602fa5be05c4906db1dd31f0daa97f19c383dc74",
-  "sizeBytes": 3831281,
+  "sha256": "c4c522dd83e2c8be711006f9d8914dbfc10e29c7afa750e7f5d39a002d0e69eb",
+  "sizeBytes": 3847664,
   "notes": "Youthnic Native Android Return Scanner · Mobile Upload Progress & Zero-Reset\n- Live visual evidence upload progress dialog with percentage indicator\n- One-tap start-again reset to zero for scanning subsequent orders\n- Automatic local file cleanup after successful cloud upload\n- Fault-tolerant background retry via WorkManager",
-  "publishedAt": "2026-10-16T07:15:00Z",
-  "downloadUrl": "https://github.com/pawanshukla500/return-youthnic/releases/latest",
+  "publishedAt": "2026-10-17T09:57:55Z",
+  "downloadUrl": "https://github.com/pawanshukla500/return-youthnic/releases/download/v1.0.58/ReturnScan-v1.0.58.apk",
   "pageUrl": "https://github.com/pawanshukla500/return-youthnic/releases"
 }
