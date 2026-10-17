@@ -1,5 +1,6 @@
 import { type ReactNode, useEffect, useState } from "react"
 import { api, downloadFile } from "../api"
+import { DateField } from "../date-field"
 import { Loading, PageError } from "../shell"
 import type { RegisterOptions, RegisterPage, RegisterRow, RegisterTicket, TicketHistoryEntry } from "../types"
 import { Badge, Icon, MarketplaceBadge, Modal, PartnerBadge } from "../ui"
@@ -808,28 +809,26 @@ export function Reports() {
               </option>
             ))}
           </select>
-          <label className={filters.dateFrom ? "date-filter" : "date-filter is-empty"}>
+          <label className="date-filter">
             From
             <span>
-              <input
-                type="date"
-                aria-label="From date"
+              <DateField
+                label="From date"
+                placeholder="Any day"
                 value={filters.dateFrom}
-                onChange={(event) => update({ dateFrom: event.target.value })}
+                onChange={(value) => update({ dateFrom: value })}
               />
-              {!filters.dateFrom && <em>Any day</em>}
             </span>
           </label>
-          <label className={filters.dateTo ? "date-filter" : "date-filter is-empty"}>
+          <label className="date-filter">
             To
             <span>
-              <input
-                type="date"
-                aria-label="To date"
+              <DateField
+                label="To date"
+                placeholder="Any day"
                 value={filters.dateTo}
-                onChange={(event) => update({ dateTo: event.target.value })}
+                onChange={(value) => update({ dateTo: value })}
               />
-              {!filters.dateTo && <em>Any day</em>}
             </span>
           </label>
           </div>

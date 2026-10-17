@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { api, downloadFile } from "./api"
+import { DateField } from "./date-field"
 import { useLiveChanges } from "./live"
 import type { AccountOption, AnalyticsReport as Report, IssueCategory } from "./types"
 import { Icon } from "./ui"
@@ -108,9 +109,9 @@ export function AnalyticsReport() {
             </button>
           ))}
         </div>
-        <input type="date" value={dateFrom} max={dateTo} onChange={(e) => setDateFrom(e.target.value)} aria-label="From (IST)" />
+        <DateField value={dateFrom} max={dateTo} onChange={setDateFrom} label="From (IST)" />
         <span className="analytics-to">to</span>
-        <input type="date" value={dateTo} min={dateFrom} max={today} onChange={(e) => setDateTo(e.target.value)} aria-label="To (IST)" />
+        <DateField value={dateTo} min={dateFrom} max={today} onChange={setDateTo} label="To (IST)" />
         <select value={accountId} onChange={(e) => setAccountId(e.target.value)} aria-label="Marketplace">
           <option value="">All marketplaces</option>
           {accounts.map((a) => (
