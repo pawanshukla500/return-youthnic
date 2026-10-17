@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react"
 import { api, downloadFile } from "./api"
+import { DateField } from "./date-field"
 import { Loading } from "./shell"
 import { Badge, Icon, Modal } from "./ui"
 
@@ -505,18 +506,18 @@ export function ShopifyReport() {
           <div className="date-filter-group">
             <label>
               <span>From:</span>
-              <input
-                type="date"
+              <DateField
+                label="From date"
                 value={dateFrom}
-                onChange={(e) => { setDateFrom(e.target.value); setPage(1); }}
+                onChange={(value) => { setDateFrom(value); setPage(1); }}
               />
             </label>
             <label>
               <span>To:</span>
-              <input
-                type="date"
+              <DateField
+                label="To date"
                 value={dateTo}
-                onChange={(e) => { setDateTo(e.target.value); setPage(1); }}
+                onChange={(value) => { setDateTo(value); setPage(1); }}
               />
             </label>
             {(dateFrom || dateTo) && (

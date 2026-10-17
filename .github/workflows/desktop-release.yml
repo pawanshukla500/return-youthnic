@@ -135,3 +135,15 @@ jobs:
           * **24/7 Meesho Claim Bot**: Embedded worker loop connects directly to the production API, leases Meesho claims, verifies downloaded evidence, and automates the Meesho supplier portal.
           * **Bounded Resource Use**: Native process-tree teardown, streaming evidence downloads, 24-hour cache pruning, and adaptive idle polling." || \
           gh release upload "$TAG_NAME" "$SETUP_EXE" --clobber
+
+          # Keep only the newest two DESKTOP releases (current + previous, for rollback).
+          # Android releases (v1.0.*) belong to the APK workflow and must never be touched here.
+          echo "Pruning older desktop releases; keeping the newest two..."
+          gh release list --limit 100 --json tagName,publishedAt \
+            --jq '[.[] | select(.tagName | startswith("desktop-v"))] | sort_by(.publishedAt) | reverse | .[2:] | .[].tagName' \
+            | while read -r old_tag; do
+              if [ -n "$old_tag" ]; then
+                echo "Removing old desktop release $old_tag..."
+                gh release delete "$old_tag" --cleanup-tag -y || true
+              fi
+            done

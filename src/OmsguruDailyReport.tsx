@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react"
 import { api, downloadFile } from "./api"
+import { DateField } from "./date-field"
 import { Loading } from "./shell"
 import { Badge, Icon, Modal } from "./ui"
 
@@ -501,14 +502,15 @@ export function OmsguruDailyReport() {
 
         <div className="omsguru-date-picker">
           <Icon name="calendar" size={16} />
-          <input
-            type="date"
+          <DateField
+            bare
+            showIcon={false}
+            label="Filter by specific date"
             value={dateFilter}
-            onChange={(e) => {
-              setDateFilter(e.target.value)
+            onChange={(value) => {
+              setDateFilter(value)
               setPage(1)
             }}
-            title="Filter by specific date"
           />
           {dateFilter && (
             <button type="button" className="omsguru-clear-btn" onClick={() => setDateFilter("")}>

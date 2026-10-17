@@ -100,7 +100,7 @@ button.iron-stat:hover { border-color: #94a3b8; }
 .iron-tabs button { height: 34px; padding: 0 14px; border: 0; border-radius: 8px; background: transparent; color: #4f5a57; font-size: 13px; font-weight: 600; }
 .iron-tabs button.active { background: #fff; color: var(--green); box-shadow: 0 1px 3px rgba(0,0,0,.08); }
 .iron-filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-.iron-filters select, .iron-filters input[type="date"] { height: 38px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; background: #fff; font-size: 13px; }
+.iron-filters select, .iron-filters .date-field { height: 38px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; background: #fff; font-size: 13px; }
 .iron-search { display: flex; align-items: center; gap: 6px; height: 38px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; background: #fff; color: var(--muted); }
 .iron-search input { border: 0; outline: 0; width: 180px; font-size: 13px; }
 .iron-flash { margin: 12px 16px 0; padding: 10px 12px; border-radius: 8px; background: #ecfdf5; color: #065f46; font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
@@ -157,7 +157,7 @@ button.iron-stat:hover { border-color: #94a3b8; }
 /* ---- Return analytics ---- */
 .analytics { display: grid; gap: 14px; }
 .analytics-filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 12px 14px; }
-.analytics-filters input[type="date"], .analytics-filters select { height: 36px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; background: #fff; font-size: 13px; }
+.analytics-filters .date-field, .analytics-filters select { height: 36px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; background: #fff; font-size: 13px; }
 .analytics-to { font-size: 12px; color: var(--muted); }
 .analytics-presets { display: flex; gap: 3px; padding: 3px; border-radius: 9px; background: #f3f5f4; }
 .analytics-presets button { height: 30px; padding: 0 12px; border: 0; border-radius: 7px; background: transparent; font-size: 12px; font-weight: 600; color: #4f5a57; }

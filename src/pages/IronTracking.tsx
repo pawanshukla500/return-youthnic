@@ -1,6 +1,7 @@
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react"
 import { canDispatchIron, canReceiveIron, isAdminUser } from "../access"
 import { ApiError, api } from "../api"
+import { DateField } from "../date-field"
 import { useLiveChanges } from "../live"
 import type { AccountOption, IronRecord, IronState, IronSummary } from "../types"
 import { IronBatches, CreateBatchDialog } from "./IronBatches"
@@ -241,8 +242,8 @@ export function IronTracking() {
                 </option>
               ))}
             </select>
-            <input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} aria-label="Sent from" title="Sent from (IST)" />
-            <input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} aria-label="Sent to" title="Sent to (IST)" />
+            <DateField value={dateFrom} onChange={setDateFrom} label="Sent from" title="Sent from (IST)" />
+            <DateField value={dateTo} onChange={setDateTo} label="Sent to" title="Sent to (IST)" />
           </div>
         </div>
 

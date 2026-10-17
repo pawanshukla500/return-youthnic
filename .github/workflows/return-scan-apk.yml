@@ -194,14 +194,6 @@ jobs:
           cp "$RELEASE_APK" "$DIST_DIR/ReturnScan-${TAG_NAME}.apk"
           cp "$RELEASE_APK" "$DIST_DIR/ReturnScan-latest.apk"
 
-          echo "Pruning older releases to ensure only the latest release is kept..."
-          gh release list --limit 100 --json tagName --jq '.[].tagName' | while read -r old_tag; do
-            if [ -n "$old_tag" ] && [ "$old_tag" != "$TAG_NAME" ]; then
-              echo "Removing old release $old_tag..."
-              gh release delete "$old_tag" --cleanup-tag -y || true
-            fi
-          done
-
           echo "Publishing GitHub Release $TAG_NAME..."
           gh release create "$TAG_NAME" \
             "$DIST_DIR/ReturnScan-${TAG_NAME}.apk" \
@@ -213,3 +205,15 @@ jobs:
             "$DIST_DIR/ReturnScan-${TAG_NAME}.apk" \
             "$DIST_DIR/ReturnScan-latest.apk" \
             --clobber
+
+          # Keep only the newest two ANDROID releases (current + previous, for rollback).
+          # Desktop releases (desktop-v*) belong to the desktop workflow and must never be touched here.
+          echo "Pruning older Android releases; keeping the newest two..."
+          gh release list --limit 100 --json tagName,publishedAt \
+            --jq '[.[] | select(.tagName | startswith("v1.0."))] | sort_by(.publishedAt) | reverse | .[2:] | .[].tagName' \
+            | while read -r old_tag; do
+              if [ -n "$old_tag" ]; then
+                echo "Removing old Android release $old_tag..."
+                gh release delete "$old_tag" --cleanup-tag -y || true
+              fi
+            done

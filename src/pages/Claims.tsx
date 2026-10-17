@@ -2,6 +2,7 @@ import { useEffect, useState } from "react"
 import { ApiError, api, downloadFile } from "../api"
 import { Loading, PageError } from "../shell"
 import { saveCsv, toCsv } from "../csv"
+import { DateField } from "../date-field"
 import {
   CLAIM_STATUS_LABELS,
   CLAIM_STATUS_TONES,
@@ -339,8 +340,8 @@ function ClaimQueue() {
             onChange={(e) => { setSearch(e.target.value); setPage(1) }}
             style={{ flex: 1, minWidth: 200 }}
           />
-          <input type="date" aria-label="Claims from date" value={dateFrom} onChange={(e) => { setDateFrom(e.target.value); setPage(1) }} />
-          <input type="date" aria-label="Claims to date" value={dateTo} onChange={(e) => { setDateTo(e.target.value); setPage(1) }} />
+          <DateField label="Claims from date" value={dateFrom} onChange={(value) => { setDateFrom(value); setPage(1) }} />
+          <DateField label="Claims to date" value={dateTo} onChange={(value) => { setDateTo(value); setPage(1) }} />
           <button className="btn secondary small" onClick={() => void exportQueue("csv")}>Export CSV</button>
           <button className="btn secondary small" onClick={() => void exportQueue("xlsx")}>Export Excel</button>
         </div>
@@ -962,7 +963,7 @@ function ClaimDetailModal({
                 {newStatus === "paid" && (
                   <>
                     <input type="number" min="0" step="0.01" placeholder="Paid amount" value={paidAmount} onChange={(e) => setPaidAmount(e.target.value)} required />
-                    <input type="date" aria-label="Payout date" value={payoutDate} onChange={(e) => setPayoutDate(e.target.value)} />
+                    <DateField label="Payout date" value={payoutDate} onChange={setPayoutDate} />
                   </>
                 )}
                 <button className="btn primary" disabled={!newStatus || statusUpdating} onClick={updateStatus}>
