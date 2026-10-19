@@ -75,28 +75,32 @@ The automation engine (`desktop-agent/src/marketplaces/meesho.ts`) implements th
 - **Adaptive Backoff Queue Polling:** When claims exist, polls every 5s; when idle, backs off gracefully (10s -> 20s -> 30s) keeping idle CPU utilization < 0.5%.
 - **Lease Recovery:** Polling atomically leases each Meesho job. Expired work returns to the queue until its bounded attempt limit is reached.
 
-### 6. Native Desktop App & Enterprise NSIS Installer
-- **Electron Application (`desktop/`):** Full Return App UI + 24/7 background claims worker bundled into a single native Windows application.
+### 6. Cross-platform Desktop App & Installers
+- **Electron Application (`desktop/`):** Claim-bot window + 24/7 background claims worker bundled into installed apps for Windows, Linux, and macOS.
 - **Persistent Session Partition:** `session.fromPartition("persist:return-app-desktop")` keeps login cookies and tokens alive indefinitely without re-authenticating.
-- **Installation Target:** Versioned NSIS installer (`perMachine: true`) at `C:\Program Files\Return App\`.
-- **Windows Auto-start:** Packaged installs register auto-start by default and launch hidden in the tray. Processing remains paused unless the saved operator is an Admin or Supervisor.
-- **Marketplace boundary:** Only Meesho jobs enter the automatic queue. Myntra, Flipkart, Amazon and Ajio remain manual workflows.
-- **Automated GitHub Releases:** `.github/workflows/desktop-release.yml` validates pull requests and publishes a versioned setup executable after a qualifying merge to `main`.
+- **Installation Targets:** Versioned NSIS installer (`perMachine: true`) at `C:\Program Files\Return App\`, Linux AppImage + deb, macOS DMG + ZIP.
+- **Auto-start & recovery:** Packaged installs register auto-start by default and launch hidden in the tray; on Windows the installer also registers the `ReturnAppClaimBot` Scheduled Task (restart on failure). Processing remains paused unless the saved operator is an Admin or Supervisor.
+- **Marketplace boundary:** Meesho jobs enter the automatic queue; Flipkart, Amazon, Myntra and Ajio run assisted (prepare + evidence, operator confirms submit) and never auto-complete.
+- **First-time setup & secrets:** Per-panel guided supplier login in the dashboard; operator token and PC API key encrypted with the OS store (DPAPI on Windows).
+- **Automated GitHub Releases:** `.github/workflows/desktop-release.yml` validates pull requests and publishes all OS installers to one `desktop-v*` release after a qualifying merge to `main`.
 
 ## Build & Run Commands
 
 ```bash
-# Build & run native Electron desktop application
+# Build & run cross-platform Electron desktop application
 npm run desktop
 
 # Bundle desktop main process for distribution
 npm run desktop:build
 
-# Build the running directory (dist-electron/win-unpacked) used for C:\Return App
+# Unpacked build for rapid testing (win-unpacked / linux-unpacked)
 npm run desktop:pack
+npm run desktop:pack:linux
 
-# Package official enterprise Windows NSIS installer (C:\Program Files\Return App\)
+# Package installers: Windows NSIS, Linux AppImage + deb, macOS DMG + ZIP
 npm run desktop:dist
+npm run desktop:dist:linux
+npm run desktop:dist:mac
 
 # Complete distributable build (same installer step used for release)
 npm run build:desktop

@@ -99,23 +99,30 @@ Common error messages:
 
 ## Desktop Application Configuration
 
-The Native Windows Desktop Application (`desktop/` & `desktop-agent/`) runs natively on warehouse workstations and reads its configuration from the local user profile:
+The cross-platform Desktop Application (`desktop/` & `desktop-agent/`) runs on warehouse workstations (Windows, Linux, macOS) and reads its configuration from the local user profile. Full operator guide: [DESKTOP-APP.md](DESKTOP-APP.md).
 
 - **Configuration File:** `~/.taskflow-claim-agent/config.json` (under `%USERPROFILE%\.taskflow-claim-agent\config.json`).
 - **Fields:**
   | Field | Default | Description |
   |---|---|---|
   | `backendUrl` | `https://return.youthnic.shop` | Target Return App backend URL. Localhost/127.0.0.1 entries are automatically migrated to production cloud URL. |
-  | `agentToken` | `""` | 32-byte worker bearer token obtained automatically via `/api/automation/agent/register`. |
-  | `workerId` | Machine hostname / GUID | Identifier for the workstation worker instance. |
+  | `agentUuid` | `agent-<hostname>-…` | Identifier for the workstation worker instance. |
+  | `agentName` | `Warehouse-Agent-<hostname>` | Display name shown in the automation device list. |
+  | `apiKey` | `""` | Per-PC API key from Admin/Supervisor enrollment. Stored encrypted (OS credential store) inside the packaged app. |
   | `pollIntervalMs` | `10000` (10s) | Polling frequency. Uses adaptive backoff in Electron runtime (5s active, up to 30s idle). |
-  | `headless` | `false` | When true, runs browser automation silently without popping up supplier windows. |
+  | `browserMode` | `"visible"` | `"visible"` opens the supplier browser so filing can be watched; `"headless"` runs it hidden. |
+  | `browserPath` | `""` | Optional explicit browser executable (auto-detected otherwise: Edge/Chrome on Windows, Chrome/Chromium on Linux, Chrome/Edge/Chromium on macOS). |
 - **Environment Overrides:**
-  - `APP_URL` or `RETURN_APP_URL`: Overrides the web URL loaded into the desktop window (useful for local development `http://localhost:5173`).
+  - `APP_URL` or `BACKEND_URL`: Overrides the backend URL (useful for local development).
+  - `BROWSER_PATH`: Overrides the browser executable (warehouse PCs with a custom install path).
+  - `DESKTOP_UPDATE_FEED_URL`: Overrides the GitHub releases feed used by Check-for-updates.
 - **Session & Storage Locations:**
   - **Persistent App Session:** Electron partition `persist:return-app-desktop` stored in `%APPDATA%\Return App\Partitions\return-app-desktop`. Stores operator authentication cookies and tokens across reboots.
-  - **Browser Profiles:** `~/.taskflow-claim-agent/browser-profiles/profile-[marketplace]` (e.g. `profile-meesho`). Keeps marketplace supplier portal cookies and active logins alive.
+  - **Operator sign-in:** `~/.taskflow-claim-agent/operator-session.json` (token encrypted with the OS store in the packaged app; see `GET /api/security` on the dashboard).
+  - **Browser Profiles:** `~/.taskflow-claim-agent/browser-profiles/profile-[marketplace]` (e.g. `profile-meesho`). Keeps marketplace supplier portal cookies and active logins alive — one isolated profile per panel.
   - **Evidence Cache:** `~/.taskflow-claim-agent/evidence-cache/`. Downloads evidence photos/videos here via stream pipeline, automatically pruning items older than 24 hours on launch.
+  - **Bot logs:** `~/.taskflow-claim-agent/logs/bot-YYYY-MM-DD.log` (7 days kept).
+- **Windows auto-config (installer):** `build/installer.nsh` registers the `ReturnAppClaimBot` Scheduled Task (sign-in trigger, hidden launch, restart on failure) and removes it on uninstall. Supplier cookies and sign-in are kept across reinstalls.
 
 ## Per-environment settings
 

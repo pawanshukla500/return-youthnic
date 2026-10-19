@@ -185,38 +185,49 @@ The native Android app is written in Kotlin for fast, ergonomics-focused warehou
 - **Resilient Uploads**: Direct upload to Firebase Storage and server media endpoints with fallback to Android `WorkManager` for background retry on network jitter.
 - **In-App Auto-Updates (`AppUpdater.kt`)**: Checks `/api/app/latest` on start and prompts the operator to update when a new version is published.
 
-### Native Windows Desktop Application & Automation Bot (`desktop/` & `desktop-agent/`)
+### Cross-platform Desktop Application & Claim Bot (`desktop/` & `desktop-agent/`)
 
-The desktop application provides a native Windows runtime for warehouse terminals, pairing full Return App user capabilities with an autonomous background claim filing bot:
+The desktop application is a real installed app (Electron shell + local claim-bot server + CDP browser automation) for warehouse terminals on Windows, Linux, and macOS. Operator guide: [DESKTOP-APP.md](DESKTOP-APP.md).
 
 - **Electron Architecture & Process Boundary:**
   - `desktop/main.ts` (Main Process): Orchestrates window lifecycle, native system tray, single instance lock, embedded automation runner, and connection recovery.
-  - `desktop/preload.cjs` (Preload Script): Enforces a secure boundary with `contextIsolation: true` and `nodeIntegration: false`.
+  - `desktop/preload.cjs` (Preload Script): Enforces a secure boundary with `contextIsolation: true` and `nodeIntegration: false`; exposes only 4 typed verbs (`desktop:notify`, `desktop:get-bot-status`, `desktop:toggle-bot`, `desktop:bot-status-changed`).
   - **Persistent Session Storage:** Operates inside `session.fromPartition("persist:return-app-desktop")`. Once the operator logs in via ID and password, session cookies and device tokens persist indefinitely across reboots.
+- **Panel-wise continuous filing (`desktop-agent/src/panel-queue.ts`):**
+  - Six isolated supplier panels (Meesho, Flipkart, Amazon, Myntra VB, Myntra EJ, Ajio), each with its own browser profile, cookies, and queue.
+  - Round-robin worker skips busy/held/cooling-down panels; a panel that needs OTP/CAPTCHA never blocks the others. State is exposed to the dashboard and tray via `GET /api/panels`.
+  - Meesho is fully automated (a claim counts only on a new 9–15 digit Meesho ticket); other panels run assisted (prepare + evidence, operator confirms submit) and never auto-complete.
+- **Local secrets (`desktop-agent/src/local-secrets.ts`):** Operator token and PC API key are encrypted with the OS credential store (DPAPI on Windows) inside the packaged app, with a safe file fallback outside Electron.
+- **Update check (`desktop-agent/src/update-check.ts`):** Compares the running version against the newest `desktop-v*` GitHub release; the dashboard offers the OS-matched installer download. Check-and-notify only — no silent auto-install.
 - **Low-Spec Hardware Discipline (4GB RAM & 2-Core CPU):**
   - **Memory Limits:** Caps V8 heap with `--max-old-space-size=256` and restricts renderer instances with `--renderer-process-limit=2`. Disables spellcheck (`spellcheck: false`) saving ~35MB RAM.
   - **Background Throttling & Low CPU Idle:** Native window timer throttling (`backgroundThrottling: true`) drops renderer activity to 1Hz when minimized to tray. Adaptive backoff scheduler polls every 5s during active claim queues, backing off smoothly to 10s -> 20s -> 30s when empty (< 0.5% idle CPU).
-  - **Zombie Process Elimination:** `BrowserRunner.close()` tracks the spawned Chrome/Edge child PID and issues an explicit `taskkill /pid ... /T /F` process-tree termination.
+  - **Zombie Process Elimination:** `BrowserRunner.close()` stops the whole browser process tree (`taskkill /T /F` on Windows, process-group kill on Linux/macOS).
 - **Streaming Evidence Media Pipeline:**
   - Direct HTTP chunk-to-disk streaming (`ReadableStream.getReader()`) in `AgentClient.downloadEvidenceFiles`, eliminating RAM buffering during unboxing video downloads.
   - Automated disk pruning (`pruneOldEvidenceFiles`) cleans temporary media files older than 24 hours on startup.
-- **Enterprise Installation & Deployment:**
-  - Built with `electron-builder` into a versioned machine-wide NSIS installer (`Return.App.Setup.<version>.exe`) installing to `C:\Program Files\Return App\` (`perMachine: true`).
-  - Packaged installs register Windows auto-start by default. The app starts hidden in the tray and resumes work only after an Admin or Supervisor session is verified.
+- **Installation & Deployment:**
+  - `electron-builder` targets: Windows NSIS (`Return.App.Setup.<version>.exe`, `perMachine: true`, `C:\Program Files\Return App\`), Linux AppImage + deb, macOS DMG + ZIP.
+  - `build/installer.nsh` custom steps: browser-presence warning, `ReturnAppClaimBot` Scheduled Task (sign-in trigger, hidden launch, restart on failure), task removal on uninstall.
+  - Packaged installs register auto-start by default. The app starts hidden in the tray and resumes work only after an Admin or Supervisor session is verified.
   - Every Server PC has a UUID and API key. Queue, credential, media and progress routes require both values; jobs use expiring leases and bounded retries.
-  - Automated continuous release via GitHub Actions (`.github/workflows/desktop-release.yml`).
+  - Automated continuous release via GitHub Actions (`.github/workflows/desktop-release.yml`, windows/ubuntu/macos matrix, one `desktop-v*` release, newest two kept).
 
 ## Directory structure
 
 
 ```text
-desktop/                      Native Windows Electron application
+desktop/                      Cross-platform Electron application (Windows, Linux, macOS)
   main.ts                     Main process, system tray, 24/7 worker, offline card
-  preload.cjs                 Isolated IPC preload bridge
+  preload.cjs                 Isolated IPC preload bridge (4 typed verbs)
 desktop-agent/                Marketplace claim automation engine
-  src/browser-runner.ts       CDP browser launcher with process-tree cleanup
+  src/browser-runner.ts       CDP browser launcher with per-OS process-tree cleanup
   src/agent-client.ts         Authenticated API client, leases, streaming and evidence-integrity checks
-  src/marketplaces/meesho.ts  Meesho supplier panel claim filing flow
+  src/panel-queue.ts          Six isolated panels, round-robin rotation, cooldowns
+  src/local-secrets.ts        OS-credential-store encryption (DPAPI) with fallback
+  src/update-check.ts         desktop-v* release check (notify only)
+  src/marketplaces/meesho.ts  Meesho supplier panel claim filing flow (fully automatic)
+  src/marketplaces/*.ts       Assisted engines (Flipkart, Amazon, Myntra, Ajio)
 android/                      Native Kotlin Android return scanner
   app/src/main/               CameraX scanning, photo/video evidence, AppUpdater
 server/                       Express API, database setup, file parsers, the register, OMSGuru integration

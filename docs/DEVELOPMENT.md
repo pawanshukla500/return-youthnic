@@ -30,10 +30,14 @@ Agents starting new work should read [AGENTS.md](../AGENTS.md) and [notes/agent-
 | `npm run sync:oms -- --list` | Lists the OMSGuru channels without writing to the database. |
 | `npm run sync:oms` | Syncs channel listings and master SKUs from OMSGuru, and runs the nightly listing-to-product-master bridge. Flags: `--channel <id>` for one channel, `--skip-skus` to skip the SKU list, `--skip-master-bridge` to skip master bridge. |
 | `npm run sync:vms` | Syncs product catalog images from read-only VMS database into `product_master.image_url`. |
-| `npm run desktop` | Launches the Native Windows Electron desktop app in local development. |
+| `npm run desktop` | Launches the cross-platform Electron desktop app in local development (Windows, Linux, macOS). |
 | `npm run desktop:build` | Bundles `desktop/main.ts` into CommonJS (`desktop/dist/main.cjs`) using esbuild. |
 | `npm run desktop:pack` | Builds an unpacked directory of the Electron app in `dist-electron/win-unpacked` for rapid testing. |
-| `npm run desktop:dist` | Packages the machine-wide Windows NSIS installer (`Return.App.Setup.<version>.exe`) into `dist-electron/` with `perMachine: true`. The installer output is local and is not committed. |
+| `npm run desktop:pack:linux` | Same unpacked build for Linux (`dist-electron/linux-unpacked`). |
+| `npm run desktop:dist` | Packages the machine-wide Windows NSIS installer (`Return.App.Setup.<version>.exe`) into `dist-electron/` with `perMachine: true`. Runs the custom steps in `build/installer.nsh` (browser check, `ReturnAppClaimBot` scheduled task). The installer output is local and is not committed. |
+| `npm run desktop:dist:linux` | Packages Linux AppImage + `.deb` (`Return.App.Setup.<version>.AppImage/.deb`). |
+| `npm run desktop:dist:mac` | Packages macOS DMG + ZIP. |
+| `npm run desktop:dist:all` | All OS installers (used by CI per-runner instead). |
 | `npm run build:desktop` | Runs the complete distributable desktop build, including the Electron bundle and versioned NSIS installer. |
 | `npm run bot` | Runs the claim-bot dashboard in this terminal. The warehouse app is `npm run desktop`, which opens the same bot after sign-in and keeps it in the tray. |
 | `npm run oms:orders` | Looks up OMSGuru order details for the uploaded return rows. Flags: `--sample` (20 returns, and only the field names of the first response is printed), `--limit <n>`, `--marketplace <name>`, `--refresh` (fetch again when a snapshot exists), `--delay <ms>` (default 1500), `--csv`. Run by hand. |
@@ -82,7 +86,7 @@ These rules protect the business logic. They apply to people and to agents. The 
 | A screen | `src/pages/*.tsx`, `src/shell.tsx`, `src/types.ts`, `src/api.ts`. Check every control against the UI audit |
 | Claims & evidence | `server/claims-routes.ts`, `server/claims-service.ts`, `server/claim-automation-routes.ts`, `server/claim-automation-service.ts` |
 | Batched product master | `server/product-master.ts`, `server/product-master-routes.ts` |
-| Windows Desktop claim bot | `desktop-agent/src/` (`agent-client.ts`, `automation-engine.ts`, `index.ts`) |
+| Cross-platform Desktop claim bot | `desktop/` (`main.ts`, `preload.cjs`), `desktop-agent/src/` (`agent-client.ts`, `browser-runner.ts`, `panel-queue.ts`, `local-secrets.ts`, `update-check.ts`, `desktop-app-server.ts`, `marketplaces/`) |
 | Native Android scanner | `android/app/src/main/java/shop/youthnic/returnscan/` (`ClaimCaptureActivity.kt`, `ScanActivity.kt`, `AppUpdater.kt`) |
 | OMSGuru & catalog bridge | `server/oms/*`, `server/oms/master-bridge.ts`, and `server/scripts/sync-oms-*.ts`. The API is in [notes/omsguru-api.md](notes/omsguru-api.md) |
 

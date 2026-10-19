@@ -143,16 +143,16 @@ Placed at `android/app/google-services.json`:
 
 ---
 
-## 6. Windows Desktop Claim Bot
+## 6. Desktop Claim Bot (installed app)
 
-The claim bot runs inside the Return App desktop window:
+The claim bot runs inside the Return App desktop window (operator guide: [DESKTOP-APP.md](DESKTOP-APP.md)):
 
 ```bash
 npm run desktop           # dev: bundle and launch from the repo
-npm run desktop:pack      # production: build dist-electron/win-unpacked (copied to C:\Return App on the warehouse terminal)
+npm run desktop:pack      # local unpacked build (dist-electron/win-unpacked) for rapid testing
 ```
 
-Sign in on that window. The bot then keeps polling while the app is running, including after the window is closed to the tray. Scan stays on the website and the phone. The installed app lives in `C:\Return App\` and starts with Windows; the packaged installer (NSIS, `npm run desktop:dist`) defaults to `C:\Program Files\Return App\`.
+Sign in on that window. The bot then keeps polling while the app is running, including after the window is closed to the tray. Scan stays on the website and the phone. The installed app (NSIS, `npm run desktop:dist`) starts with Windows via auto-start plus the `ReturnAppClaimBot` Scheduled Task, which also restarts it after a crash. First-time supplier logins are set up panel-by-panel in the dashboard's First-time setup wizard.
 
 Sign out asks for confirmation first, because it stops the 24/7 bot until the next sign-in.
 

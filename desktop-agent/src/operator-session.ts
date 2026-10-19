@@ -2,6 +2,7 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { loadAgentConfig } from "./config.js"
+import { protectSecret, revealSecret } from "./local-secrets.js"
 
 export type OperatorProfile = {
   name: string
@@ -21,7 +22,10 @@ function readStored(): StoredSession | null {
   try {
     const parsed = JSON.parse(fs.readFileSync(sessionFile(), "utf8")) as StoredSession
     if (!parsed?.token) return null
-    return parsed
+    const token = revealSecret(parsed.token)
+    // An undecryptable token is unusable; the operator signs in again.
+    if (!token) return null
+    return { ...parsed, token }
   } catch {
     return null
   }
@@ -30,7 +34,7 @@ function readStored(): StoredSession | null {
 function writeStored(session: StoredSession): void {
   const file = sessionFile()
   fs.mkdirSync(path.dirname(file), { recursive: true })
-  fs.writeFileSync(file, JSON.stringify(session), { encoding: "utf8" })
+  fs.writeFileSync(file, JSON.stringify({ ...session, token: protectSecret(session.token) }), { encoding: "utf8" })
 }
 
 export function operatorAuthorization(): string | null {
