@@ -1,4 +1,4 @@
-<!-- Updated 2026-10-10 from package.json and the files in server/tests/. Not run. -->
+<!-- Updated 2026-10-19 from package.json. 39 files, 450 tests. -->
 # Testing
 
 ## Framework and setup
@@ -24,21 +24,48 @@ The `test` script in `package.json` lists the files by name, in this order:
 1. `server/tests/import.test.ts`
 2. `server/tests/spreadsheet-numbers.test.ts`
 3. `server/tests/marketplace-rules.test.ts`
-4. `server/tests/oms.test.ts`
-5. `server/tests/oms-orders.test.ts`
-6. `server/tests/data-capture.test.ts`
-7. `server/tests/database-ssl.test.ts`
-8. `server/tests/register-rules.test.ts`
-9. `server/tests/register-db.test.ts` (needs a test database)
-10. `server/tests/access.test.ts`
-11. `server/tests/upload-policy.test.ts`
-12. `server/tests/access-db.test.ts` (needs a test database)
+4. `server/tests/marketplace-ingestion.test.ts`
+5. `server/tests/oms.test.ts`
+6. `server/tests/oms-orders.test.ts`
+7. `server/tests/data-capture.test.ts`
+8. `server/tests/database-ssl.test.ts`
+9. `server/tests/register-rules.test.ts`
+10. `server/tests/register-db.test.ts` (needs a test database)
+11. `server/tests/access.test.ts`
+12. `server/tests/upload-policy.test.ts`
+13. `server/tests/access-db.test.ts` (needs a test database)
+14. `server/tests/scanner-list.test.ts`
+15. `server/tests/device-sessions.test.ts`
+16. `server/tests/email-reports.test.ts`
+17. `server/tests/continuous-scanning.test.ts`
+18. `server/tests/security-operations.test.ts`
+19. `server/tests/auth-persistent.test.ts`
+20. `server/tests/mobile-app.test.ts`
+21. `server/tests/shopify-sync.test.ts`
+22. `server/tests/omsguru-daily.test.ts`
+23. `server/tests/payment-sync.test.ts`
+24. `server/tests/unmapped-skus.test.ts`
+25. `server/tests/return-reasons.test.ts`
+26. `server/tests/iron.test.ts`
+27. `server/tests/iron-db.test.ts` (needs a test database)
+28. `server/tests/flyer.test.ts`
+29. `server/tests/claims.test.ts`
+30. `server/tests/claim-automation.test.ts`
+31. `server/tests/vms-catalog.test.ts`
+32. `server/tests/oms-master-bridge.test.ts`
+33. `server/tests/product-master-batch.test.ts`
+34. `server/tests/unmapped-candidates.test.ts`
+35. `server/tests/format-unmapped.test.ts`
+36. `desktop-agent/portal-login.test.ts`
+37. `desktop-agent/panel-queue.test.ts`
+38. `desktop-agent/local-secrets.test.ts`
+39. `desktop-agent/update-check.test.ts`
 
 There is no watch mode and no separate unit, integration or end-to-end script.
 
 ## Database checks
 
-Two files check PostgreSQL behaviour: `register-db.test.ts` and `access-db.test.ts`. They run only when `TEST_DATABASE_URL` is set, in the same terminal, before `npm test`:
+Three files check PostgreSQL behaviour: `register-db.test.ts`, `access-db.test.ts`, and `iron-db.test.ts`. They run only when `TEST_DATABASE_URL` is set, in the same terminal, before `npm test`:
 
 ```bash
 $env:TEST_DATABASE_URL = "<a test database URL; its database name must contain 'test'>"
@@ -71,11 +98,16 @@ The files refuse any database whose name does not contain `test` (a case-insensi
 
 The declaration counts are the number of top-level `test(` calls in each file, found by text search on 2026-10-10. They are not a coverage measure.
 
-The tests exercise server-side code only. There are no tests for the React pages and no browser tests.
+| `portal-login.test.ts` (desktop-agent) | 2 | No | Stable per-marketplace profile folders and supplier session-marker readback. |
+| `panel-queue.test.ts` (desktop-agent) | 5 | No | Six isolated panels, marketplace-to-panel mapping (Myntra EJ vs VB split), round-robin rotation skipping busy/held panels, error cooldown, completed panels rejoining. |
+| `local-secrets.test.ts` (desktop-agent) | 3 | No | Plaintext fallback round-trip, legacy file reads, undecryptable values failing closed without throwing. The OS-store (DPAPI) path runs only inside the packaged app. |
+| `update-check.test.ts` (desktop-agent) | 3 | No | Semver vs `desktop-v*` tags (run number ignored), available-update reporting with download links, offline failure closed. |
+
+The tests exercise server-side code and the desktop agent's pure modules. There are no tests for the React pages and no browser tests.
 
 ## Writing new tests
 
-- Put new files in `server/tests/` and name them `*.test.ts`.
+- Put server files in `server/tests/` and desktop-agent files in `desktop-agent/`, named `*.test.ts`.
 - Use the same imports as the existing files: `import { test } from "node:test"` and `import assert from "node:assert/strict"`.
 - Use synthetic data only. Every test value starts with `SYN-`, and there are no real customer or account values.
 - Pure rules are tested without a database. A check that needs PostgreSQL is gated on `TEST_DATABASE_URL`, with the same database-name guard as the existing files, and it is reported as skipped when the variable is missing.
@@ -94,7 +126,7 @@ The repository includes automated GitHub Actions workflows:
    - Triggers on every push and pull request to `main`.
    - Provisions a dedicated `postgres:16` service container with SSL disabled for the internal test runner network.
    - Runs `npm run typecheck`, `npm run build`, and `npm test` with `TEST_DATABASE_URL` pointing at the container database `return_scan_test`.
-   - Runs all 406 tests (0 skipped in CI).
+   - Runs all 450 tests (0 skipped in CI).
    - Verifies the Docker production container build.
 
 2. **`.github/workflows/return-scan-apk.yml`**:
@@ -106,9 +138,14 @@ The repository includes automated GitHub Actions workflows:
 3. **`.github/workflows/deploy.yml`**:
    - Automatically deploys the web client and Express server to the Hostinger production VPS (`https://return.youthnic.shop`) upon push to `main`.
 
+4. **`.github/workflows/desktop-release.yml`**:
+   - Triggers on pushes to `main` (and PRs touching desktop paths, build-only) affecting `desktop/**`, `desktop-agent/**`, claim server code, `src/pages/Claims.tsx`, `package.json`, or itself.
+   - Builds installers on three runners in parallel: Windows NSIS, Linux AppImage + deb, macOS DMG + ZIP. Full `npm test` runs once (ubuntu).
+   - On `main` pushes, publishes every installer to one `desktop-v<version>.<run>` release (`--latest=false`, so Android keeps the Latest badge) and prunes older `desktop-v*` tags to the newest two.
+
 ## Verification status
 
-The test suite runs 406 tests with 0 failures:
-- Locally: 370 tests pass without a test database (36 database tests report skipped).
-- In CI: 406 tests pass (100% pass, 0 fail, 0 skipped) against the `postgres:16` container.
+The test suite runs 450 tests with 0 failures:
+- Locally: 413 tests pass without a test database (37 database tests report skipped).
+- In CI: 450 tests pass (100% pass, 0 fail, 0 skipped) against the `postgres:16` container.
 

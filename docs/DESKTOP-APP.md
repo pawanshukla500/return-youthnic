@@ -42,6 +42,7 @@ operator confirm). Closing the window keeps it running in the tray.
 
 ## 3. Daily operation
 
+- **First-time setup box**: connect/reconnect panels, `X of 6 connected`, credential-storage mode, Check-for-updates button.
 - **Claims Queue Pipeline** table: filter, Run this claim, watch stages.
 - **Panel-wise strip**: per-panel state (Ready / Filing / Needs you /
   Cooling down). A held panel never blocks the others; **Rejoin rotation**
@@ -91,7 +92,21 @@ stops for manual reconciliation instead of retrying blind.
 - **Sign-in loops**: delete `%USERPROFILE%\.taskflow-claim-agent\operator-session.json`
   and sign in again (one-time; DPAPI-bound tokens don't roam between machines).
 
-## 7. Honestly not yet done
+## 7. Dashboard local API (all require operator sign-in)
+
+| Route | Purpose |
+|---|---|
+| `GET /api/status` | Worker state, active job, next poll, backend URL |
+| `GET /api/panels` | Six panels: state, active job, cookie status, last result |
+| `POST /api/panels/:key/clear` | Clear a panel hold so it rejoins rotation |
+| `GET /api/security` | Whether OS credential store encryption is active |
+| `GET /api/updates/check` | Newest `desktop-v*` release vs running version + download links |
+| `GET /api/portal-logins` | Per-panel ID-saved + cookie-saved status |
+| `POST /api/portal-logins` | Save a supplier ID/password (server-encrypted) |
+| `POST /api/portal-logins/test` | Open the visible browser and save that panel's cookies |
+| `POST /api/jobs/run-one` | Queue one waiting claim immediately |
+
+## 8. Honestly not yet done
 
 - Full auto-filing for Flipkart/Amazon/Myntra/Ajio (assisted today; writing
   untested portal scripts would be mock automation).
