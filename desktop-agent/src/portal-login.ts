@@ -237,7 +237,7 @@ export async function completePortalLogin(
     const challenge = await browser.detectCaptchaOrOtp()
     if (challenge.challengeDetected && !announcedOtp) {
       announcedOtp = true
-      logger.info(`${input.marketplace} is asking for a code. Type it in the Edge window. This app will save the cookies when the supplier panel opens.`)
+      logger.info(`${input.marketplace} is asking for a code. Type it in the supplier browser window. This app will save the cookies when the supplier panel opens.`)
     }
 
     await browser.delay(4000)
@@ -252,12 +252,12 @@ export async function completePortalLogin(
   if (announcedOtp) {
     return {
       ok: false,
-      message: `${input.marketplace} is still waiting for the code in the Edge window. Type the code there. The cookies are saved when the supplier panel opens.`,
+      message: `${input.marketplace} is still waiting for the code in the supplier browser window. Type the code there. The cookies are saved when the supplier panel opens.`,
     }
   }
   return {
     ok: false,
-    message: `${input.marketplace} did not finish signing in. The saved bot ID was used. Open the Edge window and complete the login so the cookies can be saved.`,
+    message: `${input.marketplace} did not finish signing in. The saved bot ID was used. Open the supplier browser window and complete the login so the cookies can be saved.`,
   }
 }
 

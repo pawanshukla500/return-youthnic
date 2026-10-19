@@ -4,24 +4,85 @@ import path from "node:path"
 import WebSocket from "ws"
 import { logger } from "./logger.js"
 
-export function findSystemBrowser(): string | null {
-  const candidates = [
-    // Edge (installed on 100% of modern Windows PCs)
-    "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
-    "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
-    path.join(process.env.LOCALAPPDATA || "", "Microsoft\\Edge\\Application\\msedge.exe"),
-    // Chrome
-    "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
-    "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
-    path.join(process.env.LOCALAPPDATA || "", "Google\\Chrome\\Application\\chrome.exe"),
-  ]
-
-  for (const c of candidates) {
-    if (fs.existsSync(c)) {
-      return c
+function whichBinaries(names: string[]): string | null {
+  for (const name of names) {
+    try {
+      const found = child_process.execSync(
+        process.platform === "win32" ? `where ${name} 2>nul` : `command -v ${name} 2>/dev/null`,
+        { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+      )
+        .split(String.fromCharCode(10))
+        .map((s) => s.trim())
+        .filter(Boolean)[0]
+      if (found && fs.existsSync(found)) return found
+      if (found && !found.includes("/") && !found.includes("\\")) return found
+    } catch {
+      // not on PATH — fall through to fixed candidates
     }
   }
   return null
+}
+
+export function findSystemBrowser(): string | null {
+  // Explicit override wins on every OS (used by warehouse PCs with a custom install path).
+  const override = process.env.BROWSER_PATH?.trim()
+  if (override && fs.existsSync(override)) return override
+
+  if (process.platform === "win32") {
+    const candidates = [
+      // Edge (installed on 100% of modern Windows PCs)
+      "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+      "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
+      path.join(process.env.LOCALAPPDATA || "", "Microsoft\\Edge\\Application\\msedge.exe"),
+      // Chrome
+      "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+      path.join(process.env.LOCALAPPDATA || "", "Google\\Chrome\\Application\\chrome.exe"),
+    ]
+
+    for (const c of candidates) {
+      if (c && fs.existsSync(c)) {
+        return c
+      }
+    }
+    return whichBinaries(["msedge.exe", "chrome.exe", "chromium.exe"])
+  }
+
+  if (process.platform === "darwin") {
+    const candidates = [
+      "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+      "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+      "/Applications/Chromium.app/Contents/MacOS/Chromium",
+    ]
+    for (const c of candidates) {
+      if (fs.existsSync(c)) return c
+    }
+    return whichBinaries(["google-chrome", "chromium", "chromium-browser", "microsoft-edge"])
+  }
+
+  // linux and every other POSIX OS (Ubuntu, Debian, Fedora, Arch, WSL)
+  const candidates = [
+    "/usr/bin/google-chrome",
+    "/usr/bin/google-chrome-stable",
+    "/usr/bin/chromium",
+    "/usr/bin/chromium-browser",
+    "/usr/bin/microsoft-edge",
+    "/usr/bin/microsoft-edge-stable",
+    "/snap/bin/chromium",
+    "/opt/google/chrome/chrome",
+    "/opt/microsoft/msedge/msedge",
+  ]
+  for (const c of candidates) {
+    if (fs.existsSync(c)) return c
+  }
+  return whichBinaries([
+    "google-chrome",
+    "google-chrome-stable",
+    "chromium",
+    "chromium-browser",
+    "microsoft-edge",
+    "microsoft-edge-stable",
+  ])
 }
 
 export type BrowserSession = {
@@ -50,7 +111,9 @@ export class BrowserRunner {
   }): Promise<BrowserSession> {
     const browserPath = options.executablePath || findSystemBrowser()
     if (!browserPath) {
-      throw new Error("No compatible Chromium browser (Microsoft Edge or Chrome) found on this Windows system.")
+      throw new Error(
+        "No compatible Chromium browser (Microsoft Edge, Google Chrome, or Chromium) found. Install Chrome/Chromium or set BROWSER_PATH to its executable.",
+      )
     }
 
     const port = options.port || 9222
@@ -85,7 +148,9 @@ export class BrowserRunner {
 
     logger.info(`Spawning browser: ${path.basename(browserPath)} on port ${port} (Headless: ${Boolean(options.headless)})...`)
     const proc = child_process.spawn(browserPath, args, {
-      detached: false,
+      // Detached on POSIX so the whole browser tree lives in its own process
+      // group and close() can stop it with kill(-pid) on Linux/macOS.
+      detached: process.platform !== "win32",
       stdio: "ignore",
     })
     this.proc = proc
@@ -589,7 +654,7 @@ export class BrowserRunner {
         // ignore
       }
       this.ws = null
-      // Give Edge a moment to write the profile cookies before the process tree is stopped.
+      // Give the browser a moment to write the profile cookies before the process tree is stopped.
       await new Promise((resolve) => setTimeout(resolve, 1500))
     }
 
@@ -603,7 +668,24 @@ export class BrowserRunner {
               this.proc.kill("SIGKILL")
             }
           } else {
-            this.proc.kill("SIGKILL")
+            // POSIX (Linux/macOS): stop the whole browser process tree so no
+            // headless child survives on 4GB warehouse terminals.
+            try {
+              process.kill(-this.proc.pid, "SIGTERM")
+              await new Promise((r) => setTimeout(r, 1500))
+              try {
+                process.kill(-this.proc.pid, "SIGKILL")
+              } catch {
+                // already gone
+              }
+            } catch {
+              try {
+                child_process.execSync(`pkill -P ${this.proc.pid}`, { stdio: "ignore" })
+              } catch {
+                // ignore — best effort child cleanup
+              }
+              this.proc.kill("SIGKILL")
+            }
           }
         }
       } catch {

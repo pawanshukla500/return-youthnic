@@ -324,8 +324,18 @@ function startDesktopBotScheduler(): void {
 // Main Application Window
 // ---------------------------------------------------------------------------------------------------------------
 
+function iconFor(name: "png" | "ico"): string {
+  // Windows prefers .ico, Linux/macOS prefer .png. Both ship in public/.
+  const ordered = process.platform === "win32" ? ["app-icon.ico", "app-icon.png"] : ["app-icon.png", "app-icon.ico"]
+  for (const file of ordered) {
+    const p = path.join(app.getAppPath(), "public", file)
+    if (fs.existsSync(p)) return p
+  }
+  return path.join(app.getAppPath(), "public", name === "ico" ? "app-icon.ico" : "app-icon.png")
+}
+
 function createMainWindow(): void {
-  const iconPath = path.join(app.getAppPath(), "public", "app-icon.png")
+  const iconPath = iconFor("png")
   let appIcon: nativeImage | undefined
   if (fs.existsSync(iconPath)) {
     appIcon = nativeImage.createFromPath(iconPath)
@@ -517,7 +527,7 @@ function createMainWindow(): void {
 // ---------------------------------------------------------------------------------------------------------------
 
 function createTray(): void {
-  const iconPath = path.join(app.getAppPath(), "public", "favicon.ico")
+  const iconPath = iconFor("ico")
   let trayIcon: nativeImage
   if (fs.existsSync(iconPath)) {
     trayIcon = nativeImage.createFromPath(iconPath)
@@ -632,9 +642,10 @@ ipcMain.handle("desktop:toggle-bot", () => {
 app.whenReady().then(async () => {
   process.env.RETURN_APP_VERSION = app.getVersion()
   if (app.isPackaged) {
+    // Cross-platform auto-start: Windows registry / macOS login items /
+    // Linux .desktop entry. Launches hidden so the 24/7 bot resumes in the tray.
     app.setLoginItemSettings({
       openAtLogin: true,
-      path: process.execPath,
       args: ["--hidden"],
     })
   }
@@ -661,8 +672,10 @@ app.on("before-quit", () => {
 })
 
 app.on("window-all-closed", () => {
-  // On Windows, keep app running in tray if minimized
-  if (process.platform !== "darwin" && isQuitting) {
+  // Windows + Linux: keep the 24/7 bot in the tray after the window closes.
+  // macOS: standard behaviour — stay active until the user quits explicitly.
+  if (process.platform === "darwin") return
+  if (isQuitting) {
     app.quit()
   }
 })

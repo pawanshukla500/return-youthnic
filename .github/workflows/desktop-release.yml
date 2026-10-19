@@ -1,4 +1,4 @@
-name: Build & Release Return App Windows Desktop
+name: Build & Release Return App Desktop (Windows, Linux, macOS)
 
 on:
   push:
@@ -52,8 +52,24 @@ concurrency:
 
 jobs:
   build-desktop:
-    name: Build Native Windows Electron Installer
-    runs-on: windows-latest
+    name: Build Desktop Setup (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            dist: "npm run desktop:dist"
+            artifact: return-app-windows-setup
+            glob: "dist-electron/Return.App.Setup.*.exe"
+          - os: ubuntu-latest
+            dist: "npm run desktop:dist:linux"
+            artifact: return-app-linux-setup
+            glob: "dist-electron/Return.App.Setup.*.{AppImage,deb}"
+          - os: macos-latest
+            dist: "npm run desktop:dist:mac"
+            artifact: return-app-macos-setup
+            glob: "dist-electron/Return.App.Setup.*.{dmg,zip}"
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout Source Code
         uses: actions/checkout@v4
@@ -74,36 +90,36 @@ jobs:
         run: npm run build
 
       - name: Run Automated Tests
+        if: matrix.os == 'ubuntu-latest'
         run: npm test
 
       - name: Bundle Electron Main
         run: npm run desktop:build
 
-      - name: Build Windows NSIS Setup Installer
-        run: npm run desktop:dist
+      - name: Build Desktop Setup Installer
+        run: ${{ matrix.dist }}
 
-      - name: Upload Windows Setup Artifact
+      - name: Upload Setup Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: return-app-windows-setup
-          path: dist-electron/Return.App.Setup.*.exe
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.glob }}
           if-no-files-found: error
 
   publish-release:
     name: Publish Desktop Release to GitHub
     needs: build-desktop
     if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish)
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
-      - name: Download Windows Setup Artifact
+      - name: Download All Setup Artifacts
         uses: actions/download-artifact@v4
         with:
-          name: return-app-windows-setup
           path: release-input
 
       - name: Publish or Update GitHub Release
@@ -112,30 +128,40 @@ jobs:
           GH_REPO: ${{ github.repository }}
         shell: bash
         run: |
-          SETUP_EXE="$(find release-input -maxdepth 1 -name 'Return.App.Setup.*.exe' -print -quit)"
-          if [ ! -f "$SETUP_EXE" ]; then
-            echo "::error::No Setup EXE found in downloaded artifact."
+          shopt -s nullglob
+          FILES=(release-input/**/*.{exe,AppImage,deb,dmg,zip})
+          if [ ${#FILES[@]} -eq 0 ]; then
+            echo "::error::No setup files found in downloaded artifacts."
             exit 1
           fi
+          printf 'Publishing %s\n' "${FILES[@]}"
 
           VERSION="$(node -p "require('./package.json').version")"
           TAG_NAME="desktop-v${VERSION}.${GITHUB_RUN_NUMBER}"
           echo "Publishing GitHub Release $TAG_NAME..."
 
           gh release create "$TAG_NAME" \
-            "$SETUP_EXE" \
+            "${FILES[@]}" \
             --target "${{ github.sha }}" \
             --latest=false \
             --title "Return App Desktop $TAG_NAME" \
-            --notes "Official Windows Desktop NSIS Installer for Return App ($TAG_NAME).
+            --notes "Cross-platform desktop installer for Return App ($TAG_NAME).
+
+          ### Downloads
+          * **Windows**: \`Return.App.Setup.<version>.exe\` (NSIS, per-machine, Desktop + Start Menu shortcuts)
+          * **Linux (Ubuntu/Debian)**: \`.deb\` package or portable \`.AppImage\` — needs Chrome/Chromium or Edge installed, or set \`BROWSER_PATH\`
+          * **macOS**: \`.dmg\` disk image (also ships as \`.zip\`)
+
+          ### Panel-wise continuous filing
+          * **Six isolated supplier panels**: Meesho, Flipkart, Amazon, Myntra VB, Myntra EJ, Ajio — each keeps its own login cookies and queue.
+          * **Round-robin worker**: one stuck panel (OTP, CAPTCHA, cooldown) never blocks the others; held panels rejoin from the dashboard.
+          * **Meesho fully automated**; other panels run assisted (prepare + evidence, operator confirms submit).
 
           ### System Specifications & Optimizations:
           * **Low-Spec Optimized**: Runs smoothly on **4GB RAM and 2-Core CPUs** 24/7 with V8 heap constraints (\`--max-old-space-size=256\`) and Chromium background throttling.
-          * **Program Files Standard Location**: NSIS installer configures per-machine installation into \`Program Files\` with Desktop and Start Menu shortcuts.
-          * **Persistent Session Storage**: Sign in once with ID and password; authentication cookies persist indefinitely across restarts.
-          * **24/7 Meesho Claim Bot**: Embedded worker loop connects directly to the production API, leases Meesho claims, verifies downloaded evidence, and automates the Meesho supplier portal.
-          * **Bounded Resource Use**: Native process-tree teardown, streaming evidence downloads, 24-hour cache pruning, and adaptive idle polling." || \
-          gh release upload "$TAG_NAME" "$SETUP_EXE" --clobber
+          * **Auto-start on every OS**: Windows registry, Linux desktop entry, macOS login item — launches hidden into the tray.
+          * **Bounded Resource Use**: Native process-tree teardown on all platforms, streaming evidence downloads, 24-hour cache pruning, and adaptive idle polling." || \
+          gh release upload "$TAG_NAME" "${FILES[@]}" --clobber
 
           # Keep only the newest two DESKTOP releases (current + previous, for rollback).
           # Android releases (v1.0.*) belong to the APK workflow and must never be touched here.

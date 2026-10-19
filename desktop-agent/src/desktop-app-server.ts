@@ -9,6 +9,7 @@ import { BrowserRunner, findSystemBrowser } from "./browser-runner.js"
 import { getAutomationEngine } from "./marketplaces/registry.js"
 import { currentOperator, loginOperator, logoutOperator } from "./operator-session.js"
 import { closePortalLoginBrowser, holdPortalBrowser, listPortalLogins, PORTAL_CHANNELS, profileDirFor, queueOneClaim, readSessionSavedAt, savePortalLogin, testPortalLogin } from "./portal-login.js"
+import { clearPanelHold, getPanelStatuses, markPanelBusy, markPanelResult, panelKeyForMarketplace } from "./panel-queue.js"
 
 export type DesktopBotControl = {
   isRunning: () => boolean
@@ -69,9 +70,11 @@ async function pollAndProcessJob(): Promise<void> {
     isCurrentlyProcessing = true
     const jobHeader = poll.job
     activeJobInfo = jobHeader
+    const panelKey = panelKeyForMarketplace(String(jobHeader.marketplace || ""))
 
     logger.info(`=== Received Claim Job #${jobHeader.jobId} (${jobHeader.marketplace} · AWB/Order: ${jobHeader.trackingId || jobHeader.orderNumber} · Stage: ${jobHeader.stage}) ===`)
     await client.sendHeartbeat("busy", { activeJobId: jobHeader.jobId, marketplace: jobHeader.marketplace })
+    markPanelBusy(panelKey, jobHeader.jobId, String(jobHeader.stage || ""))
 
     const bundle = await client.getExecutionBundle(jobHeader.jobId)
     if (!bundle) {
@@ -92,7 +95,7 @@ async function pollAndProcessJob(): Promise<void> {
     // Launch browser
     const browserRunner = new BrowserRunner()
     const isHeadless = config.browserMode === "headless" || bundle.automationMode === "headless"
-    const profilePath = path.join(config.userDataDir, `profile-${bundle.marketplace.toLowerCase().replace(/[^a-z0-9]/g, "_")}`)
+    const profilePath = profileDirFor(config.userDataDir, bundle.marketplace)
 
     const browserSession = await browserRunner.launch({
       profileDir: profilePath,
@@ -116,6 +119,7 @@ async function pollAndProcessJob(): Promise<void> {
       const result = await engine.execute(action)
 
       if (result.stage === "prepared") {
+        markPanelResult(panelKey, "prepared", "Prepared on the supplier panel. Waiting for approval.")
         await client.updateProgress(jobHeader.jobId, {
           stage: "prepared",
           logMessage: "Claim prepared on seller portal. Waiting for user approval before submission.",
@@ -128,11 +132,13 @@ async function pollAndProcessJob(): Promise<void> {
           screenshotPath: result.screenshotPath,
         })
         submissionOutcomeUnknown = false
+        markPanelResult(panelKey, "completed", `Filed · ref ${result.marketplaceClaimId}`)
         // Clean up local downloaded evidence files so they don't occupy disk space
         await client.cleanClaimEvidenceFiles(bundle.claimId)
       } else if (result.stage === "manual_intervention_required") {
         keepBrowserOpen = true
         holdPortalBrowser(browserRunner)
+        markPanelResult(panelKey, "manual_action", result.manualActionReason || "Manual action required on portal.")
         await client.updateProgress(jobHeader.jobId, {
           stage: "manual_intervention_required",
           logMessage: result.manualActionReason || "Manual action required on portal.",
@@ -141,6 +147,7 @@ async function pollAndProcessJob(): Promise<void> {
         })
       } else if (result.stage === "not_eligible") {
         logger.warn(`Job #${jobHeader.jobId} is not eligible for a claim. Kept for manual review; moving to the next job.`)
+        markPanelResult(panelKey, "not_eligible", result.manualActionReason || "Marketplace says this order is not eligible.")
         await client.updateProgress(jobHeader.jobId, {
           stage: "not_eligible",
           logMessage: result.manualActionReason || "The marketplace says this order is not eligible for a claim.",
@@ -155,6 +162,12 @@ async function pollAndProcessJob(): Promise<void> {
   } catch (err: any) {
     logger.error("Error processing automation job:", err)
     if (activeJobInfo?.jobId) {
+      const failedPanel = panelKeyForMarketplace(String(activeJobInfo.marketplace || ""))
+      markPanelResult(
+        failedPanel,
+        submissionOutcomeUnknown ? "manual_action" : "failed",
+        err instanceof Error ? err.message : "Desktop automation failed.",
+      )
       await client.updateProgress(activeJobInfo.jobId, {
         stage: submissionOutcomeUnknown ? "manual_intervention_required" : "failed",
         logMessage: err instanceof Error ? err.message : "Desktop automation failed.",
@@ -366,7 +379,7 @@ function getDashboardHtml(): string {
   <main inert>
     <section class="panel" id="portal-setup" style="padding: 16px 18px;">
       <div class="panel-title" style="margin-bottom: 6px;">Supplier login, then one claim</div>
-      <p style="color: var(--muted); font-size: 12px; line-height: 1.5; margin-bottom: 12px;">Do one marketplace at a time. Leave the ID and password blank to use the bot login already saved on the web. Test login opens Edge, signs in, and stores the cookies on this PC. If a code appears, type it in that window before closing it.</p>
+      <p style="color: var(--muted); font-size: 12px; line-height: 1.5; margin-bottom: 12px;">Do one marketplace at a time. Leave the ID and password blank to use the bot login already saved on the web. Test login opens the system browser, signs in, and stores the cookies on this PC. If a code appears, type it in that window before closing it.</p>
       <div style="display: flex; flex-wrap: wrap; gap: 10px; align-items: end;">
         <label style="font-size: 12px; font-weight: 600;">Marketplace<br>
           <select id="portal-marketplace" class="form-control" style="min-width: 140px; margin-top: 4px;">
@@ -384,6 +397,12 @@ function getDashboardHtml(): string {
       </div>
       <div id="portal-status" style="margin-top: 10px; font-size: 12px; color: #a7f3d0;"></div>
       <div id="portal-message" style="margin-top: 6px; font-size: 12px; color: #fca5a5;"></div>
+    </section>
+
+    <section class="panel" id="panel-queue" style="padding: 16px 18px;">
+      <div class="panel-title" style="margin-bottom: 4px;">Panel-wise continuous filing</div>
+      <p style="color: var(--muted); font-size: 12px; line-height: 1.5; margin-bottom: 12px;">Each supplier panel keeps its own login cookies and queue. The bot rotates through the ready panels, so one panel waiting on OTP or cooling down never stops the others.</p>
+      <div id="panel-strip" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px;"></div>
     </section>
 
     <!-- KPI Overview -->
@@ -600,6 +619,42 @@ function getDashboardHtml(): string {
         const data = await res.json();
         allJobs = data.rows || [];
         renderJobs();
+      } catch (err) {
+        console.error(err);
+      }
+    }
+
+    async function loadPanels() {
+      try {
+        const res = await fetch('/api/panels');
+        if (!res.ok) return;
+        const data = await res.json();
+        const strip = document.getElementById('panel-strip');
+        const dot = { idle: '#10b981', preparing: '#3b82f6', submitting: '#3b82f6', manual_action: '#f59e0b', cooldown: '#ef4444', disabled: '#64748b' };
+        const label = { idle: 'Ready', preparing: 'Preparing', submitting: 'Filing', manual_action: 'Needs you', cooldown: 'Cooling down', disabled: 'Off' };
+        strip.innerHTML = (data.panels || []).map(p =>
+          '<div style="background:#080f0d;border:1px solid var(--line);border-radius:8px;padding:10px 12px;">' +
+          '<div style="display:flex;align-items:center;gap:6px;font-size:12px;font-weight:700;">' +
+          '<span style="width:8px;height:8px;border-radius:50%;background:' + (dot[p.state] || '#64748b') + ';display:inline-block;"></span>' +
+          '<span>' + p.name + '</span>' +
+          (p.automated ? '<span style="font-size:10px;color:#6ee7b7;border:1px solid var(--line);border-radius:4px;padding:0 4px;">auto</span>' : '<span style="font-size:10px;color:#fbbf24;border:1px solid var(--line);border-radius:4px;padding:0 4px;">assisted</span>') +
+          '</div>' +
+          '<div style="font-size:11px;color:var(--muted);margin-top:4px;">' + (label[p.state] || p.state) +
+          (p.activeJobId ? ' · job #' + p.activeJobId : '') +
+          (p.sessionSavedAt ? ' · cookies ✓' : ' · no cookies') + '</div>' +
+          (p.lastResult ? '<div style="font-size:11px;color:#a7f3d0;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="' + p.lastResult.replace(/"/g, '&quot;') + '">' + p.lastResult + '</div>' : '') +
+          ((p.state === 'manual_action' || p.state === 'cooldown') ? '<button class="btn btn-secondary" style="margin-top:6px;" data-key="' + p.key + '" onclick="clearPanelHold(this.dataset.key)">Rejoin rotation</button>' : '') +
+          '</div>'
+        ).join('');
+      } catch (err) {
+        console.error(err);
+      }
+    }
+
+    async function clearPanelHold(key) {
+      try {
+        await fetch('/api/panels/' + encodeURIComponent(key) + '/clear', { method: 'POST' });
+        await loadPanels();
       } catch (err) {
         console.error(err);
       }
@@ -843,9 +898,11 @@ function getDashboardHtml(): string {
     loadPortalLogins();
     loadStatus();
     loadJobs();
+    loadPanels();
     connectSse();
     setInterval(loadStatus, 2000);
     setInterval(loadJobs, 10000);
+    setInterval(loadPanels, 5000);
   </script>
 </body>
 </html>`
@@ -997,6 +1054,27 @@ export function startDesktopAppServer(port = 3005, control?: DesktopBotControl):
         const jobs = await client.getRecentJobs()
         res.writeHead(200, { "Content-Type": "application/json" })
         res.end(JSON.stringify(jobs))
+        return
+      }
+
+      if (url.pathname === "/api/panels" && req.method === "GET") {
+        if (!operatorSignedIn) {
+          sendJson(res, 401, { error: "Sign in before viewing panels." })
+          return
+        }
+        sendJson(res, 200, { panels: getPanelStatuses(config.userDataDir) })
+        return
+      }
+
+      if (url.pathname.startsWith("/api/panels/") && url.pathname.endsWith("/clear") && req.method === "POST") {
+        if (!operatorSignedIn) {
+          sendJson(res, 401, { error: "Sign in before clearing a panel hold." })
+          return
+        }
+        const key = decodeURIComponent(url.pathname.split("/")[3] || "")
+        clearPanelHold(key)
+        logger.info(`Panel hold cleared by operator: ${key}`)
+        sendJson(res, 200, { ok: true, panels: getPanelStatuses(config.userDataDir) })
         return
       }
 

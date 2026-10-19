@@ -3,6 +3,7 @@ import type { JobExecutionBundle } from "../agent-client.js"
 import type { BaseMarketplaceAutomation } from "./base-automation.js"
 import { MeeshoAutomation } from "./meesho.js"
 import { FlipkartAutomation } from "./flipkart.js"
+import { AmazonAutomation } from "./amazon.js"
 import { MyntraAutomation } from "./myntra.js"
 import { AjioAutomation } from "./ajio.js"
 
@@ -20,6 +21,9 @@ export function getAutomationEngine(
   }
   if (norm.includes("flipkart")) {
     return new FlipkartAutomation(browser, job, evidenceFilesMap, workDir)
+  }
+  if (norm.includes("amazon")) {
+    return new AmazonAutomation(browser, job, evidenceFilesMap, workDir)
   }
   if (norm.includes("myntra")) {
     return new MyntraAutomation(browser, job, evidenceFilesMap, workDir)

@@ -1,9 +1,9 @@
-<!-- Updated 2026-10-17. CI runs 432 tests with postgres:16 service. Android v1.0.58 and Windows Desktop desktop-v1.1.0.10 active. -->
+<!-- Updated 2026-10-19. CI runs 444 tests with postgres:16 service. Android v1.0.58. Desktop source v1.2.0: cross-platform installers (Windows/Linux/macOS) + panel-wise continuous filing; last published installer still desktop-v1.1.0.10 until 1.2.0 merges. -->
 # return-scanning-app
 
 A return scanning app for VB Exports. Marketplace return reports (Myntra VB and Myntra EJ, Flipkart, Meesho, Amazon, and Ajio) are loaded as lookup data, one account at a time. A scan then records what physically arrived in the return scan register, which is the permanent record. The app also stores channel listings and master SKUs from the OMSGuru API, for product titles and images.
 
-**Status (2026-10-17):** Full local and CI test suites pass with 432 tests (395 pass, 0 fail, 37 database checks run against a dedicated `postgres:16` container). Deployed to production VPS (`https://return.youthnic.shop`). Native Android return scanning app active at `v1.0.58` (`versionCode: 10058`). Native Windows Desktop application (`Return.App.Setup.1.1.0.exe`) with 24/7 background claim automation worker published at GitHub Release `desktop-v1.1.0.10`. GitHub keeps only the newest two releases of each family (`v1.0.*` Android, `desktop-v*` Windows). See [docs/notes/agent-handoff.md](docs/notes/agent-handoff.md).
+**Status (2026-10-19):** Full local and CI test suites pass with 444 tests (407 pass, 0 fail, 37 database checks run against a dedicated `postgres:16` container). Deployed to production VPS (`https://return.youthnic.shop`). Native Android return scanning app active at `v1.0.58` (`versionCode` 10058). Cross-platform desktop application source is at `1.2.0` (`Return.App.Setup.1.2.0.exe` verified locally, 118,871,660 bytes); Windows/Linux/macOS installers publish as GitHub Release `desktop-v1.2.0.*` on merge via the matrix workflow. GitHub keeps only the newest two releases of each family (`v1.0.*` Android, `desktop-v*` desktop). See [docs/notes/agent-handoff.md](docs/notes/agent-handoff.md).
 
 ## For agents
 
@@ -68,15 +68,16 @@ The web app has six pages. The Admin page is shown to administrators only.
 ## Native Mobile & Desktop Clients
 
 - **Native Android Scanner (`android/`)**: Built in Kotlin with CameraX for rapid hardware-grade barcode scanning, runtime camera permissions, photo & 480p SD unboxing video evidence capture, visual upload progress dialogs, instant "Start Again with Zero" form reset, and automated in-app updates (`v1.0.58`, `versionCode: 10058`) synchronized with GitHub Releases. Only the newest two `v1.0.*` releases are kept.
-- **Native Windows Desktop Application (`desktop/` & `desktop-agent/`)**:
-  - **Enterprise NSIS Installer**: Installs natively to `C:\Program Files\Return App\` (`perMachine: true`) with Desktop and Start Menu shortcuts, packaged via `electron-builder` as `Return.App.Setup.1.1.0.exe` (Release `desktop-v1.1.0.10`). Only the newest two `desktop-v*` releases are kept, and they are never marked "Latest" so the Android APK keeps that badge for in-app updates.
+- **Cross-platform Desktop Application (`desktop/` & `desktop-agent/`)**, source `1.2.0`:
+  - **Setup files for every OS**: Windows NSIS (`Return.App.Setup.<version>.exe`, per-machine, Desktop + Start Menu shortcuts), Linux AppImage + `.deb` (Ubuntu/Debian), macOS DMG + ZIP. Built in parallel by `.github/workflows/desktop-release.yml` (windows/ubuntu/macos runners) and published as one `desktop-v*` release. Only the newest two `desktop-v*` releases are kept, and they are never marked "Latest" so the Android APK keeps that badge for in-app updates.
+  - **Panel-wise continuous filing**: six isolated supplier panels (Meesho, Flipkart, Amazon, Myntra VB, Myntra EJ, Ajio), each with its own login cookies and queue. The worker rotates round-robin, so a panel waiting on OTP/CAPTCHA or cooling down never blocks the others; held panels rejoin from the dashboard (`GET /api/panels`). Meesho is fully automated; other panels run assisted (prepare + evidence, operator confirms submit).
   - **4GB RAM & 2-Core CPU Optimization**: Engineered for entry-level warehouse workstations. Operates 24/7 with < 0.5% idle CPU utilization, V8 heap limits (`--max-old-space-size=256`), restricted renderer processes (`renderer-process-limit=2`), background throttling (`backgroundThrottling: true`), and disabled spellcheck dictionaries.
   - **Persistent Session Storage**: Uses Electron partition `persist:return-app-desktop`. Operators sign in once with standard username/password; session cookies and tokens remain valid across restarts and reboots.
   - **System Tray 24/7 Automation Worker**: Closing the window minimizes the app into the Windows notification tray. Features an adaptive backoff queue scheduler (5s active / 10s-30s idle) that continuously polls marketplace claims.
-  - **Chrome DevTools Protocol (CDP) Claim Engine**: Automates Meesho supplier claim filing, human keystroke typing, and automatic process tree termination (`taskkill /T /F`) to prevent zombie browser processes. Other marketplaces remain manual.
+  - **Chrome DevTools Protocol (CDP) Claim Engine**: Automates supplier claim filing with human keystroke typing and automatic process-tree termination on every OS (`taskkill /T /F` on Windows, process-group kill on Linux/macOS). Meesho is fully automated; other marketplaces run assisted with manual confirmation.
   - **Authenticated Worker & Leases**: Admin/Supervisor enrollment issues a per-PC API key. Jobs use expiring leases, bounded retries, and signed-in operator checks.
   - **Streaming Media Pipeline**: Direct HTTP chunk-to-disk streaming (`ReadableStream.getReader()`), size/SHA-256 verification, multi-file evidence mapping, and automated 24-hour temporary file cache pruning.
-  - **Windows Auto-start**: Packaged installs register auto-start by default and launch hidden in the tray.
+  - **Auto-start on every OS**: Packaged installs register auto-start by default (Windows registry, Linux desktop entry, macOS login item) and launch hidden in the tray.
 
 For example, to load a Flipkart return report: open **Data uploads**, choose **Flipkart**, drop the file, read the preview, and when it can be activated, click **Activate**.
 

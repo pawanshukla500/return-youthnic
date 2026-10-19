@@ -1,7 +1,7 @@
 {
   "name": "return-scanning-app",
   "private": true,
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Youthnic Return App - Automated Return Scanning & Marketplace Claims Desktop Application",
   "author": "Youthnic VB Exports",
   "type": "module",
@@ -15,13 +15,17 @@
     "desktop": "npm run desktop:build && electron desktop/dist/main.cjs",
     "desktop:build": "esbuild desktop/main.ts --bundle --platform=node --target=node20 --format=cjs --outfile=desktop/dist/main.cjs --external:electron --external:ws",
     "desktop:pack": "npm run desktop:build && electron-builder --win dir",
+    "desktop:pack:linux": "npm run desktop:build && electron-builder --linux dir",
     "desktop:dist": "npm run desktop:build && electron-builder --win nsis --publish never",
+    "desktop:dist:linux": "npm run desktop:build && electron-builder --linux AppImage deb --publish never",
+    "desktop:dist:mac": "npm run desktop:build && electron-builder --mac dmg zip --publish never",
+    "desktop:dist:all": "npm run desktop:build && electron-builder --win nsis --linux AppImage deb --mac dmg zip --publish never",
     "build:desktop": "npm run desktop:dist",
     "bot": "tsx desktop-agent/src/desktop-app-server.ts",
     "desktop-app": "tsx desktop-agent/src/desktop-app-server.ts",
     "start": "node --max-old-space-size=384 server/dist.js",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.server.json",
-    "test": "node --import tsx --test --test-concurrency=1 server/tests/import.test.ts server/tests/spreadsheet-numbers.test.ts server/tests/marketplace-rules.test.ts server/tests/marketplace-ingestion.test.ts server/tests/oms.test.ts server/tests/oms-orders.test.ts server/tests/data-capture.test.ts server/tests/database-ssl.test.ts server/tests/register-rules.test.ts server/tests/register-db.test.ts server/tests/access.test.ts server/tests/upload-policy.test.ts server/tests/access-db.test.ts server/tests/scanner-list.test.ts server/tests/device-sessions.test.ts server/tests/email-reports.test.ts server/tests/continuous-scanning.test.ts server/tests/security-operations.test.ts server/tests/auth-persistent.test.ts server/tests/mobile-app.test.ts server/tests/shopify-sync.test.ts server/tests/omsguru-daily.test.ts server/tests/payment-sync.test.ts server/tests/unmapped-skus.test.ts server/tests/return-reasons.test.ts server/tests/iron.test.ts server/tests/iron-db.test.ts server/tests/flyer.test.ts server/tests/claims.test.ts server/tests/claim-automation.test.ts server/tests/vms-catalog.test.ts server/tests/oms-master-bridge.test.ts server/tests/product-master-batch.test.ts server/tests/unmapped-candidates.test.ts server/tests/format-unmapped.test.ts desktop-agent/portal-login.test.ts",
+    "test": "node --import tsx --test --test-concurrency=1 server/tests/import.test.ts server/tests/spreadsheet-numbers.test.ts server/tests/marketplace-rules.test.ts server/tests/marketplace-ingestion.test.ts server/tests/oms.test.ts server/tests/oms-orders.test.ts server/tests/data-capture.test.ts server/tests/database-ssl.test.ts server/tests/register-rules.test.ts server/tests/register-db.test.ts server/tests/access.test.ts server/tests/upload-policy.test.ts server/tests/access-db.test.ts server/tests/scanner-list.test.ts server/tests/device-sessions.test.ts server/tests/email-reports.test.ts server/tests/continuous-scanning.test.ts server/tests/security-operations.test.ts server/tests/auth-persistent.test.ts server/tests/mobile-app.test.ts server/tests/shopify-sync.test.ts server/tests/omsguru-daily.test.ts server/tests/payment-sync.test.ts server/tests/unmapped-skus.test.ts server/tests/return-reasons.test.ts server/tests/iron.test.ts server/tests/iron-db.test.ts server/tests/flyer.test.ts server/tests/claims.test.ts server/tests/claim-automation.test.ts server/tests/vms-catalog.test.ts server/tests/oms-master-bridge.test.ts server/tests/product-master-batch.test.ts server/tests/unmapped-candidates.test.ts server/tests/format-unmapped.test.ts desktop-agent/portal-login.test.ts desktop-agent/panel-queue.test.ts",
     "user:create": "tsx server/scripts/create-user.ts",
     "load:master": "tsx server/scripts/load-product-master.ts",
     "layout:inspect": "tsx server/scripts/inspect-layout.ts",
@@ -84,6 +88,25 @@
         "nsis"
       ],
       "icon": "public/app-icon.ico"
+    },
+    "linux": {
+      "artifactName": "Return.App.Setup.${version}.${ext}",
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "icon": "public/app-icon-512.png",
+      "category": "Office",
+      "description": "Youthnic Return App - panel-wise continuous marketplace claim filing for warehouse PCs"
+    },
+    "mac": {
+      "artifactName": "Return.App.Setup.${version}.${ext}",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "icon": "public/app-icon-512.png",
+      "category": "public.app-category.business"
     },
     "nsis": {
       "oneClick": false,
