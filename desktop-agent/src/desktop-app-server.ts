@@ -10,6 +10,8 @@ import { getAutomationEngine } from "./marketplaces/registry.js"
 import { currentOperator, loginOperator, logoutOperator } from "./operator-session.js"
 import { closePortalLoginBrowser, holdPortalBrowser, listPortalLogins, PORTAL_CHANNELS, profileDirFor, queueOneClaim, readSessionSavedAt, savePortalLogin, testPortalLogin } from "./portal-login.js"
 import { clearPanelHold, getPanelStatuses, markPanelBusy, markPanelResult, panelKeyForMarketplace } from "./panel-queue.js"
+import { localEncryptionAvailable } from "./local-secrets.js"
+import { checkForUpdates } from "./update-check.js"
 
 export type DesktopBotControl = {
   isRunning: () => boolean
@@ -377,6 +379,17 @@ function getDashboardHtml(): string {
   </div>
 
   <main inert>
+    <section class="panel" id="onboarding" style="padding: 16px 18px;">
+      <div class="panel-title" style="margin-bottom: 4px;">First-time setup — connect each supplier panel <span id="onboarding-count" style="font-size: 11px; font-weight: normal; color: var(--muted);"></span></div>
+      <p style="color: var(--muted); font-size: 12px; line-height: 1.5; margin-bottom: 12px;">Do one panel at a time. For each marketplace, save the supplier ID and password, then sign in: the supplier page opens in a visible browser window. Complete any OTP or CAPTCHA there yourself — the cookies are saved on this PC so sign-in sticks across restarts. A panel whose session expires drops back to Connect here.</p>
+      <div id="onboarding-steps" style="display: grid; gap: 8px;"></div>
+      <div style="display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 12px; font-size: 12px; color: var(--muted);">
+        <span id="security-line">Checking credential storage…</span>
+        <button class="btn btn-secondary" type="button" onclick="checkUpdates()">Check for updates</button>
+        <span id="update-result"></span>
+      </div>
+    </section>
+
     <section class="panel" id="portal-setup" style="padding: 16px 18px;">
       <div class="panel-title" style="margin-bottom: 6px;">Supplier login, then one claim</div>
       <p style="color: var(--muted); font-size: 12px; line-height: 1.5; margin-bottom: 12px;">Do one marketplace at a time. Leave the ID and password blank to use the bot login already saved on the web. Test login opens the system browser, signs in, and stores the cookies on this PC. If a code appears, type it in that window before closing it.</p>
@@ -802,8 +815,86 @@ function getDashboardHtml(): string {
           return;
         }
         status.textContent = (data.channels || []).map((channel) => channel.name + ': ' + (channel.configured ? 'ID saved' : 'no ID') + (channel.sessionSavedAt ? ', cookies saved' : ', cookies not saved')).join(' · ');
+        renderOnboarding(data.channels || []);
       } catch (err) {
         status.textContent = '';
+      }
+    }
+
+    function renderOnboarding(channels) {
+      const section = document.getElementById('onboarding');
+      const box = document.getElementById('onboarding-steps');
+      if (!channels.length) {
+        section.style.display = 'none';
+        return;
+      }
+      const done = channels.filter((c) => c.sessionSavedAt).length;
+      document.getElementById('onboarding-count').textContent = '(' + done + ' of ' + channels.length + ' connected)';
+      if (done === channels.length) {
+        box.innerHTML = '<div style="font-size:12px;color:#6ee7b7;">✓ All panels connected. If a panel signs out or its cookies expire, its Connect button reappears here.</div>';
+        return;
+      }
+      box.innerHTML = channels.map((c, i) => {
+        const ready = Boolean(c.sessionSavedAt);
+        const state = ready ? '✓ Connected — cookies saved' : (c.configured ? 'ID saved — sign in again to refresh the session' : 'Not connected');
+        const color = ready ? '#6ee7b7' : (c.configured ? '#fbbf24' : 'var(--muted)');
+        return '<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;background:#080f0d;border:1px solid var(--line);border-radius:8px;padding:8px 12px;">' +
+          '<span style="font-size:12px;font-weight:700;min-width:150px;">' + (i + 1) + '. ' + c.name + '</span>' +
+          '<span style="font-size:11px;color:' + color + ';flex:1;min-width:200px;">' + state + '</span>' +
+          (ready
+            ? '<button class="btn btn-secondary" type="button" data-name="' + c.name + '" onclick="wizardSelect(this.dataset.name, true)">Reconnect</button>'
+            : '<button class="btn btn-primary" type="button" data-name="' + c.name + '" data-configured="' + (c.configured ? '1' : '') + '" onclick="wizardSelect(this.dataset.name, this.dataset.configured)">Connect</button>') +
+          '</div>';
+      }).join('');
+    }
+
+    async function wizardSelect(name, configured) {
+      const select = document.getElementById('portal-marketplace');
+      const match = Array.from(select.options).find((option) => name.toLowerCase().includes(option.value.toLowerCase()));
+      if (match) select.value = match.value;
+      if (configured) {
+        await testPortal();
+        await loadPortalLogins();
+      } else {
+        focusLogin(name);
+      }
+    }
+
+    async function loadSecurityLine() {
+      const line = document.getElementById('security-line');
+      try {
+        const res = await fetch('/api/security');
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) return;
+        line.textContent = (data.osCredentialStore ? '🔒 Credentials encrypted (OS store). ' : '⚠️ Credentials in local files (OS store unavailable). ') + (data.detail || '');
+      } catch {
+        line.textContent = '';
+      }
+    }
+
+    async function checkUpdates() {
+      const out = document.getElementById('update-result');
+      out.textContent = 'Checking…';
+      try {
+        const res = await fetch('/api/updates/check');
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          out.textContent = data.error || 'Update check needs sign-in.';
+          return;
+        }
+        if (!data.updateAvailable) {
+          out.textContent = 'Up to date (this app: ' + (data.currentVersion || '?') + ').';
+          return;
+        }
+        const list = data.downloads || [];
+        const platform = (navigator.platform || '').toLowerCase();
+        const wantExt = platform.includes('win') ? '.exe' : (platform.includes('mac') ? '.dmg' : '.deb');
+        const best = list.find((d) => (d.name || '').toLowerCase().endsWith(wantExt)) || list[0];
+        out.innerHTML = 'Update available: ' + data.latestTag +
+          (best ? ' — <a href="' + best.url + '" target="_blank" rel="noopener" style="color:#6ee7b7;font-weight:700;">Download ' + best.name + '</a>' : '') +
+          ' (install it over this version; supplier cookies are kept).';
+      } catch {
+        out.textContent = 'Update check failed (offline?).';
       }
     }
 
@@ -896,6 +987,7 @@ function getDashboardHtml(): string {
     // Initial load
     loadOperator();
     loadPortalLogins();
+    loadSecurityLine();
     loadStatus();
     loadJobs();
     loadPanels();
@@ -903,6 +995,7 @@ function getDashboardHtml(): string {
     setInterval(loadStatus, 2000);
     setInterval(loadJobs, 10000);
     setInterval(loadPanels, 5000);
+    setInterval(loadPortalLogins, 30000);
   </script>
 </body>
 </html>`
@@ -1119,6 +1212,29 @@ export function startDesktopAppServer(port = 3005, control?: DesktopBotControl):
         const result = await client.testConnection()
         res.writeHead(200, { "Content-Type": "application/json" })
         res.end(JSON.stringify(result))
+        return
+      }
+
+      if (url.pathname === "/api/security") {
+        if (!operatorSignedIn) {
+          sendJson(res, 401, { error: "Sign in before viewing security status." })
+          return
+        }
+        sendJson(res, 200, {
+          osCredentialStore: localEncryptionAvailable(),
+          detail: localEncryptionAvailable()
+            ? "Operator token and PC API key are encrypted with the OS credential store on this machine."
+            : "OS credential store is not available here; secrets use the local file format. They are encrypted automatically when the packaged app runs.",
+        })
+        return
+      }
+
+      if (url.pathname === "/api/updates/check") {
+        if (!operatorSignedIn) {
+          sendJson(res, 401, { error: "Sign in before checking for updates." })
+          return
+        }
+        sendJson(res, 200, await checkForUpdates())
         return
       }
 

@@ -1,6 +1,7 @@
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
+import { protectSecret, revealSecret } from "./local-secrets.js"
 
 export type AgentConfig = {
   agentUuid: string
@@ -65,7 +66,7 @@ export function loadAgentConfig(): AgentConfig {
     agentUuid: process.env.AGENT_UUID || saved.agentUuid || defaultUuid,
     agentName: process.env.AGENT_NAME || saved.agentName || `Warehouse-Agent-${hostname}`,
     backendUrl,
-    apiKey: process.env.AGENT_API_KEY || saved.apiKey || "",
+    apiKey: process.env.AGENT_API_KEY || revealSecret(saved.apiKey || "") || "",
     pollIntervalMs: Number(process.env.POLL_INTERVAL_MS || saved.pollIntervalMs || 10000),
     heartbeatIntervalMs: Number(process.env.HEARTBEAT_INTERVAL_MS || saved.heartbeatIntervalMs || 15000),
     browserMode: (process.env.BROWSER_MODE || saved.browserMode || "visible") as "visible" | "headless",
@@ -78,7 +79,7 @@ export function loadAgentConfig(): AgentConfig {
   // Persist if first run or if legacy localhost URL was upgraded
   if (!fs.existsSync(configFile) || saved.backendUrl !== backendUrl) {
     try {
-      fs.writeFileSync(configFile, JSON.stringify(config, null, 2), "utf8")
+      fs.writeFileSync(configFile, JSON.stringify({ ...config, apiKey: protectSecret(config.apiKey) }, null, 2), "utf8")
     } catch {
       // ignore
     }
@@ -96,7 +97,7 @@ export function saveAgentConfig(updates: Partial<AgentConfig>): AgentConfig {
   const homeDir = os.homedir()
   const configFile = path.join(homeDir, ".taskflow-claim-agent", "config.json")
   try {
-    fs.writeFileSync(configFile, JSON.stringify(updated, null, 2), "utf8")
+    fs.writeFileSync(configFile, JSON.stringify({ ...updated, apiKey: protectSecret(updated.apiKey) }, null, 2), "utf8")
   } catch {
     // ignore
   }
