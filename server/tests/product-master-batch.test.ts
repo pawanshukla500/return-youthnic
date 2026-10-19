@@ -4,7 +4,10 @@ import {
   MASTER_BATCH_LIMIT,
   MASTER_STAGING_TTL_MS,
   clampMasterBatchLimit,
+  inheritBlankMasterImages,
+  inheritedImageCount,
   masterBatchProgress,
+  masterSkuKey,
   requireStagedMasterImport,
   takeMasterBatch,
   type StagedMasterImport,
@@ -38,6 +41,7 @@ function synEntry(overrides: Partial<StagedMasterImport> = {}): StagedMasterImpo
     inserted: 0,
     removed: 0,
     replaced: false,
+    imagesFilled: 0,
     ...overrides,
   }
 }
@@ -140,6 +144,47 @@ test("requireStagedMasterImport rejects an expired staging (400) and forgets it"
   assert.equal(result.status, 400)
   assert.equal(result.message, "That file preview expired. Upload it again.")
   assert.equal(staged.has("SYN-upload-3"), false)
+})
+
+test("a blank listing takes the image already known for that product SKU", () => {
+  const rows = [
+    synRow(1),
+    { ...synRow(2), masterSku: "SYN-MASTER-1", imageUrl: "" },
+    { ...synRow(3), masterSku: "SYN-MASTER-1", imageUrl: "https://img.example.invalid/SYN-1.jpg" },
+    { ...synRow(4), masterSku: "SYN-MASTER-9", imageUrl: "" },
+  ]
+  rows[0].imageUrl = ""
+  const stored = new Map<string, string>([
+    [masterSkuKey("SYN-MASTER-9"), "https://img.example.invalid/SYN-stored.jpg"],
+    [masterSkuKey("SYN-MASTER-1"), "https://img.example.invalid/SYN-old.jpg"],
+  ])
+  const filled = inheritBlankMasterImages(rows, stored)
+  assert.equal(filled[0].imageUrl, "https://img.example.invalid/SYN-1.jpg")
+  assert.equal(filled[1].imageUrl, "https://img.example.invalid/SYN-1.jpg")
+  assert.equal(filled[2].imageUrl, "https://img.example.invalid/SYN-1.jpg")
+  assert.equal(filled[3].imageUrl, "https://img.example.invalid/SYN-stored.jpg")
+  assert.equal(inheritedImageCount(rows, filled), 3)
+})
+
+test("an image already on a listing is not replaced by another product SKU image", () => {
+  const rows = [
+    { ...synRow(1), imageUrl: "https://img.example.invalid/SYN-keep.jpg" },
+    { ...synRow(2), masterSku: "SYN-MASTER-1", imageUrl: "https://img.example.invalid/SYN-other.jpg" },
+  ]
+  const filled = inheritBlankMasterImages(rows, new Map([["syn-master-1", "https://img.example.invalid/SYN-stored.jpg"]]))
+  assert.equal(filled[0].imageUrl, "https://img.example.invalid/SYN-keep.jpg")
+  assert.equal(filled[1].imageUrl, "https://img.example.invalid/SYN-other.jpg")
+  assert.equal(inheritedImageCount(rows, filled), 0)
+})
+
+test("product SKU image matching ignores case", () => {
+  const rows = [
+    { ...synRow(1), masterSku: "SYN-Master-1", imageUrl: "" },
+    { ...synRow(2), masterSku: "syn-master-1", imageUrl: "https://img.example.invalid/SYN-case.jpg" },
+  ]
+  const filled = inheritBlankMasterImages(rows)
+  assert.equal(filled[0].imageUrl, "https://img.example.invalid/SYN-case.jpg")
+  assert.equal(masterSkuKey("  SYN-Master-1  "), "syn-master-1")
 })
 
 test("requireStagedMasterImport accepts a staging exactly at the TTL boundary", () => {

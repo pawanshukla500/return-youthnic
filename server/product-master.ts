@@ -150,14 +150,109 @@ export async function productMasterState(db: pg.Pool): Promise<ProductMasterStat
   }
 }
 
+// Product SKU key used to share one image across listing rows. Case and surrounding space do not make a new product.
+export function masterSkuKey(masterSku: string): string {
+  return masterSku.trim().toLowerCase()
+}
+
+// Fills blank image links from the same product SKU. A link already on the row stays. A link in this file wins over
+// one already stored. Stored links are keyed by masterSkuKey.
+export function inheritBlankMasterImages<T extends { masterSku: string; imageUrl: string }>(
+  rows: readonly T[],
+  storedByMasterSku: ReadonlyMap<string, string> = new Map(),
+): T[] {
+  const fromFile = new Map<string, string>()
+  for (const row of rows) {
+    const image = row.imageUrl.trim()
+    if (!image) continue
+    const key = masterSkuKey(row.masterSku)
+    if (key && !fromFile.has(key)) fromFile.set(key, image)
+  }
+  return rows.map((row) => {
+    if (row.imageUrl.trim()) return row
+    const key = masterSkuKey(row.masterSku)
+    if (!key) return row
+    const image = fromFile.get(key) || storedByMasterSku.get(key)?.trim() || ""
+    if (!image) return row
+    return { ...row, imageUrl: image }
+  })
+}
+
+// How many blank rows gained an image. Rows stay in the same order.
+export function inheritedImageCount(
+  before: readonly { imageUrl: string }[],
+  after: readonly { imageUrl: string }[],
+): number {
+  let filled = 0
+  const count = Math.min(before.length, after.length)
+  for (let index = 0; index < count; index++) {
+    if (!before[index].imageUrl.trim() && after[index].imageUrl.trim()) filled++
+  }
+  return filled
+}
+
+// Newest stored image for each product SKU in the list. Blank images are ignored.
+export async function loadStoredMasterImages(
+  db: pg.Pool | pg.PoolClient,
+  masterSkus: readonly string[],
+): Promise<Map<string, string>> {
+  const keys = [...new Set(masterSkus.map(masterSkuKey).filter(Boolean))]
+  const images = new Map<string, string>()
+  if (!keys.length) return images
+  const found = await db.query<{ master_key: string; image_url: string }>(
+    `SELECT DISTINCT ON (lower(btrim(master_sku)))
+       lower(btrim(master_sku)) AS master_key,
+       image_url
+     FROM product_master
+     WHERE btrim(image_url) <> ''
+       AND lower(btrim(master_sku)) = ANY($1::text[])
+     ORDER BY lower(btrim(master_sku)), updated_at DESC, listing_sku`,
+    [keys],
+  )
+  for (const row of found.rows) {
+    const image = String(row.image_url || "").trim()
+    if (image) images.set(String(row.master_key), image)
+  }
+  return images
+}
+
+// Writes a known product-SKU image onto listing rows that are still blank. A saved image is never replaced.
+// Pass no list to fill every product SKU that already has an image somewhere in the table.
+export async function pasteBlankMasterImages(
+  db: pg.Pool | pg.PoolClient,
+  masterSkus?: readonly string[],
+): Promise<number> {
+  const keys = masterSkus ? [...new Set(masterSkus.map(masterSkuKey).filter(Boolean))] : null
+  if (keys && !keys.length) return 0
+  const updated = await db.query(
+    `UPDATE product_master AS blank
+     SET image_url = donor.image_url,
+         updated_at = now()
+     FROM (
+       SELECT DISTINCT ON (lower(btrim(master_sku)))
+         lower(btrim(master_sku)) AS master_key,
+         image_url
+       FROM product_master
+       WHERE btrim(image_url) <> ''
+         AND ($1::text[] IS NULL OR lower(btrim(master_sku)) = ANY($1::text[]))
+       ORDER BY lower(btrim(master_sku)), updated_at DESC, listing_sku
+     ) AS donor
+     WHERE btrim(blank.image_url) = ''
+       AND lower(btrim(blank.master_sku)) = donor.master_key`,
+    [keys],
+  )
+  return updated.rowCount ?? 0
+}
+
 // Incrementally merges/upserts product master rows without deleting previously loaded data.
 // Adds new mappings and updates existing ones on conflict (marketplace, listing_sku).
+// A blank image cell is then filled from any other row of the same product SKU that already has a link.
 export async function upsertProductMaster(
   db: pg.Pool,
   actor: Actor,
   rows: MasterRow[],
   filename: string,
-): Promise<{ inserted: number; total: number; lastLoadedAt: string }> {
+): Promise<{ inserted: number; total: number; lastLoadedAt: string; imagesFilled: number }> {
   if (!rows.length) {
     throw new ServiceError(400, "No row has both a listing SKU and a product SKU. Nothing was loaded.")
   }
@@ -187,18 +282,20 @@ export async function upsertProductMaster(
       )
       affected += (res.rowCount ?? 0)
     }
+    const imagesFilled = await pasteBlankMasterImages(client, rows.map((row) => row.masterSku))
 
     await writeAudit(client, actor.id, "product_master.upsert", "product_master", "all", {
       filename,
       rows: rows.length,
       affected,
+      imagesFilled,
     })
 
     // Candidate-aware flip: variant rows (spaceless, parent article-suffix) resolve too.
     await flipResolvedUnmappedRows(client)
 
     await client.query("COMMIT")
-    return { inserted: affected, total: rows.length, lastLoadedAt: formatUploadLabel() }
+    return { inserted: affected, total: rows.length, lastLoadedAt: formatUploadLabel(), imagesFilled }
   } catch (error) {
     await client.query("ROLLBACK")
     throw error
@@ -214,16 +311,19 @@ export async function replaceProductMaster(
   actor: Actor,
   rows: MasterRow[],
   filename: string,
-): Promise<{ inserted: number; removed: number; lastLoadedAt: string }> {
+): Promise<{ inserted: number; removed: number; lastLoadedAt: string; imagesFilled: number }> {
   if (!rows.length) {
     throw new ServiceError(400, "No row has both a listing SKU and a product SKU. Nothing was loaded.")
   }
   const client = await db.connect()
   try {
     await client.query("BEGIN")
+    const donors = await loadStoredMasterImages(client, rows.map((row) => row.masterSku))
+    const ready = inheritBlankMasterImages(rows, donors)
+    const imagesFromFile = inheritedImageCount(rows, ready)
     const removed = await client.query("DELETE FROM product_master")
-    for (let start = 0; start < rows.length; start += CHUNK) {
-      const chunk = rows.slice(start, start + CHUNK)
+    for (let start = 0; start < ready.length; start += CHUNK) {
+      const chunk = ready.slice(start, start + CHUNK)
       const values: unknown[] = []
       const groups = chunk.map((row) => {
         const base = values.length
@@ -236,17 +336,19 @@ export async function replaceProductMaster(
         values,
       )
     }
+    const imagesFilled = imagesFromFile + await pasteBlankMasterImages(client, ready.map((row) => row.masterSku))
     await writeAudit(client, actor.id, "product_master.replace", "product_master", "all", {
       filename,
       rows: rows.length,
       removed: removed.rowCount ?? 0,
+      imagesFilled,
     })
 
     // Candidate-aware flip: variant rows (spaceless, parent article-suffix) resolve too.
     await flipResolvedUnmappedRows(client)
 
     await client.query("COMMIT")
-    return { inserted: rows.length, removed: removed.rowCount ?? 0, lastLoadedAt: formatUploadLabel() }
+    return { inserted: rows.length, removed: removed.rowCount ?? 0, lastLoadedAt: formatUploadLabel(), imagesFilled }
   } catch (error) {
     await client.query("ROLLBACK")
     throw error
@@ -512,6 +614,8 @@ export type StagedMasterImport = {
   // Replace mode only: rows removed by the one DELETE, and whether that DELETE already ran.
   removed: number
   replaced: boolean
+  // Blank image cells filled from another row of the same product SKU.
+  imagesFilled: number
 }
 
 // Caps a client-supplied batch limit at 500. Missing, zero, negative and non-numeric values mean 500.

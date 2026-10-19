@@ -1235,9 +1235,9 @@ export function summarizeProductMaster(
   }
 }
 
-// One entry point for the Admin preview: parse the file, then summarize it with a few sample rows.
-export function previewProductMaster(buffer: Buffer, filename: string, marketplaceOverride?: string): MasterPreview {
-  const parsed = parseProductMaster(buffer, filename, marketplaceOverride)
+// Summarizes one parsed product master. `rows` can be the parsed rows after blank images were filled from the
+// same product SKU, so the preview shows the link that will be stored.
+export function masterPreviewForRows(parsed: MasterParseResult, rows: MasterRow[] = parsed.rows): MasterPreview {
   if (parsed.fatal) {
     return {
       fatal: parsed.fatal,
@@ -1255,7 +1255,7 @@ export function previewProductMaster(buffer: Buffer, filename: string, marketpla
       sample: [],
     }
   }
-  const summary = summarizeProductMaster(parsed.rows)
+  const summary = summarizeProductMaster(rows)
   return {
     fatal: "",
     ...summary,
@@ -1263,13 +1263,18 @@ export function previewProductMaster(buffer: Buffer, filename: string, marketpla
     skipped: parsed.skipped,
     conflictCount: parsed.conflictCount,
     conflictSample: parsed.conflicts,
-    sample: parsed.rows.slice(0, 20).map((row) => ({
+    sample: rows.slice(0, 20).map((row) => ({
       listingSku: row.listingSku,
       masterSku: row.masterSku,
       category: row.category,
       imageUrl: row.imageUrl,
     })),
   }
+}
+
+// One entry point for the Admin preview: parse the file, then summarize it with a few sample rows.
+export function previewProductMaster(buffer: Buffer, filename: string, marketplaceOverride?: string): MasterPreview {
+  return masterPreviewForRows(parseProductMaster(buffer, filename, marketplaceOverride))
 }
 
 // Header row only. The template carries no sample data, so an unchanged copy cannot import a made-up return.

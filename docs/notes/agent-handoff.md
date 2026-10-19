@@ -35,7 +35,7 @@ Read this before the session log. The log below is history. This section is the 
 
 - **Run.** `npm run dev` serves the web app at `http://localhost:5173` and the API at `http://127.0.0.1:3001`. Production runs on Hostinger VPS inside Docker container `Return-App` (linked at `/docker/return-app` for hPanel Docker discovery) at `https://return.youthnic.shop`. Pages: `/`, `/scan`, `/register`, `/claims`, `/uploads`, `/admin` (`src/routes.ts`). Sign-in stays on the address you opened.
 - **Do not read `.env`.** Do not print `DATABASE_URL`, `TEST_DATABASE_URL`, OMSGuru credentials, or `NEW_USER_PASSWORD`. The live database name last read from `/api/health` was `return-scan_youthnic`.
-- **Product master & lookup returns.** 34,795 rows loaded in `product_master`. Active lookup returns (2,539 returns, 2,548 items), `product_master`, and user credentials remain intact for live warehouse operations.
+- **Product master & lookup returns.** On 2026-10-19 the operator asked for a clear so the catalog can be uploaded again. `product_master` on `return-scan_youthnic` is empty (91,696 mapping rows removed). `sku_catalog` was already empty. `unmapped_listing_skus` was left as it was (5,473 rows). Scans, uploads, returns, and user credentials were not touched.
 - **Listing SKU match.** Spaces are ignored. A short trailing token that is not a size (`_A`, `_Al`, `_NEW`) is also looked up without that token. `B126-kabira-Bottle Green_S_A` matches `B126-kabira-Bottle Green_S`. `_XL` is a size and is not stripped. `listingSkuCandidates` and `parentListingSku` in `server/marketplace-rules.ts`. `masterSkusForListings` in `server/lookup-import.ts`. The scan lookup and the register overlay an unresolved product SKU from the master. They do not rewrite the saved scan row.
 - **Catalog images.** `GET /api/catalog-image?url=` serves a stored http(s) image link. Flipkart `img.fkcdn.com` links are fetched at 416 pixels. Shopify links get `width=480`. A copy is kept in the machine temp folder.
 - **Partners.** A courier name that equals an alias, or starts with an alias of at least 6 characters, uses that partner. `delhiveryexpress` and `delhiversurface` are Delhivery. A tracking link does not name the partner. Marks are local files in `public/logos/partners/` (`src/partners.ts`).
@@ -2363,3 +2363,18 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
 - **Ran:** code inspection of `server/omsguru-daily.ts`, `server/schema-register.sql`, `server/oms/*`; GitHub release metadata read for v1.0.58.
 - **Not run:** the OMSGuru DB test locally (no `TEST_DATABASE_URL`; CI runs it); a live OMSGuru upload.
 - **The next agent must not:** send Iron Send units to OMSGuru; point the mobile updater at `/releases/latest`; let either release workflow delete or re-badge the other family's releases; add raw `type="date"` inputs (use `DateField`).
+
+### 2026-10-19, Cursor, Cleared the product SKU master for a fresh upload
+- **Changed:** No application code. Deleted every row in `product_master` on database `return-scan_youthnic` and wrote one `register_audit_log` row (`product_master.clear`). The one-off script was removed after the run.
+- **Ran:** `npx tsx server/scripts/_clear-product-master-once.ts` -> exit 0. Before: `product_master` 91,696, `sku_catalog` 0, `unmapped_listing_skus` 5,473. Removed 91,696. After: `product_master` 0, `sku_catalog` 0, `unmapped_listing_skus` 5,473.
+- **Not run:** `npm test`, `npm run typecheck`, `npm run build`. No other table was cleared.
+- **The next agent must not:** Delete scans, uploads, returns, audit history, `sku_catalog`, `oms_listings`, `oms_skus`, or `unmapped_listing_skus` unless the operator asks. Do not drop `product_master`.
+- **Open for the user:** Upload the product SKU file again from Admin → Product SKU master. The 5,473 unmapped listing rows are still there.
+
+### 2026-10-19, Cursor, Blank product-SKU images copy from the same product
+- **Changed:** A blank Channel Image URL is filled from another listing of the same product SKU when that product already has an image link. An image already saved on that listing is kept. Merge writes the link after upsert (`pasteBlankMasterImages`). Replace reads stored images before the delete, then inserts the filled rows. The OMSGuru master bridge does the same paste after its listing-image fill. Admin preview shows the link that will be stored.
+- **Files:** `server/product-master.ts`, `server/product-master-routes.ts`, `server/sheets.ts`, `server/oms/master-bridge.ts`, `server/scripts/load-product-master.ts`, `server/tests/product-master-batch.test.ts`, `src/pages/Admin.tsx`, `src/types.ts`.
+- **Ran:** `npx tsx --test server/tests/product-master-batch.test.ts server/tests/oms-master-bridge.test.ts server/tests/import.test.ts` -> 80 pass, 0 fail. `npx tsc --noEmit -p tsconfig.json` and `npx tsc --noEmit -p tsconfig.server.json` -> exit 0.
+- **Not run:** a live product-master upload. The table is still empty until the operator uploads the file.
+- **The next agent must not:** Overwrite a non-blank `product_master.image_url` when the uploaded cell is blank. Do not copy an image onto a different product SKU.
+- **Open for the user:** Upload the product SKU file again. Blank cells for a product SKU that already has an image, in the file or in the database, are filled on import.

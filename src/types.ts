@@ -621,7 +621,7 @@ export type ProductMasterImportBatch = {
   total: number
   done: boolean
   batchInserted: number
-  result?: { inserted: number; updated?: number; removed?: number; resolvedUnmapped?: number }
+  result?: { inserted: number; updated?: number; removed?: number; resolvedUnmapped?: number; imagesFilled?: number }
   state?: ProductMasterState
 }
 

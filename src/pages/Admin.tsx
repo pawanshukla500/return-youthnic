@@ -912,16 +912,19 @@ export function Admin() {
         }
         const result = data.result
         setProductMaster(data.state)
+        const imageText = result.imagesFilled
+          ? ` Filled ${result.imagesFilled.toLocaleString("en-US")} blank image links from the same product SKU.`
+          : ""
         if (mode === "replace") {
           setPmNotice(
-            `Replaced product master with ${result.inserted.toLocaleString("en-US")} listing SKUs. Removed ${result.removed?.toLocaleString("en-US") ?? 0} earlier rows.`,
+            `Replaced product master with ${result.inserted.toLocaleString("en-US")} listing SKUs. Removed ${result.removed?.toLocaleString("en-US") ?? 0} earlier rows.${imageText}`,
           )
         } else {
           const resolvedText = result.resolvedUnmapped
             ? ` Resolved and linked ${result.resolvedUnmapped.toLocaleString("en-US")} previously unmapped return items!`
             : ""
           setPmNotice(
-            `Successfully merged ${result.inserted.toLocaleString("en-US")} new and updated ${result.updated?.toLocaleString("en-US") ?? 0} listing SKUs.${resolvedText} All previous catalog mappings were preserved intact.`,
+            `Successfully merged ${result.inserted.toLocaleString("en-US")} new and updated ${result.updated?.toLocaleString("en-US") ?? 0} listing SKUs.${resolvedText}${imageText} All previous catalog mappings were preserved intact.`,
           )
         }
         setPmPreview(null)
@@ -1579,6 +1582,7 @@ export function Admin() {
               <p>
                 Channel listing SKU to VB EXPORT product SKU resolution, category and channel image links.
                 A specific marketplace mapping takes precedence over all-marketplaces rules.
+                A blank Channel Image URL is filled from another listing of the same product SKU when that product already has an image link. An image already saved on that listing is kept.
               </p>
             </div>
             <button
@@ -2056,7 +2060,16 @@ export function Admin() {
                         { key: "listing", header: "Channel Listing SKU", render: (r) => r.listingSku },
                         { key: "master", header: "Product SKU", render: (r) => r.masterSku },
                         { key: "category", header: "Category", render: (r) => r.category || "—" },
-                        { key: "image", header: "Image Link", render: (r) => (r.imageUrl ? "Yes ✓" : "—") },
+                        {
+                          key: "image",
+                          header: "Image Link",
+                          render: (r) =>
+                            r.imageUrl ? (
+                              <span title={r.imageUrl}>{r.imageUrl.length > 48 ? `${r.imageUrl.slice(0, 48)}…` : r.imageUrl}</span>
+                            ) : (
+                              "—"
+                            ),
+                        },
                       ]}
                       rows={pmPreview.sample.slice(0, 5)}
                       rowKey={(r) => r.listingSku}
