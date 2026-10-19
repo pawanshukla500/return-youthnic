@@ -97,6 +97,7 @@
       ],
       "icon": "public/app-icon-512.png",
       "category": "Office",
+      "maintainer": "Youthnic VB Exports <return.scan@youthnic.shop>",
       "description": "Youthnic Return App - panel-wise continuous marketplace claim filing for warehouse PCs"
     },
     "mac": {

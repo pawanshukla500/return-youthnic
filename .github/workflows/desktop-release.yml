@@ -64,11 +64,15 @@ jobs:
           - os: ubuntu-latest
             dist: "npm run desktop:dist:linux"
             artifact: return-app-linux-setup
-            glob: "dist-electron/Return.App.Setup.*.{AppImage,deb}"
+            glob: |
+              dist-electron/Return.App.Setup.*.AppImage
+              dist-electron/Return.App.Setup.*.deb
           - os: macos-latest
             dist: "npm run desktop:dist:mac"
             artifact: return-app-macos-setup
-            glob: "dist-electron/Return.App.Setup.*.{dmg,zip}"
+            glob: |
+              dist-electron/Return.App.Setup.*.dmg
+              dist-electron/Return.App.Setup.*.zip
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout Source Code
