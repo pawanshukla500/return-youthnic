@@ -10,7 +10,7 @@ Iron Send is an operational step, not a return issue. A unit that was received b
 |---|---|
 | Iron Send is not Wrong, Missing or Damaged. A scan with only Iron Send is a clear return (`outcome = 'clear'`, `status = 'Clear'`), never a claim. | `countsAsReturnIssue` (`server/register-rules.ts`), `recordScan` and `correctScanIssue` (`server/register-service.ts`) |
 | Iron Send is never counted in issue figures (overview, shift, claims, email, analytics issue units). | `outcome`-based figures; `is_operational` excluded in `server/analytics.ts` and `server/email-reports.ts` |
-| Iron Send units are never sent to OMSGuru. | `calculateGoodReturnsForDay` (`server/omsguru-daily.ts`) subtracts every non-missing issue, Iron Send included; `iron_send.is_missing` is `false`, so ironed units are removed from good stock and a fully-ironed line writes no row to `UpdateInStockQtyAnd_orLastPurchasePrice.csv`. Re-verified against the query on 2026-10-17 (`iron-db.test.ts` covers it in CI). |
+| Iron Send units are never sent to OMSGuru. | A scanned return with any non-missing issue, including Iron Send, is left out of `UpdateInStockQtyAnd_orLastPurchasePrice.csv` entirely (`aggregateInventoryByProductSku` in `server/omsguru-daily.ts`). A missing-only line still counts the units that arrived. |
 | The Return Team only records Iron Send (a tap at the scan bench, web or Android). | Scan bench |
 | Only the Inward Team (role `Inward`) or an Admin records units received back, by hand. | `receiveIron` / `canReceiveIron` (`server/iron.ts`), 403 for every other role |
 | Nothing marks Iron Send received automatically. | No scheduler or code path writes `iron_receive_events` except `POST /api/iron/:id/receive` |

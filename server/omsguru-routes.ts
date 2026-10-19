@@ -15,6 +15,7 @@ import {
   sendOmsguruDailyEmail,
   calculateGoodReturnsForDay,
   pruneOldOmsguruFiles,
+  normalizeDailyTime,
   type SkuUpdateItem,
 } from "./omsguru-daily.js"
 import { isFirebaseConfigured } from "./firebase-storage.js"
@@ -54,7 +55,11 @@ export function mountOmsguruRoutes(
     try {
       const db = getPool()
       const actorUserId = (req as SessionRequest).user.id
-      const updated = await updateOmsguruConfig(db, req.body || {}, actorUserId)
+      const body = req.body || {}
+      if (body.dailyTime !== undefined && !normalizeDailyTime(String(body.dailyTime))) {
+        return res.status(400).json({ error: "Daily time must be HH:MM in 24-hour form, for example 23:00." })
+      }
+      const updated = await updateOmsguruConfig(db, body, actorUserId)
       res.json({ config: updated, ok: true })
     } catch (error) {
       next(error)

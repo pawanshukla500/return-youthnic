@@ -4161,5 +4161,149 @@ button.catalog-image-wrap { width: 100%; padding: 0; border: 0; display: block; 
   margin-bottom: 14px;
 }
 
+.claim-template-create,
+.claim-template-list {
+  padding: 16px 18px 8px;
+}
+
+.claim-template-create h3,
+.claim-template-card h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.claim-template-create-grid,
+.claim-field-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px 12px;
+  align-items: end;
+  margin-top: 10px;
+}
+
+.claim-template-create-grid label,
+.claim-field-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #334155;
+}
+
+.claim-template-create-grid input,
+.claim-template-create-grid select,
+.claim-field-form input,
+.claim-field-form select {
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  font-size: 13px;
+  font-weight: 500;
+  color: #0f172a;
+}
+
+.claim-template-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding-bottom: 18px;
+}
+
+.claim-template-card {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 16px;
+  background: #fff;
+}
+
+.claim-template-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.claim-template-head p,
+.claim-template-description {
+  margin: 4px 0 0;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.claim-template-fields {
+  margin-top: 14px;
+}
+
+.claim-template-fields > strong {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #64748b;
+}
+
+.claim-template-table-wrap {
+  overflow-x: auto;
+}
+
+.claim-template-fields table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.claim-template-fields th,
+.claim-template-fields td {
+  padding: 8px 10px;
+  border-bottom: 1px solid #eef2f1;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.claim-template-fields th {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #64748b;
+  background: #f8fafc;
+}
+
+.claim-template-fields code {
+  font-size: 12px;
+}
+
+.claim-template-fields tr.inactive td {
+  color: #94a3b8;
+}
+
+.claim-field-form {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.claim-field-form label.claim-field-check {
+  flex-direction: row;
+  align-items: center;
+  align-self: end;
+  min-height: 36px;
+  gap: 6px;
+}
+
+.claim-template-create-grid button,
+.claim-field-form button {
+  height: 36px;
+  margin-left: 0;
+  justify-self: start;
+}
+
+.claim-field-form .form-error {
+  grid-column: 1 / -1;
+}
+
 
 

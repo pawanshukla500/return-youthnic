@@ -920,15 +920,14 @@ export function OmsguruDailyReport() {
                   Daily Scheduled Time (IST)
                 </label>
                 <input
-                  type="text"
+                  type="time"
                   className="input"
                   value={config.dailyTime}
-                  onChange={(e) => setConfig({ ...config, dailyTime: e.target.value.trim() })}
-                  placeholder="23:00"
+                  onChange={(e) => setConfig({ ...config, dailyTime: e.target.value })}
                   required
                 />
                 <small style={{ color: "var(--muted)", fontSize: "11px" }}>
-                  Set to 23:00 for 11:00 PM IST daily generation and email dispatch.
+                  23:00 is 11:00 PM IST. Supervisors receive the email. Admins are copied. You can change this time here or in Admin → System.
                 </small>
               </div>
 

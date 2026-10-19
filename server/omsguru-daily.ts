@@ -7,7 +7,8 @@
 
 import crypto from "node:crypto"
 import type pg from "pg"
-import { getIstDateParts, sendEmailViaResend, getAuthorizedRecipients } from "./email-reports.js"
+import { getIstDateParts, sendEmailViaResend } from "./email-reports.js"
+import { compactSkuKey, listingSkuCandidates, marketplaceRank } from "./marketplace-rules.js"
 import {
   uploadToFirebaseStorage,
   deleteFromFirebaseStorage,
@@ -41,6 +42,135 @@ export const DEFAULT_OMSGURU_CONFIG: OmsguruConfig = {
   retentionDays: 180,
   storageFolder: "inventory-update-file",
   ccEmails: [],
+}
+
+// Accepts "23:00" or "23:00:00" and returns 24-hour HH:MM. Anything else is rejected.
+export function normalizeDailyTime(value: string): string | null {
+  const match = value.trim().match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/)
+  if (!match) return null
+  const hour = Number(match[1])
+  const minute = Number(match[2])
+  if (!Number.isInteger(hour) || !Number.isInteger(minute) || hour > 23 || minute > 59) return null
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`
+}
+
+// "23:00" becomes "11:00 PM" for the email and the Admin screen.
+export function formatDailyTimeLabel(value: string): string {
+  const clock = normalizeDailyTime(value) || DEFAULT_OMSGURU_CONFIG.dailyTime
+  const [hourText, minuteText] = clock.split(":")
+  const hour = Number(hourText)
+  const suffix = hour >= 12 ? "PM" : "AM"
+  const hour12 = hour % 12 === 0 ? 12 : hour % 12
+  return `${hour12}:${minuteText} ${suffix}`
+}
+
+export type InventoryLine = {
+  orderKey: string
+  listingSku: string
+  productSku: string
+  marketplace: string
+  receivedQty: number
+  // Units marked with any non-missing issue, including Iron Send.
+  issueQty: number
+  itemId: number
+  trackingId: string
+  orderNumber: string
+}
+
+export type MasterListing = {
+  marketplace: string
+  listingSku: string
+  masterSku: string
+}
+
+// One Product SkuCode for a channel listing. A marketplace-specific master row beats an all-marketplaces row.
+// The parent listing (without an article suffix such as _You) is used when the exact listing is not stored.
+export function resolveProductSkuCode(
+  listingSku: string,
+  storedProductSku: string,
+  marketplace: string,
+  masters: readonly MasterListing[],
+): { sku: string; mapped: boolean } {
+  const listing = listingSku.trim()
+  const candidates = listingSkuCandidates(listing).map((candidate) => compactSkuKey(candidate))
+  let best: { sku: string; score: number } | null = null
+  for (let place = 0; place < candidates.length; place++) {
+    const compact = candidates[place]
+    if (!compact) continue
+    for (const row of masters) {
+      if (compactSkuKey(row.listingSku) !== compact) continue
+      const rank = marketplaceRank(row.marketplace, marketplace)
+      if (rank === 0) continue
+      const score = (candidates.length - place) * 10 + rank
+      const sku = row.masterSku.trim()
+      if (!sku) continue
+      if (!best || score > best.score) best = { sku, score }
+    }
+  }
+  if (best) return { sku: best.sku, mapped: true }
+  const stored = storedProductSku.trim()
+  if (stored && stored.toUpperCase() !== "UNRESOLVED" && compactSkuKey(stored) !== compactSkuKey(listing)) {
+    return { sku: stored, mapped: true }
+  }
+  return { sku: listing, mapped: false }
+}
+
+// Sums clear returns by Product SkuCode across every channel listing and marketplace.
+// An order with any non-missing issue, including Iron Send, is left out entirely.
+export function aggregateInventoryByProductSku(
+  lines: readonly InventoryLine[],
+  masters: readonly MasterListing[],
+): {
+  skus: SkuUpdateItem[]
+  totalQty: number
+  unmappedItems: UnmappedScannedItem[]
+  unmappedByMarketplace: Map<string, Set<string>>
+} {
+  const blockedOrders = new Set<string>()
+  for (const line of lines) {
+    if (line.issueQty > 0 && line.orderKey) blockedOrders.add(line.orderKey)
+  }
+
+  const buckets = new Map<string, { sku: string; qty: number; marketplaces: Record<string, number> }>()
+  const unmappedItems: UnmappedScannedItem[] = []
+  const unmappedByMarketplace = new Map<string, Set<string>>()
+
+  for (const line of lines) {
+    if (line.orderKey && blockedOrders.has(line.orderKey)) continue
+    if (line.issueQty > 0) continue
+    const qty = Math.max(0, Math.floor(line.receivedQty))
+    if (qty <= 0) continue
+
+    const resolved = resolveProductSkuCode(line.listingSku, line.productSku, line.marketplace, masters)
+    const masterSku = resolved.sku.trim()
+    if (!masterSku) continue
+    if (!resolved.mapped) {
+      unmappedItems.push({
+        itemId: line.itemId,
+        marketplace: line.marketplace || "Other",
+        trackingId: line.trackingId,
+        orderNumber: line.orderNumber,
+        listingSku: line.listingSku.trim(),
+        goodQty: qty,
+      })
+      const mpSet = unmappedByMarketplace.get(line.marketplace || "Other") ?? new Set<string>()
+      if (line.listingSku.trim()) mpSet.add(line.listingSku.trim())
+      unmappedByMarketplace.set(line.marketplace || "Other", mpSet)
+    }
+
+    const key = compactSkuKey(masterSku)
+    const existing = buckets.get(key) ?? { sku: masterSku, qty: 0, marketplaces: {} }
+    existing.qty += qty
+    const mp = line.marketplace || "Other"
+    existing.marketplaces[mp] = (existing.marketplaces[mp] || 0) + qty
+    buckets.set(key, existing)
+  }
+
+  const skus = [...buckets.values()]
+    .sort((a, b) => a.sku.localeCompare(b.sku))
+    .map((entry) => ({ sku: entry.sku, qty: entry.qty, marketplaces: entry.marketplaces }))
+  const totalQty = skus.reduce((sum, entry) => sum + entry.qty, 0)
+  return { skus, totalQty, unmappedItems, unmappedByMarketplace }
 }
 
 export type SkuUpdateItem = {
@@ -95,9 +225,9 @@ export async function getOmsguruConfig(db: pg.Pool): Promise<OmsguruConfig> {
     )
     if (result.rows[0]?.setting_value) {
       const stored = result.rows[0].setting_value as Partial<OmsguruConfig>
-      let dailyTime = stored.dailyTime || DEFAULT_OMSGURU_CONFIG.dailyTime
+      let dailyTime = normalizeDailyTime(stored.dailyTime || "") || DEFAULT_OMSGURU_CONFIG.dailyTime
       // Migrate from old 19:45 (7:45 PM) schedule to 23:00 (11:00 PM IST)
-      if (dailyTime === "19:45") {
+      if (stored.dailyTime === "19:45") {
         dailyTime = "23:00"
         db.query(
           "UPDATE app_system_settings SET setting_value = jsonb_set(setting_value, '{dailyTime}', '\"23:00\"') WHERE setting_key = 'omsguru_config'",
@@ -124,9 +254,13 @@ export async function updateOmsguruConfig(
   actorUserId: number,
 ): Promise<OmsguruConfig> {
   const current = await getOmsguruConfig(db)
+  const requestedTime = config.dailyTime !== undefined ? normalizeDailyTime(config.dailyTime) : current.dailyTime
+  if (config.dailyTime !== undefined && !requestedTime) {
+    throw new Error("Daily time must be HH:MM in 24-hour form, for example 23:00.")
+  }
   const updated: OmsguruConfig = {
     dailyEnabled: config.dailyEnabled ?? current.dailyEnabled,
-    dailyTime: config.dailyTime ?? current.dailyTime,
+    dailyTime: requestedTime || current.dailyTime,
     dropshipWarehouseId: config.dropshipWarehouseId ?? current.dropshipWarehouseId,
     retentionDays: Number(config.retentionDays ?? current.retentionDays),
     storageFolder: config.storageFolder ?? current.storageFolder,
@@ -165,25 +299,21 @@ export async function calculateGoodReturnsForDay(
 
   const sql = `
     SELECT
+      rs.id AS scan_id,
       rsi.id AS item_id,
-      rs.scanned_at,
       COALESCE(NULLIF(rs.scanned_tracking, ''), rs.tracking_id_snapshot, er.tracking_id, '') AS tracking_id,
       COALESCE(er.order_number, '') AS order_number,
       COALESCE(m.name, rs.marketplace_snapshot, 'Unknown') AS marketplace,
       COALESCE(rsi.marketplace_sku, '') AS marketplace_sku,
       COALESCE(rsi.product_sku, '') AS product_sku,
       rsi.received_qty,
-      COALESCE(issues.issue_qty, 0)::int AS issue_qty,
-      COALESCE(s.code, '') AS sku_code
+      COALESCE(issues.issue_qty, 0)::int AS issue_qty
     FROM receipt_scans rs
     JOIN receipt_scan_items rsi ON rsi.receipt_scan_id = rs.id
     LEFT JOIN expected_returns er ON er.id = rs.expected_return_id
     LEFT JOIN marketplaces m ON m.id = er.marketplace_id
-    LEFT JOIN expected_return_items eri ON eri.id = rsi.expected_return_item_id
-    LEFT JOIN skus s ON s.id = eri.sku_id
-    -- Units of a received line that are not good stock. Missing-item issues are left out, because a missing unit is
-    -- already not in received_qty. Damaged, wrong and other issues are counted, and so is Iron Send: an ironed unit is
-    -- never sent to OMSGuru (it is operational, and the Inward Team handles it when it comes back).
+    -- Missing-item issues are left out of this count, because a missing unit is already absent from received_qty.
+    -- Every other mark, including Iron Send, blocks the whole order from the inventory file.
     LEFT JOIN (
       SELECT x.receipt_scan_item_id, SUM(x.qty)::int AS issue_qty
       FROM receipt_scan_issues x
@@ -196,76 +326,52 @@ export async function calculateGoodReturnsForDay(
   `
 
   const res = await db.query(sql, [periodStart, periodEnd])
-  const rows = res.rows
-
-  // Collect missing master product SKUs that need product_master resolution
-  const needsMaster: { listing: string; marketplace: string }[] = []
-  for (const row of rows) {
-    const rawSku = String(row.product_sku || "").trim()
-    if (!rawSku || rawSku.toUpperCase() === "UNRESOLVED") {
-      const listing = String(row.marketplace_sku || "").trim()
-      if (listing) {
-        needsMaster.push({ listing, marketplace: String(row.marketplace) })
-      }
+  const lines: InventoryLine[] = res.rows.map((row) => {
+    const marketplace = String(row.marketplace || "Unknown")
+    const orderNumber = String(row.order_number || "").trim()
+    // One scanned return. An issue on any line of that return, including Iron Send, keeps the whole return out.
+    const orderKey = `scan:${Number(row.scan_id)}`
+    return {
+      orderKey,
+      listingSku: String(row.marketplace_sku || ""),
+      productSku: String(row.product_sku || ""),
+      marketplace,
+      receivedQty: Number(row.received_qty || 0),
+      issueQty: Number(row.issue_qty || 0),
+      itemId: Number(row.item_id),
+      trackingId: String(row.tracking_id || ""),
+      orderNumber,
     }
+  })
+
+  const compacts = new Set<string>()
+  for (const line of lines) {
+    if (line.issueQty > 0) continue
+    for (const candidate of listingSkuCandidates(line.listingSku)) {
+      const compact = compactSkuKey(candidate)
+      if (compact) compacts.add(compact)
+    }
+    const stored = compactSkuKey(line.productSku)
+    if (stored && stored !== "unresolved") compacts.add(stored)
   }
 
-  const masterMap = new Map<string, string>()
-  if (needsMaster.length) {
-    const listingSet = [...new Set(needsMaster.map((n) => n.listing.toLowerCase().replace(/\s+/g, "")))]
+  let masters: MasterListing[] = []
+  if (compacts.size) {
     const pmRes = await db.query(
-      `SELECT listing_sku, master_sku FROM product_master WHERE replace(lower(listing_sku), ' ', '') = ANY($1::text[])`,
-      [listingSet],
+      `SELECT marketplace, listing_sku, master_sku
+       FROM product_master
+       WHERE replace(lower(listing_sku), ' ', '') = ANY($1::text[])`,
+      [[...compacts]],
     )
-    for (const r of pmRes.rows) {
-      masterMap.set(String(r.listing_sku).toLowerCase().replace(/\s+/g, ""), String(r.master_sku))
-    }
+    masters = pmRes.rows.map((row) => ({
+      marketplace: String(row.marketplace || ""),
+      listingSku: String(row.listing_sku || ""),
+      masterSku: String(row.master_sku || ""),
+    }))
   }
 
-  // Aggregate by resolved Master Product SKU
-  const aggregation = new Map<string, { qty: number; marketplaces: Record<string, number> }>()
-  const unmappedItems: UnmappedScannedItem[] = []
-  const unmappedByMarketplace = new Map<string, Set<string>>()
-
-  for (const row of rows) {
-    const received = Number(row.received_qty || 0)
-    const issues = Number(row.issue_qty || 0)
-    const goodQty = Math.max(0, received - issues)
-    if (goodQty <= 0) continue // Skip items with issues or 0 good quantity
-
-    let masterSku = String(row.product_sku || "").trim()
-    if (!masterSku || masterSku.toUpperCase() === "UNRESOLVED") {
-      const listing = String(row.marketplace_sku || "").trim()
-      const normalizedKey = listing.toLowerCase().replace(/\s+/g, "")
-      const fromMaster = masterMap.get(normalizedKey)
-      const fromSkuCode = String(row.sku_code || "").trim()
-      const resolved = fromMaster || (fromSkuCode && fromSkuCode !== listing ? fromSkuCode : "")
-
-      if (resolved) {
-        masterSku = resolved
-      } else {
-        masterSku = listing
-        unmappedItems.push({
-          itemId: Number(row.item_id),
-          marketplace: String(row.marketplace || "Other"),
-          trackingId: String(row.tracking_id || ""),
-          orderNumber: String(row.order_number || ""),
-          listingSku: listing,
-          goodQty,
-        })
-        const mpSet = unmappedByMarketplace.get(String(row.marketplace || "Other")) ?? new Set()
-        mpSet.add(listing)
-        unmappedByMarketplace.set(String(row.marketplace || "Other"), mpSet)
-      }
-    }
-    if (!masterSku) continue
-
-    const existing = aggregation.get(masterSku) ?? { qty: 0, marketplaces: {} }
-    existing.qty += goodQty
-    const mp = String(row.marketplace || "Other")
-    existing.marketplaces[mp] = (existing.marketplaces[mp] || 0) + goodQty
-    aggregation.set(masterSku, existing)
-  }
+  const aggregated = aggregateInventoryByProductSku(lines, masters)
+  const { unmappedItems, unmappedByMarketplace } = aggregated
 
   // Auto-record any unmapped listing SKUs found in scans
   if (unmappedByMarketplace.size > 0) {
@@ -274,24 +380,10 @@ export async function calculateGoodReturnsForDay(
     }
   }
 
-  const skus: SkuUpdateItem[] = []
-  let totalQty = 0
-
-  const sortedKeys = [...aggregation.keys()].sort((a, b) => a.localeCompare(b))
-  for (const sku of sortedKeys) {
-    const data = aggregation.get(sku)!
-    skus.push({
-      sku,
-      qty: data.qty,
-      marketplaces: data.marketplaces,
-    })
-    totalQty += data.qty
-  }
-
   return {
-    skus,
-    totalSkus: skus.length,
-    totalQty,
+    skus: aggregated.skus,
+    totalSkus: aggregated.skus.length,
+    totalQty: aggregated.totalQty,
     unmappedItems,
   }
 }
@@ -464,6 +556,8 @@ export function renderOmsguruUpdateEmail(
   config: OmsguruConfig,
 ): { subject: string; html: string; text: string } {
   const formattedDate = formatDisplayDate(record.updateDate)
+  const clock = normalizeDailyTime(config.dailyTime) || DEFAULT_OMSGURU_CONFIG.dailyTime
+  const clockLabel = formatDailyTimeLabel(clock)
   const subject = `OMSGuru Daily Inventory Update — ${record.updateDate} (Req: ${record.requestId}) — ${fmt(record.totalQty)} Units (${fmt(record.totalSkus)} SKUs)`
 
   // Compute marketplace breakdown metrics
@@ -484,7 +578,7 @@ export function renderOmsguruUpdateEmail(
 Youthnic Returns — OMSGuru Daily Inventory Update
 ============================================================
 Date: ${record.updateDate} (Asia/Kolkata)
-Scheduled Dispatch: 23:00 IST (11:00 PM)
+Scheduled Dispatch: ${clock} IST (${clockLabel})
 Request ID: ${record.requestId}
 Dropship Warehouse ID: ${record.dropshipWarehouseId}
 Total Good Received Units: ${fmt(record.totalQty)}
@@ -492,7 +586,7 @@ Total Master SKUs to Update: ${fmt(record.totalSkus)}
 Active Marketplaces (${mpCount}): ${mpSummaryText}
 Storage Archive: ${record.storageUrl || record.storagePath || "Saved in PostgreSQL (180 days retention)"}
 ------------------------------------------------------------
-This file includes the combined sum of good physical returns received across all marketplace accounts today. Damaged / issue-marked items and Iron Send units are excluded.
+This file sums Product SkuCode quantities from every channel listing across all marketplaces. An order with any issue mark, including Iron Send, is left out. A missing-only line still counts the units that physically arrived.
 
 Top SKUs:
 ${record.skuBreakdown
@@ -556,7 +650,7 @@ Generated automatically by Return App: https://return.youthnic.shop
           </td>
           <td style="text-align: right; vertical-align: middle;">
             <span style="display: inline-block; padding: 6px 14px; background: rgba(255,255,255,0.18); border: 1px solid rgba(255,255,255,0.3); border-radius: 20px; font-size: 11px; font-weight: 700; color: #ffffff; letter-spacing: 0.5px;">
-              ● 23:00 IST DISPATCH
+              ● ${clock} IST DISPATCH
             </span>
           </td>
         </tr>
@@ -567,7 +661,7 @@ Generated automatically by Return App: https://return.youthnic.shop
         Your evening inventory briefing
       </h1>
       <div style="font-size: 13px; font-weight: 500; color: #d1fae5; letter-spacing: 0.1px;">
-        Daily inventory update · ${formattedDate} · 23:00 IST · Mon–Sun
+        Daily inventory update · ${formattedDate} · ${clock} IST (${clockLabel}) · Mon–Sun
       </div>
     </div>
 
@@ -578,7 +672,7 @@ Generated automatically by Return App: https://return.youthnic.shop
         Good evening, Team
       </h2>
       <p style="margin: 0 0 24px 0; font-size: 14px; line-height: 1.6; color: #475569;">
-        Here is today's verified return inventory update for OMSGuru. Only physical returns scanned in good condition across all marketplace accounts are included — damaged, defective, wrong items, and Iron Send units are excluded from restocking.
+        Here is today's OMSGuru inventory update. Each row is one Product SkuCode, summed from every channel listing across all marketplaces. Orders with any issue mark, including Iron Send, are left out.
       </p>
 
       <!-- 4-Card Horizontal Stat Grid (Table layout for universal email client compatibility) -->
@@ -617,7 +711,7 @@ Generated automatically by Return App: https://return.youthnic.shop
           Priority focus
         </div>
         <div style="font-size: 12.5px; color: #64748b; line-height: 1.5;">
-          0 issue units · <strong>${mpCount}</strong> marketplace channel${mpCount === 1 ? "" : "s"} active · ${mpSummaryText}
+          Issue-marked orders and Iron Send are left out · <strong>${mpCount}</strong> marketplace channel${mpCount === 1 ? "" : "s"} · ${mpSummaryText}
         </div>
       </div>
 
@@ -662,7 +756,7 @@ Generated automatically by Return App: https://return.youthnic.shop
                 <code>UpdateInStockQtyAnd_orLastPurchasePrice.csv</code>
               </div>
               <div style="font-size: 12px; color: #475569; margin-top: 2px;">
-                Aggregated sum of good returns today across all marketplaces · <strong>${fmt(record.totalQty)}</strong> units across <strong>${fmt(record.totalSkus)}</strong> unique SKUs
+                Product SkuCode totals across all marketplaces · <strong>${fmt(record.totalQty)}</strong> units across <strong>${fmt(record.totalSkus)}</strong> product SKUs
               </div>
             </td>
             <td style="vertical-align: middle; text-align: right;">
@@ -733,7 +827,7 @@ Generated automatically by Return App: https://return.youthnic.shop
     <!-- Footer -->
     <div class="footer">
       Generated automatically by <strong>TaskFlow Pro · Return Scan</strong> (Youthnic · VB Exports)<br />
-      Scheduled daily at <strong>11:00 PM IST (23:00)</strong> · Portal: <a href="https://return.youthnic.shop/register" style="color: #0f6b56; font-weight: 600;">return.youthnic.shop/register</a>
+      Scheduled daily at <strong>${clockLabel} IST (${clock})</strong> · Portal: <a href="https://return.youthnic.shop/register" style="color: #0f6b56; font-weight: 600;">return.youthnic.shop/register</a>
     </div>
   </div>
 </body>
@@ -741,6 +835,44 @@ Generated automatically by Return App: https://return.youthnic.shop
 `.trim()
 
   return { subject, html, text }
+}
+
+// Supervisors receive the inventory email. Admins are copied. Extra addresses in the OMSGuru settings are copied too.
+export async function omsguruDispatchList(
+  db: pg.Pool,
+  extraCc: readonly string[] = [],
+): Promise<{ to: string[]; cc: string[] }> {
+  const res = await db.query(
+    `SELECT email, role FROM users
+     WHERE status = 'Active' AND lower(role) IN ('admin', 'supervisor') AND btrim(email) <> ''
+     ORDER BY id`,
+  )
+  const to: string[] = []
+  const cc: string[] = []
+  const seen = new Set<string>()
+  for (const row of res.rows) {
+    const email = String(row.email || "").trim().toLowerCase()
+    if (!email || seen.has(email)) continue
+    if (String(row.role || "").toLowerCase() === "supervisor") {
+      to.push(email)
+      seen.add(email)
+    }
+  }
+  for (const row of res.rows) {
+    const email = String(row.email || "").trim().toLowerCase()
+    if (!email || seen.has(email)) continue
+    if (String(row.role || "").toLowerCase() === "admin") {
+      cc.push(email)
+      seen.add(email)
+    }
+  }
+  for (const extra of extraCc) {
+    const email = String(extra || "").trim().toLowerCase()
+    if (!email.includes("@") || seen.has(email)) continue
+    cc.push(email)
+    seen.add(email)
+  }
+  return { to, cc }
 }
 
 // Sends the email with CSV attachment via Resend
@@ -754,12 +886,12 @@ export async function sendOmsguruDailyEmail(
   if (!row) throw new Error(`OMSGuru update ${updateId} not found`)
 
   const config = await getOmsguruConfig(db)
-  const recipients = await getAuthorizedRecipients(db)
+  const dispatch = await omsguruDispatchList(db, config.ccEmails || [])
+  const recipients = dispatch.to
+  const cc = dispatch.cc
   if (!recipients.length) {
-    return { sent: false, recipients: [], cc: [], details: "No authorized recipients configured" }
+    return { sent: false, recipients: [], cc, details: "No active Supervisor is available to receive the inventory email" }
   }
-
-  const cc = config.ccEmails || []
 
   const record: OmsguruDailyUpdateRecord = {
     id: Number(row.id),

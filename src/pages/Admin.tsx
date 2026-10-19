@@ -194,6 +194,10 @@ export function Admin() {
   const [testReportType, setTestReportType] = useState<"daily" | "weekly">("daily")
   const [testReportBusy, setTestReportBusy] = useState(false)
   const [testReportResult, setTestReportResult] = useState<string | null>(null)
+  const [omsguruMail, setOmsguruMail] = useState<{ dailyEnabled: boolean; dailyTime: string } | null>(null)
+  const [savingOmsguruMail, setSavingOmsguruMail] = useState(false)
+  const [omsguruMailNotice, setOmsguruMailNotice] = useState("")
+  const [omsguruMailError, setOmsguruMailError] = useState("")
 
   // Session Security Settings state
   const [sessionConfig, setSessionConfig] = useState<SessionConfig | null>(null)
@@ -470,6 +474,7 @@ export function Admin() {
         history: [],
       })),
       api<{ config: SessionConfig }>("/api/admin/settings/sessions").catch(() => ({ config: null })),
+      api<{ config: { dailyEnabled: boolean; dailyTime: string } }>("/api/omsguru/config").catch(() => ({ config: null })),
     ])
       .then(
         ([
@@ -483,6 +488,7 @@ export function Admin() {
           sessionData,
           reportsData,
           sessionConfData,
+          omsguruMailData,
         ]) => {
           setUsers(userData.users)
           setIssues(optionData.options)
@@ -497,6 +503,12 @@ export function Admin() {
             setReportHistory(reportsData.history)
           }
           if (sessionConfData.config) setSessionConfig(sessionConfData.config)
+          if (omsguruMailData.config) {
+            setOmsguruMail({
+              dailyEnabled: omsguruMailData.config.dailyEnabled,
+              dailyTime: omsguruMailData.config.dailyTime,
+            })
+          }
           loadPaymentStatus()
           loadUnmappedSummary()
           void loadCredentials()
@@ -553,6 +565,26 @@ export function Admin() {
   }
 
   // Reports config actions
+  const saveOmsguruMail = async (event: FormEvent) => {
+    event.preventDefault()
+    if (!omsguruMail) return
+    setSavingOmsguruMail(true)
+    setOmsguruMailError("")
+    setOmsguruMailNotice("")
+    try {
+      const res = await api<{ config: { dailyEnabled: boolean; dailyTime: string } }>("/api/omsguru/config", {
+        method: "POST",
+        body: JSON.stringify({ dailyEnabled: omsguruMail.dailyEnabled, dailyTime: omsguruMail.dailyTime }),
+      })
+      setOmsguruMail({ dailyEnabled: res.config.dailyEnabled, dailyTime: res.config.dailyTime })
+      setOmsguruMailNotice("OMSGuru inventory email time saved.")
+    } catch (err) {
+      setOmsguruMailError(err instanceof Error ? err.message : "Could not save the OMSGuru email time.")
+    } finally {
+      setSavingOmsguruMail(false)
+    }
+  }
+
   const saveReportsConfig = async (e: FormEvent) => {
     e.preventDefault()
     if (!reportsConfig) return
@@ -2649,6 +2681,44 @@ export function Admin() {
               </form>
             )}
 
+            {omsguruMail && (
+              <form onSubmit={saveOmsguruMail} className="report-admin-card" style={{ marginTop: 16 }}>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: 16 }}>OMSGuru inventory email</h3>
+                  <p style={{ margin: "4px 0 0", color: "#64748b", fontSize: 12 }}>
+                    Sent to every active Supervisor. Active Admins are copied. The file totals each Product SkuCode across all marketplaces. Orders with any issue mark, including Iron Send, are left out.
+                  </p>
+                </div>
+                {omsguruMailNotice && <div className="form-success">{omsguruMailNotice}</div>}
+                {omsguruMailError && <div className="form-error">{omsguruMailError}</div>}
+                <div className="schedule-card" style={{ marginTop: 12 }}>
+                  <div className="schedule-card-head">
+                    <strong>Daily inventory update</strong>
+                    <label style={{ display: "flex", gap: 6, alignItems: "center", cursor: "pointer" }}>
+                      <input
+                        type="checkbox"
+                        checked={omsguruMail.dailyEnabled}
+                        onChange={(event) => setOmsguruMail({ ...omsguruMail, dailyEnabled: event.target.checked })}
+                      />
+                      <span style={{ fontSize: 12, fontWeight: 600 }}>Enabled</span>
+                    </label>
+                  </div>
+                  <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12 }}>
+                    <span style={{ fontWeight: 600, color: "#334155" }}>Delivery time (IST):</span>
+                    <input
+                      type="time"
+                      value={omsguruMail.dailyTime}
+                      onChange={(event) => setOmsguruMail({ ...omsguruMail, dailyTime: event.target.value })}
+                      style={{ padding: "4px 8px", borderRadius: 4, border: "1px solid var(--line)" }}
+                    />
+                  </label>
+                </div>
+                <button className="btn primary" type="submit" disabled={savingOmsguruMail} style={{ alignSelf: "flex-start", marginTop: 12 }}>
+                  {savingOmsguruMail ? "Saving..." : "Save inventory email time"}
+                </button>
+              </form>
+            )}
+
             {/* Test Report Section */}
             <div style={{ marginTop: 16, paddingTop: 16, borderTop: "1px solid var(--line)" }}>
               <strong style={{ fontSize: 13, color: "#1e293b" }}>Send Test Report (Admin only)</strong>
@@ -2893,6 +2963,10 @@ type ClaimTemplateDTO = {
   fields: ClaimTemplateFieldDTO[]
 }
 
+type FieldDraft = { key: string; label: string; type: string; required: boolean; min: number; max: number; maxMb: number }
+
+const emptyFieldDraft = (): FieldDraft => ({ key: "", label: "", type: "image", required: true, min: 1, max: 10, maxMb: 25 })
+
 function ClaimTemplatesTab() {
   const [templates, setTemplates] = useState<ClaimTemplateDTO[]>([])
   const [accounts, setAccounts] = useState<AccountRow[]>([])
@@ -2905,7 +2979,7 @@ function ClaimTemplatesTab() {
   const [createFormError, setCreateFormError] = useState("")
 
   // Field creation state
-  const [fieldDrafts, setFieldDrafts] = useState<Record<number, { key: string; label: string; type: string; required: boolean; min: number; max: number; maxMb: number }>>({})
+  const [fieldDrafts, setFieldDrafts] = useState<Record<number, FieldDraft>>({})
   const [fieldErrors, setFieldErrors] = useState<Record<number, string>>({})
 
   const load = () => {
@@ -2959,9 +3033,24 @@ function ClaimTemplatesTab() {
     }
   }
 
+  const updateDraft = (templateId: number, patch: Partial<FieldDraft>) => {
+    setFieldDrafts((current) => ({
+      ...current,
+      [templateId]: { ...(current[templateId] ?? emptyFieldDraft()), ...patch },
+    }))
+  }
+
   const addField = async (templateId: number) => {
-    const draft = fieldDrafts[templateId]
-    if (!draft || !draft.key.trim() || !draft.label.trim()) return
+    const draft = fieldDrafts[templateId] ?? emptyFieldDraft()
+    if (!draft.key.trim() || !draft.label.trim()) return
+    if (!Number.isInteger(draft.min) || !Number.isInteger(draft.max) || draft.min < 0 || draft.max < draft.min || draft.max > 20) {
+      setFieldErrors({ ...fieldErrors, [templateId]: "Min and max files must be whole numbers, and max must be at least the minimum (up to 20)." })
+      return
+    }
+    if (!Number.isInteger(draft.maxMb) || draft.maxMb < 1 || draft.maxMb > 100) {
+      setFieldErrors({ ...fieldErrors, [templateId]: "The file size limit must be a whole number from 1 to 100 MB." })
+      return
+    }
     setFieldErrors({ ...fieldErrors, [templateId]: "" })
     try {
       await api(`/api/admin/claims/templates/${templateId}/fields`, {
@@ -2977,7 +3066,7 @@ function ClaimTemplatesTab() {
           maxFileSizeMb: draft.maxMb,
         }),
       })
-      setFieldDrafts({ ...fieldDrafts, [templateId]: { key: "", label: "", type: "image", required: true, min: 1, max: 10, maxMb: 25 } })
+      setFieldDrafts((current) => ({ ...current, [templateId]: emptyFieldDraft() }))
       load()
     } catch (err) {
       setFieldErrors({ ...fieldErrors, [templateId]: err instanceof Error ? err.message : "Failed to add field" })
@@ -3005,196 +3094,205 @@ function ClaimTemplatesTab() {
         </div>
       </div>
 
-      {/* Create new template */}
-      <div style={{ padding: 16, borderBottom: "1px solid var(--line)" }}>
-        <h4 style={{ margin: "0 0 8px" }}>Create template</h4>
-        {createFormError && <div className="form-error" style={{ marginBottom: 8 }}>{createFormError}</div>}
-        <div className="filter-row">
-          <input
-            type="text"
-            placeholder="Template name"
-            value={newName}
-            onChange={(e) => setNewName(e.target.value)}
-            maxLength={120}
-            style={{ flex: 1 }}
-          />
-          <select value={newMarketplace} onChange={(e) => setNewMarketplace(e.target.value)}>
-            <option value="">All marketplaces</option>
-            {accounts.map((a) => (
-              <option key={a.id} value={a.id}>{a.name}</option>
-            ))}
-          </select>
-          <input
-            type="text"
-            placeholder="Description (optional)"
-            value={newDescription}
-            onChange={(e) => setNewDescription(e.target.value)}
-            style={{ flex: 1 }}
-          />
-          <button className="btn primary" disabled={!newName.trim() || creating} onClick={createTemplate}>
+      <form
+        className="claim-template-create"
+        onSubmit={(event) => {
+          event.preventDefault()
+          if (newName.trim() && !creating) void createTemplate()
+        }}
+      >
+        <h3>Create template</h3>
+        {createFormError && <div className="form-error">{createFormError}</div>}
+        <div className="claim-template-create-grid">
+          <label>
+            Template name
+            <input
+              type="text"
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              maxLength={120}
+              required
+            />
+          </label>
+          <label>
+            Marketplace
+            <select value={newMarketplace} onChange={(e) => setNewMarketplace(e.target.value)} aria-label="Marketplace for the new template">
+              <option value="">All marketplaces</option>
+              {accounts.map((a) => (
+                <option key={a.id} value={a.id}>{a.name}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Description
+            <input
+              type="text"
+              value={newDescription}
+              onChange={(e) => setNewDescription(e.target.value)}
+              placeholder="Optional"
+            />
+          </label>
+          <button
+            className="btn primary"
+            type="submit"
+            disabled={!newName.trim() || creating}
+            title={newName.trim() ? "Create this claim template" : "Enter a template name first"}
+          >
             {creating ? "Creating…" : "Create"}
           </button>
         </div>
-      </div>
+      </form>
 
-      {/* Template list */}
-      <div style={{ padding: 16 }}>
+      <div className="claim-template-list">
         {templates.length === 0 ? (
           <p className="muted">No claim templates configured. Create one above.</p>
         ) : (
-          <div className="account-grid-v2">
-            {templates.map((tpl) => (
-              <div className="account-card-v2" key={tpl.id}>
-                <div className="account-card-header">
+          templates.map((tpl) => {
+            const draft = fieldDrafts[tpl.id] ?? emptyFieldDraft()
+            const canAdd = Boolean(draft.key.trim() && draft.label.trim())
+            return (
+              <article className="claim-template-card" key={tpl.id}>
+                <header className="claim-template-head">
                   <div>
-                    <h4>{tpl.name}</h4>
-                    <p style={{ fontSize: 11, color: "#64748b" }}>{tpl.marketplaceName}</p>
+                    <h3>{tpl.name}</h3>
+                    <p>{tpl.marketplaceName}</p>
                   </div>
                   <Badge tone={tpl.active ? "success" : "neutral"}>{tpl.active ? "Active" : "Inactive"}</Badge>
-                </div>
-                {tpl.description && <p style={{ fontSize: 12, color: "#475569", margin: "4px 0 8px" }}>{tpl.description}</p>}
+                </header>
+                {tpl.description ? <p className="claim-template-description">{tpl.description}</p> : null}
 
-                {/* Fields */}
-                <div style={{ marginTop: 8 }}>
-                  <strong style={{ fontSize: 11, textTransform: "uppercase", color: "#64748b" }}>Fields</strong>
+                <div className="claim-template-fields">
+                  <strong>Fields</strong>
                   {tpl.fields.length === 0 ? (
-                    <p className="muted" style={{ fontSize: 12 }}>No fields defined.</p>
+                    <p className="muted">No fields defined.</p>
                   ) : (
-                    <table className="media-table" style={{ marginTop: 6 }}>
-                      <thead>
-                        <tr>
-                          <th>Key</th>
-                          <th>Label</th>
-                          <th>Type</th>
-                          <th>Required</th>
-                          <th>Limits</th>
-                          <th></th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {tpl.fields.map((f) => (
-                          <tr key={f.id} className={f.active ? "" : "inactive"}>
-                            <td>{f.fieldKey}</td>
-                            <td>{f.fieldLabel}</td>
-                            <td>{f.fieldType}</td>
-                            <td>{f.required ? "Yes" : "No"}</td>
-                            <td>{f.minCount}-{f.maxCount} files, {f.maxFileSizeMb} MB each</td>
-                            <td>
-                              {f.active && (
-                                <button className="btn secondary small" onClick={() => deactivateField(f.id, tpl.id)}>
-                                  Deactivate
-                                </button>
-                              )}
-                            </td>
+                    <div className="claim-template-table-wrap">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>Key</th>
+                            <th>Label</th>
+                            <th>Type</th>
+                            <th>Required</th>
+                            <th>Limits</th>
+                            <th></th>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                        </thead>
+                        <tbody>
+                          {tpl.fields.map((f) => (
+                            <tr key={f.id} className={f.active ? undefined : "inactive"}>
+                              <td><code>{f.fieldKey}</code></td>
+                              <td>{f.fieldLabel}</td>
+                              <td>{f.fieldType}</td>
+                              <td>{f.required ? "Yes" : "No"}</td>
+                              <td>{f.minCount}–{f.maxCount} files, {f.maxFileSizeMb} MB each</td>
+                              <td>
+                                {f.active ? (
+                                  <button className="btn secondary small" type="button" onClick={() => deactivateField(f.id, tpl.id)}>
+                                    Deactivate
+                                  </button>
+                                ) : (
+                                  <span className="muted">Inactive</span>
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
                   )}
                 </div>
 
-                {/* Add field */}
-                <div style={{ marginTop: 8, borderTop: "1px solid var(--line)", paddingTop: 8 }}>
-                  {fieldErrors[tpl.id] && <div className="form-error" style={{ marginBottom: 4 }}>{fieldErrors[tpl.id]}</div>}
-                  <div className="filter-row" style={{ flexWrap: "wrap", gap: 4 }}>
+                <form
+                  className="claim-field-form"
+                  onSubmit={(event) => {
+                    event.preventDefault()
+                    if (canAdd) void addField(tpl.id)
+                  }}
+                >
+                  {fieldErrors[tpl.id] ? <div className="form-error">{fieldErrors[tpl.id]}</div> : null}
+                  <label>
+                    Field key
                     <input
                       type="text"
-                      placeholder="field_key"
-                      value={fieldDrafts[tpl.id]?.key || ""}
-                      onChange={(e) => setFieldDrafts({
-                        ...fieldDrafts,
-                        [tpl.id]: { ...(fieldDrafts[tpl.id] || { key: "", label: "", type: "image", required: true, min: 1, max: 10, maxMb: 25 }), key: e.target.value },
-                      })}
-                      style={{ width: 120 }}
+                      value={draft.key}
+                      placeholder="product_images"
+                      onChange={(e) => updateDraft(tpl.id, { key: e.target.value })}
                     />
+                  </label>
+                  <label>
+                    Field label
                     <input
                       type="text"
-                      placeholder="Field label"
-                      value={fieldDrafts[tpl.id]?.label || ""}
-                      onChange={(e) => setFieldDrafts({
-                        ...fieldDrafts,
-                        [tpl.id]: { ...(fieldDrafts[tpl.id] || { key: "", label: "", type: "image", required: true, min: 1, max: 10, maxMb: 25 }), label: e.target.value },
-                      })}
-                      style={{ width: 120 }}
+                      value={draft.label}
+                      placeholder="Product images"
+                      onChange={(e) => updateDraft(tpl.id, { label: e.target.value })}
                     />
-                    <select
-                      value={fieldDrafts[tpl.id]?.type || "image"}
-                      onChange={(e) => setFieldDrafts({
-                        ...fieldDrafts,
-                        [tpl.id]: { ...(fieldDrafts[tpl.id] || { key: "", label: "", type: "image", required: true, min: 1, max: 10, maxMb: 25 }), type: e.target.value },
-                      })}
-                      style={{ width: 90 }}
-                    >
+                  </label>
+                  <label>
+                    Type
+                    <select value={draft.type} aria-label={`Field type for ${tpl.name}`} onChange={(e) => updateDraft(tpl.id, { type: e.target.value })}>
                       <option value="image">Image</option>
                       <option value="video">Video</option>
                       <option value="document">Document</option>
                     </select>
-                    <label style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12 }}>
-                      <input
-                        type="checkbox"
-                        checked={fieldDrafts[tpl.id]?.required ?? true}
-                        onChange={(e) => setFieldDrafts({
-                          ...fieldDrafts,
-                          [tpl.id]: { ...(fieldDrafts[tpl.id] || { key: "", label: "", type: "image", required: true, min: 1, max: 10, maxMb: 25 }), required: e.target.checked },
-                        })}
-                      />
-                      Required
-                    </label>
+                  </label>
+                  <label className="claim-field-check">
+                    <input
+                      type="checkbox"
+                      checked={draft.required}
+                      onChange={(e) => updateDraft(tpl.id, { required: e.target.checked })}
+                    />
+                    Required
+                  </label>
+                  <label>
+                    Min files
                     <input
                       type="number"
                       min={0}
                       max={20}
-                      title="Minimum required files"
-                      value={fieldDrafts[tpl.id]?.min ?? 1}
-                      onChange={(e) => setFieldDrafts({
-                        ...fieldDrafts,
-                        [tpl.id]: { ...(fieldDrafts[tpl.id] || { key: "", label: "", type: "image", required: true, min: 1, max: 10, maxMb: 25 }), min: Number(e.target.value) },
-                      })}
-                      style={{ width: 64 }}
+                      value={draft.min}
+                      onChange={(e) => updateDraft(tpl.id, { min: Number(e.target.value) })}
                     />
+                  </label>
+                  <label>
+                    Max files
                     <input
                       type="number"
                       min={1}
                       max={20}
-                      title="Maximum files"
-                      value={fieldDrafts[tpl.id]?.max ?? 10}
-                      onChange={(e) => setFieldDrafts({
-                        ...fieldDrafts,
-                        [tpl.id]: { ...(fieldDrafts[tpl.id] || { key: "", label: "", type: "image", required: true, min: 1, max: 10, maxMb: 25 }), max: Number(e.target.value) },
-                      })}
-                      style={{ width: 64 }}
+                      value={draft.max}
+                      onChange={(e) => updateDraft(tpl.id, { max: Number(e.target.value) })}
                     />
+                  </label>
+                  <label>
+                    Max MB
                     <input
                       type="number"
                       min={1}
                       max={100}
-                      title="Maximum megabytes per file"
-                      value={fieldDrafts[tpl.id]?.maxMb ?? 25}
-                      onChange={(e) => setFieldDrafts({
-                        ...fieldDrafts,
-                        [tpl.id]: { ...(fieldDrafts[tpl.id] || { key: "", label: "", type: "image", required: true, min: 1, max: 10, maxMb: 25 }), maxMb: Number(e.target.value) },
-                      })}
-                      style={{ width: 70 }}
+                      value={draft.maxMb}
+                      onChange={(e) => updateDraft(tpl.id, { maxMb: Number(e.target.value) })}
                     />
-                    <button
-                      className="btn secondary small"
-                      disabled={!(fieldDrafts[tpl.id]?.key?.trim()) || !(fieldDrafts[tpl.id]?.label?.trim())}
-                      onClick={() => addField(tpl.id)}
-                    >
-                      Add field
-                    </button>
-                  </div>
-                </div>
+                  </label>
+                  <button
+                    className="btn secondary"
+                    type="submit"
+                    disabled={!canAdd}
+                    title={canAdd ? "Add this field to the template" : "Enter a field key and a label first"}
+                  >
+                    Add field
+                  </button>
+                </form>
 
-                {/* Toggle active */}
-                <div style={{ marginTop: 8 }}>
-                  <button className="btn secondary small" onClick={() => toggleActive(tpl)}>
+                <div>
+                  <button className="btn secondary small" type="button" onClick={() => toggleActive(tpl)}>
                     {tpl.active ? "Deactivate template" : "Activate template"}
                   </button>
                 </div>
-              </div>
-            ))}
-          </div>
+              </article>
+            )
+          })
         )}
       </div>
     </section>

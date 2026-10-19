@@ -5,8 +5,13 @@ import {
   buildOmsguruCsv,
   renderOmsguruUpdateEmail,
   DEFAULT_OMSGURU_CONFIG,
+  aggregateInventoryByProductSku,
+  normalizeDailyTime,
+  formatDailyTimeLabel,
   type SkuUpdateItem,
   type OmsguruDailyUpdateRecord,
+  type InventoryLine,
+  type MasterListing,
 } from "../omsguru-daily.js"
 import { isFirebaseConfigured } from "../firebase-storage.js"
 
@@ -144,6 +149,83 @@ test("DEFAULT_OMSGURU_CONFIG sets daily schedule to 23:00 IST (11:00 PM)", () =>
   assert.equal(DEFAULT_OMSGURU_CONFIG.dailyEnabled, true)
   assert.equal(DEFAULT_OMSGURU_CONFIG.dropshipWarehouseId, "6688")
   assert.equal(DEFAULT_OMSGURU_CONFIG.retentionDays, 180)
+})
+
+function synLine(overrides: Partial<InventoryLine> = {}): InventoryLine {
+  return {
+    orderKey: "scan:1",
+    listingSku: "SYN-LIST-A",
+    productSku: "",
+    marketplace: "Myntra EJ",
+    receivedQty: 1,
+    issueQty: 0,
+    itemId: 1,
+    trackingId: "SYN-AWB",
+    orderNumber: "SYN-ORDER",
+    ...overrides,
+  }
+}
+
+test("inventory sums every channel listing into one Product SkuCode across marketplaces", () => {
+  const masters: MasterListing[] = [
+    { marketplace: "all", listingSku: "SYN-LIST-A", masterSku: "SYN-PRODUCT-1" },
+    { marketplace: "Myntra VB", listingSku: "SYN-LIST-B", masterSku: "SYN-PRODUCT-1" },
+    { marketplace: "Flipkart", listingSku: "SYN-LIST-C", masterSku: "SYN-PRODUCT-2" },
+  ]
+  const result = aggregateInventoryByProductSku(
+    [
+      synLine({ orderKey: "scan:1", listingSku: "SYN-LIST-A", marketplace: "Myntra EJ", receivedQty: 2, itemId: 1 }),
+      synLine({ orderKey: "scan:2", listingSku: "SYN-LIST-B_You", marketplace: "Myntra VB", receivedQty: 3, itemId: 2 }),
+      synLine({ orderKey: "scan:3", listingSku: "SYN-LIST-C", marketplace: "Flipkart", receivedQty: 4, itemId: 3 }),
+    ],
+    masters,
+  )
+  assert.equal(result.skus.length, 2)
+  const first = result.skus.find((entry) => entry.sku === "SYN-PRODUCT-1")
+  assert.equal(first?.qty, 5)
+  assert.deepEqual(first?.marketplaces, { "Myntra EJ": 2, "Myntra VB": 3 })
+  const second = result.skus.find((entry) => entry.sku === "SYN-PRODUCT-2")
+  assert.equal(second?.qty, 4)
+  assert.equal(result.totalQty, 9)
+  assert.equal(result.unmappedItems.length, 0)
+})
+
+test("a return with any issue mark, including a partial Iron Send, is left out entirely", () => {
+  const masters: MasterListing[] = [
+    { marketplace: "all", listingSku: "SYN-LIST-A", masterSku: "SYN-PRODUCT-1" },
+    { marketplace: "all", listingSku: "SYN-LIST-B", masterSku: "SYN-PRODUCT-1" },
+  ]
+  const result = aggregateInventoryByProductSku(
+    [
+      synLine({ orderKey: "scan:10", listingSku: "SYN-LIST-A", receivedQty: 3, issueQty: 1, itemId: 10 }),
+      synLine({ orderKey: "scan:10", listingSku: "SYN-LIST-B", receivedQty: 2, issueQty: 0, itemId: 11 }),
+      synLine({ orderKey: "scan:11", listingSku: "SYN-LIST-A", marketplace: "Amazon", receivedQty: 4, issueQty: 0, itemId: 12 }),
+    ],
+    masters,
+  )
+  assert.equal(result.skus.length, 1)
+  assert.equal(result.skus[0].sku, "SYN-PRODUCT-1")
+  assert.equal(result.skus[0].qty, 4)
+  assert.deepEqual(result.skus[0].marketplaces, { Amazon: 4 })
+})
+
+test("a missing-only line still counts the units that arrived", () => {
+  const result = aggregateInventoryByProductSku(
+    [synLine({ listingSku: "SYN-LIST-A", productSku: "SYN-PRODUCT-1", receivedQty: 1, issueQty: 0 })],
+    [],
+  )
+  assert.equal(result.skus[0].qty, 1)
+  assert.equal(result.unmappedItems.length, 0)
+})
+
+test("normalizeDailyTime accepts 11:00 PM as 23:00 and rejects a bad clock", () => {
+  assert.equal(normalizeDailyTime("23:00"), "23:00")
+  assert.equal(normalizeDailyTime("23:00:00"), "23:00")
+  assert.equal(normalizeDailyTime("9:05"), "09:05")
+  assert.equal(normalizeDailyTime("24:00"), null)
+  assert.equal(normalizeDailyTime("11 PM"), null)
+  assert.equal(formatDailyTimeLabel("23:00"), "11:00 PM")
+  assert.equal(formatDailyTimeLabel("09:05"), "9:05 AM")
 })
 
 test("isFirebaseConfigured returns valid status without throwing error", () => {
