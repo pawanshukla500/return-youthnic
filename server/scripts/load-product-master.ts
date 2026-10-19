@@ -18,6 +18,7 @@ import path from "node:path"
 import { fileURLToPath } from "node:url"
 import dotenv from "dotenv"
 import { getPool } from "../db.js"
+import { inheritBlankMasterImages, inheritedImageCount, loadStoredMasterImages, pasteBlankMasterImages } from "../product-master.js"
 import { parseProductMaster } from "../sheets.js"
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..")
@@ -56,16 +57,19 @@ async function main() {
   const client = await db.connect()
   try {
     await client.query("BEGIN")
-    const ready = await client.query("SELECT to_regclass('public.expected_returns') IS NOT NULL AS ready")
-    if (!ready.rows[0].ready) {
+    const schema = await client.query("SELECT to_regclass('public.expected_returns') IS NOT NULL AS ready")
+    if (!schema.rows[0].ready) {
       throw new Error("The app schema does not exist yet. Start the app once (npm run dev), then run this again.")
     }
     await client.query(fs.readFileSync(path.join(root, "server", "schema-import.sql"), "utf8"))
 
+    const donors = await loadStoredMasterImages(client, parsed.rows.map((row) => row.masterSku))
+    const loaded = inheritBlankMasterImages(parsed.rows, donors)
+    const imagesFilled = inheritedImageCount(parsed.rows, loaded)
     const removed = await client.query("DELETE FROM product_master")
     const CHUNK = 1000
-    for (let start = 0; start < parsed.rows.length; start += CHUNK) {
-      const chunk = parsed.rows.slice(start, start + CHUNK)
+    for (let start = 0; start < loaded.length; start += CHUNK) {
+      const chunk = loaded.slice(start, start + CHUNK)
       const values: unknown[] = []
       const groups = chunk.map((row) => {
         const base = values.length
@@ -77,12 +81,13 @@ async function main() {
         values,
       )
     }
+    const pasted = imagesFilled + await pasteBlankMasterImages(client, loaded.map((row) => row.masterSku))
     await client.query("COMMIT")
-    const withImage = parsed.rows.filter((row) => row.imageUrl).length
+    const withImage = loaded.filter((row) => row.imageUrl).length
     const scopes = new Map<string, number>()
     for (const row of parsed.rows) scopes.set(row.marketplace, (scopes.get(row.marketplace) ?? 0) + 1)
     console.log(
-      `Loaded ${parsed.rows.length} listings (${withImage} with an image link). Replaced ${removed.rowCount ?? 0} earlier rows. Skipped ${parsed.skipped} rows without both SKUs.`,
+      `Loaded ${parsed.rows.length} listings (${withImage} with an image link, ${pasted} blank cells filled from the same product SKU). Replaced ${removed.rowCount ?? 0} earlier rows. Skipped ${parsed.skipped} rows without both SKUs.`,
     )
     console.log(
       `Stored for: ${[...scopes].map(([scope, count]) => `${scope === "all" ? "all marketplaces" : scope} (${count})`).join(", ")}`,

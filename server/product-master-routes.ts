@@ -12,8 +12,12 @@ import { getPool } from "./db.js"
 import { actorOf, requireAdmin, sendError } from "./http.js"
 import {
   MASTER_STAGING_TTL_MS,
+  inheritBlankMasterImages,
+  inheritedImageCount,
   insertMasterRows,
+  loadStoredMasterImages,
   markUnmappedListingSkusMapped,
+  pasteBlankMasterImages,
   productMasterState,
   replaceProductMaster,
   requireStagedMasterImport,
@@ -27,12 +31,21 @@ import {
   type StagedMasterImport,
 } from "./product-master.js"
 import { ServiceError, writeAudit } from "./register-service.js"
-import { parseProductMaster, previewProductMaster, productMasterTemplateCsv } from "./sheets.js"
+import { masterPreviewForRows, parseProductMaster, productMasterTemplateCsv } from "./sheets.js"
 
 const uploadFile = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 25 * 1024 * 1024 },
 })
+
+// Preview counts a blank Channel Image URL as present when that product SKU already has a link in this file or in
+// product_master. Nothing is written.
+async function previewWithInheritedImages(buffer: Buffer, filename: string, scope: string) {
+  const parsed = parseProductMaster(buffer, filename, scope)
+  if (parsed.fatal || !parsed.rows.length) return masterPreviewForRows(parsed)
+  const donors = await loadStoredMasterImages(getPool(), parsed.rows.map((row) => row.masterSku))
+  return masterPreviewForRows(parsed, inheritBlankMasterImages(parsed.rows, donors))
+}
 
 // The scope the loaded rows are stored under. Empty or "all" means every account. A named scope must be a real
 // account, so a typo cannot silently store rows that never match a scan.
@@ -83,7 +96,7 @@ export function mountProductMasterRoutes(app: Express, requireUser: RequestHandl
         if (!file) return res.status(400).json({ error: "Choose a CSV or XLSX file" })
         const scope = await resolveScope(req.body?.marketplace)
         res.json({
-          preview: previewProductMaster(file.buffer, file.originalname, scope),
+          preview: await previewWithInheritedImages(file.buffer, file.originalname, scope),
           filename: file.originalname,
           marketplace: scope,
         })
@@ -228,6 +241,7 @@ export function mountProductMasterRoutes(app: Express, requireUser: RequestHandl
           inserted: 0,
           removed: 0,
           replaced: false,
+          imagesFilled: 0,
         })
 
         res.json({
@@ -236,7 +250,7 @@ export function mountProductMasterRoutes(app: Express, requireUser: RequestHandl
           filename: file.originalname,
           marketplace: scope,
           mode,
-          preview: previewProductMaster(file.buffer, file.originalname, scope),
+          preview: await previewWithInheritedImages(file.buffer, file.originalname, scope),
         })
       } catch (error) {
         sendError(res, error, next)
@@ -262,28 +276,41 @@ export function mountProductMasterRoutes(app: Express, requireUser: RequestHandl
       let batchInserted = 0
       let removed = entry.removed
       let didReplace = false
+      let workingChunk = chunk
+      let inheritedRows: typeof entry.rows | null = null
+      let filledFromInherit = 0
+      let filledFromPaste = 0
       try {
         await client.query("BEGIN")
         if (isReplace && !entry.replaced) {
+          const donors = await loadStoredMasterImages(client, entry.rows.map((row) => row.masterSku))
+          const ready = inheritBlankMasterImages(entry.rows, donors)
+          filledFromInherit = inheritedImageCount(entry.rows, ready)
+          inheritedRows = ready
+          workingChunk = ready.slice(entry.processed, entry.processed + chunk.length)
           const deleted = await client.query("DELETE FROM product_master")
           removed = deleted.rowCount ?? 0
           didReplace = true
         }
-        batchInserted = isReplace ? await insertMasterRows(client, chunk) : await upsertMasterRows(client, chunk)
+        batchInserted = isReplace ? await insertMasterRows(client, workingChunk) : await upsertMasterRows(client, workingChunk)
+        filledFromPaste = await pasteBlankMasterImages(client, workingChunk.map((row) => row.masterSku))
         await markUnmappedListingSkusMapped(client)
         const done = nextProcessed >= total
+        const imagesFilled = entry.imagesFilled + filledFromInherit + filledFromPaste
         if (done) {
           if (isReplace) {
             await writeAudit(client, ownerId, "product_master.replace", "product_master", "all", {
               filename: entry.filename,
               rows: total,
               removed,
+              imagesFilled,
             })
           } else {
             await writeAudit(client, ownerId, "product_master.upsert", "product_master", "all", {
               filename: entry.filename,
               rows: total,
               affected: entry.inserted + batchInserted,
+              imagesFilled,
             })
           }
         }
@@ -294,6 +321,9 @@ export function mountProductMasterRoutes(app: Express, requireUser: RequestHandl
       } finally {
         client.release()
       }
+
+      if (inheritedRows) entry.rows = inheritedRows
+      entry.imagesFilled += filledFromInherit + filledFromPaste
 
       if (didReplace) {
         entry.removed = removed
@@ -307,8 +337,8 @@ export function mountProductMasterRoutes(app: Express, requireUser: RequestHandl
         return res.json({ uploadId, processed: entry.processed, total, done: false, batchInserted })
       }
       const result = isReplace
-        ? { inserted: entry.inserted, removed: entry.removed }
-        : { inserted: entry.inserted }
+        ? { inserted: entry.inserted, removed: entry.removed, imagesFilled: entry.imagesFilled }
+        : { inserted: entry.inserted, imagesFilled: entry.imagesFilled }
       stagedMasterImports.delete(uploadId)
       res.json({
         uploadId,

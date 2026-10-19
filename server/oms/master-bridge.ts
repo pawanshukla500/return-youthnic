@@ -3,7 +3,8 @@
 // Reads only already-synced tables (oms_listings joined to oms_skus on oms_sku_id) plus the channel
 // list the sync script already fetched: zero new OMSGuru API calls, no credentials touched. In one
 // transaction it (a) inserts new product_master mappings, (b) fills blank product_master images
-// from listing images, and (c) flips matching unmapped_listing_skus rows to mapped. On error the
+// from listing images, (c) copies a product SKU's stored image onto listings of that SKU that are
+// still blank, and (d) flips matching unmapped_listing_skus rows to mapped. On error the
 // transaction rolls back and product_master is untouched.
 //
 // A channel whose labels do not map to exactly one account is skipped and counted, never guessed:
@@ -12,7 +13,7 @@
 // Synthetic-tested only (server/tests/oms-master-bridge.test.ts). No live API, no database tests.
 
 import type pg from "pg"
-import { markUnmappedListingSkusMapped } from "../product-master.js"
+import { markUnmappedListingSkusMapped, pasteBlankMasterImages } from "../product-master.js"
 
 export type BridgeChannel = { id: number; name: string; channel_name: string }
 
@@ -110,6 +111,8 @@ export async function bridgeMasterMappings(
       const filled = await client.query(FILL_IMAGES_SQL, [marketplace, id])
       imageFilled += filled.rowCount ?? 0
     }
+    // A listing that is still blank takes the image already stored for the same product SKU.
+    imageFilled += await pasteBlankMasterImages(client)
     await markUnmappedListingSkusMapped(client)
     await client.query("COMMIT")
   } catch (error) {
