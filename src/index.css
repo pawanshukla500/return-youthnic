@@ -1080,6 +1080,91 @@ button.catalog-image-wrap { width: 100%; padding: 0; border: 0; display: block; 
 .register-row .search-box input { font-size: 13px; color: #24302c; }
 .register-row select.filter-button { height: 40px; min-width: 150px; font-size: 13px; }
 .register-actions { padding-top: 4px; }
+
+/* ---- Return register rebuild: responsive tabs, filters, table ---- */
+.report-view-switcher {
+  overflow-x: auto;
+  scrollbar-width: none;
+  scroll-snap-type: x proximity;
+  padding-bottom: 8px;
+}
+.report-view-switcher::-webkit-scrollbar { display: none; }
+.report-view-tab { flex: none; scroll-snap-align: start; }
+.register-select-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  align-items: end;
+}
+.register-select-row select.filter-button { min-width: 0; width: 100%; }
+.register-select-row .date-filter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+.register-select-row .date-filter > span { flex: 1; min-width: 0; }
+.register-select-row .date-filter .date-field { min-width: 0; width: 100%; }
+.register-table-grid {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.register-table-grid th {
+  text-align: left;
+  padding: 8px 10px;
+  white-space: nowrap;
+  background: #fff;
+  border-bottom: 1px solid #e2e8f0;
+}
+.register-table-grid td { padding: 8px 10px; white-space: nowrap; }
+.register-table-grid tbody tr { border-bottom: 1px solid #f1f5f9; vertical-align: top; }
+.register-table-grid .sticky-col {
+  position: sticky;
+  left: 0;
+  background: #fff;
+  z-index: 1;
+  box-shadow: 1px 0 0 #e2e8f0;
+}
+.register-table-grid thead .sticky-col { z-index: 2; }
+
+/* Shared plain table (Reason & Sizing Intelligence): base look plus a
+   minimum width so narrow screens scroll sideways instead of squishing. */
+.table {
+  width: 100%;
+  min-width: 600px;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.table th {
+  text-align: left;
+  padding: 8px 10px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--muted);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+  font-size: 13px;
+}
+.table.table-compact { min-width: 720px; font-size: 12px; }
+.table.table-compact td { font-size: 12px; }
+@media (max-width: 760px) {
+  .report-view-tab { padding: 8px 12px; font-size: 13px; }
+  .register-search-row .search-box { flex: 1 1 100%; min-width: 0; }
+}
+@media (max-width: 640px) {
+  .record-sheet dl > div { grid-template-columns: 1fr; }
+  .record-sheet dt { padding-bottom: 2px; }
+  .record-sheet dd { padding-top: 2px; }
+}
+@media (max-width: 520px) {
+  .pagination { flex-wrap: wrap; gap: 8px; }
+}
 .filter-note { margin: 0; color: #9a4a32; font-size: 13px; font-weight: 600; }
 .report-summary span { font-size: 11px; letter-spacing: .4px; }
 .report-summary small { font-size: 12px; color: #5f6b67; }
