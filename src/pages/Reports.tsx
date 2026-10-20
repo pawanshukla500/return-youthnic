@@ -1,167 +1,90 @@
-import { type ReactNode, useEffect, useState } from "react"
+import { lazy, Suspense, useEffect, useMemo, useState, type ComponentType, type ReactNode } from "react"
 import { api, downloadFile } from "../api"
 import { DateField } from "../date-field"
 import { Loading, PageError } from "../shell"
 import type { RegisterOptions, RegisterPage, RegisterRow, RegisterTicket, TicketHistoryEntry } from "../types"
 import { Badge, Icon, MarketplaceBadge, Modal, PartnerBadge } from "../ui"
-import { ShopifyReport } from "../ShopifyReport"
-import { OmsguruDailyReport } from "../OmsguruDailyReport"
-import { ReturnReasonsReport } from "../ReturnReasonsReport"
-import { AnalyticsReport } from "../AnalyticsReport"
+import {
+  DEFAULT_SORT,
+  DISPLAY_KIND_LABELS,
+  EMPTY_FILTERS,
+  PARTNER_METHOD_LABELS,
+  TRACKING_SOURCE_LABELS,
+  VALIDATION_LABELS,
+  VIEW_TABS,
+  buildQuery,
+  flyerLabel,
+  issueText,
+  matchedText,
+  parseRegisterTab,
+  subIssueText,
+  ticketStatusTone,
+  tickets,
+  unique,
+  type RegisterExportColumns,
+  type RegisterFilters,
+  type RegisterSort,
+  type RegisterTab,
+  type RegisterTabKey,
+} from "../register-view"
 import { useLiveChanges } from "../live"
 
 // The return register. Each row is one verified item of a return, or one line of a legacy scan. The default export is the
 // 19 columns of the approved mapping, in that order. The operational export adds the service and traceability columns.
 // Filters, sorting, pagination and the exports are applied by the server, on the same PostgreSQL data, so the screen and
 // the exports always agree, and no account the user cannot see is included.
+//
+// The four analysis tabs are code-split: each loads on first open, so the register table stays fast on warehouse PCs.
 
-const PAGE_SIZE = 50
+function lazyNamed<T>(load: () => Promise<T>, name: keyof T) {
+  return lazy(() => load().then((module) => ({ default: module[name] as ComponentType })))
+}
+
+const AnalyticsReport = lazyNamed(() => import("../AnalyticsReport"), "AnalyticsReport")
+const ShopifyReport = lazyNamed(() => import("../ShopifyReport"), "ShopifyReport")
+const OmsguruDailyReport = lazyNamed(() => import("../OmsguruDailyReport"), "OmsguruDailyReport")
+const ReturnReasonsReport = lazyNamed(() => import("../ReturnReasonsReport"), "ReturnReasonsReport")
+
+// Analysis tabs behind the switcher: label, loading text, and component.
+const TAB_PANELS: Record<Exclude<RegisterTabKey, "register">, { tab: RegisterTab; loading: string; Panel: ComponentType }> = {
+  analytics: { tab: VIEW_TABS[1], loading: "Loading return analytics…", Panel: AnalyticsReport },
+  shopify: { tab: VIEW_TABS[2], loading: "Loading Shopify returns…", Panel: ShopifyReport },
+  omsguru: { tab: VIEW_TABS[3], loading: "Loading OMSGuru update…", Panel: OmsguruDailyReport },
+  reasons: { tab: VIEW_TABS[4], loading: "Loading reason and sizing intelligence…", Panel: ReturnReasonsReport },
+}
 
 type Row = RegisterRow
 
-type Filters = {
-  tracking: string
-  order: string
-  sku: string
-  marketplaceId: string
-  partner: string
+// One row plus its derived labels, computed once per dataset so the table
+// does not re-derive tickets and issue text on every render.
+type EnrichedRow = {
+  row: Row
   issue: string
-  ticketStatus: string
-  scannerId: string
-  dateFrom: string
-  dateTo: string
+  subIssue: string
+  ticketList: RegisterTicket[]
+  ticketCodes: string
+  rejectionText: string
+  matched: string
 }
 
-type Sort = { key: string; direction: "asc" | "desc" }
-
-// Which columns a file has. "approved" is the default and is exactly the 19 approved columns.
-type ExportColumns = "approved" | "operational"
-
-const EMPTY_FILTERS: Filters = {
-  tracking: "",
-  order: "",
-  sku: "",
-  marketplaceId: "",
-  partner: "",
-  issue: "",
-  ticketStatus: "",
-  scannerId: "",
-  dateFrom: "",
-  dateTo: "",
-}
-
-const DEFAULT_SORT: Sort = { key: "date", direction: "desc" }
-
-// The server accepts these sort names only. Other columns are not sortable.
-const SERVER_SORT: Record<string, string> = {
-  date: "scanned_at",
-  marketplace: "marketplace",
-  tracking: "tracking_id",
-  order: "order_number",
-  orderItem: "order_item_id",
-  marketplaceSku: "marketplace_sku",
-  productSku: "product_sku",
-  partner: "logistic_partner_name",
-  returnType: "return_type",
-  qty: "expected_qty",
-}
-
-function buildQuery(filters: Filters, sort: Sort, page?: number): string {
-  const params = new URLSearchParams()
-  for (const [key, value] of Object.entries(filters)) {
-    const trimmed = value.trim()
-    if (trimmed) params.set(key, trimmed)
+function enrich(row: Row): EnrichedRow {
+  const ticketList = tickets(row)
+  return {
+    row,
+    issue: issueText(row),
+    subIssue: subIssueText(row),
+    ticketList,
+    ticketCodes: unique(ticketList.map((ticket) => ticket.code)).join(", ") || "—",
+    rejectionText: unique(ticketList.map((ticket) => ticket.rejectionReason)).join("; ") || "—",
+    matched: matchedText(row),
   }
-  const serverKey = SERVER_SORT[sort.key]
-  if (serverKey) {
-    params.set("sort", serverKey)
-    params.set("direction", sort.direction)
-  }
-  if (page) {
-    params.set("page", String(page))
-    params.set("pageSize", String(PAGE_SIZE))
-  }
-  return params.toString()
-}
-
-function unique(values: string[]): string[] {
-  return [...new Set(values.filter((value) => value !== ""))]
-}
-
-function issueText(row: Row): string {
-  return row.issues.length ? unique(row.issues.map((issue) => issue.categoryLabel)).join("; ") : "No issue"
-}
-
-function subIssueText(row: Row): string {
-  return unique(row.issues.map((issue) => issue.subIssueLabel)).join("; ")
-}
-
-function tickets(row: Row): RegisterTicket[] {
-  const found: RegisterTicket[] = []
-  for (const issue of row.issues) {
-    if (issue.ticket && !found.some((ticket) => ticket.id === issue.ticket?.id)) found.push(issue.ticket)
-  }
-  return found
-}
-
-function ticketStatusTone(status: string): string {
-  if (status === "Approved") return "success"
-  if (status === "Rejected") return "danger"
-  if (status === "Review" || status === "Raised") return "warning"
-  return "neutral"
-}
-
-const PARTNER_METHOD_LABELS: Record<string, string> = {
-  explicit_carrier: "from the file",
-  marketplace_mapping: "marketplace mapping",
-  tracking_domain: "from the tracking link",
-  manual: "entered by hand",
-  none: "not identified",
-}
-
-const VALIDATION_LABELS: Record<string, string> = {
-  not_applicable: "",
-  match: "AWB confirmed by the tracking link",
-  mismatch_resolved: "AWB taken from the tracking link (rounding)",
-  mismatch_kept: "AWB differs from the tracking link. Check the label",
-  no_link: "No tracking link to check",
-  invalid_link: "Tracking link not readable",
-  unverified_host: "Tracking link host not verified",
-  blank_awb: "AWB is blank",
-  damaged_awb: "AWB is damaged (scientific notation)",
-}
-
-const DISPLAY_KIND_LABELS: Record<string, string> = {
-  order_line: "Order line",
-  ajio_return_order_number: "Ajio return order number",
-  amazon_shipment_id: "Amazon Shipment ID",
-}
-
-const TRACKING_SOURCE_LABELS: Record<string, string> = {
-  return_tracking: "Return AWB (file column)",
-  forward_tracking: "Forward AWB (return AWB blank)",
-  tracking_id: "Tracking ID (file column)",
-  tracking_url: "Tracking link (verified)",
-}
-
-function matchedText(row: Row): string {
-  const field =
-    row.matchedTrackingField === "alt_tracking_id"
-      ? "Forward (alternate) AWB"
-      : row.matchedTrackingField === "tracking_id"
-        ? "Primary AWB"
-        : row.matchedTrackingField === "order_number"
-          ? "Order ID"
-          : "Not recorded"
-  const leg = row.matchedLeg === "return" ? "return leg" : row.matchedLeg === "forward" ? "forward leg" : "leg not known"
-  return row.matchedTrackingField ? `${field}, ${leg}` : "Not recorded"
 }
 
 type ColumnDef = {
   key: string
   header: string
   sortable?: boolean
-  render: (row: Row) => ReactNode
+  render: (entry: EnrichedRow) => ReactNode
   sticky?: boolean
 }
 
@@ -171,52 +94,69 @@ const COLUMNS: ColumnDef[] = [
     key: "date",
     header: "Date",
     sortable: true,
-    render: (row) => (
+    render: (entry) => (
       <>
-        <strong>{row.scanDay}</strong>
-        <small>{row.scanTime}</small>
+        <strong>{entry.row.scanDay}</strong>
+        <small>{entry.row.scanTime}</small>
       </>
     ),
   },
-  { key: "marketplace", header: "Marketplace", sortable: true, render: (row) => <MarketplaceBadge name={row.marketplace} /> },
-  { key: "tracking", header: "Tracking ID", sortable: true, sticky: true, render: (row) => <strong>{row.trackingId}</strong> },
-  { key: "order", header: "Order ID", sortable: true, render: (row) => row.orderId || "—" },
+  {
+    key: "marketplace",
+    header: "Marketplace",
+    sortable: true,
+    render: (entry) => <MarketplaceBadge name={entry.row.marketplace} />,
+  },
+  {
+    key: "tracking",
+    header: "Tracking ID",
+    sortable: true,
+    sticky: true,
+    render: (entry) => <strong>{entry.row.trackingId}</strong>,
+  },
+  { key: "order", header: "Order ID", sortable: true, render: (entry) => entry.row.orderId || "—" },
   {
     key: "orderItem",
     header: "Order Item ID",
     sortable: true,
-    render: (row) => (
+    render: (entry) => (
       <>
-        {row.orderItemId || "—"}
-        {row.displayIdentifierKind && row.displayIdentifierKind !== "order_line" && (
+        {entry.row.orderItemId || "—"}
+        {entry.row.displayIdentifierKind && entry.row.displayIdentifierKind !== "order_line" && (
           <small title="This identifier is shown for display only. It is not an order line.">
-            {DISPLAY_KIND_LABELS[row.displayIdentifierKind] ?? row.displayIdentifierKind}
+            {DISPLAY_KIND_LABELS[entry.row.displayIdentifierKind] ?? entry.row.displayIdentifierKind}
           </small>
         )}
       </>
     ),
   },
-  { key: "marketplaceSku", header: "Marketplace SKU", sortable: true, render: (row) => row.marketplaceSku || "—" },
+  {
+    key: "marketplaceSku",
+    header: "Marketplace SKU",
+    sortable: true,
+    render: (entry) => entry.row.marketplaceSku || "—",
+  },
   {
     key: "productSku",
     header: "Product SKU",
     sortable: true,
-    render: (row) => (row.productSku ? row.productSku : <Badge tone="warning">Not resolved</Badge>),
+    render: (entry) =>
+      entry.row.productSku ? entry.row.productSku : <Badge tone="warning">Not resolved</Badge>,
   },
   {
     key: "identifier",
     header: "Marketplace SKU Identification (FNSKU/ASIN/Myntra FSN)",
-    render: (row) => row.marketplaceSkuIdentifier || "—",
+    render: (entry) => entry.row.marketplaceSkuIdentifier || "—",
   },
   {
     key: "partner",
     header: "Logistic Partner Name",
     sortable: true,
-    render: (row) => (
+    render: (entry) => (
       <>
-        <PartnerBadge name={row.logisticPartner || "Unknown / Pending Verification"} />
-        {row.partnerMethod && row.partnerMethod !== "none" && row.partnerMethod !== "tracking_domain" && (
-          <small>{PARTNER_METHOD_LABELS[row.partnerMethod] ?? row.partnerMethod}</small>
+        <PartnerBadge name={entry.row.logisticPartner || "Unknown / Pending Verification"} />
+        {entry.row.partnerMethod && entry.row.partnerMethod !== "none" && entry.row.partnerMethod !== "tracking_domain" && (
+          <small>{PARTNER_METHOD_LABELS[entry.row.partnerMethod] ?? entry.row.partnerMethod}</small>
         )}
       </>
     ),
@@ -225,22 +165,24 @@ const COLUMNS: ColumnDef[] = [
     key: "returnType",
     header: "Return Type",
     sortable: true,
-    render: (row) => (
+    render: (entry) => (
       <>
-        {row.returnType || "—"}
-        {row.returnTypeRaw && row.returnTypeRaw !== row.returnType && <small>as file: {row.returnTypeRaw}</small>}
+        {entry.row.returnType || "—"}
+        {entry.row.returnTypeRaw && entry.row.returnTypeRaw !== entry.row.returnType && (
+          <small>as file: {entry.row.returnTypeRaw}</small>
+        )}
       </>
     ),
   },
-  { key: "qty", header: "Qty", sortable: true, render: (row) => <strong>{row.expectedQty}</strong> },
+  { key: "qty", header: "Qty", sortable: true, render: (entry) => <strong>{entry.row.expectedQty}</strong> },
   {
     key: "amount",
     header: "Amount",
     sortable: true,
-    render: (row) =>
-      row.amount !== null && row.amount !== undefined ? (
+    render: (entry) =>
+      entry.row.amount !== null && entry.row.amount !== undefined ? (
         <strong style={{ color: "#0f6b56" }}>
-          ₹{Number(row.amount).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          ₹{Number(entry.row.amount).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
         </strong>
       ) : (
         <span title="Sales amount pending sync" style={{ color: "#94a3b8" }}>
@@ -248,20 +190,20 @@ const COLUMNS: ColumnDef[] = [
         </span>
       ),
   },
-  { key: "reason", header: "Return Reason", render: (row) => row.returnReason || "—" },
+  { key: "reason", header: "Return Reason", render: (entry) => entry.row.returnReason || "—" },
   {
     key: "issue",
     header: "Return Received Issue",
-    render: (row) => <span className={row.issues.length ? "issue-text" : "clean"}>{issueText(row)}</span>,
+    render: (entry) => <span className={entry.row.issues.length ? "issue-text" : "clean"}>{entry.issue}</span>,
   },
   {
     // Iron Send is operational, not a return issue, so it has its own column.
     key: "ironSend",
     header: "Iron Send",
-    render: (row) =>
-      row.ironSendQty ? (
+    render: (entry) =>
+      entry.row.ironSendQty ? (
         <span className="iron-state state-pending" title="Sent for ironing. Not a return issue. Tracked on Iron tracking.">
-          Iron Send ×{row.ironSendQty}
+          Iron Send ×{entry.row.ironSendQty}
         </span>
       ) : (
         "—"
@@ -271,12 +213,12 @@ const COLUMNS: ColumnDef[] = [
     // Meesho flyer ID captured at the bench for an issue return (permanent claim evidence).
     key: "flyer",
     header: "Meesho Flyer ID",
-    render: (row) =>
-      row.flyerId ? (
-        <span title={`Flyer status: ${row.flyerState || "scanned"}`}>
-          <strong>{row.flyerId}</strong>
+    render: (entry) =>
+      entry.row.flyerId ? (
+        <span title={`Flyer status: ${entry.row.flyerState || "scanned"}`}>
+          <strong>{entry.row.flyerId}</strong>
         </span>
-      ) : row.flyerState === "unavailable" ? (
+      ) : entry.row.flyerState === "unavailable" ? (
         <span title="The flyer was missing at the bench. No ID was stored.">
           <Badge tone="warning">Unavailable</Badge>
         </span>
@@ -287,19 +229,19 @@ const COLUMNS: ColumnDef[] = [
   {
     key: "subIssue",
     header: "Return Received Sub Issue (Only If Missing)",
-    render: (row) => subIssueText(row) || "—",
+    render: (entry) => entry.subIssue || "—",
   },
   {
     key: "ticket",
     header: "Ticket ID (Only If Return Received Issue)",
-    render: (row) => unique(tickets(row).map((ticket) => ticket.code)).join(", ") || "—",
+    render: (entry) => entry.ticketCodes,
   },
   {
     key: "ticketStatus",
     header: "Ticket ID Status",
-    render: (row) =>
-      tickets(row).length
-        ? tickets(row).map((ticket) => (
+    render: (entry) =>
+      entry.ticketList.length
+        ? entry.ticketList.map((ticket) => (
             <Badge key={ticket.id} tone={ticketStatusTone(ticket.status)}>
               {ticket.status}
             </Badge>
@@ -314,24 +256,28 @@ const COLUMNS: ColumnDef[] = [
   {
     key: "rejection",
     header: "If Rejected, What the Reason",
-    render: (row) => unique(tickets(row).map((ticket) => ticket.rejectionReason)).join("; ") || "—",
+    render: (entry) => entry.rejectionText,
   },
-  { key: "received", header: "Received Qty", render: (row) => (row.receivedQty === null ? "—" : row.receivedQty) },
-  { key: "scanner", header: "Scanned By", render: (row) => row.scannedBy },
+  {
+    key: "received",
+    header: "Received Qty",
+    render: (entry) => (entry.row.receivedQty === null ? "—" : entry.row.receivedQty),
+  },
+  { key: "scanner", header: "Scanned By", render: (entry) => entry.row.scannedBy },
   {
     key: "source",
     header: "Source",
-    render: (row) =>
-      row.source === "legacy" ? <Badge tone="neutral">Legacy scan</Badge> : <Badge tone="success">Verified</Badge>,
+    render: (entry) =>
+      entry.row.source === "legacy" ? <Badge tone="neutral">Legacy scan</Badge> : <Badge tone="success">Verified</Badge>,
   },
   {
     key: "matched",
     header: "Matched Tracking",
-    render: (row) => (
+    render: (entry) => (
       <>
-        {matchedText(row)}
-        {row.trackingValidation && VALIDATION_LABELS[row.trackingValidation] && (
-          <small>{VALIDATION_LABELS[row.trackingValidation]}</small>
+        {entry.matched}
+        {entry.row.trackingValidation && VALIDATION_LABELS[entry.row.trackingValidation] && (
+          <small>{VALIDATION_LABELS[entry.row.trackingValidation]}</small>
         )}
       </>
     ),
@@ -361,10 +307,21 @@ function TicketEditor({
   }
 
   useEffect(() => {
+    let cancelled = false
     setStatus(ticket.status)
     setReason(ticket.rejectionReason)
-    loadHistory()
+    api<{ history: TicketHistoryEntry[] }>(`/api/tickets/${ticket.id}/history`)
+      .then((result) => {
+        if (!cancelled) setHistory(result.history)
+      })
+      .catch((err: Error) => {
+        if (!cancelled) setMessage(err.message)
+      })
     // Reload when a different ticket is shown. The history is fetched fresh each time.
+    // A slow reply for a previous ticket never overwrites the current one.
+    return () => {
+      cancelled = true
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ticket.id])
 
@@ -439,10 +396,9 @@ function TicketEditor({
 
 // Every field of one row, for the record view: the 19 columns, then the scan and the file the return came from.
 function RecordDetail({ row }: { row: Row }) {
-  const flyerValue =
-    row.flyerId || (row.flyerState === "unavailable" ? "Unavailable at bench" : row.flyerState === "scanned" ? "—" : "Not required")
+  const entry = enrich(row)
   const traceability: [string, string | number][] = [
-    ["Meesho flyer ID (claim)", flyerValue || "—"],
+    ["Meesho flyer ID (claim)", flyerLabel(row.flyerId, row.flyerState)],
     ["Flyer status", row.flyerState || "not_required"],
     ["Scanned AWB", row.scannedTracking || "Not recorded"],
     ["Original tracking ID (file)", row.originalTrackingId || "—"],
@@ -465,7 +421,7 @@ function RecordDetail({ row }: { row: Row }) {
         {COLUMNS.map((column) => (
           <div key={column.key}>
             <dt>{column.header}</dt>
-            <dd>{column.render(row)}</dd>
+            <dd>{column.render(entry)}</dd>
           </div>
         ))}
       </dl>
@@ -482,35 +438,34 @@ function RecordDetail({ row }: { row: Row }) {
   )
 }
 
+function TabPanel({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="page-content" role="tabpanel" aria-label={label}>
+      {children}
+    </div>
+  )
+}
+
 export function Reports() {
   const [options, setOptions] = useState<RegisterOptions | null>(null)
-  const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS)
-  const [sort, setSort] = useState<Sort>(DEFAULT_SORT)
+  const [filters, setFilters] = useState<RegisterFilters>(EMPTY_FILTERS)
+  const [sort, setSort] = useState<RegisterSort>(DEFAULT_SORT)
   const [page, setPage] = useState(1)
   const [data, setData] = useState<RegisterPage | null>(null)
   const [error, setError] = useState("")
   const [exportError, setExportError] = useState("")
-  const [exportColumns, setExportColumns] = useState<ExportColumns>("approved")
+  const [exportColumns, setExportColumns] = useState<RegisterExportColumns>("approved")
   const [refreshKey, setRefreshKey] = useState(0)
   const [detail, setDetail] = useState<Row | null>(null)
   const [hidden, setHidden] = useState<Set<string>>(new Set())
   const [showColumns, setShowColumns] = useState(false)
-  const [viewMode, setViewMode] = useState<"register" | "shopify" | "omsguru" | "reasons" | "analytics">(() => {
-    const tab = new URLSearchParams(window.location.search).get("tab")
-    if (tab === "analytics") return "analytics"
-    if (tab === "reasons" || tab === "sizing") return "reasons"
-    if (tab === "omsguru") return "omsguru"
-    if (tab === "shopify") return "shopify"
-    return "register"
-  })
+  const [viewMode, setViewMode] = useState<RegisterTabKey>(() => parseRegisterTab(new URLSearchParams(window.location.search).get("tab")))
 
-  const changeView = (mode: "register" | "shopify" | "omsguru" | "reasons" | "analytics") => {
+  const changeView = (mode: RegisterTabKey) => {
     setViewMode(mode)
+    const tab = VIEW_TABS.find((entry) => entry.key === mode)
     const url = new URL(window.location.href)
-    if (mode === "analytics") url.searchParams.set("tab", "analytics")
-    else if (mode === "reasons") url.searchParams.set("tab", "reasons")
-    else if (mode === "shopify") url.searchParams.set("tab", "shopify")
-    else if (mode === "omsguru") url.searchParams.set("tab", "omsguru")
+    if (tab?.param) url.searchParams.set("tab", tab.param)
     else url.searchParams.delete("tab")
     window.history.replaceState(null, "", url.toString())
   }
@@ -547,7 +502,10 @@ export function Reports() {
     if (viewMode === "register") setRefreshKey((key) => key + 1)
   }, 1000)
 
-  const update = (patch: Partial<Filters>) => {
+  // Derived labels are computed once per dataset, not once per cell per render.
+  const enriched = useMemo(() => (data ? data.rows.map(enrich) : []), [data])
+
+  const update = (patch: Partial<RegisterFilters>) => {
     setFilters((current) => ({ ...current, ...patch }))
     setPage(1)
   }
@@ -581,89 +539,41 @@ export function Reports() {
   }
 
   const switcher = (
-    <div className="report-view-switcher">
-      <button
-        type="button"
-        className={`report-view-tab ${viewMode === "register" ? "active" : ""}`}
-        onClick={() => changeView("register")}
-      >
-        <Icon name="report" size={16} />
-        <span>Return Register (All Accounts)</span>
-      </button>
-      <button
-        type="button"
-        className={`report-view-tab ${viewMode === "analytics" ? "active" : ""}`}
-        onClick={() => changeView("analytics")}
-      >
-        <Icon name="grid" size={16} />
-        <span>Return Analytics</span>
-        <span className="shopify-live-indicator" title="Size, SKU, marketplace, date and reason figures from stored scans">● Live</span>
-      </button>
-      <button
-        type="button"
-        className={`report-view-tab ${viewMode === "shopify" ? "active" : ""}`}
-        onClick={() => changeView("shopify")}
-      >
-        <img src="/logos/shopify.svg" alt="Shopify" width={16} height={16} />
-        <span>Shopify Returns & RTO</span>
-        <span className="shopify-live-indicator" title="Real-time automated sync">● Real-time</span>
-      </button>
-      <button
-        type="button"
-        className={`report-view-tab ${viewMode === "omsguru" ? "active" : ""}`}
-        onClick={() => changeView("omsguru")}
-      >
-        <Icon name="upload" size={16} />
-        <span>OMSGuru Update Daily</span>
-        <span className="omsguru-live-indicator" title="The daily time is set in Admin, System. The default is 11:00 PM IST">● Daily IST</span>
-      </button>
-      <button
-        type="button"
-        className={`report-view-tab ${viewMode === "reasons" ? "active" : ""}`}
-        onClick={() => changeView("reasons")}
-      >
-        <Icon name="report" size={16} />
-        <span>Reason & Sizing Intelligence</span>
-        <span className="shopify-live-indicator" style={{ background: "#4338ca", color: "#fff" }} title="Multi-Marketplace Standardized Return Reasons & Sizing Digest">
-          ● Weekly Digest
-        </span>
-      </button>
+    <div className="report-view-switcher" role="tablist" aria-label="Register views">
+      {VIEW_TABS.map((tab) => (
+        <button
+          key={tab.key}
+          type="button"
+          role="tab"
+          aria-selected={viewMode === tab.key}
+          className={`report-view-tab ${viewMode === tab.key ? "active" : ""}`}
+          onClick={() => changeView(tab.key)}
+        >
+          {tab.icon === "shopify" ? (
+            <img src="/logos/shopify.svg" alt="" width={16} height={16} aria-hidden="true" />
+          ) : (
+            <Icon name={tab.icon} size={16} />
+          )}
+          <span>{tab.label}</span>
+          {tab.badge && (
+            <span className={tab.badge.className} style={tab.badge.style} title={tab.badge.title}>
+              {tab.badge.text}
+            </span>
+          )}
+        </button>
+      ))}
     </div>
   )
 
-  if (viewMode === "analytics") {
+  if (viewMode !== "register") {
+    const panel = TAB_PANELS[viewMode]
     return (
-      <div className="page-content">
+      <TabPanel label={panel.tab.label}>
         {switcher}
-        <AnalyticsReport />
-      </div>
-    )
-  }
-
-  if (viewMode === "reasons") {
-    return (
-      <div className="page-content">
-        {switcher}
-        <ReturnReasonsReport />
-      </div>
-    )
-  }
-
-  if (viewMode === "shopify") {
-    return (
-      <div className="page-content">
-        {switcher}
-        <ShopifyReport />
-      </div>
-    )
-  }
-
-  if (viewMode === "omsguru") {
-    return (
-      <div className="page-content">
-        {switcher}
-        <OmsguruDailyReport />
-      </div>
+        <Suspense fallback={<Loading label={panel.loading} />}>
+          <panel.Panel />
+        </Suspense>
+      </TabPanel>
     )
   }
 
@@ -696,7 +606,7 @@ export function Reports() {
   return (
     <div className="page-content">
       {switcher}
-      <section className="report-summary">
+      <section className="report-summary" aria-label="Register totals">
         <div>
           <span>VERIFIED LINES</span>
           <strong>{data.total.toLocaleString("en-US")}</strong>
@@ -713,36 +623,39 @@ export function Reports() {
         </div>
       </section>
 
-      <section className="panel report-table">
+      <section className="panel report-table" aria-label="Return register table">
         <div className="register-filters">
-          <div className="register-row">
-          <div className="search-box">
-            <Icon name="search" />
-            <input
-              aria-label="Tracking ID"
-              value={filters.tracking}
-              onChange={(event) => update({ tracking: event.target.value })}
-              placeholder="Tracking ID…"
-            />
+          <div className="register-row register-search-row">
+            <div className="search-box">
+              <Icon name="search" />
+              <input
+                aria-label="Tracking ID"
+                value={filters.tracking}
+                onChange={(event) => update({ tracking: event.target.value })}
+                placeholder="Tracking ID…"
+                autoComplete="off"
+              />
+            </div>
+            <div className="search-box">
+              <input
+                aria-label="Order ID or order item ID"
+                value={filters.order}
+                onChange={(event) => update({ order: event.target.value })}
+                placeholder="Order ID…"
+                autoComplete="off"
+              />
+            </div>
+            <div className="search-box">
+              <input
+                aria-label="Marketplace SKU or product SKU"
+                value={filters.sku}
+                onChange={(event) => update({ sku: event.target.value })}
+                placeholder="SKU…"
+                autoComplete="off"
+              />
+            </div>
           </div>
-          <div className="search-box">
-            <input
-              aria-label="Order ID or order item ID"
-              value={filters.order}
-              onChange={(event) => update({ order: event.target.value })}
-              placeholder="Order ID…"
-            />
-          </div>
-          <div className="search-box">
-            <input
-              aria-label="Marketplace SKU or product SKU"
-              value={filters.sku}
-              onChange={(event) => update({ sku: event.target.value })}
-              placeholder="SKU…"
-            />
-          </div>
-          </div>
-          <div className="register-row">
+          <div className="register-row register-select-row">
           <select
             className={selectClass}
             aria-label="Marketplace"
@@ -851,7 +764,7 @@ export function Reports() {
             className={selectClass}
             aria-label="Export columns"
             value={exportColumns}
-            onChange={(event) => setExportColumns(event.target.value as ExportColumns)}
+            onChange={(event) => setExportColumns(event.target.value as RegisterExportColumns)}
           >
             <option value="approved">Export: approved 19 columns</option>
             <option value="operational">Export: operational (with traceability)</option>
@@ -895,22 +808,14 @@ export function Reports() {
         )}
 
         {/* Desktop and tablet: the table scrolls sideways, and the Tracking ID column stays in view. */}
-        <div className="table-wrap" style={{ overflowX: "auto" }}>
-          <table style={{ width: "max-content", minWidth: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+        <div className="table-wrap">
+          <table className="register-table-grid">
             <thead>
               <tr>
                 {visible.map((column) => (
                   <th
                     key={column.key}
-                    style={{
-                      textAlign: "left",
-                      padding: "8px 10px",
-                      whiteSpace: "nowrap",
-                      position: column.sticky ? "sticky" : undefined,
-                      left: column.sticky ? 0 : undefined,
-                      background: "#fff",
-                      borderBottom: "1px solid #e2e8f0",
-                    }}
+                    className={column.sticky ? "sticky-col" : undefined}
                     aria-sort={
                       column.sortable && sort.key === column.key
                         ? sort.direction === "asc"
@@ -929,38 +834,29 @@ export function Reports() {
                     )}
                   </th>
                 ))}
-                <th style={{ borderBottom: "1px solid #e2e8f0" }} aria-label="Details" />
+                <th aria-label="Details" />
               </tr>
             </thead>
             <tbody>
-              {data.rows.length === 0 && (
+              {enriched.length === 0 && (
                 <tr>
                   <td colSpan={visible.length + 1} style={{ padding: 20 }}>
                     No verified returns match these filters.
                   </td>
                 </tr>
               )}
-              {data.rows.map((row) => (
-                <tr key={row.key} style={{ borderBottom: "1px solid #f1f5f9", verticalAlign: "top" }}>
+              {enriched.map((entry) => (
+                <tr key={entry.row.key}>
                   {visible.map((column) => (
-                    <td
-                      key={column.key}
-                      style={{
-                        padding: "8px 10px",
-                        position: column.sticky ? "sticky" : undefined,
-                        left: column.sticky ? 0 : undefined,
-                        background: column.sticky ? "#fff" : undefined,
-                        whiteSpace: "nowrap",
-                      }}
-                    >
-                      {column.render(row)}
+                    <td key={column.key} className={column.sticky ? "sticky-col" : undefined}>
+                      {column.render(entry)}
                     </td>
                   ))}
-                  <td style={{ padding: "8px 10px" }}>
+                  <td>
                     <button
                       className="text-button"
-                      onClick={() => setDetail(row)}
-                      aria-label={`Details for ${row.trackingId}`}
+                      onClick={() => setDetail(entry.row)}
+                      aria-label={`Details for ${entry.row.trackingId}`}
                     >
                       Details
                     </button>
@@ -971,7 +867,7 @@ export function Reports() {
           </table>
         </div>
 
-        <div className="pagination">
+        <nav className="pagination" aria-label="Register pages">
           <span>
             {data.total
               ? `Showing ${start}–${end} of ${data.total.toLocaleString("en-US")}`
@@ -988,7 +884,7 @@ export function Reports() {
               ›
             </button>
           </div>
-        </div>
+        </nav>
       </section>
 
       {detail && (

@@ -1,4 +1,4 @@
-<!-- Updated 2026-10-19 from package.json. 39 files, 450 tests. -->
+<!-- Updated 2026-10-20 from package.json. 40 files, 463 tests. -->
 # Testing
 
 ## Framework and setup
@@ -60,6 +60,7 @@ The `test` script in `package.json` lists the files by name, in this order:
 37. `desktop-agent/panel-queue.test.ts`
 38. `desktop-agent/local-secrets.test.ts`
 39. `desktop-agent/update-check.test.ts`
+40. `src/register-view.test.ts`
 
 There is no watch mode and no separate unit, integration or end-to-end script.
 
@@ -102,8 +103,9 @@ The declaration counts are the number of top-level `test(` calls in each file, f
 | `panel-queue.test.ts` (desktop-agent) | 5 | No | Six isolated panels, marketplace-to-panel mapping (Myntra EJ vs VB split), round-robin rotation skipping busy/held panels, error cooldown, completed panels rejoining. |
 | `local-secrets.test.ts` (desktop-agent) | 3 | No | Plaintext fallback round-trip, legacy file reads, undecryptable values failing closed without throwing. The OS-store (DPAPI) path runs only inside the packaged app. |
 | `update-check.test.ts` (desktop-agent) | 3 | No | Semver vs `desktop-v*` tags (run number ignored), available-update reporting with download links, offline failure closed. |
+| `register-view.test.ts` (src) | 13 | No | Register query building (trim, pagination, Amount sort mapping), issue/sub-issue/ticket labels, ticket dedupe and status tones, flyer bench outcomes, matched-tracking text, and the five tab keys with the legacy sizing alias. |
 
-The tests exercise server-side code and the desktop agent's pure modules. There are no tests for the React pages and no browser tests.
+The tests exercise server-side code, the desktop agent's pure modules, and the register page's pure view helpers. There are no tests for rendered React pages and no browser tests.
 
 ## Writing new tests
 
@@ -126,7 +128,7 @@ The repository includes automated GitHub Actions workflows:
    - Triggers on every push and pull request to `main`.
    - Provisions a dedicated `postgres:16` service container with SSL disabled for the internal test runner network.
    - Runs `npm run typecheck`, `npm run build`, and `npm test` with `TEST_DATABASE_URL` pointing at the container database `return_scan_test`.
-   - Runs all 450 tests (0 skipped in CI).
+   - Runs all 463 tests (0 skipped in CI).
    - Verifies the Docker production container build.
 
 2. **`.github/workflows/return-scan-apk.yml`**:
@@ -145,7 +147,7 @@ The repository includes automated GitHub Actions workflows:
 
 ## Verification status
 
-The test suite runs 450 tests with 0 failures:
-- Locally: 413 tests pass without a test database (37 database tests report skipped).
-- In CI: 450 tests pass (100% pass, 0 fail, 0 skipped) against the `postgres:16` container.
+The test suite runs 463 tests with 0 failures:
+- Locally: 426 tests pass without a test database (37 database tests report skipped).
+- In CI: 463 tests pass (100% pass, 0 fail, 0 skipped) against the `postgres:16` container.
 

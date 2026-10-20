@@ -569,8 +569,8 @@ export function ReturnReasonsReport() {
             No seller fault returns found for this criteria. Great job!
           </div>
         ) : (
-          <div style={{ overflowX: "auto" }}>
-            <table className="table" style={{ width: "100%", fontSize: 13 }}>
+          <div className="table-wrap">
+            <table className="table">
               <thead>
                 <tr>
                   <th style={{ width: "25%" }}>Product Master SKU</th>
@@ -670,8 +670,8 @@ export function ReturnReasonsReport() {
             No garment sizing issues found matching current criteria.
           </div>
         ) : (
-          <div style={{ overflowX: "auto" }}>
-            <table className="table" style={{ width: "100%", fontSize: 13 }}>
+          <div className="table-wrap">
+            <table className="table">
               <thead>
                 <tr>
                   <th style={{ width: "25%" }}>Garment Master SKU</th>
@@ -782,8 +782,8 @@ export function ReturnReasonsReport() {
           <h3 style={{ margin: "0 0 14px 0", fontSize: 16, fontWeight: 700, color: "#0f172a" }}>
             3. Multi-Marketplace Return Distribution
           </h3>
-          <div style={{ overflowX: "auto" }}>
-            <table className="table" style={{ width: "100%", fontSize: 13 }}>
+          <div className="table-wrap">
+            <table className="table">
               <thead>
                 <tr>
                   <th>Marketplace</th>
@@ -846,7 +846,7 @@ export function ReturnReasonsReport() {
             />
 
             <div style={{ maxHeight: 420, overflowY: "auto", border: "1px solid #e2e8f0", borderRadius: 8 }}>
-              <table className="table" style={{ width: "100%", fontSize: 12 }}>
+              <table className="table table-compact">
                 <thead>
                   <tr>
                     <th>Marketplace</th>
