@@ -22,7 +22,7 @@ export type RegisterFilters = {
 
 export type RegisterSort = { key: string; direction: "asc" | "desc" }
 
-export type RegisterTabKey = "register" | "analytics" | "shopify" | "omsguru" | "reasons"
+export type RegisterTabKey = "register" | "analytics" | "shopify" | "omsguru"
 
 // Which columns a file has. "approved" is the default and is exactly the 19 approved columns.
 export type RegisterExportColumns = "approved" | "operational"
@@ -165,8 +165,9 @@ export function flyerLabel(flyerId: string | undefined, flyerState: string | und
   return "Not required"
 }
 
-// The five tabs of /register, in order. The tab query param keeps refreshes
-// on the same tab; "sizing" is the legacy alias for the reasons tab.
+// The four tabs of /register, in order. The tab query param keeps refreshes
+// on the same tab. Retired tab params ("reasons", "sizing") fall back to the
+// register table; the reason backend and its tests stay for API use.
 export type RegisterTab = {
   key: RegisterTabKey
   label: string
@@ -202,23 +203,10 @@ export const VIEW_TABS: RegisterTab[] = [
       className: "omsguru-live-indicator",
     },
   },
-  {
-    key: "reasons",
-    label: "Reason & Sizing Intelligence",
-    param: "reasons",
-    icon: "report",
-    badge: {
-      text: "● Weekly Digest",
-      title: "Multi-Marketplace Standardized Return Reasons & Sizing Digest",
-      className: "shopify-live-indicator",
-      style: { background: "#4338ca", color: "#fff" },
-    },
-  },
 ]
 
 export function parseRegisterTab(param: string | null): RegisterTabKey {
   if (param === "analytics") return "analytics"
-  if (param === "reasons" || param === "sizing") return "reasons"
   if (param === "omsguru") return "omsguru"
   if (param === "shopify") return "shopify"
   return "register"

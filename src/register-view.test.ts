@@ -150,20 +150,20 @@ describe("register-view labels", () => {
 })
 
 describe("register-view tabs", () => {
-  it("defines five tabs in order with stable keys", () => {
+  it("defines four tabs in order with stable keys", () => {
     assert.deepEqual(
       VIEW_TABS.map((tab) => tab.key),
-      ["register", "analytics", "shopify", "omsguru", "reasons"],
+      ["register", "analytics", "shopify", "omsguru"],
     )
   })
 
-  it("parses the tab query param with legacy sizing alias", () => {
+  it("parses the tab query param, unknown tabs fall back to register", () => {
     assert.equal(parseRegisterTab("analytics"), "analytics")
-    assert.equal(parseRegisterTab("sizing"), "reasons")
-    assert.equal(parseRegisterTab("reasons"), "reasons")
     assert.equal(parseRegisterTab("omsguru"), "omsguru")
     assert.equal(parseRegisterTab("shopify"), "shopify")
     assert.equal(parseRegisterTab(null), "register")
+    assert.equal(parseRegisterTab("reasons"), "register")
+    assert.equal(parseRegisterTab("sizing"), "register")
     assert.equal(parseRegisterTab("nope"), "register")
   })
 })

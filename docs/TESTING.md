@@ -103,7 +103,7 @@ The declaration counts are the number of top-level `test(` calls in each file, f
 | `panel-queue.test.ts` (desktop-agent) | 5 | No | Six isolated panels, marketplace-to-panel mapping (Myntra EJ vs VB split), round-robin rotation skipping busy/held panels, error cooldown, completed panels rejoining. |
 | `local-secrets.test.ts` (desktop-agent) | 3 | No | Plaintext fallback round-trip, legacy file reads, undecryptable values failing closed without throwing. The OS-store (DPAPI) path runs only inside the packaged app. |
 | `update-check.test.ts` (desktop-agent) | 3 | No | Semver vs `desktop-v*` tags (run number ignored), available-update reporting with download links, offline failure closed. |
-| `register-view.test.ts` (src) | 13 | No | Register query building (trim, pagination, Amount sort mapping), issue/sub-issue/ticket labels, ticket dedupe and status tones, flyer bench outcomes, matched-tracking text, and the five tab keys with the legacy sizing alias. |
+| `register-view.test.ts` (src) | 13 | No | Register query building (trim, pagination, Amount sort mapping), issue/sub-issue/ticket labels, ticket dedupe and status tones, flyer bench outcomes, matched-tracking text, and the four tab keys with retired-param fallback. |
 
 The tests exercise server-side code, the desktop agent's pure modules, and the register page's pure view helpers. There are no tests for rendered React pages and no browser tests.
 
