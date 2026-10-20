@@ -2429,3 +2429,8 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
 - **Bug fixed:** Amount sort indicator now really sorts (client allowlist missed the server `amount` key; server already supported it). 4-angle review applied (SAFE/CAREFUL); declined: test-glob rewrite, ScanReturns label unification, table-system collapse, virtualization (flagged follow-ups).
 - **Ran:** typecheck 0 errors, build OK, 463 tests (426 pass, 0 fail, 37 skipped); secret scan clean; `gh pr checks` green pre-merge; post-merge runs watched to success. No rendered-component/browser tests (no harness) — stated in PR.
 - **Docs:** TESTING.md (40 files, 463 counts, register-view row), AGENTS.md + README status lines.
+
+### 2026-10-20, Hermes Agent, PR #33 merged: reasons tab removed, analytics verified
+- **Audit verdict:** analytics tab fully working (scoped `/api/reports/analytics`, tested helpers, KPIs/charts/tables/CSV, live refresh) — kept as the register-driven analysis, no rebuild. Overview already shows volume/reasons/issues/SKUs — no change. Reasons tab removed from /register per request (964-line component deleted); server routes, schema, tests, digest sender stay for API use; ?tab=reasons/sizing falls back to the table.
+- **What:** `register-tabs-cleanup` → PR #33 → merged. PR checks + post-merge CI green, VPS deploy success. No desktop release (no installer paths touched).
+- **Ran:** tests TDD-first (RED 2 failing → GREEN 13/13), typecheck 0 errors, build OK (reasons chunk gone), full suite 463 (426 pass, 0 fail), secret scan clean.
