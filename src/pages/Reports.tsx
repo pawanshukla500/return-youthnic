@@ -43,14 +43,12 @@ function lazyNamed<T>(load: () => Promise<T>, name: keyof T) {
 const AnalyticsReport = lazyNamed(() => import("../AnalyticsReport"), "AnalyticsReport")
 const ShopifyReport = lazyNamed(() => import("../ShopifyReport"), "ShopifyReport")
 const OmsguruDailyReport = lazyNamed(() => import("../OmsguruDailyReport"), "OmsguruDailyReport")
-const ReturnReasonsReport = lazyNamed(() => import("../ReturnReasonsReport"), "ReturnReasonsReport")
 
 // Analysis tabs behind the switcher: label, loading text, and component.
-const TAB_PANELS: Record<Exclude<RegisterTabKey, "register">, { tab: RegisterTab; loading: string; Panel: ComponentType }> = {
+const TAB_PANELS: Partial<Record<RegisterTabKey, { tab: RegisterTab; loading: string; Panel: ComponentType }>> = {
   analytics: { tab: VIEW_TABS[1], loading: "Loading return analytics…", Panel: AnalyticsReport },
   shopify: { tab: VIEW_TABS[2], loading: "Loading Shopify returns…", Panel: ShopifyReport },
   omsguru: { tab: VIEW_TABS[3], loading: "Loading OMSGuru update…", Panel: OmsguruDailyReport },
-  reasons: { tab: VIEW_TABS[4], loading: "Loading reason and sizing intelligence…", Panel: ReturnReasonsReport },
 }
 
 type Row = RegisterRow
@@ -567,14 +565,16 @@ export function Reports() {
 
   if (viewMode !== "register") {
     const panel = TAB_PANELS[viewMode]
-    return (
-      <TabPanel label={panel.tab.label}>
-        {switcher}
-        <Suspense fallback={<Loading label={panel.loading} />}>
-          <panel.Panel />
-        </Suspense>
-      </TabPanel>
-    )
+    if (panel) {
+      return (
+        <TabPanel label={panel.tab.label}>
+          {switcher}
+          <Suspense fallback={<Loading label={panel.loading} />}>
+            <panel.Panel />
+          </Suspense>
+        </TabPanel>
+      )
+    }
   }
 
   if (error && !data) {
