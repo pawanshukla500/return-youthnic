@@ -164,6 +164,12 @@ engine on `127.0.0.1:3005`.
    trusted. Run the engine as its own unprivileged user so that mode is meaningful.
 4. The engine token and the PC API key are never logged. Do not add logging that prints
    them.
+5. Chromium keeps its renderer sandbox. The browser loads untrusted supplier pages, so
+   the sandbox is what keeps a compromised page away from the mounted browser profiles
+   and their supplier cookies. It is disabled only when `BROWSER_NO_SANDBOX=1` is set, or
+   when the engine runs as root on Linux (where Chromium refuses to start otherwise).
+   Run the engine as its own unprivileged user and leave the flag unset unless your
+   container runtime blocks the user namespaces the sandbox needs.
 
 ---
 

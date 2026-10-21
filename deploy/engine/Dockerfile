@@ -22,6 +22,10 @@ ENV NODE_ENV=production \
     BROWSER_MODE=headless \
     BROWSER_PATH=/usr/bin/chromium \
     HEADLESS=true
+# The image runs as the unprivileged `node` user, so Chromium keeps its renderer
+# sandbox. If a container runtime blocks the user namespaces the sandbox needs,
+# set BROWSER_NO_SANDBOX=1 to trade that isolation for a working browser. Never
+# set it on a host where the browser can already start sandboxed.
 
 # Chromium plus the fonts and shared libraries it needs headless on slim.
 RUN apt-get update \
