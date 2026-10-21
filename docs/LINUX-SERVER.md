@@ -148,10 +148,16 @@ The desktop shell then:
 - does **not** start a local engine and does **not** run a local worker;
 - loads its window from the remote engine and injects the bearer token on every request
   to that origin;
-- shows the remote worker state, panels, logs and controls.
+- shows the remote worker state, panels, logs and controls;
+- does **not** register itself to start at login. The autostart entry carries no
+  environment, so it would come back at the next sign-in without `RETURN_ENGINE_URL` and
+  silently start a local engine instead of connecting to the server. The remote engine is
+  the one that files claims, so nothing is lost. The token is never written to an
+  autostart file or a registry value, which would be readable by anyone who can read the
+  user profile.
 
 If `RETURN_ENGINE_URL` is unset the shell behaves exactly as before: it embeds a local
-engine on `127.0.0.1:3005`.
+engine on `127.0.0.1:3005` and registers itself to start hidden at login.
 
 ---
 

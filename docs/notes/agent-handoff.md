@@ -2585,3 +2585,17 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
 - **Not run:** no Docker, no Linux host, no live claim, and the retry/resume interleavings are not exercised end to end — they are covered by the pure tests and by reading.
 - **The next agent must not:** use a bind host directly as a client URL (go through `localEngineUrl()`); accept a `RETURN_ENGINE_URL` with a path; gate `run-one` on `engineBusy()` instead of `supplierProfileInUse()`; or clear `pollTimer` from a manual run without re-checking `isWorkerRunning`.
 
+### 2026-10-21, Factory Droid, branch `destop-app`: CodeAnt round 9, autostart fixed and verified in the packaged app
+
+- **CodeAnt reviewed `4ad1a8b`** and filed one new finding.
+- **Finding — a remote-configured shell autostarted a local engine (`desktop/main.ts`).** `registerAutoStart()` registered the app to start at login on every packaged launch. When the shell was configured as a client of a remote engine, `RETURN_ENGINE_URL`/`ENGINE_TOKEN` existed only in the launching shell's environment, so the next sign-in started the app **without** them, silently brought up a **local** engine, and changed where claims were filed. Writing the token into the autostart entry is not an acceptable fix: an autostart file or a `Run` value is readable by anyone who can read the profile.
+- **Fix:** `registerAutoStart()` now checks `readRemoteTargetSafely()` first and skips the entry when a remote target is configured (or when the configuration is invalid), logging why. A remote engine does the filing, so nothing is lost. `docs/LINUX-SERVER.md` §6 records the behaviour.
+- **Verified in the packaged build, both modes** (isolated temp data dir, port 3212):
+  - **remote mode** (`RETURN_ENGINE_URL` set): launched hidden, **no** autostart entry added — `PASS`.
+  - **local mode** (`RETURN_ENGINE_URL` unset): entry `electron.app.Return App = "...\Return App.exe" --hidden` added, and `/api/health` returned **200** `{ok,status,uptimeSeconds}`.
+  - The entry was then removed and `HKCU\...\Run` verified back to its **4-entry baseline**; no `Return App` process was left holding the temp dirs.
+- **Installer rebuilt with every fix so far:** `npm run desktop:dist` → `dist-electron/Return.App.Setup.1.2.0.exe` (113.4 MB, x64 NSIS) and `win-unpacked/Return App.exe`.
+- **Ran:** `npm run typecheck` exit 0 (3 projects); `npm test` 504 tests, 464 pass, 0 fail, 40 skipped locally; `npm run desktop:build` exit 0; `npm run desktop:dist` exit 0; the two packaged-app probes above. CI green for every commit this session.
+- **Not run:** the installer was not executed (needs admin, installs per-machine) and is **not code-signed** — SmartScreen warns on first run. No live claim, no Linux host, no container, no LLM call.
+- **The next agent must not:** register the start-at-login entry unconditionally (skip it for a remote-engine client); put `ENGINE_TOKEN` in an autostart file or a registry value; or assume the packaged autostart path was tested — re-check `HKCU\...\Run` after any launch and restore the baseline.
+

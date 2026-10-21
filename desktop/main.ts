@@ -610,6 +610,22 @@ function scheduleLocalEngineRetry(): void {
 function registerAutoStart(): void {
   if (!app.isPackaged) return
 
+  // A shell configured as a client of a remote engine must not register itself to
+  // start at login. The autostart entry carries no environment, so the next
+  // sign-in would start a LOCAL engine on this machine instead of connecting to
+  // the server, silently changing where claims are filed. Writing ENGINE_TOKEN
+  // into the entry is not an option either: an autostart file or a Run key value
+  // is readable by anyone who can read the profile. The remote engine is the one
+  // that files claims, so skipping the entry loses nothing.
+  const remote = readRemoteTargetSafely()
+  if (remote.target || remote.configError) {
+    logger.info(
+      "RETURN_ENGINE_URL is set, so this shell is a client of a remote engine. Skipping the start-at-login entry, " +
+        "which would otherwise launch a local engine at the next sign-in.",
+    )
+    return
+  }
+
   if (process.platform !== "linux") {
     app.setLoginItemSettings({ openAtLogin: true, args: ["--hidden"] })
     return
