@@ -28,7 +28,7 @@
     <string name="connection_offline">OFFLINE</string>
     <string name="scanned_today">%1$s scanned today</string>
     <string name="pending_scans">%1$s pending</string>
-    <string name="aim_at_awb">Aim at return parcel AWB / tracking barcode</string>
+    <string name="aim_at_awb">Aim at the AWB / tracking barcode (QR or 1D)</string>
     <string name="torch_on">Torch On</string>
     <string name="torch_off">Torch Off</string>
     <string name="manual_entry">Manual AWB</string>
