@@ -2,7 +2,7 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { protectSecret, revealSecret } from "./local-secrets.js"
-import { agentDataDir } from "./paths.js"
+import { agentDataDir, ensureAgentDataDir, writeSecretFile } from "./paths.js"
 
 export type AgentConfig = {
   agentUuid: string
@@ -34,10 +34,7 @@ export function isTrustedBackendUrl(value: string): boolean {
 }
 
 export function loadAgentConfig(): AgentConfig {
-  const baseDir = agentDataDir()
-  if (!fs.existsSync(baseDir)) {
-    fs.mkdirSync(baseDir, { recursive: true })
-  }
+  const baseDir = ensureAgentDataDir()
 
   const configFile = path.join(baseDir, "config.json")
   let saved: Partial<AgentConfig> = {}
@@ -79,7 +76,8 @@ export function loadAgentConfig(): AgentConfig {
   // Persist if first run or if legacy localhost URL was upgraded
   if (!fs.existsSync(configFile) || saved.backendUrl !== backendUrl) {
     try {
-      fs.writeFileSync(configFile, JSON.stringify({ ...config, apiKey: protectSecret(config.apiKey) }, null, 2), "utf8")
+      // config.json holds the PC API key, so it is written owner-only.
+      writeSecretFile(configFile, JSON.stringify({ ...config, apiKey: protectSecret(config.apiKey) }, null, 2))
     } catch {
       // ignore
     }
@@ -96,7 +94,7 @@ export function saveAgentConfig(updates: Partial<AgentConfig>): AgentConfig {
   const updated: AgentConfig = { ...current, ...updates }
   const configFile = path.join(agentDataDir(), "config.json")
   try {
-    fs.writeFileSync(configFile, JSON.stringify({ ...updated, apiKey: protectSecret(updated.apiKey) }, null, 2), "utf8")
+    writeSecretFile(configFile, JSON.stringify({ ...updated, apiKey: protectSecret(updated.apiKey) }, null, 2))
   } catch {
     // ignore
   }

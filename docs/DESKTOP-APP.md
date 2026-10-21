@@ -14,8 +14,10 @@ operator confirm). Closing the window keeps it running in the tray.
 2. Run it (admin rights needed — it installs per-machine into
    `C:\Program Files\Return App\` with Desktop and Start Menu shortcuts).
 3. The installer automatically:
-   - registers the **ReturnAppClaimBot** Windows Scheduled Task (starts the
-     app hidden at every sign-in, restarts it up to 3 times on failure);
+   - registers the **ReturnAppClaimBot** Windows Scheduled Task (starts the app
+     hidden at every sign-in, retries on failure every minute, and relaunches it
+     within 15 minutes if it stops for any reason — see
+     [section 8](#8-long-running-reliability-247-operation));
    - warns if no Edge/Chrome/Chromium browser is installed (install one or
      set a `BROWSER_PATH` environment variable — the bot drives it);
    - launches the app after setup.
@@ -74,7 +76,9 @@ stops for manual reconciliation instead of retrying blind.
 | Failure | What happens |
 |---|---|
 | PC reboot | Scheduled task + auto-start relaunch hidden; saved sign-in resumes |
-| App crash | Task restarts it (3 tries); tray quit is the only full stop |
+| App crash | Fatal errors exit non-zero so the task restarts a clean process; the 15-minute watchdog catches any other stop (3 tries no longer applies) |
+| Window renderer dies | The window reloads automatically; filing continues |
+| Local engine cannot bind at startup | The shell retries every 30s (up to 20 times) and reloads the window when it succeeds |
 | Network drop | Saved sign-in kept; worker retries with backoff |
 | Portal OTP/CAPTCHA | Browser stays open, panel shows Needs you, others keep filing |
 | Order not eligible (e.g. Meesho packaging policy) | Job marked `not_eligible`, skipped, manual review on web |
@@ -106,7 +110,59 @@ stops for manual reconciliation instead of retrying blind.
 | `POST /api/portal-logins/test` | Open the visible browser and save that panel's cookies |
 | `POST /api/jobs/run-one` | Queue one waiting claim immediately |
 
-## 8. Remote engine mode (Linux server)
+## 8. Long-running reliability (24/7 operation)
+
+The app is expected to run for weeks on a warehouse PC. Five mechanisms keep it alive:
+
+1. **Crash guards (`desktop-agent/src/crash-guard.ts`).** An unhandled promise
+   rejection (one failed HTTP call, a closed browser socket) is logged and the
+   bot keeps filing. An uncaught exception is logged **synchronously** and the
+   process exits non-zero, so the supervisor starts a clean process instead of
+   limping on with possibly-leaked browser processes.
+2. **Scheduled-task watchdog.** The installer registers `ReturnAppClaimBot` with
+   a 15-minute repetition on its logon trigger and `RestartOnFailure` every
+   minute. `MultipleInstancesPolicy=IgnoreNew` means the repetition never
+   duplicates a running instance; it only relaunches a stopped one. A clean exit
+   that `RestartOnFailure` would not catch is therefore still recovered within
+   15 minutes. The task never times out (`ExecutionTimeLimit=PT0S`).
+3. **Engine start retry.** If the local engine cannot bind at startup (a previous
+   instance still releasing the port, antivirus scanning the app folder), the
+   shell retries every 30 seconds up to 20 times and reloads the window when it
+   succeeds. A remote-engine misconfiguration is never overridden.
+4. **Renderer recovery.** If the window's renderer dies (GPU reset, out of
+   memory), it is reloaded automatically. The engine keeps filing throughout;
+   only the window is affected.
+5. **Bounded resources.** The evidence cache is pruned to 24 hours at startup,
+   logs are pruned to 7 days, the in-memory log ring is capped, and the poll
+   interval backs off while the queue is empty.
+
+Crash recovery was verified by running the packaged build and by tests in
+`desktop-agent/crash-guard.test.ts`, which spawn real processes: a rejected
+promise must not terminate the engine, and a fatal error must exit non-zero with
+the line already written to disk.
+
+### Building the installer locally on Windows
+
+`npm run desktop:dist` produces `dist-electron/Return.App.Setup.<version>.exe`.
+On a Windows PC with aggressive antivirus, electron-builder can fail with
+`EPERM: operation not permitted, rename ...<tool>.tmp -> <tool>` while unpacking
+its own build tools. The app code is not involved; the antivirus is holding a
+handle on a freshly written tool binary. It is fixed by letting one build fail,
+then renaming the leftover `<tool>.tmp` directory to the final name and writing a
+completion marker next to it:
+
+```powershell
+$base = "$env:LOCALAPPDATA\electron-builder\Cache"
+# For each toolset that failed (7zip@1.0.0, nsis-3.0.4.1, nsis-resources-3.4.1):
+#   rename "<tool>.tmp" -> "<tool>", then write "<tool>.state" (UTF-8, no BOM):
+#   {"version":1,"state":"complete","timestamp":<ms>,"fileCount":0,"extractedSize":0}
+```
+
+The marker must be written **without a byte-order mark** (`[System.IO.File]::WriteAllText`
+with a `UTF8Encoding($false)`), or electron-builder cannot parse it and re-extracts.
+CI on `windows-latest` does not have this problem.
+
+## 9. Remote engine mode (Linux server)
 
 The claim bot can run on a Linux server instead of (or in addition to) the
 warehouse PC. In that mode the desktop app is a client of the remote engine.
@@ -132,12 +188,14 @@ What changes:
 Full server setup, health checks, systemd and Docker are in
 [LINUX-SERVER.md](LINUX-SERVER.md).
 
-## 9. Honestly not yet done
+## 10. Honestly not yet done
 
 - Full auto-filing for Flipkart/Amazon/Myntra/Ajio (assisted today; writing
   untested portal scripts would be mock automation). This also means only Meesho
   is useful in headless remote mode.
 - Silent auto-update (needs code signing + notarization first).
+- The installer is **not code-signed**. Windows SmartScreen will warn on first
+  run until a certificate is bought.
 - No live claim has been filed from this exact build in this session; Meesho
   flow is proven by prior runs, the rest by assisted screenshots + tests.
 - No live claim has been filed from a Linux server. The Linux paths are written

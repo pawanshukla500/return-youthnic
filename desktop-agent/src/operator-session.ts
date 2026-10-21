@@ -1,8 +1,7 @@
 import fs from "node:fs"
-import path from "node:path"
 import { loadAgentConfig } from "./config.js"
 import { protectSecret, revealSecret } from "./local-secrets.js"
-import { agentSubdir } from "./paths.js"
+import { agentSubdir, writeSecretFile } from "./paths.js"
 
 export type OperatorProfile = {
   name: string
@@ -32,9 +31,8 @@ function readStored(): StoredSession | null {
 }
 
 function writeStored(session: StoredSession): void {
-  const file = sessionFile()
-  fs.mkdirSync(path.dirname(file), { recursive: true })
-  fs.writeFileSync(file, JSON.stringify({ ...session, token: protectSecret(session.token) }), { encoding: "utf8" })
+  // The operator bearer token is a secret: owner-only file permissions.
+  writeSecretFile(sessionFile(), JSON.stringify({ ...session, token: protectSecret(session.token) }))
 }
 
 export function operatorAuthorization(): string | null {

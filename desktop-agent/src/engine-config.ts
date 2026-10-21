@@ -90,3 +90,40 @@ export function bearerTokenFromHeader(header: string | undefined | null): string
   const match = /^Bearer\s+(.+)$/i.exec(header.trim())
   return match ? match[1].trim() : null
 }
+
+/** Strip the brackets WHATWG URL keeps around an IPv6 hostname. */
+function bareHostname(hostname: string): string {
+  return hostname.replace(/^\[/, "").replace(/\]$/, "")
+}
+
+/**
+ * The URL a client uses to reach an engine bound to `bind.host`.
+ *
+ * The bind host is not always `127.0.0.1`: `ENGINE_HOST=::1` listens on IPv6
+ * loopback only, so a client that hardcoded `127.0.0.1` would be refused. IPv6
+ * literals also need brackets in a URL. Local mode is always a loopback bind,
+ * so the result never leaves this machine.
+ */
+export function localEngineUrl(bind: Pick<EngineBind, "host" | "port">): string {
+  const host = bind.host.includes(":") ? `[${bind.host}]` : bind.host
+  return `http://${host}:${bind.port}/`
+}
+
+/**
+ * True when this URL would carry the bearer token in clear text over a network.
+ *
+ * Plain `http:` to loopback is fine (the bytes never leave the machine, and it
+ * is how a local engine and an SSH tunnel are reached). Plain `http:` to any
+ * other host is not: the engine token is a long-lived shared secret, so the
+ * shell refuses that target instead of leaking it to a network observer.
+ */
+export function isInsecureRemoteUrl(rawUrl: string): boolean {
+  let parsed: URL
+  try {
+    parsed = new URL(rawUrl)
+  } catch {
+    return false
+  }
+  if (parsed.protocol !== "http:") return false
+  return !isLoopbackHost(bareHostname(parsed.hostname))
+}

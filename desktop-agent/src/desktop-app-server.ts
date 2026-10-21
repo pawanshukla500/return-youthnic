@@ -3,7 +3,8 @@ import fs from "node:fs"
 import path from "node:path"
 import child_process from "node:child_process"
 import { loadAgentConfig, saveAgentConfig, type AgentConfig } from "./config.js"
-import { bearerTokenFromHeader, engineTokenMatches, resolveEngineBind, type EngineBind } from "./engine-config.js"
+import { bearerTokenFromHeader, engineTokenMatches, localEngineUrl, resolveEngineBind, type EngineBind } from "./engine-config.js"
+import { installCrashGuards } from "./crash-guard.js"
 import { agentDataDir } from "./paths.js"
 import { logger } from "./logger.js"
 import { AgentBackendClient } from "./agent-client.js"
@@ -17,7 +18,7 @@ import { checkForUpdates } from "./update-check.js"
 
 /**
  * The engine owns exactly one worker loop. The Electron shell embeds this
- * module in-process and drives it through engineStart/enginePause/enginePollNow;
+ * module in-process and drives it through engineStart/enginePause/engineRunOnceNow;
  * a remote client drives the same state over the HTTP routes below. There is no
  * second copy of the loop anywhere.
  */
@@ -28,6 +29,15 @@ let client = new AgentBackendClient(config)
 
 let isWorkerRunning = false
 let isCurrentlyProcessing = false
+/**
+ * A poll cycle is in flight (from pollJob() through job completion).
+ *
+ * This is separate from isCurrentlyProcessing, which is only set *after*
+ * pollJob() returns a job. Without this lock two overlapping cycles could both
+ * see an empty queue, both lease a job, and launch two supplier browsers at
+ * once. It is released in a finally block so a thrown error cannot wedge it.
+ */
+let pollInFlight = false
 let activeJobInfo: any = null
 let lastHeartbeatTime: string = ""
 let lastPollTime: string = ""
@@ -54,7 +64,8 @@ logger.onLog((entry) => {
 // ---------------------------------------------------------------------------------------------------------------
 
 async function pollAndProcessJob(): Promise<boolean> {
-  if (!isWorkerRunning || isCurrentlyProcessing || holdPortalBrowser()) return false
+  if (!isWorkerRunning || pollInFlight || holdPortalBrowser()) return false
+  pollInFlight = true
   lastPollTime = new Date().toLocaleTimeString("en-IN")
   let submissionOutcomeUnknown = false
 
@@ -174,6 +185,7 @@ async function pollAndProcessJob(): Promise<boolean> {
   } finally {
     isCurrentlyProcessing = false
     activeJobInfo = null
+    pollInFlight = false
     await client.sendHeartbeat("online", { status: "idle" })
   }
   return true
@@ -201,7 +213,8 @@ function pollDelayMs(processedJob: boolean): number {
 /**
  * Schedule the next poll. `pollTimer` stays non-null for the whole life of the
  * poll chain and is cleared only when the worker is paused, so a resume cannot
- * start a second chain.
+ * start a second chain. `pollInFlight` in pollAndProcessJob() is the second
+ * guard: even if two timers fired, only one cycle can lease work.
  */
 function scheduleNextPoll(delayMs: number): void {
   if (pollTimer) clearTimeout(pollTimer)
@@ -222,6 +235,34 @@ function scheduleNextPoll(delayMs: number): void {
       }
     })()
   }, delayMs)
+}
+
+/**
+ * Run one poll cycle now without resuming a paused worker.
+ *
+ * This is what "Poll Now" / "Check for Claims Now" uses. A one-shot check must
+ * not silently switch continuous filing back on: the operator pauses the bot for
+ * a reason, and a manual check is not consent to resume it. If the worker is
+ * running, the current chain is nudged forward; if it is paused, only this single
+ * cycle runs and no next poll is scheduled.
+ */
+export async function engineRunOnceNow(): Promise<void> {
+  if (!operatorSignedIn) return
+  idlePolls = 0
+  if (isWorkerRunning) {
+    scheduleNextPoll(1000)
+    return
+  }
+  if (pollTimer) {
+    clearTimeout(pollTimer)
+    pollTimer = null
+  }
+  nextPollCountdown = 0
+  try {
+    await pollAndProcessJob()
+  } catch (err) {
+    logger.error("Manual poll cycle failed.", err)
+  }
 }
 
 function startScheduler(): void {
@@ -1143,14 +1184,6 @@ export function enginePause(): void {
   isWorkerRunning = false
 }
 
-/** Check for a claim immediately instead of waiting for the next poll. */
-export function enginePollNow(): void {
-  if (!operatorSignedIn) return
-  isWorkerRunning = true
-  idlePolls = 0
-  scheduleNextPoll(1000)
-}
-
 export function engineSetBackendUrl(url: string): void {
   config = saveAgentConfig({ backendUrl: url })
   client = new AgentBackendClient(config)
@@ -1162,6 +1195,10 @@ export function engineBindInfo(): EngineBind | null {
 
 export function startDesktopAppServer(bind: EngineBind = resolveEngineBind()): Promise<http.Server> {
   engineBind = bind
+  // Long-running process: install the crash guards before anything can throw, so
+  // one failed request cannot take the bot down and a fatal error exits cleanly
+  // for the supervisor to restart.
+  installCrashGuards()
   // Prune the local evidence cache once at startup so an installed engine and a
   // server engine both honour the 24-hour cache rule (AGENTS.md rule 13).
   void client.pruneOldEvidenceFiles().catch(() => undefined)
@@ -1171,18 +1208,15 @@ export function startDesktopAppServer(bind: EngineBind = resolveEngineBind()): P
 
       // The health probe is the only route that never needs the engine token, so
       // Docker, systemd and load balancers can check liveness without a secret.
+      // Keep it to liveness only: on a non-loopback bind anyone who can reach the
+      // port sees this, so it must not disclose the backend URL, the operator's
+      // sign-in state, or the exact runtime and platform version. Those live on
+      // the authenticated /api/v1/engine/info route instead.
       if (url.pathname === "/api/health") {
         sendJson(res, 200, {
           ok: true,
           status: isCurrentlyProcessing ? "busy" : isWorkerRunning ? "running" : "idle",
-          signedIn: operatorSignedIn,
           uptimeSeconds: Math.round(process.uptime()),
-          version: process.env.RETURN_APP_VERSION || "dev",
-          platform: process.platform,
-          arch: process.arch,
-          node: process.version,
-          engineMode: bind.mode,
-          backendUrl: config.backendUrl,
         })
         return
       }
@@ -1341,7 +1375,8 @@ export function startDesktopAppServer(bind: EngineBind = resolveEngineBind()): P
           return
         }
         logger.info("Manual claim check triggered from the desktop bot.")
-        enginePollNow()
+        // A one-shot check must not resume a paused worker (see engineRunOnceNow).
+        void engineRunOnceNow()
         sendJson(res, 200, { ok: true })
         return
       }
@@ -1452,7 +1487,7 @@ export function startDesktopAppServer(bind: EngineBind = resolveEngineBind()): P
             sendJson(res, result.status, { error: result.message })
             return
           }
-          enginePollNow()
+          void engineRunOnceNow()
           sendJson(res, 200, { ok: true, message: "That claim is next. The bot will open the supplier panel for it." })
         } catch (error) {
           sendJson(res, 400, { error: error instanceof Error ? error.message : "Could not run that claim." })
@@ -1524,7 +1559,7 @@ export function startDesktopAppServer(bind: EngineBind = resolveEngineBind()): P
           `Automation engine listening on ${bind.host}:${bind.port} (remote mode; bearer token required on every route except /api/health).`,
         )
       } else {
-        logger.info(`Claim bot window is ready at http://127.0.0.1:${bind.port}`)
+        logger.info(`Claim bot window is ready at ${localEngineUrl(bind)}`)
       }
       resolve(server)
     })
@@ -1578,7 +1613,9 @@ async function main() {
   // A server deployment never opens a window; a desktop run does unless asked not to.
   const isHeadlessArg = process.argv.includes("--no-window") || process.env.HEADLESS === "true"
   if (bind.mode === "local" && !isHeadlessArg) {
-    launchAppWindow(`http://127.0.0.1:${bind.port}`)
+    // Use the bound host, not a hardcoded 127.0.0.1: ENGINE_HOST=::1 listens on
+    // IPv6 loopback only, where 127.0.0.1 would be refused.
+    launchAppWindow(localEngineUrl(bind))
   }
 }
 

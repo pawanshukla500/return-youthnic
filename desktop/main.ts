@@ -3,13 +3,13 @@ import fs from "node:fs"
 import { app, BrowserWindow, Menu, Tray, nativeImage, Notification, ipcMain, shell, session, type NativeImage } from "electron"
 import {
   enginePause,
-  enginePollNow,
+  engineRunOnceNow,
   engineStart,
   engineStatus,
   resumeClaimBotIfSignedIn,
   startDesktopAppServer,
 } from "../desktop-agent/src/desktop-app-server.js"
-import { resolveEngineBind, type EngineBind } from "../desktop-agent/src/engine-config.js"
+import { isInsecureRemoteUrl, localEngineUrl, resolveEngineBind, type EngineBind } from "../desktop-agent/src/engine-config.js"
 import { logger } from "../desktop-agent/src/logger.js"
 
 // Hardware efficiency switches for low-spec PCs (4GB RAM, 2-Core CPUs)
@@ -61,6 +61,16 @@ function readRemoteEngineTarget(): { url: string; token: string } | null {
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
     throw new Error("RETURN_ENGINE_URL must start with http:// or https://")
   }
+  // The engine token is a long-lived shared secret sent as a bearer header on
+  // every request. Plain http: to a non-loopback host would put it in clear text
+  // on the network. Loopback (and an SSH tunnel to it) is allowed; anything else
+  // must use https.
+  if (isInsecureRemoteUrl(parsed.toString())) {
+    throw new Error(
+      "RETURN_ENGINE_URL uses plain http: to a remote host, which would send ENGINE_TOKEN in clear text. " +
+        "Use an https:// URL, or an http://127.0.0.1 tunnel.",
+    )
+  }
   const token = (process.env.ENGINE_TOKEN || "").trim()
   if (!token) {
     throw new Error("RETURN_ENGINE_URL is set, so ENGINE_TOKEN must also be set to reach that engine.")
@@ -72,7 +82,8 @@ async function startLocalEngine(): Promise<EngineTarget> {
   const bind = resolveEngineBind()
   await startDesktopAppServer(bind)
   await resumeClaimBotIfSignedIn()
-  return { kind: "local", bind, url: `http://127.0.0.1:${bind.port}/` }
+  // Use the bound host: ENGINE_HOST=::1 listens on IPv6 loopback only.
+  return { kind: "local", bind, url: localEngineUrl(bind) }
 }
 
 async function resolveEngineTarget(): Promise<EngineTarget> {
@@ -85,7 +96,8 @@ async function resolveEngineTarget(): Promise<EngineTarget> {
 }
 
 function engineOrigin(target: EngineTarget): string {
-  return target.kind === "local" ? `http://127.0.0.1:${target.bind.port}` : new URL(target.url).origin
+  if (target.kind === "local") return new URL(localEngineUrl(target.bind)).origin
+  return new URL(target.url).origin
 }
 
 /** Status for the tray and the preload bridge, from the local engine or the remote control API. */
@@ -337,6 +349,22 @@ function createMainWindow(target: EngineTarget, startupError?: string): void {
     return { action: "deny" }
   })
 
+  // Long-running shell: if the renderer dies (GPU reset, out of memory, a driver
+  // crash), reload it instead of leaving a dead window on a 24/7 server PC. The
+  // engine keeps filing throughout; only this window is affected.
+  mainWindow.webContents.on("render-process-gone", (_event, details) => {
+    logger.error(`Claim bot window renderer gone (${details.reason}). Reloading.`)
+    setTimeout(() => {
+      if (!isQuitting && mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.reload()
+      }
+    }, 2000)
+  })
+
+  mainWindow.webContents.on("unresponsive", () => {
+    logger.warn("Claim bot window is unresponsive. The engine keeps running; the window will be reloaded if it dies.")
+  })
+
   // Close to tray so the 24/7 bot keeps running on the server PC.
   mainWindow.on("close", (event) => {
     if (!isQuitting) {
@@ -434,8 +462,9 @@ function createTray(): void {
 async function checkForClaimsNow(): Promise<void> {
   const target = engineTarget
   if (!target) return
+  // One-shot check: this must not resume a worker the operator paused.
   if (target.kind === "local") {
-    enginePollNow()
+    await engineRunOnceNow()
     return
   }
   await fetch(new URL("/api/scheduler/poll-now", target.url), {
@@ -476,6 +505,50 @@ if (!gotTheLock) {
   })
 }
 
+/**
+ * Retry a failed local engine start.
+ *
+ * A 24/7 bot must not stay dead because of a startup race (a previous instance
+ * still holding the port, a slow antivirus scan of the app folder). Retry with a
+ * bound so a genuine configuration error does not loop forever; the offline card
+ * keeps showing why in the meantime.
+ */
+let engineRetryTimer: NodeJS.Timeout | null = null
+const ENGINE_RETRY_INTERVAL_MS = 30_000
+const ENGINE_RETRY_MAX_ATTEMPTS = 20
+
+function scheduleLocalEngineRetry(): void {
+  if (engineRetryTimer) return
+  let attempts = 0
+  engineRetryTimer = setInterval(() => {
+    void (async () => {
+      attempts += 1
+      // A remote target is a configuration choice, not a race: never override it.
+      if (engineTarget || readRemoteEngineTarget()) {
+        if (engineRetryTimer) clearInterval(engineRetryTimer)
+        engineRetryTimer = null
+        return
+      }
+      try {
+        engineTarget = await startLocalEngine()
+        logger.info(`Claim bot engine started after retry ${attempts}.`)
+        if (engineRetryTimer) clearInterval(engineRetryTimer)
+        engineRetryTimer = null
+        mainWindow?.loadURL(engineTarget.url).catch(() => undefined)
+        refreshTray()
+      } catch (err) {
+        if (attempts >= ENGINE_RETRY_MAX_ATTEMPTS) {
+          logger.error("Claim bot engine could not start after repeated retries. Giving up until the next launch.", err)
+          if (engineRetryTimer) clearInterval(engineRetryTimer)
+          engineRetryTimer = null
+        } else {
+          logger.warn(`Claim bot engine retry ${attempts} failed; will try again in ${ENGINE_RETRY_INTERVAL_MS / 1000}s.`, err)
+        }
+      }
+    })()
+  }, ENGINE_RETRY_INTERVAL_MS)
+}
+
 app.whenReady().then(async () => {
   process.env.RETURN_APP_VERSION = app.getVersion()
 
@@ -500,6 +573,10 @@ app.whenReady().then(async () => {
   }
   createMainWindow(engineTarget ?? fallbackTarget, startupError)
   createTray()
+
+  if (startupError) {
+    scheduleLocalEngineRetry()
+  }
 
   // Refresh the tray periodically so it reflects the engine without a manual nudge.
   setInterval(() => refreshTray(), 15000)

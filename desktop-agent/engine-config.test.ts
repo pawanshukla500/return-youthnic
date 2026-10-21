@@ -6,7 +6,9 @@ import {
   MIN_ENGINE_TOKEN_LENGTH,
   bearerTokenFromHeader,
   engineTokenMatches,
+  isInsecureRemoteUrl,
   isLoopbackHost,
+  localEngineUrl,
   parseEnginePort,
   resolveEngineBind,
 } from "./src/engine-config.js"
@@ -72,5 +74,26 @@ describe("engine bind and remote-access policy", () => {
     assert.equal(bearerTokenFromHeader("Basic abc123"), null)
     assert.equal(bearerTokenFromHeader(undefined), null)
     assert.equal(bearerTokenFromHeader(""), null)
+  })
+
+  it("builds a client URL from the real bind host, including IPv6", () => {
+    assert.equal(localEngineUrl({ host: "127.0.0.1", port: 3005 }), "http://127.0.0.1:3005/")
+    assert.equal(localEngineUrl({ host: "localhost", port: 3100 }), "http://localhost:3100/")
+    // ::1 must be bracketed, or the URL is invalid and the dashboard is refused.
+    assert.equal(localEngineUrl({ host: "::1", port: 3005 }), "http://[::1]:3005/")
+  })
+
+  it("refuses a plain-http remote target so the engine token never crosses the wire in clear text", () => {
+    // Loopback over http is fine: the bytes never leave the machine (SSH tunnel).
+    assert.equal(isInsecureRemoteUrl("http://127.0.0.1:3005/"), false)
+    assert.equal(isInsecureRemoteUrl("http://localhost:3005/"), false)
+    assert.equal(isInsecureRemoteUrl("http://[::1]:3005/"), false)
+    // https is always fine.
+    assert.equal(isInsecureRemoteUrl("https://claims.example.com/"), false)
+    assert.equal(isInsecureRemoteUrl("https://10.0.0.5:3005/"), false)
+    // Plain http to anything else would leak the bearer token.
+    assert.equal(isInsecureRemoteUrl("http://claims.example.com/"), true)
+    assert.equal(isInsecureRemoteUrl("http://10.0.0.5:3005/"), true)
+    assert.equal(isInsecureRemoteUrl("http://203.0.113.7/"), true)
   })
 })
