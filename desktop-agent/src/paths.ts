@@ -32,10 +32,21 @@ export function agentSubdir(...segments: string[]): string {
  * PC API key, so it is created owner-only (0700). On POSIX this is what stops
  * another local user on a shared server from reading those files. On Windows
  * the mode argument is ignored (ACLs govern access) and the call is harmless.
+ *
+ * `mode` only applies to a directory this call creates, so a root left behind
+ * by an older build with looser permissions would keep them. The chmod below
+ * tightens it on every call. Keeping the root at 0700 also stops another local
+ * user from traversing into the browser-profile and evidence subfolders even
+ * when those were created with default permissions.
  */
 export function ensureAgentDataDir(): string {
   const dir = agentDataDir()
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
+  try {
+    fs.chmodSync(dir, 0o700)
+  } catch {
+    // Windows and some network filesystems do not support this; not fatal.
+  }
   return dir
 }
 
@@ -48,7 +59,13 @@ export function ensureAgentDataDir(): string {
  * filesystem that cannot express the mode must not stop the engine.
  */
 export function writeSecretFile(filePath: string, contents: string): void {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 })
+  const dir = path.dirname(filePath)
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
+  try {
+    fs.chmodSync(dir, 0o700)
+  } catch {
+    // Windows and some network filesystems do not support this; not fatal.
+  }
   fs.writeFileSync(filePath, contents, { encoding: "utf8", mode: 0o600 })
   try {
     fs.chmodSync(filePath, 0o600)
