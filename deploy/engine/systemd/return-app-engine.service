@@ -1,0 +1,41 @@
+[Unit]
+Description=Return App Marketplace Claims Automation Engine
+Documentation=https://github.com/pawanshukla500/return-youthnic/blob/main/docs/LINUX-SERVER.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Create this user once:  sudo useradd --system --create-home --shell /usr/sbin/nologin returnapp
+User=returnapp
+Group=returnapp
+
+# Node 22+ must be on the host. Adjust WorkingDirectory to the checkout.
+WorkingDirectory=/opt/return-app
+EnvironmentFile=/etc/return-app/engine.env
+ExecStart=/usr/bin/node --import tsx desktop-agent/src/desktop-app-server.ts --no-window
+
+# The engine must survive a crash and come back without a desktop session.
+Restart=always
+RestartSec=5
+# Give an in-flight claim time to finish before a restart escalates to SIGKILL.
+KillSignal=SIGTERM
+TimeoutStopSec=120
+KillMode=mixed
+
+# Chromium needs a writable /dev/shm; give it real space instead of a small tmpfs.
+PrivateTmp=false
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=false
+ReadWritePaths=/var/lib/return-app-engine
+LimitNOFILE=65535
+
+# Logs go to the journal and to the engine's own daily file under
+# AGENT_DATA_DIR/logs. Secrets are never logged.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=return-app-engine
+
+[Install]
+WantedBy=multi-user.target

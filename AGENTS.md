@@ -49,6 +49,9 @@ Each rule has a check. The handoff lists the checks under [Invariants](docs/note
 11. **Report only what you ran.** Do not write that something passes, works or is verified unless you ran it and read the output.
 12. **Mobile APK release and in-app update synchronization.** Any change that applies to the mobile app or scanning behavior must be reflected in the release manifest (`data/return-scan-release.json` and `server/mobile-release.ts`) and published through the GitHub Actions APK workflow (`.github/workflows/return-scan-apk.yml`). The version code and download URL must always match the published release so installed warehouse Android devices receive the in-app update notification and can update smoothly.
 13. **Desktop hardware discipline and process isolation.** The Windows desktop application and automation engine must remain operable 24/7 on 4GB RAM / 2-core CPU hardware with < 0.5% idle CPU. Never exceed 256MB V8 heap limit. All child browser processes spawned for supplier panel automation must be strictly terminated with complete process-tree signals (`taskkill /T /F`). Media downloads must stream chunk-by-chunk directly to disk and purge cache older than 24 hours. Desktop releases are automated via `.github/workflows/desktop-release.yml`.
+14. **One worker loop, owned by the engine.** The automation engine (`desktop-agent/src/desktop-app-server.ts`) owns the only claim worker loop. The Electron shell (`desktop/main.ts`) is a client of it and must not hold a second copy of the loop or a second scheduler.
+15. **The engine is fail-closed when exposed.** A non-loopback bind requires `ENGINE_TOKEN` (at least 24 characters) and the engine must refuse to start without one. Remote requests carry `Authorization: Bearer <ENGINE_TOKEN>`; the token is compared in constant time, is never logged, and is never accepted from a query string. Never publish the engine port directly to the internet. Everything under `AGENT_DATA_DIR` (browser profiles, operator session, evidence cache) is secret.
+16. **All three deployment modes stay buildable.** Any change to `desktop/` or `desktop-agent/` must keep the Windows desktop, Linux desktop and headless Linux server modes working. `npm run typecheck` covers `desktop` and `desktop-agent` through `tsconfig.desktop.json`; a change that only passes `tsconfig.json` is not verified. The deployment artifacts in `deploy/engine/` must match the engine's real routes and environment variables.
 
 ## Commands
 
@@ -65,6 +68,26 @@ npm test
 ```
 
 The two database checks run only when `TEST_DATABASE_URL` is set to a dedicated database whose name contains `test`. Without it they are reported as skipped, and a skipped check has not passed.
+
+`npm run typecheck` runs three projects: `tsconfig.json` (`src`), `tsconfig.server.json` (`server`) and `tsconfig.desktop.json` (`desktop`, `desktop-agent`).
+
+Desktop application and automation engine:
+
+```bash
+npm run desktop
+```
+
+```bash
+npm run desktop:dist
+```
+
+```bash
+npm run engine
+```
+
+```bash
+npm run engine:docker
+```
 
 ## Roles
 

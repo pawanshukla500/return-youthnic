@@ -96,6 +96,8 @@ export class BrowserRunner {
   private ws: WebSocket | null = null
   private proc: child_process.ChildProcess | null = null
   private debugPort = 0
+  /** Set by launch(). Declared so the profileDirectory getter is typed. */
+  private profileDir = ""
 
   get profileDirectory(): string {
     return this.profileDir

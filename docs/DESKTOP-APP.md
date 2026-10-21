@@ -106,10 +106,41 @@ stops for manual reconciliation instead of retrying blind.
 | `POST /api/portal-logins/test` | Open the visible browser and save that panel's cookies |
 | `POST /api/jobs/run-one` | Queue one waiting claim immediately |
 
-## 8. Honestly not yet done
+## 8. Remote engine mode (Linux server)
+
+The claim bot can run on a Linux server instead of (or in addition to) the
+warehouse PC. In that mode the desktop app is a client of the remote engine.
+
+Set these in the environment the desktop app starts with:
+
+```powershell
+$env:RETURN_ENGINE_URL = "https://claims-engine.example.com"
+$env:ENGINE_TOKEN = "<the same token as the server>"
+```
+
+What changes:
+
+- The desktop app does **not** start a local engine and does **not** run a local
+  worker. Nothing is filed from this PC.
+- The window loads from the remote engine and the app injects the bearer token on
+  every request to that origin, so the dashboard, panels, logs and controls all
+  work unchanged.
+- Closing the desktop window does not stop filing: the server keeps working.
+- Leave `RETURN_ENGINE_URL` unset and the app behaves exactly as before (embedded
+  engine on `127.0.0.1:3005`).
+
+Full server setup, health checks, systemd and Docker are in
+[LINUX-SERVER.md](LINUX-SERVER.md).
+
+## 9. Honestly not yet done
 
 - Full auto-filing for Flipkart/Amazon/Myntra/Ajio (assisted today; writing
-  untested portal scripts would be mock automation).
+  untested portal scripts would be mock automation). This also means only Meesho
+  is useful in headless remote mode.
 - Silent auto-update (needs code signing + notarization first).
 - No live claim has been filed from this exact build in this session; Meesho
   flow is proven by prior runs, the rest by assisted screenshots + tests.
+- No live claim has been filed from a Linux server. The Linux paths are written
+  and reviewed, not exercised end to end.
+- No AI reply service is wired in yet. See
+  [notes/ai-provider-comparison.md](notes/ai-provider-comparison.md).

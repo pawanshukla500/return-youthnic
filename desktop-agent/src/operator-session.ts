@@ -1,8 +1,8 @@
 import fs from "node:fs"
-import os from "node:os"
 import path from "node:path"
 import { loadAgentConfig } from "./config.js"
 import { protectSecret, revealSecret } from "./local-secrets.js"
+import { agentSubdir } from "./paths.js"
 
 export type OperatorProfile = {
   name: string
@@ -15,7 +15,7 @@ type StoredSession = OperatorProfile & {
 }
 
 function sessionFile(): string {
-  return path.join(os.homedir(), ".taskflow-claim-agent", "operator-session.json")
+  return agentSubdir("operator-session.json")
 }
 
 function readStored(): StoredSession | null {

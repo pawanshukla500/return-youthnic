@@ -2,6 +2,7 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { protectSecret, revealSecret } from "./local-secrets.js"
+import { agentDataDir } from "./paths.js"
 
 export type AgentConfig = {
   agentUuid: string
@@ -33,8 +34,7 @@ export function isTrustedBackendUrl(value: string): boolean {
 }
 
 export function loadAgentConfig(): AgentConfig {
-  const homeDir = os.homedir()
-  const baseDir = path.join(homeDir, ".taskflow-claim-agent")
+  const baseDir = agentDataDir()
   if (!fs.existsSync(baseDir)) {
     fs.mkdirSync(baseDir, { recursive: true })
   }
@@ -94,8 +94,7 @@ export function saveAgentConfig(updates: Partial<AgentConfig>): AgentConfig {
   }
   const current = loadAgentConfig()
   const updated: AgentConfig = { ...current, ...updates }
-  const homeDir = os.homedir()
-  const configFile = path.join(homeDir, ".taskflow-claim-agent", "config.json")
+  const configFile = path.join(agentDataDir(), "config.json")
   try {
     fs.writeFileSync(configFile, JSON.stringify({ ...updated, apiKey: protectSecret(updated.apiKey) }, null, 2), "utf8")
   } catch {

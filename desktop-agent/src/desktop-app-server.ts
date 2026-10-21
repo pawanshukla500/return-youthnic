@@ -3,6 +3,8 @@ import fs from "node:fs"
 import path from "node:path"
 import child_process from "node:child_process"
 import { loadAgentConfig, saveAgentConfig, type AgentConfig } from "./config.js"
+import { bearerTokenFromHeader, engineTokenMatches, resolveEngineBind, type EngineBind } from "./engine-config.js"
+import { agentDataDir } from "./paths.js"
 import { logger } from "./logger.js"
 import { AgentBackendClient } from "./agent-client.js"
 import { BrowserRunner, findSystemBrowser } from "./browser-runner.js"
@@ -13,21 +15,13 @@ import { clearPanelHold, getPanelStatuses, markPanelBusy, markPanelResult, panel
 import { localEncryptionAvailable } from "./local-secrets.js"
 import { checkForUpdates } from "./update-check.js"
 
-export type DesktopBotControl = {
-  isRunning: () => boolean
-  isProcessing: () => boolean
-  activeSummary: () => string | null
-  nextPollSeconds: () => number
-  lastPollTime: () => string
-  onSignedIn: () => void
-  onSignedOut: () => void
-  pause: () => void
-  pollNow: () => void
-  backendUrl: () => string
-  setBackendUrl: (url: string) => void
-}
-
-let externalControl: DesktopBotControl | null = null
+/**
+ * The engine owns exactly one worker loop. The Electron shell embeds this
+ * module in-process and drives it through engineStart/enginePause/enginePollNow;
+ * a remote client drives the same state over the HTTP routes below. There is no
+ * second copy of the loop anywhere.
+ */
+let engineBind: EngineBind | null = null
 
 let config: AgentConfig = loadAgentConfig()
 let client = new AgentBackendClient(config)
@@ -59,15 +53,14 @@ logger.onLog((entry) => {
 // Automation Worker Loop
 // ---------------------------------------------------------------------------------------------------------------
 
-async function pollAndProcessJob(): Promise<void> {
-  if (!isWorkerRunning || isCurrentlyProcessing || holdPortalBrowser()) return
+async function pollAndProcessJob(): Promise<boolean> {
+  if (!isWorkerRunning || isCurrentlyProcessing || holdPortalBrowser()) return false
   lastPollTime = new Date().toLocaleTimeString("en-IN")
-  nextPollCountdown = Math.round(config.pollIntervalMs / 1000)
   let submissionOutcomeUnknown = false
 
   try {
     const poll = await client.pollJob()
-    if (!poll.hasJob || !poll.job) return
+    if (!poll.hasJob || !poll.job) return false
 
     isCurrentlyProcessing = true
     const jobHeader = poll.job
@@ -83,7 +76,7 @@ async function pollAndProcessJob(): Promise<void> {
       logger.error(`Could not retrieve bundle for job #${jobHeader.jobId}. Skipping.`)
       isCurrentlyProcessing = false
       activeJobInfo = null
-      return
+      return false
     }
 
     await client.updateProgress(jobHeader.jobId, {
@@ -183,35 +176,73 @@ async function pollAndProcessJob(): Promise<void> {
     activeJobInfo = null
     await client.sendHeartbeat("online", { status: "idle" })
   }
+  return true
 }
 
 let schedulerStarted = false
+let idlePolls = 0
+
+/**
+ * Poll cadence. Claims are picked up quickly while work is flowing and the
+ * interval backs off while the queue is empty, so an idle warehouse PC or
+ * server stays well under the low-spec CPU budget (AGENTS.md rule 13).
+ */
+function pollDelayMs(processedJob: boolean): number {
+  if (processedJob) {
+    idlePolls = 0
+    return Math.max(5000, Math.round(config.pollIntervalMs / 2))
+  }
+  idlePolls += 1
+  if (idlePolls > 10) return config.pollIntervalMs * 3
+  if (idlePolls > 4) return config.pollIntervalMs * 2
+  return config.pollIntervalMs
+}
+
+/**
+ * Schedule the next poll. `pollTimer` stays non-null for the whole life of the
+ * poll chain and is cleared only when the worker is paused, so a resume cannot
+ * start a second chain.
+ */
+function scheduleNextPoll(delayMs: number): void {
+  if (pollTimer) clearTimeout(pollTimer)
+  nextPollCountdown = Math.max(1, Math.round(delayMs / 1000))
+  pollTimer = setTimeout(() => {
+    void (async () => {
+      let processed = false
+      try {
+        processed = await pollAndProcessJob()
+      } catch (err) {
+        logger.error("Poll cycle failed.", err)
+      }
+      if (isWorkerRunning) {
+        scheduleNextPoll(pollDelayMs(processed))
+      } else {
+        pollTimer = null
+        nextPollCountdown = 0
+      }
+    })()
+  }, delayMs)
+}
 
 function startScheduler(): void {
   isWorkerRunning = true
-  if (schedulerStarted) return
-  schedulerStarted = true
+  if (!schedulerStarted) {
+    schedulerStarted = true
 
-  if (pollTimer) clearInterval(pollTimer)
-  if (countdownTimer) clearInterval(countdownTimer)
+    if (countdownTimer) clearInterval(countdownTimer)
+    countdownTimer = setInterval(() => {
+      if (nextPollCountdown > 0) nextPollCountdown--
+    }, 1000)
 
-  pollTimer = setInterval(pollAndProcessJob, config.pollIntervalMs)
-  countdownTimer = setInterval(() => {
-    if (nextPollCountdown > 0) {
-      nextPollCountdown--
-    } else {
-      nextPollCountdown = Math.round(config.pollIntervalMs / 1000)
-    }
-  }, 1000)
+    // Send periodic heartbeat while the bot is signed in and running.
+    setInterval(async () => {
+      lastHeartbeatTime = new Date().toLocaleTimeString("en-IN")
+      const status = isWorkerRunning ? "online" : "offline"
+      await client.sendHeartbeat(status, { status: isCurrentlyProcessing ? "busy" : "idle", uptime: process.uptime() })
+    }, config.heartbeatIntervalMs)
+  }
 
-  // Send periodic heartbeat while the bot is signed in and running.
-  setInterval(async () => {
-    lastHeartbeatTime = new Date().toLocaleTimeString("en-IN")
-    const status = isWorkerRunning ? "online" : "offline"
-    await client.sendHeartbeat(status, { status: isCurrentlyProcessing ? "busy" : "idle", uptime: process.uptime() })
-  }, config.heartbeatIntervalMs)
-
-  void pollAndProcessJob()
+  if (!pollTimer) scheduleNextPoll(config.pollIntervalMs)
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -1041,10 +1072,6 @@ function readJson(req: http.IncomingMessage): Promise<Record<string, unknown>> {
 
 async function beginClaimWork(): Promise<void> {
   operatorSignedIn = true
-  if (externalControl) {
-    externalControl.onSignedIn()
-    return
-  }
   await client.register()
   startScheduler()
 }
@@ -1066,11 +1093,136 @@ export async function resumeClaimBotIfSignedIn(): Promise<boolean> {
   return true
 }
 
-export function startDesktopAppServer(port = 3005, control?: DesktopBotControl): Promise<http.Server> {
-  externalControl = control ?? null
+// ---------------------------------------------------------------------------------------------------------------
+// Engine control surface
+//
+// The Electron shell embeds this module and calls these functions directly.
+// A remote client (desktop app pointed at a Linux server) reaches the same
+// state through the HTTP routes below. Both read one set of variables, so the
+// worker loop, the tray and the dashboard can never disagree.
+// ---------------------------------------------------------------------------------------------------------------
+
+export type EngineStatusSnapshot = {
+  workerRunning: boolean
+  isCurrentlyProcessing: boolean
+  activeSummary: string | null
+  signedIn: boolean
+  backendUrl: string
+  agentUuid: string
+  agentName: string
+  nextPollCountdown: number
+  lastHeartbeatTime: string
+  lastPollTime: string
+  activeJobInfo: unknown
+}
+
+export function engineStatus(): EngineStatusSnapshot {
+  return {
+    workerRunning: isWorkerRunning,
+    isCurrentlyProcessing,
+    activeSummary: activeJobInfo ? `${activeJobInfo.marketplace} #${activeJobInfo.jobId}` : null,
+    signedIn: operatorSignedIn,
+    backendUrl: config.backendUrl,
+    agentUuid: config.agentUuid,
+    agentName: config.agentName,
+    nextPollCountdown,
+    lastHeartbeatTime,
+    lastPollTime,
+    activeJobInfo,
+  }
+}
+
+/** Resume the worker. A no-op until an Admin/Supervisor is signed in. */
+export function engineStart(): void {
+  if (!operatorSignedIn) return
+  startScheduler()
+}
+
+/** Pause the worker. It stays resident and resumes on engineStart(). */
+export function enginePause(): void {
+  isWorkerRunning = false
+}
+
+/** Check for a claim immediately instead of waiting for the next poll. */
+export function enginePollNow(): void {
+  if (!operatorSignedIn) return
+  isWorkerRunning = true
+  idlePolls = 0
+  scheduleNextPoll(1000)
+}
+
+export function engineSetBackendUrl(url: string): void {
+  config = saveAgentConfig({ backendUrl: url })
+  client = new AgentBackendClient(config)
+}
+
+export function engineBindInfo(): EngineBind | null {
+  return engineBind
+}
+
+export function startDesktopAppServer(bind: EngineBind = resolveEngineBind()): Promise<http.Server> {
+  engineBind = bind
+  // Prune the local evidence cache once at startup so an installed engine and a
+  // server engine both honour the 24-hour cache rule (AGENTS.md rule 13).
+  void client.pruneOldEvidenceFiles().catch(() => undefined)
   return new Promise((resolve, reject) => {
     const server = http.createServer(async (req, res) => {
       const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`)
+
+      // The health probe is the only route that never needs the engine token, so
+      // Docker, systemd and load balancers can check liveness without a secret.
+      if (url.pathname === "/api/health") {
+        sendJson(res, 200, {
+          ok: true,
+          status: isCurrentlyProcessing ? "busy" : isWorkerRunning ? "running" : "idle",
+          signedIn: operatorSignedIn,
+          uptimeSeconds: Math.round(process.uptime()),
+          version: process.env.RETURN_APP_VERSION || "dev",
+          platform: process.platform,
+          arch: process.arch,
+          node: process.version,
+          engineMode: bind.mode,
+          backendUrl: config.backendUrl,
+        })
+        return
+      }
+
+      // Fail-closed: when the engine is reachable off this machine, every route
+      // except the health probe needs the bearer token. resolveEngineBind()
+      // guarantees a token exists for a non-loopback bind, so this can never be
+      // anonymous. Keep this gate above every other /api route.
+      if (bind.remoteAccess) {
+        const provided = bearerTokenFromHeader(req.headers.authorization)
+        if (!engineTokenMatches(provided, bind.authToken)) {
+          sendJson(res, 401, { error: "A valid engine token is required." })
+          return
+        }
+      }
+
+      if (url.pathname === "/api/v1/engine/info") {
+        sendJson(res, 200, {
+          engine: "return-app-automation-engine",
+          version: process.env.RETURN_APP_VERSION || "dev",
+          platform: process.platform,
+          arch: process.arch,
+          node: process.version,
+          pid: process.pid,
+          engineMode: bind.mode,
+          bindHost: bind.host,
+          bindPort: bind.port,
+          uptimeSeconds: Math.round(process.uptime()),
+          dataDir: agentDataDir(),
+          status: engineStatus(),
+          panels: getPanelStatuses(config.userDataDir).map((p) => ({
+            key: p.key,
+            name: p.name,
+            state: p.state,
+            automated: p.automated,
+            sessionSaved: Boolean(p.sessionSavedAt),
+          })),
+        })
+        return
+      }
 
       if (url.pathname === "/" || url.pathname === "/index.html") {
         res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" })
@@ -1079,22 +1231,19 @@ export function startDesktopAppServer(port = 3005, control?: DesktopBotControl):
       }
 
       if (url.pathname === "/api/status") {
+        const status = engineStatus()
         sendJson(res, 200, {
-          isRunning: externalControl ? externalControl.isRunning() : isWorkerRunning,
-          isCurrentlyProcessing: externalControl ? externalControl.isProcessing() : isCurrentlyProcessing,
-          activeJobInfo,
-          activeSummary: externalControl
-            ? externalControl.activeSummary()
-            : activeJobInfo
-              ? `${activeJobInfo.marketplace} #${activeJobInfo.jobId}`
-              : null,
-          nextPollCountdown: externalControl ? externalControl.nextPollSeconds() : nextPollCountdown,
-          lastHeartbeatTime,
-          lastPollTime: externalControl ? externalControl.lastPollTime() : lastPollTime,
-          backendUrl: externalControl ? externalControl.backendUrl() : config.backendUrl,
-          agentUuid: config.agentUuid,
-          agentName: config.agentName,
-          signedIn: operatorSignedIn,
+          isRunning: status.workerRunning,
+          isCurrentlyProcessing: status.isCurrentlyProcessing,
+          activeJobInfo: status.activeJobInfo,
+          activeSummary: status.activeSummary,
+          nextPollCountdown: status.nextPollCountdown,
+          lastHeartbeatTime: status.lastHeartbeatTime,
+          lastPollTime: status.lastPollTime,
+          backendUrl: status.backendUrl,
+          agentUuid: status.agentUuid,
+          agentName: status.agentName,
+          signedIn: status.signedIn,
         })
         return
       }
@@ -1131,8 +1280,7 @@ export function startDesktopAppServer(port = 3005, control?: DesktopBotControl):
 
       if (url.pathname === "/api/operator/logout" && req.method === "POST") {
         operatorSignedIn = false
-        if (externalControl) externalControl.onSignedOut()
-        else isWorkerRunning = false
+        isWorkerRunning = false
         await logoutOperator()
         logger.info("Operator signed out. Claim bot is paused until the next sign-in.")
         sendJson(res, 200, { ok: true })
@@ -1176,19 +1324,14 @@ export function startDesktopAppServer(port = 3005, control?: DesktopBotControl):
           sendJson(res, 401, { error: "Sign in before starting the claim bot." })
           return
         }
-        const running = externalControl ? externalControl.isRunning() : isWorkerRunning
-        if (running) {
-          if (externalControl) externalControl.pause()
-          else isWorkerRunning = false
-          logger.info("Claim bot paused. It stays on this PC and resumes when Start Bot is used.")
-        } else if (externalControl) {
-          externalControl.onSignedIn()
-          logger.info("Claim bot resumed.")
+        if (isWorkerRunning) {
+          enginePause()
+          logger.info("Claim bot paused. It stays on this machine and resumes when Start Bot is used.")
         } else {
-          startScheduler()
+          engineStart()
           logger.info("Claim bot resumed.")
         }
-        sendJson(res, 200, { ok: true, isRunning: externalControl ? externalControl.isRunning() : isWorkerRunning })
+        sendJson(res, 200, { ok: true, isRunning: isWorkerRunning })
         return
       }
 
@@ -1198,8 +1341,7 @@ export function startDesktopAppServer(port = 3005, control?: DesktopBotControl):
           return
         }
         logger.info("Manual claim check triggered from the desktop bot.")
-        if (externalControl) externalControl.pollNow()
-        else void pollAndProcessJob()
+        enginePollNow()
         sendJson(res, 200, { ok: true })
         return
       }
@@ -1275,18 +1417,16 @@ export function startDesktopAppServer(port = 3005, control?: DesktopBotControl):
           sendJson(res, 401, { error: "Sign in before testing a supplier login." })
           return
         }
-        if (isCurrentlyProcessing || externalControl?.isProcessing()) {
+        if (isCurrentlyProcessing) {
           sendJson(res, 409, { error: "A claim is running. Wait until it finishes, then test the login." })
           return
         }
-        if (externalControl?.isRunning()) externalControl.pause()
-        else isWorkerRunning = false
+        isWorkerRunning = false
         try {
           const body = await readJson(req)
           const result = await testPortalLogin(String(body.marketplace || "Meesho"), String(body.username || ""), String(body.password || ""))
           if (result.ok && operatorSignedIn) {
-            if (externalControl) externalControl.onSignedIn()
-            else startScheduler()
+            engineStart()
           }
           sendJson(res, result.ok ? 200 : 400, result)
         } catch (error) {
@@ -1301,7 +1441,7 @@ export function startDesktopAppServer(port = 3005, control?: DesktopBotControl):
           sendJson(res, 401, { error: "Sign in before running a claim." })
           return
         }
-        if (isCurrentlyProcessing || externalControl?.isProcessing()) {
+        if (isCurrentlyProcessing) {
           sendJson(res, 409, { error: "A claim is already running. Let it finish before starting the next one." })
           return
         }
@@ -1312,11 +1452,7 @@ export function startDesktopAppServer(port = 3005, control?: DesktopBotControl):
             sendJson(res, result.status, { error: result.message })
             return
           }
-          if (externalControl) externalControl.pollNow()
-          else {
-            isWorkerRunning = true
-            void pollAndProcessJob()
-          }
+          enginePollNow()
           sendJson(res, 200, { ok: true, message: "That claim is next. The bot will open the supplier panel for it." })
         } catch (error) {
           sendJson(res, 400, { error: error instanceof Error ? error.message : "Could not run that claim." })
@@ -1335,9 +1471,12 @@ export function startDesktopAppServer(port = 3005, control?: DesktopBotControl):
           try {
             const data = JSON.parse(body) as { backendUrl?: string }
             const updates = typeof data.backendUrl === "string" ? { backendUrl: data.backendUrl } : {}
-            config = saveAgentConfig(updates)
-            if (updates.backendUrl && externalControl) externalControl.setBackendUrl(updates.backendUrl)
-            client = new AgentBackendClient(config)
+            if (updates.backendUrl) {
+              engineSetBackendUrl(updates.backendUrl)
+            } else {
+              config = saveAgentConfig(updates)
+              client = new AgentBackendClient(config)
+            }
             logger.info(`Agent configuration updated. Backend URL: ${config.backendUrl}`)
             if (operatorSignedIn) await client.register()
             const { apiKey: _apiKey, ...publicConfig } = config
@@ -1379,8 +1518,14 @@ export function startDesktopAppServer(port = 3005, control?: DesktopBotControl):
     })
 
     server.once("error", reject)
-    server.listen(port, "127.0.0.1", () => {
-      logger.info(`Claim bot window is ready at http://127.0.0.1:${port}`)
+    server.listen(bind.port, bind.host, () => {
+      if (bind.remoteAccess) {
+        logger.info(
+          `Automation engine listening on ${bind.host}:${bind.port} (remote mode; bearer token required on every route except /api/health).`,
+        )
+      } else {
+        logger.info(`Claim bot window is ready at http://127.0.0.1:${bind.port}`)
+      }
       resolve(server)
     })
   })
@@ -1426,14 +1571,14 @@ async function main() {
 
   logger.info(`Starting 24/7 Claim Desktop Bot (Backend: ${config.backendUrl})...`)
 
-  const port = 3005
-  await startDesktopAppServer(port)
+  const bind = resolveEngineBind()
+  await startDesktopAppServer(bind)
   await resumeClaimBotIfSignedIn()
 
-  // Open native desktop app window unless running with --headless or in CI
+  // A server deployment never opens a window; a desktop run does unless asked not to.
   const isHeadlessArg = process.argv.includes("--no-window") || process.env.HEADLESS === "true"
-  if (!isHeadlessArg) {
-    launchAppWindow(`http://127.0.0.1:${port}`)
+  if (bind.mode === "local" && !isHeadlessArg) {
+    launchAppWindow(`http://127.0.0.1:${bind.port}`)
   }
 }
 

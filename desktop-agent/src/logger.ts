@@ -1,11 +1,11 @@
 import fs from "node:fs"
-import os from "node:os"
 import path from "node:path"
+import { agentSubdir } from "./paths.js"
 
 export type LogLevel = "debug" | "info" | "warn" | "error"
 
 // The installed app has no console, so every line also goes to a daily file. Files older than this are deleted.
-const LOG_DIR = path.join(os.homedir(), ".taskflow-claim-agent", "logs")
+const LOG_DIR = agentSubdir("logs")
 const LOG_KEEP_DAYS = 7
 let prunedForDay = ""
 

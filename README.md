@@ -1,4 +1,4 @@
-<!-- Updated 2026-10-20. CI runs 463 tests with postgres:16 service. Android v1.0.58. Desktop 1.2.0 released (desktop-v1.2.0.18). Register page rebuilt with code-split tabs + responsive layout. -->
+<!-- Updated 2026-10-21. Desktop/engine split: engine owns the worker loop; Windows/Linux desktop + headless Linux server modes. Android v1.0.60. -->
 # return-scanning-app
 
 A return scanning app for VB Exports. Marketplace return reports (Myntra VB and Myntra EJ, Flipkart, Meesho, Amazon, and Ajio) are loaded as lookup data, one account at a time. A scan then records what physically arrived in the return scan register, which is the permanent record. The app also stores channel listings and master SKUs from the OMSGuru API, for product titles and images.
@@ -81,6 +81,8 @@ The web app has six pages. The Admin page is shown to administrators only.
   - **Authenticated Worker & Leases**: Admin/Supervisor enrollment issues a per-PC API key. Jobs use expiring leases, bounded retries, and signed-in operator checks.
   - **Streaming Media Pipeline**: Direct HTTP chunk-to-disk streaming (`ReadableStream.getReader()`), size/SHA-256 verification, multi-file evidence mapping, and automated 24-hour temporary file cache pruning.
   - **Auto-start on every OS**: Packaged installs register auto-start by default (Windows registry, Linux desktop entry, macOS login item) and launch hidden in the tray.
+  - **Separated automation engine, three deployment modes**: the engine (`desktop-agent/`) owns the single claim worker loop and the desktop shell is a thin client of it. **Mode 1** Windows desktop and **Mode 2** Linux desktop embed the engine on `127.0.0.1:3005`; **Mode 3** runs the engine alone on a headless Linux server (Docker or systemd, `deploy/engine/`) with no window, so closing the desktop app never stops filing. Full guide: [docs/LINUX-SERVER.md](docs/LINUX-SERVER.md).
+  - **Remote engine management**: set `RETURN_ENGINE_URL` and `ENGINE_TOKEN` and the desktop app becomes a client of a remote engine, showing its worker state, panels, logs and controls. A non-loopback engine bind requires `ENGINE_TOKEN` (fail-closed) and every control route then needs `Authorization: Bearer`. Engine state relocates with `AGENT_DATA_DIR`. Decisions and alternatives: [docs/notes/architecture-decision.md](docs/notes/architecture-decision.md).
 
 For example, to load a Flipkart return report: open **Data uploads**, choose **Flipkart**, drop the file, read the preview, and when it can be activated, click **Activate**.
 
