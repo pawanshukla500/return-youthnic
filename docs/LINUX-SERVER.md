@@ -117,12 +117,17 @@ engine is bound to a non-loopback host.
 
 Some panels cannot be automated headlessly at the login step. Two supported paths:
 
-1. **Seed the session on a desktop** (Mode 1/2), then copy the panel profile directory
-   (`AGENT_DATA_DIR/browser-profiles/profile-<panel>`) to the server's data volume. The
-   cookies carry over.
+1. **Seed the session on a host of the same operating system**, then copy the panel profile
+   directory (`AGENT_DATA_DIR/browser-profiles/profile-<panel>`) to the server's data
+   volume. Chromium encrypts its cookie jar with a key held by the OS for that user —
+   DPAPI on Windows, the desktop keyring on Linux — so the copy carries a usable session
+   only within the same OS. A Windows profile copied to a Linux server does **not** carry
+   over, and the panel will still ask for a login; use path 2 to sign in on the server
+   itself.
 2. **Run the engine with a display** for that panel: set `BROWSER_MODE=visible` and either
    give the host a VNC/X session or start a temporary container with `Xvfb`. Complete the
-   OTP/CAPTCHA once, then return to headless.
+   OTP/CAPTCHA once, then return to headless. This is the supported way to seed a session
+   on the Linux server.
 
 A challenge the engine cannot pass sets the panel to `manual_action` and leaves the other
 panels filing. It never guesses a credential.

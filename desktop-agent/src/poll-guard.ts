@@ -19,6 +19,15 @@ export type PollCycleState = {
   pollInFlight: boolean
   /** A supplier login browser holds the shared profile. */
   portalBrowserHeld: boolean
+  /**
+   * A supplier login test is running.
+   *
+   * It pauses the poller and drives the profile itself, so it sets neither
+   * `workerRunning` (it forces it off) nor `pollInFlight`. Without this the
+   * manual one-shot would bypass the paused check and launch a claim browser on
+   * the same profile the login test is using.
+   */
+  portalTestInFlight?: boolean
   /** A one-shot "Poll Now" rather than the scheduled chain. */
   manual?: boolean
 }
@@ -26,14 +35,16 @@ export type PollCycleState = {
 /**
  * True when a poll cycle may start.
  *
- * `manual` bypasses only the paused check. The re-entrancy and profile guards
- * always apply: a one-shot must never overlap a cycle already running, and it
- * must never open a browser while the login flow holds the profile.
+ * `manual` bypasses only the paused check. Every other guard still applies: a
+ * one-shot must never overlap a cycle already running, and it must never open a
+ * browser while the login flow — a held browser or a running login test — owns
+ * the profile.
  */
 export function shouldRunPollCycle(state: PollCycleState): boolean {
   if (!state.workerRunning && !state.manual) return false
   if (state.pollInFlight) return false
   if (state.portalBrowserHeld) return false
+  if (state.portalTestInFlight) return false
   return true
 }
 

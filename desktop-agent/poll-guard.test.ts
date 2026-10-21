@@ -37,6 +37,26 @@ describe("poll cycle guard", () => {
       false,
     )
   })
+
+  it("never starts while a supplier login test is running, manual or not", () => {
+    // The login test forces workerRunning off and sets no pollInFlight, so without
+    // this check a manual Poll Now would bypass the paused guard and launch a claim
+    // browser on the profile the login test is using.
+    assert.equal(
+      shouldRunPollCycle({ workerRunning: true, pollInFlight: false, portalBrowserHeld: false, portalTestInFlight: true }),
+      false,
+    )
+    assert.equal(
+      shouldRunPollCycle({
+        workerRunning: false,
+        pollInFlight: false,
+        portalBrowserHeld: false,
+        portalTestInFlight: true,
+        manual: true,
+      }),
+      false,
+    )
+  })
 })
 
 describe("engine busy guard", () => {

@@ -92,7 +92,7 @@ async function pollAndProcessJob(manual = false): Promise<boolean> {
   // paused, so the running-state check is skipped for it. The other two guards
   // still apply: a manual cycle must not overlap one already in flight, and it
   // must not run while a supplier login browser holds the profile.
-  if (!shouldRunPollCycle({ workerRunning: isWorkerRunning, pollInFlight, portalBrowserHeld: holdPortalBrowser(), manual })) return false
+  if (!shouldRunPollCycle({ workerRunning: isWorkerRunning, pollInFlight, portalBrowserHeld: holdPortalBrowser(), portalTestInFlight, manual })) return false
   pollInFlight = true
   lastPollTime = new Date().toLocaleTimeString("en-IN")
   let submissionOutcomeUnknown = false
