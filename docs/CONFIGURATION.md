@@ -93,6 +93,7 @@ Common error messages:
 - `vite.config.ts`: web dev server on port 5173, host `0.0.0.0`, and a proxy that sends `/api` to `127.0.0.1` on the API port.
 - `tsconfig.json`: TypeScript settings for `src/` and `vite.config.ts` (strict mode, ES2022, bundler module resolution, the `react-jsx` transform, `isolatedModules`).
 - `tsconfig.server.json`: TypeScript settings for `server/`, including the tests (strict mode, Node types).
+- `tsconfig.desktop.json`: TypeScript settings for `desktop/` and `desktop-agent/` (strict mode, ES2022, Node types). `npm run typecheck` runs all three projects. The root `Dockerfile` copies this file into the builder stage because the typecheck step needs it.
 - `package.json`: the scripts, and the list of test files that `npm test` runs. A new test file must be added to the `test` script by name.
 - `.gitignore`: ignores `node_modules`, `dist`, `.env` and log files.
 - `RUN.bat`: Windows helper. It installs packages on the first run, warns when `.env` is missing, opens the web app after six seconds, and runs `npm run dev`.
