@@ -157,7 +157,11 @@ engine on `127.0.0.1:3005`.
 2. Never publish port 3005 directly to the internet. Use a reverse proxy with TLS, or an
    SSH tunnel (`ssh -L 3005:127.0.0.1:3005 user@server`).
 3. `AGENT_DATA_DIR` contains supplier browser cookies and the operator session. Treat it
-   as a secret: `chmod 700`, encrypted disk where possible, and never in a public backup.
+   as a secret: encrypted disk where possible, and never in a public backup. The engine
+   already enforces this — `ensureAgentDataDir()` creates the root 0700 and re-chmods it
+   on every call, and `writeSecretFile()` writes `config.json` and `operator-session.json`
+   0600 — so a folder or file left loose by an older build is tightened rather than
+   trusted. Run the engine as its own unprivileged user so that mode is meaningful.
 4. The engine token and the PC API key are never logged. Do not add logging that prints
    them.
 
