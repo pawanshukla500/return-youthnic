@@ -8,6 +8,7 @@ import {
   engineTokenMatches,
   isInsecureRemoteUrl,
   isLoopbackHost,
+  isSameOrigin,
   localEngineUrl,
   parseEnginePort,
   resolveEngineBind,
@@ -95,5 +96,18 @@ describe("engine bind and remote-access policy", () => {
     assert.equal(isInsecureRemoteUrl("http://claims.example.com/"), true)
     assert.equal(isInsecureRemoteUrl("http://10.0.0.5:3005/"), true)
     assert.equal(isInsecureRemoteUrl("http://203.0.113.7/"), true)
+  })
+
+  it("keeps the window on the engine origin with an exact-origin test", () => {
+    const origin = "http://127.0.0.1:3005"
+    assert.equal(isSameOrigin("http://127.0.0.1:3005/", origin), true)
+    assert.equal(isSameOrigin("http://127.0.0.1:3005/dashboard?tab=logs", origin), true)
+    // A prefix test would wrongly accept every one of these.
+    assert.equal(isSameOrigin("http://127.0.0.1:3005.evil.com/", origin), false)
+    assert.equal(isSameOrigin("http://127.0.0.1:30051/", origin), false)
+    assert.equal(isSameOrigin("http://127.0.0.1:3005@evil.com/", origin), false)
+    assert.equal(isSameOrigin("https://127.0.0.1:3005/", origin), false)
+    assert.equal(isSameOrigin("http://evil.com/?x=http://127.0.0.1:3005", origin), false)
+    assert.equal(isSameOrigin("not a url", origin), false)
   })
 })

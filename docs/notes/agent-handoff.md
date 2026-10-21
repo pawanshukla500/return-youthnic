@@ -2522,3 +2522,12 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
 - **Not run:** the installer was still not executed; no live claim; no Linux server; no LLM call. The Linux autostart entry was **not** exercised on a real Linux desktop — it is verified by `tsc` and by reading, and `desktop:build` only bundles it.
 - **The next agent must not:** assume `setLoginItemSettings()` works on Linux (it does not; use the `.desktop` entry); use `process.execPath` for the AppImage autostart `Exec` line; or let a second login test past `engineBusy()`.
 
+### 2026-10-21, Factory Droid, branch `destop-app`: CodeAnt re-review round 3 (1 more finding, security)
+
+- **CodeAnt reviewed `972cd5a`** (19:22–19:37), auto-resolved the two threads fixed there, and filed one new finding.
+- **Finding — prefix-based navigation allow-list (`desktop/main.ts:339`).** The `will-navigate` handler allowed a URL if it merely *started with* the engine origin text: `if (!url.startsWith(origin) && !url.startsWith("data:")) event.preventDefault()`. `origin` is a bare origin such as `http://127.0.0.1:3005`, so `http://127.0.0.1:3005.evil.com/` and `http://127.0.0.1:30051/` both passed and would have loaded **inside** the Electron window with the preload bridge attached. Replaced with an exact-origin comparison.
+- **Where the fix lives:** new `isSameOrigin(rawUrl, expectedOrigin)` in `desktop-agent/src/engine-config.ts` (pure, next to `isInsecureRemoteUrl` and `localEngineUrl`), used by the shell's `will-navigate` handler, which now also logs the blocked URL. `engine-config.test.ts` gained a case covering the two prefix bypasses plus `http://127.0.0.1:3005@evil.com/`, an `https` downgrade, a query-string lookalike and a malformed URL.
+- **Ran:** `npm run typecheck` exit 0 (3 projects). `engine-config.test.ts` + `poll-guard.test.ts` 19 tests, 19 pass, 0 fail, 0 skipped. `npm test` — 494 tests, 454 pass, 0 fail, 40 skipped locally. `npm run desktop:build` exit 0. CI green for `972cd5a` and every earlier commit this session.
+- **Not run:** the installer was still not executed; no live claim; no Linux server; no LLM call. The blocked-navigation path is verified by the new pure test, not by driving a real hostile page at the packaged window.
+- **The next agent must not:** compare a URL to an origin with `startsWith` anywhere in the shell — the engine origin is not a prefix-safe boundary; use `isSameOrigin()`.
+

@@ -9,7 +9,7 @@ import {
   resumeClaimBotIfSignedIn,
   startDesktopAppServer,
 } from "../desktop-agent/src/desktop-app-server.js"
-import { isInsecureRemoteUrl, localEngineUrl, resolveEngineBind, type EngineBind } from "../desktop-agent/src/engine-config.js"
+import { isInsecureRemoteUrl, isSameOrigin, localEngineUrl, resolveEngineBind, type EngineBind } from "../desktop-agent/src/engine-config.js"
 import { logger } from "../desktop-agent/src/logger.js"
 
 // Hardware efficiency switches for low-spec PCs (4GB RAM, 2-Core CPUs)
@@ -336,7 +336,9 @@ function createMainWindow(target: EngineTarget, startupError?: string): void {
 
   // The window is the engine's own dashboard. Anything else opens in the system browser.
   mainWindow.webContents.on("will-navigate", (event, url) => {
-    if (!url.startsWith(origin) && !url.startsWith("data:")) {
+    if (url.startsWith("data:")) return
+    if (!isSameOrigin(url, origin)) {
+      logger.warn(`Blocked navigation to a non-engine origin from the claim bot window: ${url}`)
       event.preventDefault()
     }
   })

@@ -127,3 +127,20 @@ export function isInsecureRemoteUrl(rawUrl: string): boolean {
   if (parsed.protocol !== "http:") return false
   return !isLoopbackHost(bareHostname(parsed.hostname))
 }
+
+/**
+ * Exact-origin check, for deciding whether a navigation stays inside the app.
+ *
+ * A prefix test against a bare origin is not enough. With an expected origin of
+ * `http://127.0.0.1:3005`, both `http://127.0.0.1:3005.evil.com/` and
+ * `http://127.0.0.1:30051/` start with that text while being a different host or
+ * port, so a prefix check would let them load inside the Electron window with the
+ * preload bridge attached. Compare the parsed origins instead.
+ */
+export function isSameOrigin(rawUrl: string, expectedOrigin: string): boolean {
+  try {
+    return new URL(rawUrl).origin === expectedOrigin
+  } catch {
+    return false
+  }
+}
