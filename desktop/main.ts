@@ -567,7 +567,16 @@ function scheduleLocalEngineRetry(): void {
         engineTarget = await startLocalEngine()
         logger.info(`Claim bot engine started after retry ${attempts}.`)
         stopEngineRetry()
-        mainWindow?.loadURL(engineTarget.url).catch(() => undefined)
+        // The window was created for the placeholder target, so its bearer header
+        // and its allowed navigation origin are the placeholder's. A retry can
+        // bind a different origin than the placeholder (a non-loopback
+        // ENGINE_HOST, or a port that changed), and then every protected request
+        // from that window answers 401. Rebuild the window for the real target
+        // instead of loading its URL into the old one.
+        const stale = mainWindow
+        mainWindow = null
+        if (stale && !stale.isDestroyed()) stale.destroy()
+        createMainWindow(engineTarget)
         refreshTray()
       } catch (err) {
         if (attempts >= ENGINE_RETRY_MAX_ATTEMPTS) {

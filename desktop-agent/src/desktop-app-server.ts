@@ -266,6 +266,16 @@ function scheduleNextPoll(delayMs: number): void {
 }
 
 /**
+ * Serialized one-shot poll cycles.
+ *
+ * In paused mode there is no scheduled next poll, so a "run this claim" request
+ * that arrives while another one-shot is still running would be dropped by the
+ * pollInFlight guard and its claim would sit in the queue with nothing to pick it
+ * up. Chaining the requests gives each one its own cycle.
+ */
+let manualRunChain: Promise<void> = Promise.resolve()
+
+/**
  * Run one poll cycle now without resuming a paused worker.
  *
  * This is what "Poll Now" / "Check for Claims Now" uses. A one-shot check must
@@ -274,25 +284,31 @@ function scheduleNextPoll(delayMs: number): void {
  * running, the current chain is nudged forward; if it is paused, only this single
  * cycle runs and no next poll is scheduled.
  */
-export async function engineRunOnceNow(): Promise<void> {
-  if (!operatorSignedIn) return
+export function engineRunOnceNow(): Promise<void> {
+  if (!operatorSignedIn) return Promise.resolve()
   idlePolls = 0
   if (isWorkerRunning) {
     scheduleNextPoll(1000)
-    return
+    return Promise.resolve()
   }
-  if (pollTimer) {
-    clearTimeout(pollTimer)
-    pollTimer = null
-  }
-  nextPollCountdown = 0
-  try {
-    // `true` = manual, so this single cycle runs even though the worker is
-    // paused. No next poll is scheduled on this path, so the pause holds.
-    await pollAndProcessJob(true)
-  } catch (err) {
-    logger.error("Manual poll cycle failed.", err)
-  }
+  manualRunChain = manualRunChain
+    .then(async () => {
+      if (pollTimer) {
+        clearTimeout(pollTimer)
+        pollTimer = null
+      }
+      nextPollCountdown = 0
+      try {
+        // `true` = manual, so this single cycle runs even though the worker is
+        // paused. No next poll is scheduled on this path, so the pause holds.
+        await pollAndProcessJob(true)
+      } catch (err) {
+        logger.error("Manual poll cycle failed.", err)
+      }
+    })
+    // A rejected link must not wedge the chain for every later request.
+    .catch(() => undefined)
+  return manualRunChain
 }
 
 function startScheduler(): void {
