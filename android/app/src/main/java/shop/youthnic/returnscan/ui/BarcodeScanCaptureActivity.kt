@@ -3,6 +3,8 @@ package shop.youthnic.returnscan.ui
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Intent
+import android.hardware.camera2.CameraMetadata
+import android.hardware.camera2.CaptureRequest
 import android.os.Bundle
 import android.os.SystemClock
 import android.view.View
@@ -12,6 +14,8 @@ import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
+import androidx.camera.camera2.interop.Camera2Interop
+import androidx.camera.camera2.interop.ExperimentalCamera2Interop
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.content.ContextCompat
 import com.google.mlkit.vision.barcode.BarcodeScanner
@@ -22,6 +26,7 @@ import com.google.mlkit.vision.common.InputImage
 import shop.youthnic.returnscan.ReturnScanApp
 import shop.youthnic.returnscan.data.BarcodeRules
 import shop.youthnic.returnscan.databinding.ActivityBarcodeScanCaptureBinding
+import shop.youthnic.returnscan.util.CameraTuning
 import shop.youthnic.returnscan.util.Cue
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -83,17 +88,35 @@ class BarcodeScanCaptureActivity : AppCompatActivity() {
         }, ContextCompat.getMainExecutor(this))
     }
 
+    @OptIn(ExperimentalCamera2Interop::class)
     private fun bindCamera() {
         val provider = cameraProvider ?: return
         provider.unbindAll()
 
-        val preview = Preview.Builder().build().also {
+        // Continuous-picture autofocus keeps the lens hunting for a sharp close-up of the
+        // barcode. Without it, many warehouse phones lock focus at a fixed distance where the
+        // thin bars of a 1D courier barcode blur and ML Kit fails to decode them.
+        val previewBuilder = Preview.Builder()
+            .setResolutionSelector(CameraTuning.resolutionSelector(CameraTuning.HD.first, CameraTuning.HD.second))
+        Camera2Interop.Extender(previewBuilder).setCaptureRequestOption(
+            CaptureRequest.CONTROL_AF_MODE,
+            CameraMetadata.CONTROL_AF_MODE_CONTINUOUS_PICTURE
+        )
+        val preview = previewBuilder.build().also {
             it.setSurfaceProvider(binding.previewScan.surfaceProvider)
         }
 
-        val analysis = ImageAnalysis.Builder()
+        // The analysis stream runs at 1080p: 1D barcodes need more horizontal pixels than a QR
+        // code to decode, and the previous default (no ResolutionSelector) often fell back to
+        // 640x480, which is why QR codes scanned but CODE_128/Code 39/EAN flyers did not.
+        val analysisBuilder = ImageAnalysis.Builder()
+            .setResolutionSelector(CameraTuning.resolutionSelector(CameraTuning.ANALYSIS.first, CameraTuning.ANALYSIS.second))
             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-            .build()
+        Camera2Interop.Extender(analysisBuilder).setCaptureRequestOption(
+            CaptureRequest.CONTROL_AF_MODE,
+            CameraMetadata.CONTROL_AF_MODE_CONTINUOUS_PICTURE
+        )
+        val analysis = analysisBuilder.build()
 
         analysis.setAnalyzer(cameraExecutor) { imageProxy ->
             processImage(imageProxy)
