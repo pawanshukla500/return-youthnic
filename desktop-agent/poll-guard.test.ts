@@ -54,4 +54,18 @@ describe("engine busy guard", () => {
   it("reports idle only when neither is set", () => {
     assert.equal(engineBusy({ isCurrentlyProcessing: false, pollInFlight: false }), false)
   })
+
+  it("reports busy while a supplier login test is open", () => {
+    // A login test pauses the poller and drives the profile itself, so it sets
+    // neither of the other two flags. Without this, two concurrent login tests
+    // would both pass the busy check and fight over the same profile and port.
+    assert.equal(
+      engineBusy({ isCurrentlyProcessing: false, pollInFlight: false, portalTestInFlight: true }),
+      true,
+    )
+  })
+
+  it("treats an omitted login-test flag as idle", () => {
+    assert.equal(engineBusy({ isCurrentlyProcessing: false, pollInFlight: false, portalTestInFlight: undefined }), false)
+  })
 })

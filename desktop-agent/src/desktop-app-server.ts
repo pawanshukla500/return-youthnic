@@ -39,6 +39,15 @@ let isCurrentlyProcessing = false
  * once. It is released in a finally block so a thrown error cannot wedge it.
  */
 let pollInFlight = false
+/**
+ * A supplier login test is open.
+ *
+ * A login test pauses the poller and drives the supplier profile itself, so it
+ * sets neither isCurrentlyProcessing nor pollInFlight. Without this flag two
+ * concurrent tests would both pass the busy check and then fight over the same
+ * browser profile and debug port.
+ */
+let portalTestInFlight = false
 let activeJobInfo: any = null
 let lastHeartbeatTime: string = ""
 let lastPollTime: string = ""
@@ -75,7 +84,7 @@ logger.onLog((entry) => {
  * supplier profile must test this instead. See poll-guard.ts for the tested rule.
  */
 function engineBusy(): boolean {
-  return engineBusyWith({ isCurrentlyProcessing, pollInFlight })
+  return engineBusyWith({ isCurrentlyProcessing, pollInFlight, portalTestInFlight })
 }
 
 async function pollAndProcessJob(manual = false): Promise<boolean> {
@@ -1474,9 +1483,12 @@ export function startDesktopAppServer(bind: EngineBind = resolveEngineBind()): P
           return
         }
         if (engineBusy()) {
-          sendJson(res, 409, { error: "A claim is running. Wait until it finishes, then test the login." })
+          sendJson(res, 409, { error: "A claim or another login test is running. Wait for it to finish, then test the login." })
           return
         }
+        // Two login tests at once would drive the same supplier profile and the
+        // same debug port, so the second one gets a 409 above rather than racing.
+        portalTestInFlight = true
         // The test needs the supplier profile to itself, so the poller is paused
         // for its duration. Remember whether it was running: a failed test must
         // put the engine back exactly as it was, otherwise a mistyped password
@@ -1486,16 +1498,15 @@ export function startDesktopAppServer(bind: EngineBind = resolveEngineBind()): P
         try {
           const body = await readJson(req)
           const result = await testPortalLogin(String(body.marketplace || "Meesho"), String(body.username || ""), String(body.password || ""))
-          if (wasRunning && operatorSignedIn) {
-            engineStart()
-          }
           sendJson(res, result.ok ? 200 : 400, result)
         } catch (error) {
+          logger.error("Supplier login test failed.", error)
+          sendJson(res, 500, { error: error instanceof Error ? error.message : "Could not open the supplier login." })
+        } finally {
+          portalTestInFlight = false
           if (wasRunning && operatorSignedIn) {
             engineStart()
           }
-          logger.error("Supplier login test failed.", error)
-          sendJson(res, 500, { error: error instanceof Error ? error.message : "Could not open the supplier login." })
         }
         return
       }

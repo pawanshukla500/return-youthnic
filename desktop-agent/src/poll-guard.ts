@@ -41,10 +41,16 @@ export function shouldRunPollCycle(state: PollCycleState): boolean {
  * True while the engine must be treated as busy.
  *
  * `isCurrentlyProcessing` is set only after the queue lease returns a job, so it
- * misses the lease window. `pollInFlight` covers the whole cycle. Routes that
- * would start a browser on a supplier profile test this so they cannot race a
- * claim that is about to launch.
+ * misses the lease window. `pollInFlight` covers the whole cycle. `portalTestInFlight`
+ * covers a supplier login test, which pauses the poller and drives the supplier
+ * profile itself, so it sets neither of the other two. Routes that would start a
+ * browser on a supplier profile test this so they cannot race a claim that is
+ * about to launch, or a login test that already owns the profile.
  */
-export function engineBusy(state: { isCurrentlyProcessing: boolean; pollInFlight: boolean }): boolean {
-  return state.isCurrentlyProcessing || state.pollInFlight
+export function engineBusy(state: {
+  isCurrentlyProcessing: boolean
+  pollInFlight: boolean
+  portalTestInFlight?: boolean
+}): boolean {
+  return state.isCurrentlyProcessing || state.pollInFlight || Boolean(state.portalTestInFlight)
 }

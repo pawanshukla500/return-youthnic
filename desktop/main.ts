@@ -554,13 +554,51 @@ function scheduleLocalEngineRetry(): void {
   }, ENGINE_RETRY_INTERVAL_MS)
 }
 
+/**
+ * Start the app hidden at login, so a reboot does not stop the bot.
+ *
+ * Electron's setLoginItemSettings() is implemented on Windows (registry) and
+ * macOS (login items) only. On Linux it is a silent no-op, so the XDG autostart
+ * entry has to be written by hand; without it a packaged Linux install never
+ * comes back after a reboot and the 24/7 promise is broken. The entry is
+ * idempotent, so rewriting it on every launch is harmless.
+ */
+function registerAutoStart(): void {
+  if (!app.isPackaged) return
+
+  if (process.platform !== "linux") {
+    app.setLoginItemSettings({ openAtLogin: true, args: ["--hidden"] })
+    return
+  }
+
+  try {
+    // For an AppImage, process.execPath points inside the temporary mount, so
+    // APPIMAGE (the real file) is the path that survives a reboot.
+    const launchTarget = process.env.APPIMAGE || process.execPath
+    const configHome = process.env.XDG_CONFIG_HOME || path.join(app.getPath("home"), ".config")
+    const autostartDir = path.join(configHome, "autostart")
+    fs.mkdirSync(autostartDir, { recursive: true })
+    const entry = [
+      "[Desktop Entry]",
+      "Type=Application",
+      "Name=Return App",
+      "Comment=Marketplace claims bot",
+      `Exec="${launchTarget}" --hidden`,
+      "X-GNOME-Autostart-enabled=true",
+      "Terminal=false",
+      "",
+    ].join("\n")
+    fs.writeFileSync(path.join(autostartDir, "return-app.desktop"), entry, "utf8")
+    logger.info(`Registered the Linux autostart entry at ${path.join(autostartDir, "return-app.desktop")}.`)
+  } catch (err) {
+    logger.warn("Could not write the Linux autostart entry. The bot will not start at login.", err)
+  }
+}
+
 app.whenReady().then(async () => {
   process.env.RETURN_APP_VERSION = app.getVersion()
 
-  if (app.isPackaged) {
-    // Cross-platform auto-start: Windows registry / macOS login items / Linux .desktop entry.
-    app.setLoginItemSettings({ openAtLogin: true, args: ["--hidden"] })
-  }
+  registerAutoStart()
 
   let startupError: string | undefined
   try {
