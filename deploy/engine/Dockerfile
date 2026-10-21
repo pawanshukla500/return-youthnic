@@ -74,4 +74,8 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
 
 # tini reaps the Chromium child processes so no zombie browsers survive a claim.
 ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["node", "--import", "tsx", "desktop-agent/src/desktop-app-server.ts", "--no-window"]
+# The heap cap matches the desktop shell and AGENTS.md rule 13: the engine must
+# stay inside 256 MB of V8 heap so a container on 4 GB / 2-core hardware cannot
+# be OOM-killed mid-claim. Without it Node sizes the heap from the host's total
+# RAM, which is far larger than the engine is allowed to use.
+CMD ["node", "--max-old-space-size=256", "--import", "tsx", "desktop-agent/src/desktop-app-server.ts", "--no-window"]

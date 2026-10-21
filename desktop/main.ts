@@ -524,30 +524,55 @@ let engineRetryTimer: NodeJS.Timeout | null = null
 const ENGINE_RETRY_INTERVAL_MS = 30_000
 const ENGINE_RETRY_MAX_ATTEMPTS = 20
 
+function stopEngineRetry(): void {
+  if (engineRetryTimer) clearInterval(engineRetryTimer)
+  engineRetryTimer = null
+}
+
+/**
+ * Read the remote target without letting a bad RETURN_ENGINE_URL reject.
+ *
+ * readRemoteEngineTarget() throws on a malformed URL or a missing token. In the
+ * retry loop that throw happened *before* the try block, so it escaped as an
+ * unhandled rejection every 30 seconds and could take the whole Electron process
+ * down. A configuration error is also not transient, so it must stop the retries
+ * rather than burn all 20 attempts.
+ */
+function readRemoteTargetSafely(): { target: { url: string; token: string } | null; configError: string | null } {
+  try {
+    return { target: readRemoteEngineTarget(), configError: null }
+  } catch (err) {
+    return { target: null, configError: err instanceof Error ? err.message : String(err) }
+  }
+}
+
 function scheduleLocalEngineRetry(): void {
   if (engineRetryTimer) return
   let attempts = 0
   engineRetryTimer = setInterval(() => {
     void (async () => {
       attempts += 1
+      const remote = readRemoteTargetSafely()
+      if (remote.configError) {
+        logger.error("RETURN_ENGINE_URL is not usable, so no engine was started. Fix the setting and relaunch.", remote.configError)
+        stopEngineRetry()
+        return
+      }
       // A remote target is a configuration choice, not a race: never override it.
-      if (engineTarget || readRemoteEngineTarget()) {
-        if (engineRetryTimer) clearInterval(engineRetryTimer)
-        engineRetryTimer = null
+      if (engineTarget || remote.target) {
+        stopEngineRetry()
         return
       }
       try {
         engineTarget = await startLocalEngine()
         logger.info(`Claim bot engine started after retry ${attempts}.`)
-        if (engineRetryTimer) clearInterval(engineRetryTimer)
-        engineRetryTimer = null
+        stopEngineRetry()
         mainWindow?.loadURL(engineTarget.url).catch(() => undefined)
         refreshTray()
       } catch (err) {
         if (attempts >= ENGINE_RETRY_MAX_ATTEMPTS) {
           logger.error("Claim bot engine could not start after repeated retries. Giving up until the next launch.", err)
-          if (engineRetryTimer) clearInterval(engineRetryTimer)
-          engineRetryTimer = null
+          stopEngineRetry()
         } else {
           logger.warn(`Claim bot engine retry ${attempts} failed; will try again in ${ENGINE_RETRY_INTERVAL_MS / 1000}s.`, err)
         }
