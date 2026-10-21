@@ -97,16 +97,32 @@ function bareHostname(hostname: string): string {
 }
 
 /**
+ * The host a client should dial for a given bind host.
+ *
+ * A wildcard bind means "every interface" and is not a usable destination:
+ * `http://0.0.0.0:3005/` is not routable on Windows or Linux, so opening the
+ * dashboard at that URL fails. Map the wildcards to the matching loopback.
+ */
+export function clientHostForBind(host: string): string {
+  const normalized = host.trim().toLowerCase()
+  if (normalized === "0.0.0.0") return "127.0.0.1"
+  if (normalized === "::" || normalized === "[::]") return "::1"
+  return host
+}
+
+/**
  * The URL a client uses to reach an engine bound to `bind.host`.
  *
  * The bind host is not always `127.0.0.1`: `ENGINE_HOST=::1` listens on IPv6
  * loopback only, so a client that hardcoded `127.0.0.1` would be refused. IPv6
- * literals also need brackets in a URL. Local mode is always a loopback bind,
+ * literals also need brackets in a URL, and a wildcard bind has to be dialled at
+ * loopback because it is not a destination. Local mode is always a loopback bind,
  * so the result never leaves this machine.
  */
 export function localEngineUrl(bind: Pick<EngineBind, "host" | "port">): string {
-  const host = bind.host.includes(":") ? `[${bind.host}]` : bind.host
-  return `http://${host}:${bind.port}/`
+  const host = clientHostForBind(bind.host)
+  const urlHost = host.includes(":") ? `[${host}]` : host
+  return `http://${urlHost}:${bind.port}/`
 }
 
 /**

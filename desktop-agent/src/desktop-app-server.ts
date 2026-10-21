@@ -5,7 +5,7 @@ import child_process from "node:child_process"
 import { loadAgentConfig, saveAgentConfig, type AgentConfig } from "./config.js"
 import { bearerTokenFromHeader, engineTokenMatches, localEngineUrl, resolveEngineBind, type EngineBind } from "./engine-config.js"
 import { installCrashGuards } from "./crash-guard.js"
-import { engineBusy as engineBusyWith, shouldRunPollCycle } from "./poll-guard.js"
+import { engineBusy as engineBusyWith, shouldRunPollCycle, supplierProfileInUse as supplierProfileInUseWith } from "./poll-guard.js"
 import { agentDataDir } from "./paths.js"
 import { logger } from "./logger.js"
 import { AgentBackendClient } from "./agent-client.js"
@@ -85,6 +85,22 @@ logger.onLog((entry) => {
  */
 function engineBusy(): boolean {
   return engineBusyWith({ isCurrentlyProcessing, pollInFlight, portalTestInFlight })
+}
+
+/**
+ * True when a browser already owns a supplier profile.
+ *
+ * Used by routes that would queue work for a profile: a claim queued while the
+ * manual-login browser is still open cannot be picked up, because the poll cycle
+ * refuses to run until that browser closes.
+ */
+function supplierProfileInUse(): boolean {
+  return supplierProfileInUseWith({
+    isCurrentlyProcessing,
+    pollInFlight,
+    portalTestInFlight,
+    portalBrowserHeld: holdPortalBrowser(),
+  })
 }
 
 async function pollAndProcessJob(manual = false): Promise<boolean> {
@@ -293,14 +309,20 @@ export function engineRunOnceNow(): Promise<void> {
   }
   manualRunChain = manualRunChain
     .then(async () => {
-      if (pollTimer) {
-        clearTimeout(pollTimer)
-        pollTimer = null
+      // Only stand the scheduler down if the worker is *still* paused. It can
+      // have been resumed while this link waited its turn, and clearing the
+      // timer then would stop polling for good: the link finishes without
+      // scheduling a next poll, so the engine would report running while idle.
+      if (!isWorkerRunning) {
+        if (pollTimer) {
+          clearTimeout(pollTimer)
+          pollTimer = null
+        }
+        nextPollCountdown = 0
       }
-      nextPollCountdown = 0
       try {
-        // `true` = manual, so this single cycle runs even though the worker is
-        // paused. No next poll is scheduled on this path, so the pause holds.
+        // `true` = manual, so this single cycle runs even though the worker may
+        // be paused. No next poll is scheduled on this path, so the pause holds.
         await pollAndProcessJob(true)
       } catch (err) {
         logger.error("Manual poll cycle failed.", err)
@@ -1532,8 +1554,8 @@ export function startDesktopAppServer(bind: EngineBind = resolveEngineBind()): P
           sendJson(res, 401, { error: "Sign in before running a claim." })
           return
         }
-        if (engineBusy()) {
-          sendJson(res, 409, { error: "A claim is already running. Let it finish before starting the next one." })
+        if (supplierProfileInUse()) {
+          sendJson(res, 409, { error: "A claim or a supplier login is using the browser profile. Wait for it to finish, then run the claim." })
           return
         }
         try {

@@ -65,3 +65,20 @@ export function engineBusy(state: {
 }): boolean {
   return state.isCurrentlyProcessing || state.pollInFlight || Boolean(state.portalTestInFlight)
 }
+
+/**
+ * True when a browser already owns a supplier profile.
+ *
+ * `engineBusy()` covers the engine's own cycles and a running login test. A
+ * browser left open by the manual-login flow is the third case: the poll cycle
+ * refuses to run until it closes, so a route that would queue work for that
+ * profile must refuse too, or the claim is accepted and then never picked up.
+ */
+export function supplierProfileInUse(state: {
+  isCurrentlyProcessing: boolean
+  pollInFlight: boolean
+  portalTestInFlight?: boolean
+  portalBrowserHeld: boolean
+}): boolean {
+  return engineBusy(state) || state.portalBrowserHeld
+}

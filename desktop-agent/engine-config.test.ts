@@ -84,6 +84,15 @@ describe("engine bind and remote-access policy", () => {
     assert.equal(localEngineUrl({ host: "::1", port: 3005 }), "http://[::1]:3005/")
   })
 
+  it("dials a wildcard bind at loopback, because a wildcard is not a destination", () => {
+    // http://0.0.0.0:3005/ is not routable, so the dashboard would never load.
+    assert.equal(localEngineUrl({ host: "0.0.0.0", port: 3005 }), "http://127.0.0.1:3005/")
+    assert.equal(localEngineUrl({ host: "::", port: 3005 }), "http://[::1]:3005/")
+    assert.equal(localEngineUrl({ host: "  0.0.0.0  ", port: 3005 }), "http://127.0.0.1:3005/")
+    // A real interface address is a destination and must be used as-is.
+    assert.equal(localEngineUrl({ host: "10.0.0.5", port: 3005 }), "http://10.0.0.5:3005/")
+  })
+
   it("refuses a plain-http remote target so the engine token never crosses the wire in clear text", () => {
     // Loopback over http is fine: the bytes never leave the machine (SSH tunnel).
     assert.equal(isInsecureRemoteUrl("http://127.0.0.1:3005/"), false)

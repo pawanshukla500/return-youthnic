@@ -1,6 +1,6 @@
 import { describe, it } from "node:test"
 import assert from "node:assert/strict"
-import { engineBusy, shouldRunPollCycle } from "./src/poll-guard.js"
+import { engineBusy, shouldRunPollCycle, supplierProfileInUse } from "./src/poll-guard.js"
 
 /**
  * These two rules were CodeAnt findings on PR #35. Both are easy to undo by
@@ -87,5 +87,25 @@ describe("engine busy guard", () => {
 
   it("treats an omitted login-test flag as idle", () => {
     assert.equal(engineBusy({ isCurrentlyProcessing: false, pollInFlight: false, portalTestInFlight: undefined }), false)
+  })
+})
+
+describe("supplier profile guard", () => {
+  const idle = { isCurrentlyProcessing: false, pollInFlight: false, portalBrowserHeld: false }
+
+  it("reports idle when nothing holds the profile", () => {
+    assert.equal(supplierProfileInUse(idle), false)
+  })
+
+  it("reports in use while a browser is held by the manual-login flow", () => {
+    // Polling refuses to run until that browser closes, so a claim queued in the
+    // meantime would never be picked up. run-one must refuse it.
+    assert.equal(supplierProfileInUse({ ...idle, portalBrowserHeld: true }), true)
+  })
+
+  it("still reports in use for every case engineBusy() covers", () => {
+    assert.equal(supplierProfileInUse({ ...idle, isCurrentlyProcessing: true }), true)
+    assert.equal(supplierProfileInUse({ ...idle, pollInFlight: true }), true)
+    assert.equal(supplierProfileInUse({ ...idle, portalTestInFlight: true }), true)
   })
 })

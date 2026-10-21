@@ -61,6 +61,14 @@ function readRemoteEngineTarget(): { url: string; token: string } | null {
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
     throw new Error("RETURN_ENGINE_URL must start with http:// or https://")
   }
+  // The engine serves its dashboard and control API at the root. A path on the
+  // URL cannot work: the shell would load "<path>/" and every control request
+  // would miss, so reject it here rather than show a broken dashboard.
+  if (parsed.pathname !== "/" && parsed.pathname !== "") {
+    throw new Error(
+      `RETURN_ENGINE_URL must be an origin with no path, such as https://claims-engine.example.com (received "${parsed.pathname}").`,
+    )
+  }
   // The engine token is a long-lived shared secret sent as a bearer header on
   // every request. Plain http: to a non-loopback host would put it in clear text
   // on the network. Loopback (and an SSH tunnel to it) is allowed; anything else
