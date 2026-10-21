@@ -122,7 +122,7 @@ async function shellStatus(): Promise<ShellStatus> {
       activeSummary: status.activeSummary,
       signedIn: status.signedIn,
       backendUrl: status.backendUrl,
-      engineLabel: `local 127.0.0.1:${target.bind.port}`,
+      engineLabel: `local ${target.bind.host}:${target.bind.port}`,
     }
   }
 
@@ -194,13 +194,18 @@ function createMainWindow(target: EngineTarget, startupError?: string): void {
   // Persistent session partition so login ID, password, and session cookies persist forever
   const ses = session.fromPartition("persist:return-app-desktop")
 
-  if (target.kind === "remote") {
-    // The remote engine requires the bearer token on every route. Inject it for
-    // that origin only, so the dashboard, panels, logs and SSE stream all work.
-    const origin = new URL(target.url).origin
-    const token = target.token
+  // Every route except the health probe needs the bearer token whenever the
+  // engine has one. That is always the remote engine, but also a *local* engine
+  // bound to a non-loopback ENGINE_HOST: resolveEngineBind() gives that bind an
+  // authToken too, because the port is reachable from outside this machine. The
+  // token is injected for the engine origin only, so the dashboard, panels, logs
+  // and SSE stream all work. A loopback bind has an empty authToken, so this
+  // stays a no-op in the normal single-machine case.
+  const engineAuthToken = target.kind === "remote" ? target.token : target.bind.authToken
+  if (engineAuthToken) {
+    const origin = engineOrigin(target)
     ses.webRequest.onBeforeSendHeaders({ urls: [`${origin}/*`] }, (details, callback) => {
-      details.requestHeaders["Authorization"] = `Bearer ${token}`
+      details.requestHeaders["Authorization"] = `Bearer ${engineAuthToken}`
       callback({ requestHeaders: details.requestHeaders })
     })
   }

@@ -5,6 +5,7 @@ import child_process from "node:child_process"
 import { loadAgentConfig, saveAgentConfig, type AgentConfig } from "./config.js"
 import { bearerTokenFromHeader, engineTokenMatches, localEngineUrl, resolveEngineBind, type EngineBind } from "./engine-config.js"
 import { installCrashGuards } from "./crash-guard.js"
+import { engineBusy as engineBusyWith, shouldRunPollCycle } from "./poll-guard.js"
 import { agentDataDir } from "./paths.js"
 import { logger } from "./logger.js"
 import { AgentBackendClient } from "./agent-client.js"
@@ -63,8 +64,26 @@ logger.onLog((entry) => {
 // Automation Worker Loop
 // ---------------------------------------------------------------------------------------------------------------
 
-async function pollAndProcessJob(): Promise<boolean> {
-  if (!isWorkerRunning || pollInFlight || holdPortalBrowser()) return false
+/**
+ * True while a claim cycle is in flight or a job is being processed.
+ *
+ * `isCurrentlyProcessing` alone is not enough. It is only set *after* pollJob()
+ * returns, so during the lease window a caller would believe the engine is idle
+ * and could open a second browser on the same supplier profile just as a claim
+ * launches. `pollInFlight` covers the whole cycle, from the poll through job
+ * completion and browser teardown, so routes that would start a browser on a
+ * supplier profile must test this instead. See poll-guard.ts for the tested rule.
+ */
+function engineBusy(): boolean {
+  return engineBusyWith({ isCurrentlyProcessing, pollInFlight })
+}
+
+async function pollAndProcessJob(manual = false): Promise<boolean> {
+  // `manual` is the "Poll Now" one-shot. It must run even while the worker is
+  // paused, so the running-state check is skipped for it. The other two guards
+  // still apply: a manual cycle must not overlap one already in flight, and it
+  // must not run while a supplier login browser holds the profile.
+  if (!shouldRunPollCycle({ workerRunning: isWorkerRunning, pollInFlight, portalBrowserHeld: holdPortalBrowser(), manual })) return false
   pollInFlight = true
   lastPollTime = new Date().toLocaleTimeString("en-IN")
   let submissionOutcomeUnknown = false
@@ -259,7 +278,9 @@ export async function engineRunOnceNow(): Promise<void> {
   }
   nextPollCountdown = 0
   try {
-    await pollAndProcessJob()
+    // `true` = manual, so this single cycle runs even though the worker is
+    // paused. No next poll is scheduled on this path, so the pause holds.
+    await pollAndProcessJob(true)
   } catch (err) {
     logger.error("Manual poll cycle failed.", err)
   }
@@ -1452,19 +1473,27 @@ export function startDesktopAppServer(bind: EngineBind = resolveEngineBind()): P
           sendJson(res, 401, { error: "Sign in before testing a supplier login." })
           return
         }
-        if (isCurrentlyProcessing) {
+        if (engineBusy()) {
           sendJson(res, 409, { error: "A claim is running. Wait until it finishes, then test the login." })
           return
         }
+        // The test needs the supplier profile to itself, so the poller is paused
+        // for its duration. Remember whether it was running: a failed test must
+        // put the engine back exactly as it was, otherwise a mistyped password
+        // would leave a 24/7 bot paused with no obvious cause.
+        const wasRunning = isWorkerRunning
         isWorkerRunning = false
         try {
           const body = await readJson(req)
           const result = await testPortalLogin(String(body.marketplace || "Meesho"), String(body.username || ""), String(body.password || ""))
-          if (result.ok && operatorSignedIn) {
+          if (wasRunning && operatorSignedIn) {
             engineStart()
           }
           sendJson(res, result.ok ? 200 : 400, result)
         } catch (error) {
+          if (wasRunning && operatorSignedIn) {
+            engineStart()
+          }
           logger.error("Supplier login test failed.", error)
           sendJson(res, 500, { error: error instanceof Error ? error.message : "Could not open the supplier login." })
         }
@@ -1476,7 +1505,7 @@ export function startDesktopAppServer(bind: EngineBind = resolveEngineBind()): P
           sendJson(res, 401, { error: "Sign in before running a claim." })
           return
         }
-        if (isCurrentlyProcessing) {
+        if (engineBusy()) {
           sendJson(res, 409, { error: "A claim is already running. Let it finish before starting the next one." })
           return
         }
