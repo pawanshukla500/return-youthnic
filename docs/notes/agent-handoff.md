@@ -2434,3 +2434,17 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
 - **Audit verdict:** analytics tab fully working (scoped `/api/reports/analytics`, tested helpers, KPIs/charts/tables/CSV, live refresh) — kept as the register-driven analysis, no rebuild. Overview already shows volume/reasons/issues/SKUs — no change. Reasons tab removed from /register per request (964-line component deleted); server routes, schema, tests, digest sender stay for API use; ?tab=reasons/sizing falls back to the table.
 - **What:** `register-tabs-cleanup` → PR #33 → merged. PR checks + post-merge CI green, VPS deploy success. No desktop release (no installer paths touched).
 - **Ran:** tests TDD-first (RED 2 failing → GREEN 13/13), typecheck 0 errors, build OK (reasons chunk gone), full suite 463 (426 pass, 0 fail), secret scan clean.
+
+### 2026-10-21, Factory Droid, PR #34 merged: mobile 1D barcode scanning enabled (APK v1.0.60)
+- **Problem:** `BarcodeScanCaptureActivity` (dedicated AWB/Order/Flyer scanner in claim capture) and `ScannerActivity` listed 1D barcode formats in ML Kit but the camera was never tuned to read them — analysis ran at the low default resolution (often 640x480) with no autofocus, so QR codes scanned while 1D courier barcodes (CODE_128 / Code 39 / EAN-13 / ITF) blurred and failed.
+- **What changed (mobile-only, no server/schema/API/permission change):**
+  - `util/CameraTuning.kt`: added `ANALYSIS = FULL_HD` (1920x1080) and a shared `resolutionSelector(w,h)` helper.
+  - `ui/BarcodeScanCaptureActivity.kt`: FULL_HD analysis `ResolutionSelector` + `Camera2Interop` `CONTROL_AF_MODE_CONTINUOUS_PICTURE` on preview and analysis (previously no selector and no AF tuning at all).
+  - `ui/ScannerActivity.kt`: analysis bumped from 720p to 1080p + same continuous-AF on both use cases; preview kept at 720p.
+  - `res/values/strings.xml`: `aim_at_awb` → "Aim at the AWB / tracking barcode (QR or 1D)".
+  - Continuous-AF no-ops on HALs that lack the mode (graceful fallback).
+- **What I ran:** No local Android SDK, so CI was the source of truth. PR #34 build run 39632120379: unit tests ✓, lint ✓, assembleRelease ✓, signing ✓, size budget ✓, artifact ✓. Merged (squash, branch deleted). Post-merge main run 39632951695: build ✓ (4m38s), Publish GitHub Release ✓ (15s) → release **v1.0.60** (versionCode 10060) now "Latest"; v1.0.58 kept as rollback.
+- **In-app update:** server `handleLatestRelease` fetches the newest `v1.0.N` from GitHub (10060 ≥ DEFAULT_RELEASE floor 10058), so warehouse phones get the update notification automatically. **No edit to `data/return-scan-release.json` or `server/mobile-release.ts` was needed.**
+- **Did not run:** local Gradle build (no Android SDK), `npm test/typecheck` (server-side untouched).
+- **Do not change:** the ML Kit barcode format list is unchanged — do NOT drop QR/Data Matrix/PDF417; the fix is camera tuning, not format restriction.
+
