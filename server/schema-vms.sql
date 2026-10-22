@@ -17,3 +17,7 @@ CREATE TABLE IF NOT EXISTS vms_catalog_sync_runs (
 
 CREATE INDEX IF NOT EXISTS vms_catalog_sync_runs_started_idx
   ON vms_catalog_sync_runs (started_at DESC);
+
+-- Additive column: tracks how many new listing->master SKU mappings were created from VMS omsguru_listings.
+ALTER TABLE vms_catalog_sync_runs ADD COLUMN IF NOT EXISTS mappings_created integer NOT NULL DEFAULT 0;
+

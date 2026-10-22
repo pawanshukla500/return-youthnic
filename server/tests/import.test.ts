@@ -880,3 +880,22 @@ test("[synthetic] product master preview reports the scope the rows will be stor
   const preview = previewProductMaster(Buffer.from(csv, "utf8"), "synthetic-codes.csv", "Myntra VB")
   assert.deepEqual(preview.scopes, [{ marketplace: "myntra vb", rows: 2 }])
 })
+
+test("[synthetic] product master parses Catalogue Listings Master format (#, Listing SKU, Master SKU, Category, Image Link)", () => {
+  const csv = [
+    "#,Listing SKU,Master SKU,Category,Image Link",
+    "1,SYN-LIST-7Y-UQCI,SYN-MASTER-EJ2400,Sarees,https://img.example.invalid/SYN-1.jpg",
+    "2,SYN-LIST-A3-100,SYN-MASTER-A3-100,Kurta,https://img.example.invalid/SYN-2.jpg",
+    "3,SYN-LIST-COMBO,SYN-MASTER-COMBO,Saree,",
+  ].join("\n")
+  const result = parseProductMaster(Buffer.from(csv, "utf8"), "Catalogue-Listings-Master.csv", "Amazon")
+  assert.equal(result.fatal, "")
+  assert.equal(result.rows.length, 3)
+  assert.equal(result.rows[0].listingSku, "SYN-LIST-7Y-UQCI")
+  assert.equal(result.rows[0].masterSku, "SYN-MASTER-EJ2400")
+  assert.equal(result.rows[0].category, "Sarees")
+  assert.equal(result.rows[0].imageUrl, "https://img.example.invalid/SYN-1.jpg")
+  assert.equal(result.rows[0].marketplace, "amazon")
+  assert.equal(result.rows[2].imageUrl, "")
+})
+

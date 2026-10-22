@@ -11,8 +11,11 @@
 import type pg from "pg"
 import { formatUploadLabel, toIsoTimestamp } from "./format.js"
 import { compactSkuKey, listingSkuCandidates, marketplaceRank } from "./marketplace-rules.js"
+import { bridgeMasterMappings } from "./oms/master-bridge.js"
 import { ServiceError, writeAudit, type Actor } from "./register-service.js"
 import type { MasterRow } from "./sheets.js"
+import { applyVmsCatalogue } from "./vms/catalog.js"
+import { isVmsConfigured } from "./vms/db.js"
 
 // Candidate-aware unmapped-queue resolution. Mirrors scan-time lookup
 // (masterSkusForListings in server/lookup-import.ts): a queue row resolves when ANY
@@ -713,3 +716,81 @@ export async function insertMasterRows(client: pg.PoolClient, rows: MasterRow[])
 export async function markUnmappedListingSkusMapped(client: pg.PoolClient): Promise<void> {
   await flipResolvedUnmappedRows(client)
 }
+
+export type AutoLinkSummary = {
+  omsguruBridged: number
+  omsguruImagesFilled: number
+  vmsMappingsCreated: number
+  vmsImagesFilled: number
+  pastedBlankImages: number
+  resolvedUnmappedCount: number
+  errors: string[]
+}
+
+// Scans and automatically links missing listing SKUs from OMSGuru channels and VMS database.
+// Runs nightly before the OMSGuru inventory update email is generated and sent, or on-demand from Admin.
+export async function autoResolveMissingListingSkus(db: pg.Pool): Promise<AutoLinkSummary> {
+  const summary: AutoLinkSummary = {
+    omsguruBridged: 0,
+    omsguruImagesFilled: 0,
+    vmsMappingsCreated: 0,
+    vmsImagesFilled: 0,
+    pastedBlankImages: 0,
+    resolvedUnmappedCount: 0,
+    errors: [],
+  }
+
+  // 1. OMSGuru local catalog bridge (oms_listings JOIN oms_skus)
+  try {
+    const ready = await db.query<{ ready: boolean }>(
+      `SELECT to_regclass('public.oms_listings') IS NOT NULL
+          AND to_regclass('public.oms_skus') IS NOT NULL AS ready`,
+    )
+    if (ready.rows[0]?.ready) {
+      const channelsRes = await db.query<{ id: number; channel_name: string; name: string }>(
+        `SELECT DISTINCT channel_company_id AS id,
+                COALESCE(payload->>'channel_name', payload->>'name', '') AS channel_name,
+                COALESCE(payload->>'name', '') AS name
+         FROM oms_listings`,
+      )
+      if (channelsRes.rows.length) {
+        const bridgeRes = await bridgeMasterMappings(db, channelsRes.rows)
+        summary.omsguruBridged = bridgeRes.inserted
+        summary.omsguruImagesFilled = bridgeRes.imageFilled
+      }
+    }
+  } catch (err) {
+    summary.errors.push(`OMSGuru bridge: ${err instanceof Error ? err.message : String(err)}`)
+  }
+
+  // 2. VMS catalogue sync (omsguru_listings and sku_images) if VMS is configured
+  if (isVmsConfigured()) {
+    try {
+      const vmsRes = await applyVmsCatalogue(db)
+      summary.vmsMappingsCreated = vmsRes.mappingsCreated
+      summary.vmsImagesFilled = vmsRes.imagesFilled
+    } catch (err) {
+      summary.errors.push(`VMS sync: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
+  // 3. Share images across matching master SKUs
+  try {
+    summary.pastedBlankImages = await pasteBlankMasterImages(db)
+  } catch (err) {
+    summary.errors.push(`Master image propagation: ${err instanceof Error ? err.message : String(err)}`)
+  }
+
+  // 4. Mark newly resolved listing SKUs as mapped in unmapped_listing_skus
+  try {
+    const beforeCount = Number((await db.query("SELECT COUNT(*)::int AS count FROM unmapped_listing_skus WHERE status = 'unmapped'")).rows[0]?.count ?? 0)
+    await flipResolvedUnmappedRows(db)
+    const afterCount = Number((await db.query("SELECT COUNT(*)::int AS count FROM unmapped_listing_skus WHERE status = 'unmapped'")).rows[0]?.count ?? 0)
+    summary.resolvedUnmappedCount = Math.max(0, beforeCount - afterCount)
+  } catch (err) {
+    summary.errors.push(`Unmapped resolution: ${err instanceof Error ? err.message : String(err)}`)
+  }
+
+  return summary
+}
+

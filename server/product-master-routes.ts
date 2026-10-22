@@ -28,6 +28,7 @@ import {
   listUnmappedListingSkus,
   generateUnmappedSkusTemplateCsv,
   refreshUnmappedListingSkus,
+  autoResolveMissingListingSkus,
   type StagedMasterImport,
 } from "./product-master.js"
 import { ServiceError, writeAudit } from "./register-service.js"
@@ -194,6 +195,18 @@ export function mountProductMasterRoutes(app: Express, requireUser: RequestHandl
       const count = await refreshUnmappedListingSkus(getPool())
       const summary = await getUnmappedListingSkusSummary(getPool())
       res.json({ count, unmapped: summary, summary })
+    } catch (error) {
+      sendError(res, error, next)
+    }
+  })
+
+  // Auto-scan and link missing listing SKUs from OMSGuru channels and VMS database
+  app.post("/api/admin/product-master/auto-link", requireUser, requireAdmin, async (_req, res, next) => {
+    try {
+      const summary = await autoResolveMissingListingSkus(getPool())
+      const state = await productMasterState(getPool())
+      const unmapped = await getUnmappedListingSkusSummary(getPool())
+      res.json({ ok: true, summary, state, unmapped })
     } catch (error) {
       sendError(res, error, next)
     }
