@@ -53,7 +53,7 @@ interop layer. Tauri's real advantages (binary size, idle RAM) are genuine but d
 outweigh a rewrite of a shipping shell that cannot even be built on this machine.
 
 Tauri stays a **documented, deferred option**. The migration boundary is deliberately
-narrow: the shell must talk to the engine **only** through the control API (section 4), so
+narrow: the shell must talk to the engine **only** through the control API (section 3), so
 a future Tauri shell would replace `desktop/main.ts` and nothing else.
 
 ### 2.2 Browser automation driver

@@ -163,12 +163,17 @@ async function shellStatus(): Promise<ShellStatus> {
 }
 
 async function toggleWorker(): Promise<ShellStatus> {
-  const before = await shellStatus()
   const target = engineTarget
-  if (!target || !before.signedIn) return before
+  if (!target) return shellStatus()
+  const before = await shellStatus()
+  if (!before.signedIn) return before
 
   if (target.kind === "local") {
-    if (before.workerRunning) enginePause()
+    // Re-read right before toggling. `before` was captured earlier in the IPC round-trip; another
+    // client (or the Poll Now button) could have changed the worker state since then, and a stale
+    // read would start the worker when the operator meant to pause it, or vice versa.
+    const current = await shellStatus()
+    if (current.workerRunning) enginePause()
     else engineStart()
   } else {
     await fetch(new URL("/api/scheduler/toggle", target.url), {
