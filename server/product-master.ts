@@ -518,54 +518,60 @@ export async function listUnmappedListingSkus(
 }
 
 export async function refreshUnmappedListingSkus(db: pg.Pool): Promise<number> {
-  // Find all listing SKUs in expected_return_items that lack a product_master mapping
-  const res = await db.query(`
-    SELECT DISTINCT ON (m.name, COALESCE(NULLIF(eri.channel_listing_id, ''), eri.marketplace_sku_identifier))
-      m.name AS marketplace,
-      COALESCE(NULLIF(eri.channel_listing_id, ''), eri.marketplace_sku_identifier) AS listing_sku,
-      er.order_number AS sample_order_number,
-      er.tracking_id AS sample_tracking_id
-    FROM expected_return_items eri
-    JOIN expected_returns er ON er.id = eri.expected_return_id
-    JOIN marketplaces m ON m.id = er.marketplace_id
-    WHERE (eri.product_sku_source = 'unresolved'
-       OR NOT EXISTS (
-         SELECT 1 FROM product_master pm
-         WHERE LOWER(pm.listing_sku) = LOWER(COALESCE(NULLIF(eri.channel_listing_id, ''), eri.marketplace_sku_identifier))
-       ))
-      AND COALESCE(NULLIF(eri.channel_listing_id, ''), eri.marketplace_sku_identifier) IS NOT NULL
-      AND COALESCE(NULLIF(eri.channel_listing_id, ''), eri.marketplace_sku_identifier) <> ''
-    ORDER BY m.name, COALESCE(NULLIF(eri.channel_listing_id, ''), eri.marketplace_sku_identifier), er.id DESC
-  `)
+  const client = await db.connect()
+  try {
+    await client.query("SET statement_timeout = '30s'")
+    // Find all listing SKUs in expected_return_items that lack a product_master mapping
+    const res = await client.query(`
+      SELECT DISTINCT ON (m.name, COALESCE(NULLIF(eri.channel_listing_id, ''), eri.marketplace_sku_identifier))
+        m.name AS marketplace,
+        COALESCE(NULLIF(eri.channel_listing_id, ''), eri.marketplace_sku_identifier) AS listing_sku,
+        er.order_number AS sample_order_number,
+        er.tracking_id AS sample_tracking_id
+      FROM expected_return_items eri
+      JOIN expected_returns er ON er.id = eri.expected_return_id
+      JOIN marketplaces m ON m.id = er.marketplace_id
+      WHERE (eri.product_sku_source = 'unresolved'
+         OR NOT EXISTS (
+           SELECT 1 FROM product_master pm
+           WHERE LOWER(pm.listing_sku) = LOWER(COALESCE(NULLIF(eri.channel_listing_id, ''), eri.marketplace_sku_identifier))
+         ))
+        AND COALESCE(NULLIF(eri.channel_listing_id, ''), eri.marketplace_sku_identifier) IS NOT NULL
+        AND COALESCE(NULLIF(eri.channel_listing_id, ''), eri.marketplace_sku_identifier) <> ''
+      ORDER BY m.name, COALESCE(NULLIF(eri.channel_listing_id, ''), eri.marketplace_sku_identifier), er.id DESC
+    `)
 
-  // Candidate-aware: the SELECT above is exact-match, so variant-resolved rows are
-  // filtered here in JS (skip the insert) instead of entering the queue.
-  const masterKeys = await loadMasterLookupKeys(db)
-  let count = 0
-  for (const row of res.rows) {
-    const mp = String(row.marketplace || "").trim()
-    const sku = String(row.listing_sku || "").trim()
-    const sampleOrder = String(row.sample_order_number || "").trim()
-    const sampleTracking = String(row.sample_tracking_id || "").trim()
-    if (mp && sku) {
-      if (unmappedIsResolved(sku, mp, masterKeys)) continue
-      await db.query(
-        `INSERT INTO unmapped_listing_skus (marketplace, listing_sku, sample_order_number, sample_tracking_id, last_seen_at)
-         VALUES ($1, $2, $3, $4, now())
-         ON CONFLICT (marketplace, listing_sku)
-         DO UPDATE SET last_seen_at = now(),
-                       sample_order_number = CASE WHEN unmapped_listing_skus.sample_order_number = '' THEN EXCLUDED.sample_order_number ELSE unmapped_listing_skus.sample_order_number END,
-                       sample_tracking_id = CASE WHEN unmapped_listing_skus.sample_tracking_id = '' THEN EXCLUDED.sample_tracking_id ELSE unmapped_listing_skus.sample_tracking_id END`,
-        [mp, sku, sampleOrder, sampleTracking],
-      )
-      count++
+    // Candidate-aware: the SELECT above is exact-match, so variant-resolved rows are
+    // filtered here in JS (skip the insert) instead of entering the queue.
+    const masterKeys = await loadMasterLookupKeys(client)
+    let count = 0
+    for (const row of res.rows) {
+      const mp = String(row.marketplace || "").trim()
+      const sku = String(row.listing_sku || "").trim()
+      const sampleOrder = String(row.sample_order_number || "").trim()
+      const sampleTracking = String(row.sample_tracking_id || "").trim()
+      if (mp && sku) {
+        if (unmappedIsResolved(sku, mp, masterKeys)) continue
+        await client.query(
+          `INSERT INTO unmapped_listing_skus (marketplace, listing_sku, sample_order_number, sample_tracking_id, last_seen_at)
+           VALUES ($1, $2, $3, $4, now())
+           ON CONFLICT (marketplace, listing_sku)
+           DO UPDATE SET last_seen_at = now(),
+                         sample_order_number = CASE WHEN unmapped_listing_skus.sample_order_number = '' THEN EXCLUDED.sample_order_number ELSE unmapped_listing_skus.sample_order_number END,
+                         sample_tracking_id = CASE WHEN unmapped_listing_skus.sample_tracking_id = '' THEN EXCLUDED.sample_tracking_id ELSE unmapped_listing_skus.sample_tracking_id END`,
+          [mp, sku, sampleOrder, sampleTracking],
+        )
+        count++
+      }
     }
+
+    // Flip existing unmapped rows that now resolve via a variant ( decided in JS ).
+    await flipResolvedUnmappedRows(client)
+
+    return count
+  } finally {
+    client.release()
   }
-
-  // Flip existing unmapped rows that now resolve via a variant ( decided in JS ).
-  await flipResolvedUnmappedRows(db)
-
-  return count
 }
 
 export async function generateUnmappedSkusTemplateCsv(db: pg.Pool, marketplace?: string): Promise<string> {

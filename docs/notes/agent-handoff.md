@@ -2661,6 +2661,33 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
 - **Ran:** `npm run typecheck` (0 errors across 3 tsconfigs), `npm run build` (exit 0), `npm test` (574 tests: 534 pass, 0 fail, 40 skipped).
 - **The next agent must not:** widen the VMS allowlist past single-statement SELECT/WITH, log or leak the VMS connection URL, drop or alter database tables/columns destructively, or remove the preflight linkup step before OMSGuru daily email dispatch.
 
+### 2026-10-22, Antigravity Agent, 404 Not Found Incident Resolution & Database Lock Hardening
+
+- **Incident:** `https://return.youthnic.shop` and `https://return.srv1845788.hstgr.cloud` returned Traefik `404 page not found`.
+- **Root Cause Analysis:**
+  1. At 13:37 UTC, an unindexed `NOT EXISTS (SELECT 1 FROM product_master pm WHERE LOWER(pm.listing_sku) = LOWER(...))` query was triggered across all 204,635 `expected_return_items` rows in `refreshUnmappedListingSkus` (`server/product-master.ts`). Without an index on `LOWER(pm.listing_sku)`, this correlated subquery ran for 50+ minutes holding shared table locks.
+  2. At 14:01 UTC, CI deployment started the updated container. During `initDatabase()`, `applySchema` attempted DDL operations under `SET LOCAL lock_timeout = '15s'`, but was cancelled after 15 seconds due to the 50-minute lock.
+  3. Because `initDatabase()` failed, `ready` remained `false` and `/api/health` returned HTTP 503 (`database: disconnected`).
+  4. Docker marked `Return-App` as `unhealthy`.
+  5. Traefik reverse proxy drops routing for unhealthy containers, returning its default Go `404 page not found`.
+  6. In `.github/workflows/deploy.yml`, `run_cmd_retry` invoked `bash -s <<'EOF'`. When attempt 1 failed due to the health check, attempt 2 ran without standard input (heredoc consumed), causing `bash -s` to exit 0 and falsely mask the deployment failure as green in GitHub Actions.
+- **Remediation & Fixes:**
+  1. **VPS Database Lock Cleared:** Cancelled the hung query backend (`PID 3276307`) via `pg_cancel_backend` and restarted `Return-App`. Verified container immediately achieved `Up (healthy)` and Traefik restored public routing (HTTP 200).
+  2. **Additive Database Indexes (`server/schema-unmapped-skus.sql`):** Added functional index `CREATE INDEX IF NOT EXISTS product_master_lower_listing_idx ON product_master (LOWER(listing_sku));` and partial index `expected_return_items_unresolved_idx ON expected_return_items (product_sku_source) WHERE product_sku_source = 'unresolved';` to eliminate sequential full-table scans.
+  3. **Statement Timeout Guard (`server/product-master.ts`):** Wrapped `refreshUnmappedListingSkus` in a dedicated client with `SET statement_timeout = '30s'` to guarantee rogue queries cannot block migrations or hold locks indefinitely.
+  4. **CI/CD Deployment Hardening (`.github/workflows/deploy.yml`):** Fixed `run_cmd_retry` by writing deployment logic to `/tmp/deploy-remote.sh` and SCPing it to the VPS before execution, ensuring every SSH retry executes the complete script and health failures reliably trigger GitHub Actions error reporting.
+- **Verification:**
+  - `curl.exe -Iv https://return.youthnic.shop`: Verified HTTP/1.1 200 OK with Express security headers.
+  - `curl.exe -fsS https://return.youthnic.shop/api/health`: Verified HTTP 200 `{"ok":true,"database":"connected","name":"return-scan_youthnic"}`.
+  - Public Vite SPA bundle & CSS delivered with HTTP 200 (`/assets/index-CUNR31jY.js` and `/assets/index-B-aFZGJb.css`).
+  - `npm.cmd run typecheck`: Passed with 0 errors across 3 tsconfig projects.
+  - `npm.cmd run build`: Passed (Vite bundled in 2.01s, server in 23ms).
+  - `npm.cmd test`: 575 tests run: 535 passed, 0 failed, 40 skipped.
+- **The next agent must not:**
+  - Remove `product_master_lower_listing_idx` or run unindexed correlated subqueries against `expected_return_items`.
+  - Remove the `statement_timeout` guard in `refreshUnmappedListingSkus`.
+  - Reintroduce raw stdin heredocs to `run_cmd_retry` in `.github/workflows/deploy.yml`.
+
 
 
 

@@ -183,7 +183,7 @@ jobs:
           fi
           run_cmd_retry $SCP /tmp/return-app-source.tar.gz "${HOSTINGER_USER}@${HOSTINGER_HOST}:${APP_ROOT}/return-app-source.tar.gz"
 
-          run_cmd_retry $SSH "${HOSTINGER_USER}@${HOSTINGER_HOST}" "bash -s" <<'EOF'
+          cat <<'EOF' > /tmp/deploy-remote.sh
           set -euo pipefail
           APP_ROOT="/opt/return-app"
           APP_DIR="/opt/return-app/Return-App"
@@ -261,4 +261,6 @@ jobs:
           echo "Hostinger hPanel: $HPANEL_LINK"
           echo "URLs: https://return.youthnic.shop | https://return.srv1845788.hstgr.cloud"
           echo "=========================================================================="
-          EOF
+EOF
+          run_cmd_retry $SCP /tmp/deploy-remote.sh "${HOSTINGER_USER}@${HOSTINGER_HOST}:${APP_ROOT}/deploy-remote.sh"
+          run_cmd_retry $SSH "${HOSTINGER_USER}@${HOSTINGER_HOST}" "bash ${APP_ROOT}/deploy-remote.sh"

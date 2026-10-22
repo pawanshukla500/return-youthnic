@@ -19,3 +19,12 @@ CREATE INDEX IF NOT EXISTS unmapped_listing_skus_lookup_idx
 
 CREATE INDEX IF NOT EXISTS unmapped_listing_skus_status_idx
   ON unmapped_listing_skus (status);
+
+-- Additive functional index to accelerate case-insensitive listing SKU lookups against product_master
+CREATE INDEX IF NOT EXISTS product_master_lower_listing_idx
+  ON product_master (LOWER(listing_sku));
+
+-- Additive partial index to accelerate unresolved returns scanning
+CREATE INDEX IF NOT EXISTS expected_return_items_unresolved_idx
+  ON expected_return_items (product_sku_source)
+  WHERE product_sku_source = 'unresolved';
