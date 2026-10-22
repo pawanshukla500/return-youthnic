@@ -2,9 +2,13 @@ import test from "node:test"
 import assert from "node:assert/strict"
 import {
   buildFillChunks,
+  buildMappingInsertChunks,
+  cleanVmsCategory,
   cleanVmsImageUrl,
   cleanVmsSku,
+  dedupeVmsMappings,
   dedupeVmsRows,
+  normalizeVmsMarketplace,
   probeVmsCatalogue,
 } from "../vms/catalog.js"
 import { getVmsConnectionSettings, queryVmsReadOnly } from "../vms/db.js"
@@ -99,5 +103,104 @@ test("[synthetic] VMS probe without a configured URL fails closed with no connec
   } finally {
     if (previous === undefined) delete process.env.VMS_DATABASE_URL
     else process.env.VMS_DATABASE_URL = previous
+  }
+})
+
+test("[synthetic] cleanVmsCategory trims whitespace and limits length without crashing on null", () => {
+  assert.equal(cleanVmsCategory("  Sarees  \n\t "), "Sarees")
+  assert.equal(cleanVmsCategory(null), "")
+  assert.equal(cleanVmsCategory(""), "")
+  assert.equal(cleanVmsCategory("a".repeat(150)).length, 100)
+})
+
+test("[synthetic] normalizeVmsMarketplace normalizes known channels and handles edge cases", () => {
+  assert.equal(normalizeVmsMarketplace("myntra_vb"), "Myntra VB")
+  assert.equal(normalizeVmsMarketplace("Myntra EJ"), "Myntra EJ")
+  assert.equal(normalizeVmsMarketplace("Myntra"), "all")
+  assert.equal(normalizeVmsMarketplace("Amazon IN"), "Amazon")
+  assert.equal(normalizeVmsMarketplace("Flipkart Wholesale"), "Flipkart")
+  assert.equal(normalizeVmsMarketplace("Meesho Dropship"), "Meesho")
+  assert.equal(normalizeVmsMarketplace("Ajio B2C"), "Ajio")
+  assert.equal(normalizeVmsMarketplace("Shopify Store"), "Shopify")
+  assert.equal(normalizeVmsMarketplace("all"), "all")
+  assert.equal(normalizeVmsMarketplace(""), "all")
+  assert.equal(normalizeVmsMarketplace(null), "all")
+})
+
+test("[synthetic] dedupeVmsMappings keeps first occurrence, enriches missing image and category", () => {
+  const rows = [
+    {
+      listingSku: "SYN-LIST-1",
+      masterSku: "SYN-MASTER-1",
+      category: "",
+      imageUrl: "",
+      marketplace: "Amazon",
+    },
+    {
+      listingSku: "syn-list-1",
+      masterSku: "SYN-MASTER-1",
+      category: "Kurta",
+      imageUrl: "https://img.example.invalid/SYN-1.jpg",
+      marketplace: "Amazon",
+    },
+    {
+      listingSku: "",
+      masterSku: "SYN-MASTER-2",
+      category: "Saree",
+      imageUrl: "",
+      marketplace: "Amazon",
+    },
+    {
+      listingSku: "SYN-LIST-2",
+      masterSku: "",
+      category: "Saree",
+      imageUrl: "",
+      marketplace: "Amazon",
+    },
+  ]
+  const deduped = dedupeVmsMappings(rows)
+  assert.equal(deduped.length, 1)
+  assert.equal(deduped[0].listingSku, "SYN-LIST-1")
+  assert.equal(deduped[0].masterSku, "SYN-MASTER-1")
+  assert.equal(deduped[0].category, "Kurta")
+  assert.equal(deduped[0].imageUrl, "https://img.example.invalid/SYN-1.jpg")
+  assert.equal(deduped[0].marketplace, "Amazon")
+})
+
+test("[synthetic] buildMappingInsertChunks properly partitions and generates parameterized upsert SQL", () => {
+  const rows = [
+    {
+      listingSku: "SYN-LIST-1",
+      masterSku: "SYN-MASTER-1",
+      category: "Kurta",
+      imageUrl: "https://img.example.invalid/SYN-1.jpg",
+      marketplace: "Amazon",
+    },
+    {
+      listingSku: "SYN-LIST-2",
+      masterSku: "SYN-MASTER-2",
+      category: "Saree",
+      imageUrl: "https://img.example.invalid/SYN-2.jpg",
+      marketplace: "Flipkart",
+    },
+    {
+      listingSku: "SYN-LIST-3",
+      masterSku: "SYN-MASTER-3",
+      category: "Lehenga",
+      imageUrl: "",
+      marketplace: "Meesho",
+    },
+  ]
+  const chunks = buildMappingInsertChunks(rows, 2)
+  assert.equal(chunks.length, 2)
+  assert.equal(chunks[0].values.length, 10) // 2 rows * 5 params
+  assert.equal(chunks[1].values.length, 5) // 1 row * 5 params
+  assert.match(chunks[0].sql, /INSERT INTO product_master/)
+  assert.match(chunks[0].sql, /ON CONFLICT \(marketplace, listing_sku\) DO UPDATE/)
+
+  // Verify placeholder numbering
+  for (const chunk of chunks) {
+    const placeholders = (chunk.sql.match(/\$\d+/g) || []).map((t) => Number(t.slice(1)))
+    assert.deepEqual(placeholders, placeholders.map((_, i) => i + 1))
   }
 })

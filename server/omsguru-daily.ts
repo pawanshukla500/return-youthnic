@@ -15,7 +15,7 @@ import {
   listFirebaseStorageFiles,
   isFirebaseConfigured,
 } from "./firebase-storage.js"
-import { recordUnmappedListingSkus } from "./product-master.js"
+import { autoResolveMissingListingSkus, recordUnmappedListingSkus } from "./product-master.js"
 
 export type UnmappedScannedItem = {
   itemId: number
@@ -469,6 +469,18 @@ export async function generateOmsguruDailyUpdate(
   const dateStr = options.targetDate || ist.dateStr
   const warehouseId = options.warehouseId || config.dropshipWarehouseId
   const requestId = generateRequestId(dateStr)
+
+  // 0. Pre-flight scan & auto-link: map missing listing SKUs from OMSGuru channels and VMS database before generating inventory
+  try {
+    const linkSummary = await autoResolveMissingListingSkus(db)
+    if (linkSummary.vmsMappingsCreated > 0 || linkSummary.omsguruBridged > 0 || linkSummary.pastedBlankImages > 0) {
+      console.log(
+        `[OMSGuru Daily Preflight] Auto-linked: ${linkSummary.omsguruBridged} OMSGuru mappings, ${linkSummary.vmsMappingsCreated} VMS mappings, ${linkSummary.pastedBlankImages} images pasted.`,
+      )
+    }
+  } catch (linkErr) {
+    console.warn("[OMSGuru Daily Preflight Linkup Warning]", linkErr)
+  }
 
   // 1. Calculate good received returns
   const calculated = await calculateGoodReturnsForDay(db, dateStr)

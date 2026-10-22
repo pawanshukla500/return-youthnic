@@ -237,6 +237,7 @@ export function Admin() {
   const [loadingUnmappedList, setLoadingUnmappedList] = useState(false)
   const [unmappedFilterMp, setUnmappedFilterMp] = useState("")
   const [refreshingUnmapped, setRefreshingUnmapped] = useState(false)
+  const [autoLinking, setAutoLinking] = useState(false)
   const [unmappedNotice, setUnmappedNotice] = useState("")
 
   // Add User & Password Reset state
@@ -738,6 +739,44 @@ export function Admin() {
       setPmError(err instanceof Error ? err.message : "Failed to refresh unmapped listing SKUs.")
     } finally {
       setRefreshingUnmapped(false)
+    }
+  }
+
+  const handleAutoLink = async () => {
+    setAutoLinking(true)
+    setUnmappedNotice("")
+    try {
+      const data = await api<{
+        ok: boolean
+        summary: {
+          omsguruBridged: number
+          omsguruImagesFilled: number
+          vmsMappingsCreated: number
+          vmsImagesFilled: number
+          pastedBlankImages: number
+          resolvedUnmappedCount: number
+        }
+        unmapped: UnmappedSkuSummary
+        state: ProductMasterState
+      }>("/api/admin/product-master/auto-link", { method: "POST" })
+      if (data.unmapped) setUnmappedSummary(data.unmapped)
+      if (data.state) setProductMaster(data.state)
+      const s = data.summary
+      const parts: string[] = []
+      if (s.omsguruBridged > 0) parts.push(`${s.omsguruBridged} OMSGuru mappings`)
+      if (s.vmsMappingsCreated > 0) parts.push(`${s.vmsMappingsCreated} VMS mappings`)
+      if (s.vmsImagesFilled > 0 || s.pastedBlankImages > 0) {
+        parts.push(`${s.vmsImagesFilled + s.pastedBlankImages} images linked`)
+      }
+      const msg = parts.length
+        ? `Auto-link completed: ${parts.join(", ")} added.`
+        : "Auto-link completed. No additional missing mappings found in OMSGuru or VMS."
+      setUnmappedNotice(msg)
+      await loadUnmappedList(1, unmappedFilterMp)
+    } catch (err) {
+      setPmError(err instanceof Error ? err.message : "Auto-link failed.")
+    } finally {
+      setAutoLinking(false)
     }
   }
 
@@ -1860,8 +1899,17 @@ export function Admin() {
                 <button
                   type="button"
                   className="btn secondary"
+                  onClick={handleAutoLink}
+                  disabled={autoLinking || refreshingUnmapped}
+                  title="Scan and automatically link missing listing SKUs from OMSGuru channels and VMS database"
+                >
+                  <Icon name="check" size={13} /> {autoLinking ? "Linking..." : "Auto-Link (OMSGuru + VMS)"}
+                </button>
+                <button
+                  type="button"
+                  className="btn secondary"
                   onClick={handleRefreshUnmapped}
-                  disabled={refreshingUnmapped}
+                  disabled={refreshingUnmapped || autoLinking}
                   title="Re-scan all active return listings to detect missing mappings"
                 >
                   <Icon name="scan" size={13} /> {refreshingUnmapped ? "Scanning..." : "Re-scan Missing"}
@@ -2027,7 +2075,7 @@ export function Admin() {
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
                   <Icon name="upload" size={16} />
                   <span style={{ fontSize: 12, fontWeight: 600, color: "#0f6b56" }}>
-                    Filled the missing SKUs CSV? Drop it here to Append & Merge with existing catalog mappings
+                    Filled missing SKUs, Catalogue Listings Master, or OMSGuru file? Drop here to Append & Merge
                   </span>
                 </div>
               </div>

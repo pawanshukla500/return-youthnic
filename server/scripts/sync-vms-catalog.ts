@@ -24,15 +24,15 @@ dotenv.config({ path: path.join(root, ".env") })
 
 function printHelp(): void {
   console.log(`VMS Catalogue Sync (VMS is strictly READ-ONLY).
-Reads channel listing SKUs + image links from the VMS sku_photos table and
-fills blank product_master.image_url values. Merge-only: nothing is created,
-deleted, or overwritten.
+Reads channel listing SKUs, master SKU mappings, categories and catalog images from
+the VMS tables (omsguru_listings, sku_images, sku_photos) and syncs into product_master.
+Merge-only: adds missing mappings and fills blank image links. Existing mappings and images are preserved.
 
   --help       this help (connects to nothing)
   --fetch-ca   pin the VMS server certificate once (stored git-ignored)
   --probe      inspect the VMS schema + masked catalogue sample (VMS read-only)
-  --dry-run    report what would be filled (default; writes nothing anywhere)
-  --apply      fill blank image links locally + write one vms_catalog_sync_runs row`)
+  --dry-run    report what would be filled and mapped (default; writes nothing anywhere)
+  --apply      create mappings and fill blank image links + write one vms_catalog_sync_runs row`)
 }
 
 async function main() {
@@ -75,12 +75,20 @@ async function main() {
       }
     }
     const sample = await sampleVmsCatalogue()
-    console.log(`\nCatalogue candidate: ${sample.table}: ${sample.rows} rows, ${sample.withImage} with image, ${sample.blankSku} blank SKU.`)
-    console.log("By marketplace scope:")
-    for (const scope of sample.marketplaces) {
-      console.log(`  '${scope.marketplace || "(blank)"}': ${scope.rows} rows`)
+    if (sample.listingsSample?.length) {
+      console.log(`\nFound Catalogue Listings Master (omsguru_listings):`)
+      for (const entry of sample.listingsSample) {
+        console.log(`  listing='${entry.listingSku}' master='${entry.masterSku}' category='${entry.category}' host='${entry.imageHost}' scope='${entry.marketplace}'`)
+      }
     }
-    console.log("Sample rows (image shown as host only):")
+    console.log(`\nCatalogue candidate: ${sample.table}: ${sample.rows} rows, ${sample.withImage} with image, ${sample.blankSku} blank SKU.`)
+    if (sample.marketplaces.length) {
+      console.log("By marketplace scope:")
+      for (const scope of sample.marketplaces) {
+        console.log(`  '${scope.marketplace || "(blank)"}': ${scope.rows} rows`)
+      }
+    }
+    console.log("Sample image rows (image shown as host only):")
     for (const entry of sample.sample) {
       console.log(`  sku='${entry.sku}' title='${entry.title}' host='${entry.imageHost}' scope='${entry.marketplace}'`)
     }
@@ -97,19 +105,20 @@ async function main() {
       process.exit(1)
     }
     const report = await dryRunVmsCatalogue(pool)
-    console.log(`VMS catalogue rows: ${report.vmsRows} (${report.vmsUsable} distinct SKUs with an image).`)
+    console.log(`VMS catalogue total entries: ${report.vmsRows}.`)
+    console.log(`VMS omsguru_listings mappings: ${report.vmsMappings} (${report.mappingsToInsert} new mappings to create locally).`)
+    console.log(`VMS image catalogue: ${report.vmsUsable} distinct SKUs with images.`)
     console.log(`Local product master: ${report.masterRows} rows, ${report.masterImageless} without an image.`)
     console.log(`Matched listings: ${report.matchedListings} distinct keys (of which ${report.blankImagesFilled} blank images would be filled, ${report.alreadyHaveImage} already have one).`)
-    console.log(`VMS-only SKUs (not in the master): ${report.vmsOnly}.`)
     if (!args.includes("--apply")) {
-      console.log("Dry run only — nothing was written. Add --apply to fill the blank image links.")
+      console.log("Dry run only — nothing was written. Add --apply to create new mappings and fill blank image links.")
       return
     }
 
     const { applyVmsCatalogue } = await import("../vms/catalog.js")
     const applied = await applyVmsCatalogue(pool)
-    console.log(`Filled ${applied.imagesFilled} blank image link(s) across ${applied.matchedListings} matched listing(s) (run ${applied.runId}).`)
-    console.log(`VMS-only SKUs still needing a listing→product mapping: ${applied.vmsOnly}.`)
+    console.log(`Created ${applied.mappingsCreated} new product master mapping(s) from VMS omsguru_listings.`)
+    console.log(`Filled ${applied.imagesFilled} blank image link(s) across matched listings (run ${applied.runId}).`)
   } finally {
     await pool.end().catch(() => {})
     await closeVmsPool()

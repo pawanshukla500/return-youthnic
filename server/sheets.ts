@@ -1146,13 +1146,50 @@ export function parseProductMaster(buffer: Buffer, filename: string, marketplace
   }
   const { headers, records } = toFields(grid, 0)
   const listingHeader = headers.find((h) =>
-    ["marketplace_sku", "channel_listing_sku_code", "channel_listing_sku", "seller_sku", "seller_sku_code"].includes(h),
+    [
+      "marketplace_sku",
+      "channel_listing_sku_code",
+      "channel_listing_sku",
+      "listing_sku",
+      "listing_sku_code",
+      "sku_name",
+      "channel_sku",
+      "channel_sku_code",
+      "seller_sku",
+      "seller_sku_code",
+      "channel_listing_id",
+      "item_sku_code",
+    ].includes(h),
   )
   const masterHeader = headers.find((h) =>
-    ["vb_export_sku's", "vb_export_sku", "master_sku", "product_skucode", "product_sku_code", "product_sku"].includes(h),
+    [
+      "vb_export_sku's",
+      "vb_export_sku",
+      "master_sku",
+      "master_sku_code",
+      "product_skucode",
+      "product_sku_code",
+      "product_sku",
+      "sku_code",
+      "item_code",
+      "parent_sku",
+    ].includes(h),
   )
-  const categoryHeader = headers.find((h) => h === "vb_export_product_category" || h === "product_category" || h === "category")
-  const imageHeader = headers.find((h) => h === "channel_image_url" || h === "image_url" || h === "image_link" || h === "image")
+  const categoryHeader = headers.find((h) =>
+    ["vb_export_product_category", "product_category", "category", "category_name"].includes(h),
+  )
+  const imageHeader = headers.find((h) =>
+    [
+      "channel_image_url",
+      "image_url",
+      "image_link",
+      "image",
+      "photo_link",
+      "photo_url",
+      "view_photo",
+      "product_image",
+    ].includes(h),
+  )
   const cogsHeader = headers.find((h) => h.startsWith("cogs"))
   const weightHeader = headers.find((h) => h.startsWith("weight_slab") || h === "weight")
 
