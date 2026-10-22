@@ -62,6 +62,53 @@ export type VmsCatalogueSample = {
   listingsSample?: { listingSku: string; masterSku: string; category: string; imageHost: string; marketplace: string }[]
 }
 
+// Strips known marketplace/campaign noise suffixes from a product SKU to yield
+// the clean canonical master SKU (e.g. Divastri _DIV, Kalini _KL, Youthnic _YOU/_Y,
+// duplicate sale size suffixes _S_S, _New, and Ajio seller suffixes _AI1).
+export function stripNoiseSuffix(raw: string): string {
+  let s = String(raw ?? "").trim()
+  s = s.replace(/[\s_]+KL$/i, "")
+  s = s.replace(/_DIV$/i, "")
+  s = s.replace(/(_YOU|_Y)$/i, "")
+  s = s.replace(/_NEW$/i, "")
+  s = s.replace(/(_(?:XS|S|M|L|XL|2XL|XXL|3XL|4XL|5XL|FS))_S$/i, "$1")
+  s = s.replace(/_AI\d+$/i, "")
+  return s.trim()
+}
+
+// Loads canonical master SKUs from warehousemanagment.sku_variants if available on the same host.
+export async function getCanonicalMasterSkuMap(): Promise<Map<string, string>> {
+  const map = new Map<string, string>()
+  const rawUrl = process.env.VMS_DATABASE_URL?.trim()
+  if (!rawUrl) return map
+  try {
+    const wmUrl = new URL(rawUrl)
+    wmUrl.pathname = "/warehousemanagment"
+    const wmPool = new (await import("pg")).default.Pool({
+      connectionString: wmUrl.toString(),
+      connectionTimeoutMillis: 3000,
+      max: 1,
+    })
+    try {
+      const res = await wmPool.query<{ sku: string }>(
+        `SELECT DISTINCT sku FROM sku_variants WHERE sku IS NOT NULL AND btrim(sku) <> ''`,
+      )
+      for (const row of res.rows) {
+        const s = String(row.sku ?? "").trim()
+        if (s) {
+          const compact = s.toLowerCase().replace(/[^a-z0-9]/g, "")
+          if (compact) map.set(compact, s)
+        }
+      }
+    } finally {
+      await wmPool.end().catch(() => {})
+    }
+  } catch {
+    // Graceful fallback: warehousemanagment is optional/conditional
+  }
+  return map
+}
+
 // Keep an http(s) image link, else blank. A present-but-invalid link is left
 // blank, never repaired — the same rule the product-master file load follows.
 export function cleanVmsImageUrl(raw: unknown): string {
@@ -233,7 +280,13 @@ export function buildMappingInsertChunks(
       sql: `INSERT INTO product_master (marketplace, listing_sku, master_sku, category, cogs, weight_slab, image_url, updated_at)
          VALUES ${groups.join(", ")}
          ON CONFLICT (marketplace, listing_sku) DO UPDATE SET
-           master_sku = CASE WHEN btrim(COALESCE(product_master.master_sku, '')) = '' THEN EXCLUDED.master_sku ELSE product_master.master_sku END,
+           master_sku = CASE 
+             WHEN btrim(COALESCE(EXCLUDED.master_sku, '')) = '' THEN product_master.master_sku
+             WHEN btrim(COALESCE(product_master.master_sku, '')) = '' THEN EXCLUDED.master_sku
+             WHEN product_master.master_sku ~* '(_DIV|_KL|_YOU|_AI[0-9]*|_NEW|_S_S|_[SMLX|2-5XL]+_S|\\s+KL|_Y)$' THEN EXCLUDED.master_sku
+             WHEN product_master.master_sku = upper(product_master.master_sku) AND EXCLUDED.master_sku <> upper(EXCLUDED.master_sku) THEN EXCLUDED.master_sku
+             ELSE EXCLUDED.master_sku
+           END,
            category = COALESCE(NULLIF(EXCLUDED.category, ''), product_master.category),
            image_url = CASE WHEN btrim(COALESCE(product_master.image_url, '')) = '' AND EXCLUDED.image_url <> '' THEN EXCLUDED.image_url ELSE product_master.image_url END,
            updated_at = now()`,
@@ -288,6 +341,7 @@ export type VmsApplyResult = VmsDryRun & {
   imagesFilled: number
   mappingsCreated: number
   runId: number
+  registerItemsUpdated?: number
 }
 
 // Reads channel listing SKUs, master SKUs, categories and image URLs from VMS omsguru_listings.
@@ -355,23 +409,47 @@ export async function readVmsListings(): Promise<VmsListingRow[]> {
     let sql: string
     if (hasOmsSkuId && hasMatchKey) {
       const orderClause = hasUpdatedAt ? ", updated_at DESC" : ""
-      sql = `WITH master_skus AS (
-  SELECT DISTINCT ON (oms_sku_id)
+      sql = `WITH ranked_candidates AS (
+  SELECT 
     oms_sku_id,
-    match_key AS canonical_master_sku,
-    ${hasTitle ? "title" : "''::text"} AS canonical_title
+    ${listingCol} AS sku_name,
+    match_key,
+    ${hasTitle ? "title" : "''::text"} AS title,
+    marketplace,
+    ${hasUpdatedAt ? "updated_at" : "now()"} AS updated_at,
+    CASE 
+      WHEN ${listingCol} ~* '(_DIV|_KL|_YOU|_AI[0-9]*|_NEW|_S_S|_[SMLX|2-5XL]+_S)$' THEN 10
+      WHEN match_key ~* '(_DIV|_KL|_YOU|_AI[0-9]*|_NEW|_S_S|_[SMLX|2-5XL]+_S)$' THEN 10
+      WHEN ${listingCol} ~* '(\\s+KL|_Y)$' THEN 8
+      ELSE 0
+    END AS suffix_penalty,
+    CASE 
+      WHEN marketplace = 'Amazon Flex' THEN 1
+      WHEN marketplace = 'Flipkart' THEN 2
+      WHEN marketplace = 'Shopify' THEN 3
+      WHEN marketplace = 'Meesho' THEN 4
+      WHEN marketplace = 'Ajio B2C Dropship' THEN 5
+      ELSE 6
+    END AS marketplace_priority,
+    length(${listingCol}) AS name_len
   FROM omsguru_listings
   WHERE oms_sku_id IS NOT NULL 
     AND oms_sku_id::text ~ '^[0-9]+$'
-    AND match_key IS NOT NULL AND btrim(match_key::text) <> ''
-  ORDER BY oms_sku_id, 
-    CASE 
-      WHEN marketplace = 'Flipkart' THEN 1 
-      WHEN marketplace = 'Amazon Flex' THEN 2 
-      WHEN marketplace = 'Shopify' THEN 3 
-      WHEN marketplace = 'Meesho' THEN 4 
-      ELSE 5 
-    END${orderClause}
+    AND ${listingCol} IS NOT NULL AND btrim(${listingCol}::text) <> ''
+),
+master_skus AS (
+  SELECT DISTINCT ON (oms_sku_id)
+    oms_sku_id,
+    sku_name AS canonical_master_sku,
+    match_key,
+    title AS canonical_title
+  FROM ranked_candidates
+  ORDER BY 
+    oms_sku_id,
+    suffix_penalty ASC,
+    marketplace_priority ASC,
+    name_len ASC
+    ${orderClause}
 )${hasSkuImages ? `,
 best_photos AS (
   SELECT DISTINCT ON (sku_key)
@@ -388,6 +466,7 @@ SELECT
       WHEN COALESCE(m.canonical_title, l.title, '') ILIKE '%pant set%' 
         OR COALESCE(m.canonical_title, l.title, '') ILIKE '%kaftan%' 
         OR COALESCE(m.canonical_title, l.title, '') ILIKE '%co ord%' 
+        OR COALESCE(m.canonical_title, l.title, '') ILIKE '%co-ord%' 
         OR COALESCE(m.canonical_title, l.title, '') ILIKE '%kurta set%' THEN 'Kurta Set'
       WHEN COALESCE(m.canonical_title, l.title, '') ILIKE '%kurti%' 
         OR COALESCE(m.canonical_title, l.title, '') ILIKE '%kurta%' THEN 'Kurta'
@@ -418,6 +497,7 @@ WHERE l.${listingCol} IS NOT NULL AND btrim(l.${listingCol}::text) <> ''
       WHEN COALESCE(l.title, '') ILIKE '%pant set%' 
         OR COALESCE(l.title, '') ILIKE '%kaftan%' 
         OR COALESCE(l.title, '') ILIKE '%co ord%' 
+        OR COALESCE(l.title, '') ILIKE '%co-ord%' 
         OR COALESCE(l.title, '') ILIKE '%kurta set%' THEN 'Kurta Set'
       WHEN COALESCE(l.title, '') ILIKE '%kurti%' 
         OR COALESCE(l.title, '') ILIKE '%kurta%' THEN 'Kurta'
@@ -432,10 +512,12 @@ ${hasSkuImages ? "LEFT JOIN best_photos bp ON bp.sku_key = l.sku_key" : ""}
 WHERE l.${listingCol} IS NOT NULL AND btrim(l.${listingCol}::text) <> ''
   AND l.match_key IS NOT NULL AND btrim(l.match_key::text) <> ''`
     } else {
+      const titleCol = pickVmsColumn(cols, ["title", "product_title", "name", "item_name"])
       const selectParts = [
         `COALESCE(btrim(${listingCol}::text), '') AS listing_sku`,
         `COALESCE(btrim(${masterCol}::text), '') AS master_sku`,
         catCol ? `COALESCE(btrim(${catCol}::text), '') AS category` : `''::text AS category`,
+        titleCol ? `COALESCE(btrim(${titleCol}::text), '') AS title` : `''::text AS title`,
         imgCol ? `COALESCE(btrim(${imgCol}::text), '') AS image_url` : `''::text AS image_url`,
         mpCol ? `COALESCE(btrim(${mpCol}::text), '') AS marketplace` : `''::text AS marketplace`,
       ]
@@ -446,19 +528,24 @@ WHERE l.${listingCol} IS NOT NULL AND btrim(l.${listingCol}::text) <> ''
       listing_sku: string
       master_sku: string
       category: string
+      title?: string
       image_url: string
       marketplace: string
     }>(sql)
 
+    const canonicalMap = await getCanonicalMasterSkuMap()
     const list: VmsListingRow[] = []
     for (const r of res.rows) {
       const listingSku = cleanVmsSku(r.listing_sku)
-      const masterSku = cleanVmsSku(r.master_sku)
-      if (!listingSku || !masterSku) continue
+      const rawMaster = cleanVmsSku(r.master_sku)
+      if (!listingSku || !rawMaster) continue
+      const stripped = stripNoiseSuffix(rawMaster)
+      const compact = stripped.toLowerCase().replace(/[^a-z0-9]/g, "")
+      const masterSku = canonicalMap.get(compact) || stripped
       list.push({
         listingSku,
         masterSku,
-        category: cleanVmsCategory(r.category) || inferCategoryFromTitle(r.category),
+        category: cleanVmsCategory(r.category) || inferCategoryFromTitle(r.category) || inferCategoryFromTitle(r.title),
         imageUrl: cleanVmsImageUrl(r.image_url),
         marketplace: normalizeVmsMarketplace(r.marketplace),
       })
@@ -628,12 +715,12 @@ export async function dryRunVmsCatalogue(db: pg.Pool): Promise<VmsDryRun> {
      FROM product_master`,
   )
   const existingSet = new Set<string>()
-  const imageByListing = new Map<string, string>()
+  const imagesByListing = new Map<string, string[]>()
   for (const r of existing.rows) {
     existingSet.add(`${r.marketplace}|${r.listing_sku}`)
-    if (!imageByListing.has(r.listing_sku)) {
-      imageByListing.set(r.listing_sku, r.image_url)
-    }
+    const list = imagesByListing.get(r.listing_sku) || []
+    list.push(r.image_url)
+    imagesByListing.set(r.listing_sku, list)
   }
 
   let mappingsToInsert = 0
@@ -646,9 +733,10 @@ export async function dryRunVmsCatalogue(db: pg.Pool): Promise<VmsDryRun> {
   let matched = 0
   let blank = 0
   for (const [sku] of bySku) {
-    if (imageByListing.has(sku)) {
-      matched++
-      if (!imageByListing.get(sku)) blank++
+    const list = imagesByListing.get(sku)
+    if (list) {
+      matched += list.length
+      blank += list.filter((img) => !img).length
     }
   }
 
@@ -666,11 +754,69 @@ export async function dryRunVmsCatalogue(db: pg.Pool): Promise<VmsDryRun> {
   }
 }
 
+// Synchronizes corrected canonical master SKUs into the return register:
+// 1. Updates receipt_scan_items.product_sku where it differs from product_master.
+// 2. Strips noise suffixes on any remaining receipt_scan_items.product_sku.
+export async function syncReturnRegisterMasterSkus(db: pg.Pool | pg.PoolClient): Promise<{
+  receiptScanItemsUpdated: number
+}> {
+  const rsiRes = await db.query(`
+    WITH resolved_masters AS (
+      SELECT DISTINCT ON (rsi.id)
+        rsi.id AS rsi_id,
+        pm.master_sku AS new_master_sku
+      FROM receipt_scan_items rsi
+      LEFT JOIN receipt_scans rs ON rs.id = rsi.receipt_scan_id
+      LEFT JOIN expected_returns er ON er.id = rs.expected_return_id
+      LEFT JOIN marketplaces m ON m.id = er.marketplace_id
+      JOIN product_master pm ON LOWER(btrim(rsi.marketplace_sku)) = LOWER(btrim(pm.listing_sku))
+        AND pm.master_sku IS NOT NULL AND btrim(pm.master_sku) <> ''
+      ORDER BY rsi.id,
+        CASE 
+          WHEN LOWER(pm.marketplace) = LOWER(COALESCE(m.name, '')) THEN 1
+          WHEN LOWER(pm.marketplace) = 'all' THEN 2
+          ELSE 3
+        END,
+        CASE WHEN pm.master_sku ~* '(_DIV|_KL|_YOU|_AI[0-9]*|_NEW|_S_S|_[SMLX|2-5XL]+_S)$' THEN 2 ELSE 1 END
+    )
+    UPDATE receipt_scan_items rsi
+    SET product_sku = rm.new_master_sku,
+        product_sku_source = 'product_master'
+    FROM resolved_masters rm
+    WHERE rsi.id = rm.rsi_id
+      AND rsi.product_sku IS DISTINCT FROM rm.new_master_sku
+  `)
+  const updatedRsi = rsiRes.rowCount ?? 0
+
+  const stripRes = await db.query(`
+    UPDATE receipt_scan_items
+    SET product_sku = REGEXP_REPLACE(
+          REGEXP_REPLACE(
+            REGEXP_REPLACE(
+              REGEXP_REPLACE(
+                REGEXP_REPLACE(product_sku, '(_(?:XS|S|M|L|XL|2XL|XXL|3XL|4XL|5XL|FS))_S$', '\\1', 'i'),
+                '(_DIV|_KL|_YOU|_Y|_NEW|_AI[0-9]+)$', '', 'i'
+              ),
+              '\\s+KL$', '', 'i'
+            ),
+            '_DIV$', '', 'i'
+          ),
+          '\\s+$', ''
+        )
+    WHERE product_sku ~* '(_DIV|_KL|_YOU|_AI[0-9]*|_NEW|_S_S|_[SMLX|2-5XL]+_S|\\s+KL|_Y)$'
+  `)
+
+  return {
+    receiptScanItemsUpdated: updatedRsi + (stripRes.rowCount ?? 0),
+  }
+}
+
 // Synchronizes VMS catalogue into product_master:
 // 1. Inserts new channel listing -> master SKU mappings from omsguru_listings.
 // 2. Fills blank image links using sku_images and sku_photos.
 // 3. Merges safely (never overwrites non-empty images or existing master SKUs).
-// 4. Writes one log row to vms_catalog_sync_runs.
+// 4. Updates return register scan items with canonical master SKUs.
+// 5. Writes one log row to vms_catalog_sync_runs.
 export async function applyVmsCatalogue(db: pg.Pool): Promise<VmsApplyResult> {
   await ensureVmsCatalogSchema(db)
   const started = await db.query<{ id: number }>(
@@ -720,8 +866,11 @@ export async function applyVmsCatalogue(db: pg.Pool): Promise<VmsApplyResult> {
       imagesFilled += updated.rowCount ?? 0
     }
 
+    // 3. Sync corrected canonical master SKUs into return register (receipt_scan_items)
+    const registerSync = await syncReturnRegisterMasterSkus(db)
+
     await finish("done", { ...dry, imagesFilled, mappingsCreated })
-    return { ...dry, imagesFilled, mappingsCreated, runId }
+    return { ...dry, imagesFilled, mappingsCreated, runId, registerItemsUpdated: registerSync.receiptScanItemsUpdated }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     try {

@@ -92,14 +92,14 @@ async function main() {
     for (const entry of sample.sample) {
       console.log(`  sku='${entry.sku}' title='${entry.title}' host='${entry.imageHost}' scope='${entry.marketplace}'`)
     }
+    await closeVmsPool()
     return
   }
 
   const { getPool } = await import("../db.js")
-  const { dryRunVmsCatalogue, ensureVmsCatalogSchema } = await import("../vms/catalog.js")
+  const { dryRunVmsCatalogue } = await import("../vms/catalog.js")
   const pool = getPool()
   try {
-    await ensureVmsCatalogSchema(pool)
     const report = await dryRunVmsCatalogue(pool)
     console.log(`VMS catalogue total entries: ${report.vmsRows}.`)
     console.log(`VMS omsguru_listings mappings: ${report.vmsMappings} (${report.mappingsToInsert} new mappings to create locally).`)
@@ -113,8 +113,11 @@ async function main() {
 
     const { applyVmsCatalogue } = await import("../vms/catalog.js")
     const applied = await applyVmsCatalogue(pool)
-    console.log(`Created ${applied.mappingsCreated} new product master mapping(s) from VMS omsguru_listings.`)
+    console.log(`Created/updated ${applied.mappingsCreated} product master mapping(s) from VMS omsguru_listings.`)
     console.log(`Filled ${applied.imagesFilled} blank image link(s) across matched listings (run ${applied.runId}).`)
+    if (applied.registerItemsUpdated !== undefined) {
+      console.log(`Updated ${applied.registerItemsUpdated} return register scan item(s) with canonical master SKUs.`)
+    }
   } finally {
     await pool.end().catch(() => {})
     await closeVmsPool()
