@@ -849,7 +849,7 @@ function getDashboardHtml(): string {
     let allJobs = [];
     let panelCache = [];
     let statusCache = {};
-    let followUpData = { rows: [], summary: {} };
+    let followUpData = { loaded: true, rows: [], summary: {} };
     let isRunning = true;
 
     function escapeHtml(value) {
@@ -1019,16 +1019,25 @@ function getDashboardHtml(): string {
       try {
         const res = await fetch('/api/follow-ups?pageSize=100');
         if (!res.ok) {
-          followUpData = { rows: [], summary: {} };
-          body.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:20px;color:var(--muted);">Sign in to see ticket follow-ups.</td></tr>';
+          // Distinguish "sign in" from "could not read". Either way the table must not pretend the ticket list
+          // is empty, and the headline must not claim everything is green.
+          const payload = await res.json().catch(() => ({}));
+          const message = payload.error || ('Ticket follow-ups could not be read (HTTP ' + res.status + ').');
+          followUpData = { loaded: false, rows: [], summary: {}, error: message };
+          document.getElementById('followup-count').textContent = '(unavailable)';
+          body.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:20px;color:#fbbf24;">' + escapeHtml(message) + '</td></tr>';
           renderOverall();
           return;
         }
         followUpData = await res.json();
+        followUpData.loaded = true;
         renderFollowUps();
         renderOverall();
       } catch (err) {
-        console.error(err);
+        followUpData = { loaded: false, rows: [], summary: {}, error: 'Ticket follow-ups could not be read.' };
+        document.getElementById('followup-count').textContent = '(unavailable)';
+        body.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:20px;color:#fbbf24;">Ticket follow-ups could not be read.</td></tr>';
+        renderOverall();
       }
     }
 
@@ -1095,6 +1104,7 @@ function getDashboardHtml(): string {
       const cooling = panels.filter(p => p.state === 'cooldown');
       if (cooling.length) reasons.push(cooling.map(p => p.name).join(', ') + ' stopped after repeated failures');
       if (follow.withErrors) reasons.push(follow.withErrors + ' ticket check(s) failing');
+      if (followUpData && followUpData.loaded === false) reasons.push('ticket follow-ups could not be loaded');
 
       const dot = document.getElementById('overall-dot');
       const title = document.getElementById('overall-title');
@@ -1726,7 +1736,14 @@ export function startDesktopAppServer(bind: EngineBind = resolveEngineBind()): P
           sendJson(res, 401, { error: "Sign in before viewing ticket follow-ups." })
           return
         }
-        sendJson(res, 200, await client.getFollowUps({ pageSize: 100 }))
+        // Pass the real outcome through. A failed read must not look like an empty list, or the dashboard would
+        // report "no tickets are tracked" while nothing could actually be read.
+        const data = await client.getFollowUps({ pageSize: 100 })
+        if (!data.ok) {
+          sendJson(res, data.status, { error: data.error })
+          return
+        }
+        sendJson(res, 200, { rows: data.rows, total: data.total, summary: data.summary })
         return
       }
 

@@ -42,6 +42,19 @@ export type FollowUpReport = {
   screenshotPath?: string
 }
 
+/**
+ * The dashboard's follow-up read. `ok: false` means the list could not be read, and `error` says why, so the
+ * dashboard never shows "nothing is tracked" for a failed read.
+ */
+export type FollowUpListResult = {
+  ok: boolean
+  status: number
+  error: string
+  rows: any[]
+  total: number
+  summary: unknown
+}
+
 export type JobExecutionBundle = {
   jobId: number
   claimId: number
@@ -402,23 +415,48 @@ export class AgentBackendClient {
    * Read the ticket follow-ups for the dashboard.
    *
    * This is a signed-in operator read, not an agent poll, so it carries the operator's bearer token, exactly
-   * like the evidence download. An empty list is returned when nobody is signed in or the server is
-   * unreachable, so the dashboard renders "sign in" instead of failing.
+   * like the evidence download.
+   *
+   * A failure is reported as a failure. Returning an empty list for a backend outage or an expired sign-in
+   * would make the dashboard's follow-up table say "no tickets are tracked" when the truth is that nothing
+   * could be read — the same class of mistake as reporting an unrun check as passed.
    */
-  async getFollowUps(filter: { pageSize?: number } = {}): Promise<{ rows: any[]; total: number; summary: any }> {
-    const empty = { rows: [] as any[], total: 0, summary: {} }
+  async getFollowUps(filter: { pageSize?: number } = {}): Promise<FollowUpListResult> {
+    const failure = (status: number, error: string): FollowUpListResult => ({
+      ok: false,
+      status,
+      error,
+      rows: [],
+      total: 0,
+      summary: {},
+    })
     try {
       const authorization = operatorAuthorization()
-      if (!authorization) return empty
+      if (!authorization) return failure(401, "Sign in on the claim bot to see ticket follow-ups.")
       const q = new URLSearchParams()
       if (filter.pageSize) q.set("pageSize", String(filter.pageSize))
       const url = `${this.config.backendUrl}/api/automation/follow-ups?${q.toString()}`
       const res = await fetch(url, { headers: { Authorization: authorization } })
-      if (!res.ok) return empty
-      return (await res.json()) as { rows: any[]; total: number; summary: any }
+      if (!res.ok) {
+        // An expired or refused token is a sign-in problem, not a server problem: the dashboard must ask the
+        // operator to sign in rather than blame the backend.
+        if (res.status === 401 || res.status === 403) {
+          return failure(401, "The saved sign-in is no longer accepted. Sign in again to see ticket follow-ups.")
+        }
+        return failure(502, `The Return App server answered HTTP ${res.status} for ticket follow-ups.`)
+      }
+      const data = (await res.json()) as { rows?: any[]; total?: number; summary?: unknown }
+      return {
+        ok: true,
+        status: 200,
+        error: "",
+        rows: Array.isArray(data.rows) ? data.rows : [],
+        total: Number(data.total || 0),
+        summary: data.summary || {},
+      }
     } catch (err) {
       logger.debug("Failed to fetch ticket follow-ups from backend:", err)
-      return empty
+      return failure(503, "The Return App server could not be reached, so ticket follow-ups could not be read.")
     }
   }
 

@@ -10,6 +10,7 @@ import {
   startDesktopAppServer,
 } from "../desktop-agent/src/desktop-app-server.js"
 import { isInsecureRemoteUrl, isSameOrigin, localEngineUrl, resolveEngineBind, type EngineBind } from "../desktop-agent/src/engine-config.js"
+import { escapeHtml, scriptLiteral } from "../desktop-agent/src/html-escape.js"
 import { logger } from "../desktop-agent/src/logger.js"
 
 // Hardware efficiency switches for low-spec PCs (4GB RAM, 2-Core CPUs)
@@ -247,6 +248,12 @@ function createMainWindow(target: EngineTarget, startupError?: string): void {
   const engineUrl = target.url
 
   function showOfflinePage(errorDescription?: string): void {
+    // The engine URL and the Chromium failure message are operator/OS controlled, but this window carries the
+    // preload bridge, so nothing is interpolated raw. `safeUrlText` covers the HTML text context; the URL is
+    // handed to the script as a JSON literal, so a quote in a URL fragment cannot end the string and inject
+    // code, and a `</script>` inside it cannot close the block.
+    const safeUrlText = escapeHtml(engineUrl)
+    const engineUrlLiteral = scriptLiteral(engineUrl)
     const offlineHtml = `
       <!DOCTYPE html>
       <html>
@@ -311,18 +318,20 @@ function createMainWindow(target: EngineTarget, startupError?: string): void {
         <div class="card">
           <div class="icon">🔄</div>
           <h2>Opening the claim bot</h2>
-          <p>This window is the 24/7 claim bot. It does not open return scanning.${errorDescription ? `<br><small style="color:#64748b">(${errorDescription})</small>` : ""}</p>
-          <div class="url-box">${engineUrl}</div>
-          <button class="btn" onclick="retryConnection('${engineUrl}')">Open the claim bot</button>
+          <p>This window is the 24/7 claim bot. It does not open return scanning.${errorDescription ? `<br><small style="color:#64748b">(${escapeHtml(errorDescription)})</small>` : ""}</p>
+          <div class="url-box">${safeUrlText}</div>
+          <button class="btn" id="open-engine" type="button">Open the claim bot</button>
           <div class="countdown" id="timer">Retrying automatically in 6 seconds...</div>
         </div>
         <script>
+          const engineUrl = ${engineUrlLiteral};
           let seconds = 6;
           const timerEl = document.getElementById('timer');
-          function retryConnection(url) { window.location.href = url; }
+          function retryConnection() { window.location.href = engineUrl; }
+          document.getElementById('open-engine').addEventListener('click', retryConnection);
           setInterval(() => {
             seconds--;
-            if (seconds <= 0) { retryConnection('${engineUrl}'); }
+            if (seconds <= 0) { retryConnection(); }
             else { timerEl.innerText = 'Retrying automatically in ' + seconds + ' seconds...'; }
           }, 1000);
         </script>
