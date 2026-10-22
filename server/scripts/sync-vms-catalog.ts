@@ -92,6 +92,7 @@ async function main() {
     for (const entry of sample.sample) {
       console.log(`  sku='${entry.sku}' title='${entry.title}' host='${entry.imageHost}' scope='${entry.marketplace}'`)
     }
+    await closeVmsPool()
     return
   }
 
@@ -113,8 +114,11 @@ async function main() {
 
     const { applyVmsCatalogue } = await import("../vms/catalog.js")
     const applied = await applyVmsCatalogue(pool)
-    console.log(`Created ${applied.mappingsCreated} new product master mapping(s) from VMS omsguru_listings.`)
+    console.log(`Created/updated ${applied.mappingsCreated} product master mapping(s) from VMS omsguru_listings.`)
     console.log(`Filled ${applied.imagesFilled} blank image link(s) across matched listings (run ${applied.runId}).`)
+    if (applied.registerItemsUpdated !== undefined) {
+      console.log(`Updated ${applied.registerItemsUpdated} return register scan item(s) with canonical master SKUs.`)
+    }
   } finally {
     await pool.end().catch(() => {})
     await closeVmsPool()

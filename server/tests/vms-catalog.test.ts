@@ -11,6 +11,7 @@ import {
   inferCategoryFromTitle,
   normalizeVmsMarketplace,
   probeVmsCatalogue,
+  stripNoiseSuffix,
 } from "../vms/catalog.js"
 import { getVmsConnectionSettings, queryVmsReadOnly } from "../vms/db.js"
 
@@ -217,4 +218,33 @@ test("[synthetic] inferCategoryFromTitle classifies apparel titles accurately", 
   assert.equal(inferCategoryFromTitle("Traditional Designer Top"), "Ethnic Wear")
   assert.equal(inferCategoryFromTitle(""), "")
   assert.equal(inferCategoryFromTitle(null), "")
+})
+
+test("[synthetic] stripNoiseSuffix cleanly strips campaign, seller, and duplicate size suffixes", () => {
+  assert.equal(stripNoiseSuffix("EJ7003-102-Hema-Red_DIV"), "EJ7003-102-Hema-Red")
+  assert.equal(stripNoiseSuffix("EJ7003-102-Hema-Red_New"), "EJ7003-102-Hema-Red")
+  assert.equal(stripNoiseSuffix("EJ7003-102-Hema-Red_KL"), "EJ7003-102-Hema-Red")
+  assert.equal(stripNoiseSuffix("B13-Kavya-Bottle Green_S_S"), "B13-Kavya-Bottle Green_S")
+  assert.equal(stripNoiseSuffix("B13-Kavya-Bottle Green_S_Y"), "B13-Kavya-Bottle Green_S")
+  assert.equal(stripNoiseSuffix("B13-Kavya-Bottle Green_S KL"), "B13-Kavya-Bottle Green_S")
+  assert.equal(stripNoiseSuffix("B13-Kavya-Bottle Green_XL_S"), "B13-Kavya-Bottle Green_XL")
+  assert.equal(stripNoiseSuffix("BT176-Bebo-Black_M_YOU"), "BT176-Bebo-Black_M")
+  assert.equal(stripNoiseSuffix("BT154-Brity-Black_XL_AI1"), "BT154-Brity-Black_XL")
+  assert.equal(stripNoiseSuffix(""), "")
+})
+
+test("[synthetic] buildMappingInsertChunks updates master_sku on conflict when new master is canonical", () => {
+  const rows = [
+    {
+      listingSku: "102-Hema-Red",
+      masterSku: "EJ7003-102-Hema-Red",
+      category: "Sarees",
+      imageUrl: "https://img.example.invalid/102.jpg",
+      marketplace: "Ajio",
+    },
+  ]
+  const chunks = buildMappingInsertChunks(rows, 10)
+  assert.equal(chunks.length, 1)
+  assert.match(chunks[0].sql, /master_sku = CASE/)
+  assert.match(chunks[0].sql, /_DIV|_KL|_YOU/)
 })

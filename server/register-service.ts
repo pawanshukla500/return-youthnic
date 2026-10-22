@@ -562,7 +562,13 @@ async function loadShipmentDetail(client: pg.PoolClient, shipmentId: number, sca
     setContents: String(row.set_contents || ""),
     shipmentId: String(row.shipment_id || ""),
   }))
-  const needsMaster = items.filter((item) => item.marketplaceSku && (!item.productSku || !item.imageUrl))
+  const needsMaster = items.filter(
+    (item) =>
+      item.marketplaceSku &&
+      (!item.productSku ||
+        !item.imageUrl ||
+        /(_DIV|_KL|_YOU|_AI[0-9]*|_NEW|_S_S|_[SMLX|2-5XL]+_S|\s+KL|_Y)$/i.test(item.productSku)),
+  )
   if (needsMaster.length) {
     const masters = await masterSkusForListings(
       client,
@@ -571,7 +577,7 @@ async function loadShipmentDetail(client: pg.PoolClient, shipmentId: number, sca
     for (const item of needsMaster) {
       const hit = masters.get(`${String(header.marketplace).toLowerCase()}|${item.marketplaceSku}`)
       if (!hit) continue
-      if (!item.productSku) {
+      if (!item.productSku || /(_DIV|_KL|_YOU|_AI[0-9]*|_NEW|_S_S|_[SMLX|2-5XL]+_S|\s+KL|_Y)$/i.test(item.productSku)) {
         item.productSku = hit.masterSku
         item.productSkuSource = "product_master"
       }
