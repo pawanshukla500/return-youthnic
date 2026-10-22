@@ -137,8 +137,12 @@ async function shellStatus(): Promise<ShellStatus> {
 
   const host = new URL(target.url).host
   try {
+    // AbortSignal.timeout() caps the wait so a stalled remote engine does not hang the 15-second tray
+    // refresh and pile up pending requests. 5 s is enough for a LAN/WAN status read; a timeout lands in
+    // the catch block below and returns the same offline status as a refused connection.
     const res = await fetch(new URL("/api/status", target.url), {
       headers: { Authorization: `Bearer ${target.token}` },
+      signal: AbortSignal.timeout(5000),
     })
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     const data = (await res.json()) as Record<string, unknown>
@@ -179,6 +183,7 @@ async function toggleWorker(): Promise<ShellStatus> {
     await fetch(new URL("/api/scheduler/toggle", target.url), {
       method: "POST",
       headers: { Authorization: `Bearer ${target.token}` },
+      signal: AbortSignal.timeout(5000),
     }).catch(() => undefined)
   }
   return shellStatus()
