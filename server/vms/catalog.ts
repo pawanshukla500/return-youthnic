@@ -89,6 +89,26 @@ export function cleanVmsCategory(raw: unknown): string {
     .slice(0, 100)
 }
 
+// Infers clothing category from catalog title when category is absent or blank.
+export function inferCategoryFromTitle(title: unknown): string {
+  const t = String(title ?? "").toLowerCase()
+  if (t.includes("saree")) return "Sarees"
+  if (
+    t.includes("pant set") ||
+    t.includes("kaftan") ||
+    t.includes("co ord") ||
+    t.includes("co-ord") ||
+    t.includes("kurta set")
+  ) {
+    return "Kurta Set"
+  }
+  if (t.includes("kurti") || t.includes("kurta")) return "Kurta"
+  if (t.includes("dress material")) return "Dress Material"
+  if (t.includes("lehenga")) return "Lehenga Choli"
+  if (t.trim()) return "Ethnic Wear"
+  return ""
+}
+
 // Canonical marketplace mapping: Amazon, Flipkart, Meesho, Myntra VB, Myntra EJ, Ajio, Shopify, or 'all'.
 export function normalizeVmsMarketplace(raw: unknown): string {
   const value = String(raw ?? "").trim()
@@ -307,21 +327,121 @@ export async function readVmsListings(): Promise<VmsListingRow[]> {
       "parent_sku",
       "oms_sku_code",
     ])
-    if (!listingCol || !masterCol) return []
+    const hasMatchKey = cols.some((c) => c.toLowerCase() === "match_key")
+    const hasOmsSkuId = cols.some((c) => c.toLowerCase() === "oms_sku_id")
+    const hasTitle = cols.some((c) => c.toLowerCase() === "title")
+    const hasSkuKey = cols.some((c) => c.toLowerCase() === "sku_key")
+    const hasUpdatedAt = cols.some((c) => c.toLowerCase() === "updated_at")
+
+    if (!listingCol || (!masterCol && !hasMatchKey)) return []
 
     const catCol = pickVmsColumn(cols, ["category", "product_category", "category_name"])
     const imgCol = pickVmsColumn(cols, ["image_url", "image_link", "image", "photo_url", "view_photo"])
     const mpCol = pickVmsColumn(cols, ["marketplace", "channel_name", "channel", "channel_company_name", "account"])
 
-    const selectParts = [
-      `COALESCE(btrim(${listingCol}::text), '') AS listing_sku`,
-      `COALESCE(btrim(${masterCol}::text), '') AS master_sku`,
-      catCol ? `COALESCE(btrim(${catCol}::text), '') AS category` : `''::text AS category`,
-      imgCol ? `COALESCE(btrim(${imgCol}::text), '') AS image_url` : `''::text AS image_url`,
-      mpCol ? `COALESCE(btrim(${mpCol}::text), '') AS marketplace` : `''::text AS marketplace`,
-    ]
+    // Check if sku_images table exists for joining high-resolution photos
+    let hasSkuImages = false
+    if (hasSkuKey) {
+      const checkImages = await queryVmsReadOnly<{ exists: boolean }>(
+        `SELECT EXISTS (
+           SELECT 1 FROM information_schema.tables
+           WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
+             AND table_name = 'sku_images'
+         ) AS exists`,
+      )
+      hasSkuImages = Boolean(checkImages.rows[0]?.exists)
+    }
 
-    const sql = `SELECT ${selectParts.join(", ")} FROM omsguru_listings WHERE ${listingCol} IS NOT NULL AND btrim(${listingCol}::text) <> '' AND ${masterCol} IS NOT NULL AND btrim(${masterCol}::text) <> ''`
+    let sql: string
+    if (hasOmsSkuId && hasMatchKey) {
+      const orderClause = hasUpdatedAt ? ", updated_at DESC" : ""
+      sql = `WITH master_skus AS (
+  SELECT DISTINCT ON (oms_sku_id)
+    oms_sku_id,
+    match_key AS canonical_master_sku,
+    ${hasTitle ? "title" : "''::text"} AS canonical_title
+  FROM omsguru_listings
+  WHERE oms_sku_id IS NOT NULL 
+    AND oms_sku_id::text ~ '^[0-9]+$'
+    AND match_key IS NOT NULL AND btrim(match_key::text) <> ''
+  ORDER BY oms_sku_id, 
+    CASE 
+      WHEN marketplace = 'Flipkart' THEN 1 
+      WHEN marketplace = 'Amazon Flex' THEN 2 
+      WHEN marketplace = 'Shopify' THEN 3 
+      WHEN marketplace = 'Meesho' THEN 4 
+      ELSE 5 
+    END${orderClause}
+)${hasSkuImages ? `,
+best_photos AS (
+  SELECT DISTINCT ON (sku_key)
+    sku_key, image_url 
+  FROM sku_images 
+  WHERE image_url IS NOT NULL AND image_url <> ''
+  ORDER BY sku_key${hasUpdatedAt ? ", updated_at DESC" : ""}
+)` : ""}
+SELECT 
+    l.${listingCol} AS listing_sku,
+    COALESCE(m.canonical_master_sku, ${masterCol ? `l.${masterCol}` : "l.match_key"}) AS master_sku,
+    ${catCol ? `COALESCE(NULLIF(btrim(l.${catCol}::text), ''), ` : ""}${hasTitle ? `CASE 
+      WHEN COALESCE(m.canonical_title, l.title, '') ILIKE '%saree%' THEN 'Sarees'
+      WHEN COALESCE(m.canonical_title, l.title, '') ILIKE '%pant set%' 
+        OR COALESCE(m.canonical_title, l.title, '') ILIKE '%kaftan%' 
+        OR COALESCE(m.canonical_title, l.title, '') ILIKE '%co ord%' 
+        OR COALESCE(m.canonical_title, l.title, '') ILIKE '%kurta set%' THEN 'Kurta Set'
+      WHEN COALESCE(m.canonical_title, l.title, '') ILIKE '%kurti%' 
+        OR COALESCE(m.canonical_title, l.title, '') ILIKE '%kurta%' THEN 'Kurta'
+      WHEN COALESCE(m.canonical_title, l.title, '') ILIKE '%dress material%' THEN 'Dress Material'
+      WHEN COALESCE(m.canonical_title, l.title, '') ILIKE '%lehenga%' THEN 'Lehenga Choli'
+      ELSE 'Ethnic Wear'
+    END` : "'Ethnic Wear'"}${catCol ? ")" : ""} AS category,
+    ${hasSkuImages ? `COALESCE(bp.image_url, ${imgCol ? `l.${imgCol}` : "''"}, '')` : imgCol ? `COALESCE(l.${imgCol}, '')` : "''"} AS image_url,
+    ${mpCol ? `COALESCE(btrim(l.${mpCol}::text), 'all')` : "'all'"} AS marketplace
+FROM omsguru_listings l
+LEFT JOIN master_skus m ON m.oms_sku_id::text = l.oms_sku_id::text
+${hasSkuImages ? "LEFT JOIN best_photos bp ON bp.sku_key = l.sku_key" : ""}
+WHERE l.${listingCol} IS NOT NULL AND btrim(l.${listingCol}::text) <> ''
+  AND (m.canonical_master_sku IS NOT NULL OR (${masterCol ? `l.${masterCol}` : "l.match_key"} IS NOT NULL AND btrim(${masterCol ? `l.${masterCol}` : "l.match_key"}::text) <> ''))`
+    } else if (hasMatchKey && !masterCol) {
+      sql = `${hasSkuImages ? `WITH best_photos AS (
+  SELECT DISTINCT ON (sku_key)
+    sku_key, image_url 
+  FROM sku_images 
+  WHERE image_url IS NOT NULL AND image_url <> ''
+  ORDER BY sku_key${hasUpdatedAt ? ", updated_at DESC" : ""}
+)
+` : ""}SELECT 
+    l.${listingCol} AS listing_sku,
+    btrim(l.match_key::text) AS master_sku,
+    ${catCol ? `COALESCE(NULLIF(btrim(l.${catCol}::text), ''), ` : ""}${hasTitle ? `CASE 
+      WHEN COALESCE(l.title, '') ILIKE '%saree%' THEN 'Sarees'
+      WHEN COALESCE(l.title, '') ILIKE '%pant set%' 
+        OR COALESCE(l.title, '') ILIKE '%kaftan%' 
+        OR COALESCE(l.title, '') ILIKE '%co ord%' 
+        OR COALESCE(l.title, '') ILIKE '%kurta set%' THEN 'Kurta Set'
+      WHEN COALESCE(l.title, '') ILIKE '%kurti%' 
+        OR COALESCE(l.title, '') ILIKE '%kurta%' THEN 'Kurta'
+      WHEN COALESCE(l.title, '') ILIKE '%dress material%' THEN 'Dress Material'
+      WHEN COALESCE(l.title, '') ILIKE '%lehenga%' THEN 'Lehenga Choli'
+      ELSE 'Ethnic Wear'
+    END` : "'Ethnic Wear'"}${catCol ? ")" : ""} AS category,
+    ${hasSkuImages ? `COALESCE(bp.image_url, ${imgCol ? `l.${imgCol}` : "''"}, '')` : imgCol ? `COALESCE(l.${imgCol}, '')` : "''"} AS image_url,
+    ${mpCol ? `COALESCE(btrim(l.${mpCol}::text), 'all')` : "'all'"} AS marketplace
+FROM omsguru_listings l
+${hasSkuImages ? "LEFT JOIN best_photos bp ON bp.sku_key = l.sku_key" : ""}
+WHERE l.${listingCol} IS NOT NULL AND btrim(l.${listingCol}::text) <> ''
+  AND l.match_key IS NOT NULL AND btrim(l.match_key::text) <> ''`
+    } else {
+      const selectParts = [
+        `COALESCE(btrim(${listingCol}::text), '') AS listing_sku`,
+        `COALESCE(btrim(${masterCol}::text), '') AS master_sku`,
+        catCol ? `COALESCE(btrim(${catCol}::text), '') AS category` : `''::text AS category`,
+        imgCol ? `COALESCE(btrim(${imgCol}::text), '') AS image_url` : `''::text AS image_url`,
+        mpCol ? `COALESCE(btrim(${mpCol}::text), '') AS marketplace` : `''::text AS marketplace`,
+      ]
+      sql = `SELECT ${selectParts.join(", ")} FROM omsguru_listings WHERE ${listingCol} IS NOT NULL AND btrim(${listingCol}::text) <> '' AND ${masterCol} IS NOT NULL AND btrim(${masterCol}::text) <> ''`
+    }
+
     const res = await queryVmsReadOnly<{
       listing_sku: string
       master_sku: string
@@ -338,7 +458,7 @@ export async function readVmsListings(): Promise<VmsListingRow[]> {
       list.push({
         listingSku,
         masterSku,
-        category: cleanVmsCategory(r.category),
+        category: cleanVmsCategory(r.category) || inferCategoryFromTitle(r.category),
         imageUrl: cleanVmsImageUrl(r.image_url),
         marketplace: normalizeVmsMarketplace(r.marketplace),
       })
@@ -456,10 +576,38 @@ export async function readVmsCatalogue(): Promise<VmsCatalogueRow[]> {
         imageUrl: l.imageUrl,
         marketplace: l.marketplace,
       })
+      if (l.masterSku && l.masterSku.toLowerCase() !== l.listingSku.toLowerCase()) {
+        rows.push({
+          sku: l.masterSku,
+          imageUrl: l.imageUrl,
+          marketplace: l.marketplace,
+        })
+      }
     }
   }
 
   return rows
+}
+
+// Ensures vms_catalog_sync_runs table exists locally for audit logging.
+export async function ensureVmsCatalogSchema(db: pg.Pool): Promise<void> {
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS vms_catalog_sync_runs (
+      id serial PRIMARY KEY,
+      started_at timestamptz NOT NULL DEFAULT now(),
+      finished_at timestamptz,
+      status text NOT NULL DEFAULT 'running',
+      vms_rows integer NOT NULL DEFAULT 0,
+      matched_listings integer NOT NULL DEFAULT 0,
+      images_filled integer NOT NULL DEFAULT 0,
+      vms_only integer NOT NULL DEFAULT 0,
+      error text NOT NULL DEFAULT '',
+      mappings_created integer NOT NULL DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS vms_catalog_sync_runs_started_idx
+      ON vms_catalog_sync_runs (started_at DESC);
+    ALTER TABLE vms_catalog_sync_runs ADD COLUMN IF NOT EXISTS mappings_created integer NOT NULL DEFAULT 0;
+  `)
 }
 
 // Compares the VMS catalogue against local product_master without writing anything.
@@ -475,38 +623,32 @@ export async function dryRunVmsCatalogue(db: pg.Pool): Promise<VmsDryRun> {
      FROM product_master`,
   )
 
-  let mappingsToInsert = 0
-  if (dedupedMappings.length) {
-    const existingMappings = await db.query<{ marketplace: string; listing_sku: string }>(
-      `SELECT LOWER(marketplace) AS marketplace, LOWER(listing_sku) AS listing_sku
-       FROM product_master`,
-    )
-    const existingSet = new Set(
-      existingMappings.rows.map((r) => `${r.marketplace}|${r.listing_sku}`),
-    )
-    for (const m of dedupedMappings) {
-      if (!existingSet.has(`${m.marketplace.toLowerCase()}|${m.listingSku.toLowerCase()}`)) {
-        mappingsToInsert++
-      }
+  const existing = await db.query<{ marketplace: string; listing_sku: string; image_url: string }>(
+    `SELECT LOWER(marketplace) AS marketplace, LOWER(listing_sku) AS listing_sku, COALESCE(image_url, '') AS image_url
+     FROM product_master`,
+  )
+  const existingSet = new Set<string>()
+  const imageByListing = new Map<string, string>()
+  for (const r of existing.rows) {
+    existingSet.add(`${r.marketplace}|${r.listing_sku}`)
+    if (!imageByListing.has(r.listing_sku)) {
+      imageByListing.set(r.listing_sku, r.image_url)
     }
   }
 
-  const keys = [...bySku.keys()]
+  let mappingsToInsert = 0
+  for (const m of dedupedMappings) {
+    if (!existingSet.has(`${m.marketplace.toLowerCase()}|${m.listingSku.toLowerCase()}`)) {
+      mappingsToInsert++
+    }
+  }
+
   let matched = 0
   let blank = 0
-  if (keys.length) {
-    const found = await db.query<{ listing_sku: string; image_url: string }>(
-      `SELECT listing_sku, COALESCE(image_url, '') AS image_url
-       FROM product_master WHERE LOWER(listing_sku) = ANY($1::text[])`,
-      [keys],
-    )
-    const seen = new Set<string>()
-    for (const entry of found.rows) {
-      const key = String(entry.listing_sku).toLowerCase()
-      if (seen.has(key)) continue
-      seen.add(key)
+  for (const [sku] of bySku) {
+    if (imageByListing.has(sku)) {
       matched++
-      if (!entry.image_url) blank++
+      if (!imageByListing.get(sku)) blank++
     }
   }
 
@@ -530,6 +672,7 @@ export async function dryRunVmsCatalogue(db: pg.Pool): Promise<VmsDryRun> {
 // 3. Merges safely (never overwrites non-empty images or existing master SKUs).
 // 4. Writes one log row to vms_catalog_sync_runs.
 export async function applyVmsCatalogue(db: pg.Pool): Promise<VmsApplyResult> {
+  await ensureVmsCatalogSchema(db)
   const started = await db.query<{ id: number }>(
     `INSERT INTO vms_catalog_sync_runs (status) VALUES ('running') RETURNING id`,
   )

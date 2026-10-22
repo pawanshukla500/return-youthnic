@@ -95,15 +95,11 @@ async function main() {
     return
   }
 
-  const { getPool, initDatabase } = await import("../db.js")
-  const { dryRunVmsCatalogue } = await import("../vms/catalog.js")
+  const { getPool } = await import("../db.js")
+  const { dryRunVmsCatalogue, ensureVmsCatalogSchema } = await import("../vms/catalog.js")
   const pool = getPool()
   try {
-    const dbInit = await initDatabase()
-    if (!dbInit.ok) {
-      console.error("Local database failed to init:", dbInit.message)
-      process.exit(1)
-    }
+    await ensureVmsCatalogSchema(pool)
     const report = await dryRunVmsCatalogue(pool)
     console.log(`VMS catalogue total entries: ${report.vmsRows}.`)
     console.log(`VMS omsguru_listings mappings: ${report.vmsMappings} (${report.mappingsToInsert} new mappings to create locally).`)
