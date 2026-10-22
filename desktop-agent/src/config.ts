@@ -21,6 +21,25 @@ export type AgentConfig = {
 
 export const DEFAULT_PRODUCTION_URL = "https://return.youthnic.shop"
 
+/**
+ * Pick a millisecond interval from the first usable candidate.
+ *
+ * `Number("")` and `Number("abc")` are 0 and NaN, and Node clamps either timer delay to 1 ms, so a blank or
+ * misspelled value would silently turn a slow look-up into a tight loop against the backend (and, on the
+ * follow-up worker, hammer the server every millisecond). A candidate that is not a finite number of at least
+ * `minimumMs` is skipped, so an unusable environment value falls through to the saved setting and then to the
+ * documented default instead of being used as-is.
+ *
+ * Pure, so it is covered by desktop-agent/config.test.ts rather than by reading the environment.
+ */
+export function pickIntervalMs(candidates: unknown[], fallback: number, minimumMs = 1000): number {
+  for (const candidate of candidates) {
+    const raw = typeof candidate === "number" ? candidate : Number(String(candidate ?? "").trim())
+    if (Number.isFinite(raw) && raw >= minimumMs) return Math.floor(raw)
+  }
+  return fallback
+}
+
 export function isTrustedBackendUrl(value: string): boolean {
   try {
     const target = new URL(value)
@@ -65,12 +84,12 @@ export function loadAgentConfig(): AgentConfig {
     agentName: process.env.AGENT_NAME || saved.agentName || `Warehouse-Agent-${hostname}`,
     backendUrl,
     apiKey: process.env.AGENT_API_KEY || revealSecret(saved.apiKey || "") || "",
-    pollIntervalMs: Number(process.env.POLL_INTERVAL_MS || saved.pollIntervalMs || 10000),
-    heartbeatIntervalMs: Number(process.env.HEARTBEAT_INTERVAL_MS || saved.heartbeatIntervalMs || 15000),
+    pollIntervalMs: pickIntervalMs([process.env.POLL_INTERVAL_MS, saved.pollIntervalMs], 10000),
+    heartbeatIntervalMs: pickIntervalMs([process.env.HEARTBEAT_INTERVAL_MS, saved.heartbeatIntervalMs], 15000),
     // Follow-up ticket checks run on their own, much slower cadence than claim filing. The server only hands
     // out a follow-up when one is actually due (every 2 days by default), so a 30-minute look-up is cheap and
     // keeps an idle warehouse PC well inside the low-spec CPU budget.
-    followUpCheckIntervalMs: Number(process.env.FOLLOWUP_INTERVAL_MS || saved.followUpCheckIntervalMs || 1800000),
+    followUpCheckIntervalMs: pickIntervalMs([process.env.FOLLOWUP_INTERVAL_MS, saved.followUpCheckIntervalMs], 1800000),
     browserMode: (process.env.BROWSER_MODE || saved.browserMode || "visible") as "visible" | "headless",
     browserPath: process.env.BROWSER_PATH || saved.browserPath || "",
     userDataDir: path.join(baseDir, "browser-profiles"),
