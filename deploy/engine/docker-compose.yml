@@ -1,0 +1,57 @@
+# Return App — Automation Engine deployment (Docker Compose)
+#
+# One engine instance per marketplace account set. Scale horizontally by adding
+# services (engine-2, engine-3, ...) with their own data volumes and tokens.
+#
+#   cd deploy/engine
+#   cp .env.example .env          # set ENGINE_TOKEN and the backend URL
+#   docker compose up -d --build
+#   docker compose logs -f engine
+#
+# The desktop application connects to this engine by setting RETURN_ENGINE_URL
+# and ENGINE_TOKEN in its environment (see docs/LINUX-SERVER.md).
+
+services:
+  engine:
+    build:
+      context: ../..
+      dockerfile: deploy/engine/Dockerfile
+    image: return-app-engine:latest
+    container_name: return-app-engine
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      AGENT_DATA_DIR: /var/lib/return-app-engine
+      ENGINE_HOST: 0.0.0.0
+      # Interpolated from .env so ENGINE_PORT there actually takes effect. The
+      # published port and the healthcheck below use the same value; hardcoding
+      # 3005 in any of the three would silently ignore the documented setting.
+      ENGINE_PORT: "${ENGINE_PORT:-3005}"
+      BROWSER_MODE: headless
+      BROWSER_PATH: /usr/bin/chromium
+      HEADLESS: "true"
+    volumes:
+      # Browser profiles, evidence cache, logs and the operator session must
+      # survive container replacement, or every panel has to sign in again.
+      - engine-data:/var/lib/return-app-engine
+    ports:
+      # Publish on loopback only. Reach the engine through the SSH tunnel or a
+      # reverse proxy that terminates TLS, never straight off the internet.
+      - "127.0.0.1:${ENGINE_PORT:-3005}:${ENGINE_PORT:-3005}"
+    # Chromium needs more than the 256 MB the desktop shell allows itself.
+    shm_size: "512m"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:${ENGINE_PORT:-3005}/api/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+volumes:
+  engine-data:

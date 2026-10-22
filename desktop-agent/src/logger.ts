@@ -1,16 +1,31 @@
 import fs from "node:fs"
-import os from "node:os"
 import path from "node:path"
+import { agentSubdir, ensureAgentDataDir } from "./paths.js"
 
 export type LogLevel = "debug" | "info" | "warn" | "error"
 
 // The installed app has no console, so every line also goes to a daily file. Files older than this are deleted.
-const LOG_DIR = path.join(os.homedir(), ".taskflow-claim-agent", "logs")
+const LOG_DIR = agentSubdir("logs")
 const LOG_KEEP_DAYS = 7
 let prunedForDay = ""
 
+// The data root must exist (owner-only) before logs are written into it. Do it
+// once per process: a synchronous mkdir on every log line would be wasteful in a
+// 24/7 engine.
+let dataDirEnsured = false
+function ensureDataDirOnce() {
+  if (dataDirEnsured) return
+  dataDirEnsured = true
+  try {
+    ensureAgentDataDir()
+  } catch {
+    // A read-only home must not stop the engine from running.
+  }
+}
+
 function writeLogLine(timestamp: string, line: string) {
   const day = timestamp.slice(0, 10)
+  ensureDataDirOnce()
   fs.mkdir(LOG_DIR, { recursive: true }, (mkdirError) => {
     if (mkdirError) return
     fs.appendFile(path.join(LOG_DIR, `bot-${day}.log`), `${line}\n`, () => undefined)
@@ -49,8 +64,24 @@ export class AgentLogger {
     this.log("error", message, ...args)
   }
 
-  private log(level: LogLevel, message: string, ...args: unknown[]) {
+  /**
+   * Write a fatal line synchronously, so it is on disk before an immediate
+   * process.exit(). Used by the crash guard: the normal path writes the log file
+   * asynchronously and the process would otherwise exit first.
+   */
+  fatalSync(message: string, ...args: unknown[]) {
     const timestamp = new Date().toISOString()
+    const line = `[${timestamp}] [ERROR] [${this.prefix}] ${this.formatArgs(message, args)}`
+    console.error(line)
+    try {
+      fs.mkdirSync(LOG_DIR, { recursive: true })
+      fs.appendFileSync(path.join(LOG_DIR, `bot-${timestamp.slice(0, 10)}.log`), `${line}\n`, "utf8")
+    } catch {
+      // Disk full or read-only home: nothing further we can do while dying.
+    }
+  }
+
+  private formatArgs(message: string, args: unknown[]): string {
     const formattedArgs = args.map((a) => {
       if (a instanceof Error) {
         const cause = (a as any).cause ? ` (cause: ${(a as any).cause?.message || (a as any).cause})` : ""
@@ -65,7 +96,12 @@ export class AgentLogger {
       }
       return String(a)
     })
-    const formatted = formattedArgs.length > 0 ? `${message} ${formattedArgs.join(" ")}` : message
+    return formattedArgs.length > 0 ? `${message} ${formattedArgs.join(" ")}` : message
+  }
+
+  private log(level: LogLevel, message: string, ...args: unknown[]) {
+    const timestamp = new Date().toISOString()
+    const formatted = this.formatArgs(message, args)
 
     const color =
       level === "error" ? "\x1b[31m" : level === "warn" ? "\x1b[33m" : level === "info" ? "\x1b[32m" : "\x1b[36m"

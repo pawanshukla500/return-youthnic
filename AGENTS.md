@@ -8,7 +8,7 @@ A return-scanning app for VB Exports. Marketplace return reports (Myntra VB and 
 
 ## Current state (2026-10-17)
 
-- The app runs locally and in production on Hostinger VPS (`https://return.youthnic.shop`). On 2026-10-20 local checks passed: `npm run typecheck` (0 errors), `npm run build`, and `npm test` (463 tests: 426 pass, 0 fail, 37 skipped because local `TEST_DATABASE_URL` is unset).
+- The app runs locally and in production on Hostinger VPS (`https://return.youthnic.shop`). On 2026-10-22 local checks passed: `npm run typecheck` (0 errors across three projects), `npm run build`, and `npm test` (569 tests: 529 pass, 0 fail, 40 skipped — 37 because local `TEST_DATABASE_URL` is unset, 3 because the POSIX-only secret-permission checks in `desktop-agent/paths.test.ts` do not apply on Windows).
 - `GET /api/health` returns HTTP 200, database connected, name `return-scan_youthnic`.
 - Native Kotlin Android client is active in `android/` at release `v1.0.58` (`versionCode: 10058`), featuring CameraX barcode scanning, runtime camera permission flow, photo & 480p SD unboxing video evidence capture, visual upload progress dialog, instant form reset ("Start Again with Zero"), unified claim creation (`POST /api/claims/unified-create`), and automated in-app updates (`AppUpdater.kt`) synchronized via GitHub Actions (`.github/workflows/return-scan-apk.yml`). The APK workflow keeps only the newest two `v1.0.*` releases and never touches desktop releases.
 - Cross-platform Desktop application (`desktop/` & `desktop-agent/`) published at GitHub Release `desktop-v1.2.0.16` (Windows NSIS, Linux AppImage + deb, macOS DMG + ZIP). It files panel-wise across six isolated supplier panels (Meesho fully automatic, others assisted), guides first-time setup per panel in the dashboard, encrypts local secrets with the OS store, offers OS-matched update downloads, and registers the `ReturnAppClaimBot` Scheduled Task at install for restart-after-crash. Operator guide: `docs/DESKTOP-APP.md`. The desktop workflow keeps only the newest two `desktop-v*` releases (created with `--latest=false` so the APK family keeps the "Latest" badge) and never touches Android releases. A `desktop` branch may hold the next batch of desktop work pending review.
@@ -18,6 +18,8 @@ A return-scanning app for VB Exports. Marketplace return reports (Myntra VB and 
 - Claims management system (`/claims`) features real-time aggregated ₹ totals (`formatInr`), modern lifecycle status tracking, and a redesigned View Details modal (1-click copy buttons, responsive 2-column layout, visual evidence gallery, full-screen lightbox, and HTML5 video streaming player).
 - Iron Send is an operational category, tracked on the Iron tracking page (`/iron`); only the Inward Team (role `Inward`) or an Admin records ironed units received. Live sync over WebSocket `/api/live` with a polling fallback. Return analytics under Register > Return Analytics.
 - `CLAUDE.md` is not in the project folder. Until it is restored, the rules in this file and in [docs/notes/agent-handoff.md](docs/notes/agent-handoff.md) are what the code follows. Do not invent a replacement.
+- Desktop/engine separation and 24/7 reliability (branch `destop-app`): the automation engine owns the only worker loop and the desktop shell is a thin client; three modes (Windows desktop, Linux desktop, headless Linux server via `deploy/engine/`). Crash guards keep a failed request from killing the bot and make a fatal error exit cleanly for the supervisor; the `ReturnAppClaimBot` task has a 15-minute watchdog; the window reloads if its renderer dies; a failed local engine start retries. Details: [docs/DESKTOP-APP.md](docs/DESKTOP-APP.md) and [docs/LINUX-SERVER.md](docs/LINUX-SERVER.md). The Windows installer is not code-signed, so SmartScreen warns on first run.
+- Claim tracking and ticket follow-ups (branch `destop-app`): filing a claim creates a `claim_automation_follow_ups` row, and the engine re-opens that supplier panel on its own every 2 days, reads the ticket status, and reports it back until the ticket is approved, rejected, paid or reconciled. The dashboard has one headline that says **All panels green** or **Action required** (naming what to do) plus a per-panel green/amber chip, and a Ticket follow-ups table with the marketplace's own ticket ID. **No marketplace implements `checkClaimStatus()` yet**, so every panel currently answers "not implemented" and its follow-ups stop with that reason rather than guessing a ticket state; implementing `checkClaimStatus()` in a marketplace class is what turns tracking on for it. Details: [docs/DESKTOP-APP.md](docs/DESKTOP-APP.md) §§3–4.
 - What is written, what was run, and what is waiting on the user are in [docs/notes/agent-handoff.md](docs/notes/agent-handoff.md#current-state). Read the latest session logs at the end of that file.
 
 ## Read in this order
@@ -48,7 +50,10 @@ Each rule has a check. The handoff lists the checks under [Invariants](docs/note
 10. **Every screen control works, or is disabled with a title that says why.**
 11. **Report only what you ran.** Do not write that something passes, works or is verified unless you ran it and read the output.
 12. **Mobile APK release and in-app update synchronization.** Any change that applies to the mobile app or scanning behavior must be reflected in the release manifest (`data/return-scan-release.json` and `server/mobile-release.ts`) and published through the GitHub Actions APK workflow (`.github/workflows/return-scan-apk.yml`). The version code and download URL must always match the published release so installed warehouse Android devices receive the in-app update notification and can update smoothly.
-13. **Desktop hardware discipline and process isolation.** The Windows desktop application and automation engine must remain operable 24/7 on 4GB RAM / 2-core CPU hardware with < 0.5% idle CPU. Never exceed 256MB V8 heap limit. All child browser processes spawned for supplier panel automation must be strictly terminated with complete process-tree signals (`taskkill /T /F`). Media downloads must stream chunk-by-chunk directly to disk and purge cache older than 24 hours. Desktop releases are automated via `.github/workflows/desktop-release.yml`.
+13. **Desktop hardware discipline and process isolation.** The Windows desktop application and automation engine must remain operable 24/7 on 4GB RAM / 2-core CPU hardware with < 0.5% idle CPU. Never exceed 256MB V8 heap limit. All child browser processes spawned for supplier panel automation must be strictly terminated with complete process-tree signals (`taskkill /T /F`). Media downloads must stream chunk-by-chunk directly to disk and purge cache older than 24 hours. The supplier browser keeps Chromium's renderer sandbox: it loads untrusted supplier pages, so `--no-sandbox` is only ever added by `browserSandboxArgs()` (which requires `BROWSER_NO_SANDBOX=1`, or root on Linux where Chromium refuses to start). Desktop releases are automated via `.github/workflows/desktop-release.yml`.
+14. **One engine, and it owns every loop.** The automation engine (`desktop-agent/src/desktop-app-server.ts`) owns the only claim worker loop and the only ticket follow-up loop. The Electron shell (`desktop/main.ts`) is a client of it and must not hold a second copy of either loop or a second scheduler. The two engine loops never overlap: both drive the same supplier browser profile, so a follow-up check and a filing cycle block each other through `poll-guard.ts`.
+15. **The engine is fail-closed when exposed.** A non-loopback bind requires `ENGINE_TOKEN` (at least 24 characters) and the engine must refuse to start without one. Remote requests carry `Authorization: Bearer <ENGINE_TOKEN>`; the token is compared in constant time, is never logged, and is never accepted from a query string. Never publish the engine port directly to the internet. Everything under `AGENT_DATA_DIR` (browser profiles, operator session, evidence cache) is secret. Create the root with `ensureAgentDataDir()` and write every secret with `writeSecretFile()`; both chmod the directory 0700 and the file 0600 on every call, so a folder or file left loose by an older build is tightened rather than trusted.
+16. **All three deployment modes stay buildable.** Any change to `desktop/` or `desktop-agent/` must keep the Windows desktop, Linux desktop and headless Linux server modes working. `npm run typecheck` covers `desktop` and `desktop-agent` through `tsconfig.desktop.json`; a change that only passes `tsconfig.json` is not verified. The deployment artifacts in `deploy/engine/` must match the engine's real routes and environment variables.
 
 ## Commands
 
@@ -65,6 +70,26 @@ npm test
 ```
 
 The two database checks run only when `TEST_DATABASE_URL` is set to a dedicated database whose name contains `test`. Without it they are reported as skipped, and a skipped check has not passed.
+
+`npm run typecheck` runs three projects: `tsconfig.json` (`src`), `tsconfig.server.json` (`server`) and `tsconfig.desktop.json` (`desktop`, `desktop-agent`).
+
+Desktop application and automation engine:
+
+```bash
+npm run desktop
+```
+
+```bash
+npm run desktop:dist
+```
+
+```bash
+npm run engine
+```
+
+```bash
+npm run engine:docker
+```
 
 ## Roles
 

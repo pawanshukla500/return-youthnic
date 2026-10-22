@@ -15,7 +15,7 @@ describe("panel-wise continuous claim queue", () => {
   it("covers all six supplier panels with isolated profiles", () => {
     resetPanelRuntime()
     assert.equal(CLAIM_PANELS.length, 6)
-    const names = CLAIM_PANELS.map((p) => p.name)
+    const names: string[] = CLAIM_PANELS.map((p) => p.name)
     for (const expected of ["Meesho", "Flipkart", "Amazon", "Myntra VB", "Myntra EJ", "Ajio"]) {
       assert.ok(names.includes(expected), `missing panel ${expected}`)
     }

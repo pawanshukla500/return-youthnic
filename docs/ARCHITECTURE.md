@@ -134,6 +134,7 @@ Every statement is idempotent. A normal start drops nothing. The app tables are 
 | `server/logistics.ts` | Database | The partner index used by detection. Detection uses the courier name, not the tracking link | `loadPartnerIndex`, `applyPartners` |
 | `server/claim-automation-routes.ts` | Routes | Unified claim creation, desktop bot polling and status updates | `mountClaimAutomationRoutes` |
 | `server/claim-automation-service.ts` | Database | Ticket synchronizer linking claims to the register, job queue management | `syncClaimTicketToRegister`, `createOrQueueAutomationJob`, `pollAutomationJob`, `updateAutomationJob` |
+| `server/claim-follow-up-service.ts` | Database | Ticket follow-up tracking: the row created when a filing job completes, the agent lease on the next due ticket check, and the record that reschedules or stops it | `createFollowUpForJob`, `leaseNextDueFollowUp`, `recordFollowUpResult`, `normalizeFollowUpStatus`, `decideFollowUpStep` |
 | `server/product-master-routes.ts` | Routes | Staged batched product master import routes (`/start`, `/batch`, `/cancel`) | `mountProductMasterRoutes` |
 | `server/product-master.ts` | Database | 500-row chunking, in-memory staging with TTL, and isolated batch commits | `stageMasterImport`, `commitMasterBatch`, `cancelMasterImport` |
 | `server/oms/master-bridge.ts` | Database | Pure channel mapping and nightly OMSGuru to product master mapping bridge | `marketplaceForChannel`, `bridgeMasterMappings` |
@@ -187,16 +188,37 @@ The native Android app is written in Kotlin for fast, ergonomics-focused warehou
 
 ### Cross-platform Desktop Application & Claim Bot (`desktop/` & `desktop-agent/`)
 
-The desktop application is a real installed app (Electron shell + local claim-bot server + CDP browser automation) for warehouse terminals on Windows, Linux, and macOS. Operator guide: [DESKTOP-APP.md](DESKTOP-APP.md).
+The system ships as **one automation engine** (`desktop-agent/`) driven by a thin Electron
+shell (`desktop/`) on Windows, Linux and macOS, and by a headless Linux service (Docker or
+systemd) in server mode. The engine — not the shell — owns the worker loop, so closing a
+desktop window can never interrupt a claim. Operator guide: [DESKTOP-APP.md](DESKTOP-APP.md);
+server guide: [LINUX-SERVER.md](LINUX-SERVER.md); decisions and alternatives:
+[notes/architecture-decision.md](notes/architecture-decision.md).
 
-- **Electron Architecture & Process Boundary:**
-  - `desktop/main.ts` (Main Process): Orchestrates window lifecycle, native system tray, single instance lock, embedded automation runner, and connection recovery.
-  - `desktop/preload.cjs` (Preload Script): Enforces a secure boundary with `contextIsolation: true` and `nodeIntegration: false`; exposes only 4 typed verbs (`desktop:notify`, `desktop:get-bot-status`, `desktop:toggle-bot`, `desktop:bot-status-changed`).
+- **Three deployment modes, one codebase:**
+  - **Mode 1 — Windows Desktop.** Electron shell embeds the engine on `127.0.0.1:3005`. Tray, auto-start, `ReturnAppClaimBot` Scheduled Task, visible system browser.
+  - **Mode 2 — Linux Desktop.** Identical shell and engine; AppImage/deb packaging, system Chromium/Chrome, auto-start via a `.desktop` entry.
+  - **Mode 3 — Headless Linux Server.** The engine alone under Docker or systemd (`deploy/engine/`), headless Chromium over CDP, no window, no desktop environment. Closing the desktop client does not stop automation.
+- **Automation engine (`desktop-agent/src/desktop-app-server.ts`):**
+  - Owns the single worker loop, the panel queue, the browser runner and the control API. `pollAndProcessJob()` returns whether it handled a claim, and the scheduler backs off 10s → 20s → 30s while the queue is empty.
+  - Owns the follow-up ticket worker on its own, much slower cadence (`FOLLOWUP_INTERVAL_MS`, 30 minutes by default). Each cycle asks the server for the next due ticket check, opens that panel's saved session, calls the marketplace's `checkClaimStatus()`, and reports the result. The two workers never overlap: both drive the same supplier profile, so `followUpInFlight` blocks a filing cycle and vice versa (`poll-guard.ts`).
+  - Serves the dashboard HTML, the legacy dashboard routes, and two engine routes: `GET /api/health` (liveness, never authenticated) and `GET /api/v1/engine/info` (version, bind, uptime, worker status, panel states, data dir).
+  - Exposes `engineStatus()`, `engineStart()`, `enginePause()`, `engineRunOnceNow()`, `engineSetBackendUrl()` for an in-process client.
+- **Engine bind and remote-access policy (`desktop-agent/src/engine-config.ts`):**
+  - A loopback bind (`127.0.0.1` / `::1` / `localhost`) is local mode with no token; the OS user boundary is the guard.
+  - Any other bind is remote mode and `ENGINE_TOKEN` is **mandatory** (minimum 24 characters). Without it the engine refuses to start, so a reachable engine can never be anonymous.
+  - Remote requests authenticate with `Authorization: Bearer <ENGINE_TOKEN>`; the token is compared in constant time and is never logged.
+- **Portable engine state (`desktop-agent/src/paths.ts`):** `AGENT_DATA_DIR` relocates config, browser profiles, evidence cache, logs and the operator session, so a container volume or a systemd `ReadWritePaths` folder holds everything. Defaults to `~/.taskflow-claim-agent`.
+- **Electron shell as a client (`desktop/main.ts`):**
+  - Resolves an engine target: `RETURN_ENGINE_URL` set → connect to that remote engine (no local engine, no local worker, bearer token injected on every request to that origin); unset → embed a local engine on `127.0.0.1:3005`.
+  - Owns only the window, the tray, the single-instance lock and auto-start. It no longer contains a second copy of the worker loop.
+  - `desktop/preload.cjs` (Preload Script): Enforces a secure boundary with `contextIsolation: true` and `nodeIntegration: false`; exposes only typed verbs (`desktop:notify`, `desktop:get-bot-status`, `desktop:toggle-bot`, `desktop:bot-status-changed`).
   - **Persistent Session Storage:** Operates inside `session.fromPartition("persist:return-app-desktop")`. Once the operator logs in via ID and password, session cookies and device tokens persist indefinitely across reboots.
 - **Panel-wise continuous filing (`desktop-agent/src/panel-queue.ts`):**
   - Six isolated supplier panels (Meesho, Flipkart, Amazon, Myntra VB, Myntra EJ, Ajio), each with its own browser profile, cookies, and queue.
   - Round-robin worker skips busy/held/cooling-down panels; a panel that needs OTP/CAPTCHA never blocks the others. State is exposed to the dashboard and tray via `GET /api/panels`.
   - Meesho is fully automated (a claim counts only on a new 9–15 digit Meesho ticket); other panels run assisted (prepare + evidence, operator confirms submit) and never auto-complete.
+  - Ticket status reading is a separate, per-marketplace capability. `BaseMarketplaceAutomation.checkClaimStatus()` defaults to `{ supported: false }`, so a marketplace without a reader stops its follow-ups instead of pretending to check; implementing it in a marketplace class turns tracking on for that marketplace.
 - **Local secrets (`desktop-agent/src/local-secrets.ts`):** Operator token and PC API key are encrypted with the OS credential store (DPAPI on Windows) inside the packaged app, with a safe file fallback outside Electron.
 - **Update check (`desktop-agent/src/update-check.ts`):** Compares the running version against the newest `desktop-v*` GitHub release; the dashboard offers the OS-matched installer download. Check-and-notify only — no silent auto-install.
 - **Low-Spec Hardware Discipline (4GB RAM & 2-Core CPU):**
@@ -217,10 +239,13 @@ The desktop application is a real installed app (Electron shell + local claim-bo
 
 
 ```text
-desktop/                      Cross-platform Electron application (Windows, Linux, macOS)
-  main.ts                     Main process, system tray, 24/7 worker, offline card
-  preload.cjs                 Isolated IPC preload bridge (4 typed verbs)
-desktop-agent/                Marketplace claim automation engine
+desktop/                      Thin Electron shell (Windows, Linux, macOS)
+  main.ts                     Window, tray, single-instance lock, auto-start, engine client
+  preload.cjs                 Isolated IPC preload bridge (typed verbs)
+desktop-agent/                Marketplace claim automation engine (the portable core)
+  src/desktop-app-server.ts   Engine entrypoint: single worker loop, control API, dashboard
+  src/engine-config.ts        Bind + remote-access policy (fail-closed on a non-loopback bind)
+  src/paths.ts                AGENT_DATA_DIR resolution for profiles, evidence cache, logs, session
   src/browser-runner.ts       CDP browser launcher with per-OS process-tree cleanup
   src/agent-client.ts         Authenticated API client, leases, streaming and evidence-integrity checks
   src/panel-queue.ts          Six isolated panels, round-robin rotation, cooldowns
@@ -228,6 +253,7 @@ desktop-agent/                Marketplace claim automation engine
   src/update-check.ts         desktop-v* release check (notify only)
   src/marketplaces/meesho.ts  Meesho supplier panel claim filing flow (fully automatic)
   src/marketplaces/*.ts       Assisted engines (Flipkart, Amazon, Myntra, Ajio)
+deploy/engine/                Headless Linux server deployment (Dockerfile, compose, systemd, env template)
 android/                      Native Kotlin Android return scanner
   app/src/main/               CameraX scanning, photo/video evidence, AppUpdater
 server/                       Express API, database setup, file parsers, the register, OMSGuru integration
@@ -255,7 +281,8 @@ server/                       Express API, database setup, file parsers, the reg
   schema-register.sql         Partners, tracking evidence, scan snapshots
   schema-scan-history.sql     Scan history snapshots and indexes
   schema-claims.sql           Claim lifecycle, financial reconciliation, evidence and history
-  schema-claim-automation.sql Claim automation queue, worker authorization, partial indexes
+  schema-claim-automation.sql Claim automation queue, worker authorization, ticket follow-ups, partial indexes
+  claim-follow-up-service.ts  Ticket follow-up tracking (due checks, reschedule every 2 days, stop on a final state)
   format.ts, dates.ts, lifecycle.ts   Display formatting, IST dates, lifecycle counts
   seed.ts                     Empty. Left from the removed demo seed; safe to delete
   oms/                        OMSGuru client, catalog, SKU, invoice and order code

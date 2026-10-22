@@ -25,7 +25,8 @@ const SCHEMA_VERSION = 1
 //  schema-flyer.sql         Meesho flyer ID capture for issue returns (permanent claim evidence)
 //  schema-claims.sql        Claims foundation: templates, claim records, media metadata, status history
 //  schema-meesho-claims.sql Meesho ticket snapshots, TAT, sub-issue values, and evidence requirements
-//  schema-claim-automation.sql Desktop EXE automation, marketplace credentials, jobs, and template fields
+//  schema-claim-automation.sql Desktop EXE automation, marketplace credentials, jobs, follow-up ticket checks,
+//                            and template fields
 //  schema-vms.sql           VMS catalogue sync run log (read-only source, local product_master target)
 const SCHEMA_FILES = [
   "schema.sql",
@@ -68,6 +69,7 @@ const HISTORY_TABLES = [
   "claim_media",
   "claim_status_history",
   "claim_automation_jobs",
+  "claim_automation_follow_ups",
 ] as const
 
 // Reads every schema file and refuses to apply them if any contain a destructive statement against a

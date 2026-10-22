@@ -20,6 +20,41 @@ export type JobPollResult = {
   }
 }
 
+export type FollowUpOutcome = "status_read" | "not_supported" | "login_required" | "not_found" | "error"
+
+export type FollowUpPollResult = {
+  hasFollowUp: boolean
+  followUp?: {
+    followUpId: number
+    claimId: number
+    marketplace: string
+    accountName: string
+    marketplaceClaimId: string
+    portalUrl: string
+  }
+}
+
+export type FollowUpReport = {
+  outcome: FollowUpOutcome
+  statusText?: string
+  normalizedStatus?: string
+  note?: string
+  screenshotPath?: string
+}
+
+/**
+ * The dashboard's follow-up read. `ok: false` means the list could not be read, and `error` says why, so the
+ * dashboard never shows "nothing is tracked" for a failed read.
+ */
+export type FollowUpListResult = {
+  ok: boolean
+  status: number
+  error: string
+  rows: any[]
+  total: number
+  summary: unknown
+}
+
 export type JobExecutionBundle = {
   jobId: number
   claimId: number
@@ -157,6 +192,57 @@ export class AgentBackendClient {
     } catch (err) {
       logger.debug("Poll job check failed:", err)
       return { hasJob: false }
+    }
+  }
+
+  /**
+   * Ask the server for the next follow-up ticket check that is due for this agent.
+   *
+   * The server only hands out a row when one is actually due (every 2 days by default), so an empty answer is
+   * the normal case for most cycles.
+   */
+  async pollFollowUp(): Promise<FollowUpPollResult> {
+    if (!this.isRegistered) {
+      const ok = await this.register()
+      if (!ok) return { hasFollowUp: false }
+    }
+    try {
+      const url = `${this.config.backendUrl}/api/automation/follow-ups/due?agentUuid=${encodeURIComponent(this.config.agentUuid)}`
+      const res = await fetch(url, {
+        headers: {
+          "X-Agent-UUID": this.config.agentUuid,
+          "X-Agent-Key": this.apiKey,
+        },
+      })
+      if (!res.ok) {
+        if (res.status === 401 || res.status === 404) this.isRegistered = false
+        return { hasFollowUp: false }
+      }
+      return (await res.json()) as FollowUpPollResult
+    } catch (err) {
+      logger.debug("Follow-up check failed:", err)
+      return { hasFollowUp: false }
+    }
+  }
+
+  /** Report the outcome of one follow-up check so the server can reschedule or stop the ticket. */
+  async reportFollowUp(followUpId: number, data: FollowUpReport): Promise<void> {
+    try {
+      const url = `${this.config.backendUrl}/api/automation/follow-ups/${followUpId}/result`
+      const res = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Agent-UUID": this.config.agentUuid,
+          "X-Agent-Key": this.apiKey,
+        },
+        body: JSON.stringify(data),
+      })
+      if (!res.ok) throw new Error(`Follow-up report failed with HTTP ${res.status}.`)
+      logger.info(`Follow-up #${followUpId} reported (${data.outcome}${data.statusText ? `: ${data.statusText}` : ""}).`)
+    } catch (err) {
+      logger.error("Failed to report follow-up result:", err)
+      throw err
     }
   }
 
@@ -322,6 +408,55 @@ export class AgentBackendClient {
       return { ok: false, status: res.status, message: `Backend responded with HTTP ${res.status}`, latencyMs }
     } catch (err: any) {
       return { ok: false, status: 0, message: err?.message || String(err), latencyMs: Date.now() - start }
+    }
+  }
+
+  /**
+   * Read the ticket follow-ups for the dashboard.
+   *
+   * This is a signed-in operator read, not an agent poll, so it carries the operator's bearer token, exactly
+   * like the evidence download.
+   *
+   * A failure is reported as a failure. Returning an empty list for a backend outage or an expired sign-in
+   * would make the dashboard's follow-up table say "no tickets are tracked" when the truth is that nothing
+   * could be read — the same class of mistake as reporting an unrun check as passed.
+   */
+  async getFollowUps(filter: { pageSize?: number } = {}): Promise<FollowUpListResult> {
+    const failure = (status: number, error: string): FollowUpListResult => ({
+      ok: false,
+      status,
+      error,
+      rows: [],
+      total: 0,
+      summary: {},
+    })
+    try {
+      const authorization = operatorAuthorization()
+      if (!authorization) return failure(401, "Sign in on the claim bot to see ticket follow-ups.")
+      const q = new URLSearchParams()
+      if (filter.pageSize) q.set("pageSize", String(filter.pageSize))
+      const url = `${this.config.backendUrl}/api/automation/follow-ups?${q.toString()}`
+      const res = await fetch(url, { headers: { Authorization: authorization } })
+      if (!res.ok) {
+        // An expired or refused token is a sign-in problem, not a server problem: the dashboard must ask the
+        // operator to sign in rather than blame the backend.
+        if (res.status === 401 || res.status === 403) {
+          return failure(401, "The saved sign-in is no longer accepted. Sign in again to see ticket follow-ups.")
+        }
+        return failure(502, `The Return App server answered HTTP ${res.status} for ticket follow-ups.`)
+      }
+      const data = (await res.json()) as { rows?: any[]; total?: number; summary?: unknown }
+      return {
+        ok: true,
+        status: 200,
+        error: "",
+        rows: Array.isArray(data.rows) ? data.rows : [],
+        total: Number(data.total || 0),
+        summary: data.summary || {},
+      }
+    } catch (err) {
+      logger.debug("Failed to fetch ticket follow-ups from backend:", err)
+      return failure(503, "The Return App server could not be reached, so ticket follow-ups could not be read.")
     }
   }
 

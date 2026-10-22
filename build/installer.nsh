@@ -30,16 +30,26 @@
     MessageBox MB_OK|MB_ICONEXCLAMATION "Return App installed, but no Edge, Chrome, or Chromium browser was found.$\r$\n$\r$\nThe claim bot drives the system browser to file marketplace claims. Install Microsoft Edge or Google Chrome (or set the BROWSER_PATH environment variable), then use the dashboard's supplier-login setup."
   ${EndIf}
 
-  ; --- Scheduled task XML (logon trigger + restart on failure) ---
+  ; --- Scheduled task XML (logon trigger + watchdog repetition + restart on failure) ---
+  ; MultipleInstancesPolicy=IgnoreNew means a trigger that fires while the task is
+  ; already running is ignored, so the 15-minute repetition below acts as a
+  ; watchdog: if the app died for any reason (including a clean exit that
+  ; RestartOnFailure would not catch), it is relaunched within 15 minutes and
+  ; never duplicated. Duration PT0S repeats indefinitely.
   FileOpen $1 "$PLUGINSDIR\ReturnAppTask.xml" w
   FileWrite $1 '<?xml version="1.0" encoding="UTF-16"?>$\r$\n'
   FileWrite $1 '<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">$\r$\n'
   FileWrite $1 '  <RegistrationInfo>$\r$\n'
-  FileWrite $1 '    <Description>Return App 24/7 marketplace claim bot. Launches hidden into the tray and keeps filing panel-wise.</Description>$\r$\n'
+  FileWrite $1 '    <Description>Return App 24/7 marketplace claim bot. Launches hidden into the tray and keeps filing panel-wise. Relaunched by the watchdog repetition if it stops.</Description>$\r$\n'
   FileWrite $1 '  </RegistrationInfo>$\r$\n'
   FileWrite $1 '  <Triggers>$\r$\n'
   FileWrite $1 '    <LogonTrigger>$\r$\n'
   FileWrite $1 '      <Enabled>true</Enabled>$\r$\n'
+  FileWrite $1 '      <Repetition>$\r$\n'
+  FileWrite $1 '        <Interval>PT15M</Interval>$\r$\n'
+  FileWrite $1 '        <Duration>PT0S</Duration>$\r$\n'
+  FileWrite $1 '        <StopAtDurationEnd>false</StopAtDurationEnd>$\r$\n'
+  FileWrite $1 '      </Repetition>$\r$\n'
   FileWrite $1 '    </LogonTrigger>$\r$\n'
   FileWrite $1 '  </Triggers>$\r$\n'
   FileWrite $1 '  <Principals>$\r$\n'
@@ -54,9 +64,10 @@
   FileWrite $1 '    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>$\r$\n'
   FileWrite $1 '    <AllowHardTerminate>true</AllowHardTerminate>$\r$\n'
   FileWrite $1 '    <StartWhenAvailable>true</StartWhenAvailable>$\r$\n'
+  FileWrite $1 '    <WakeToRun>false</WakeToRun>$\r$\n'
   FileWrite $1 '    <RestartOnFailure>$\r$\n'
-  FileWrite $1 '      <Interval>PT5M</Interval>$\r$\n'
-  FileWrite $1 '      <Count>3</Count>$\r$\n'
+  FileWrite $1 '      <Interval>PT1M</Interval>$\r$\n'
+  FileWrite $1 '      <Count>999</Count>$\r$\n'
   FileWrite $1 '    </RestartOnFailure>$\r$\n'
   FileWrite $1 '    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>$\r$\n'
   FileWrite $1 '  </Settings>$\r$\n'

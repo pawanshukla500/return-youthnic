@@ -3,6 +3,10 @@ import fs from "node:fs"
 import path from "node:path"
 import child_process from "node:child_process"
 import { loadAgentConfig, saveAgentConfig, type AgentConfig } from "./config.js"
+import { bearerTokenFromHeader, engineTokenMatches, localEngineUrl, resolveEngineBind, type EngineBind } from "./engine-config.js"
+import { installCrashGuards } from "./crash-guard.js"
+import { engineBusy as engineBusyWith, shouldRunPollCycle, supplierProfileInUse as supplierProfileInUseWith } from "./poll-guard.js"
+import { agentDataDir } from "./paths.js"
 import { logger } from "./logger.js"
 import { AgentBackendClient } from "./agent-client.js"
 import { BrowserRunner, findSystemBrowser } from "./browser-runner.js"
@@ -12,28 +16,47 @@ import { closePortalLoginBrowser, holdPortalBrowser, listPortalLogins, PORTAL_CH
 import { clearPanelHold, getPanelStatuses, markPanelBusy, markPanelResult, panelKeyForMarketplace } from "./panel-queue.js"
 import { localEncryptionAvailable } from "./local-secrets.js"
 import { checkForUpdates } from "./update-check.js"
+import { followUpExecutionBundle } from "./follow-up-bundle.js"
 
-export type DesktopBotControl = {
-  isRunning: () => boolean
-  isProcessing: () => boolean
-  activeSummary: () => string | null
-  nextPollSeconds: () => number
-  lastPollTime: () => string
-  onSignedIn: () => void
-  onSignedOut: () => void
-  pause: () => void
-  pollNow: () => void
-  backendUrl: () => string
-  setBackendUrl: (url: string) => void
-}
-
-let externalControl: DesktopBotControl | null = null
+/**
+ * The engine owns exactly one worker loop. The Electron shell embeds this
+ * module in-process and drives it through engineStart/enginePause/engineRunOnceNow;
+ * a remote client drives the same state over the HTTP routes below. There is no
+ * second copy of the loop anywhere.
+ */
+let engineBind: EngineBind | null = null
 
 let config: AgentConfig = loadAgentConfig()
 let client = new AgentBackendClient(config)
 
 let isWorkerRunning = false
 let isCurrentlyProcessing = false
+/**
+ * A poll cycle is in flight (from pollJob() through job completion).
+ *
+ * This is separate from isCurrentlyProcessing, which is only set *after*
+ * pollJob() returns a job. Without this lock two overlapping cycles could both
+ * see an empty queue, both lease a job, and launch two supplier browsers at
+ * once. It is released in a finally block so a thrown error cannot wedge it.
+ */
+let pollInFlight = false
+/**
+ * A supplier login test is open.
+ *
+ * A login test pauses the poller and drives the supplier profile itself, so it
+ * sets neither isCurrentlyProcessing nor pollInFlight. Without this flag two
+ * concurrent tests would both pass the busy check and then fight over the same
+ * browser profile and debug port.
+ */
+let portalTestInFlight = false
+/**
+ * A follow-up ticket check is open.
+ *
+ * The check opens the same supplier profile the filing worker uses, so the two
+ * must never overlap. Poll cycles and the routes that would start a supplier
+ * browser test this through poll-guard.ts.
+ */
+let followUpInFlight = false
 let activeJobInfo: any = null
 let lastHeartbeatTime: string = ""
 let lastPollTime: string = ""
@@ -59,15 +82,50 @@ logger.onLog((entry) => {
 // Automation Worker Loop
 // ---------------------------------------------------------------------------------------------------------------
 
-async function pollAndProcessJob(): Promise<void> {
-  if (!isWorkerRunning || isCurrentlyProcessing || holdPortalBrowser()) return
+/**
+ * True while a claim cycle is in flight or a job is being processed.
+ *
+ * `isCurrentlyProcessing` alone is not enough. It is only set *after* pollJob()
+ * returns, so during the lease window a caller would believe the engine is idle
+ * and could open a second browser on the same supplier profile just as a claim
+ * launches. `pollInFlight` covers the whole cycle, from the poll through job
+ * completion and browser teardown, so routes that would start a browser on a
+ * supplier profile must test this instead. See poll-guard.ts for the tested rule.
+ */
+function engineBusy(): boolean {
+  return engineBusyWith({ isCurrentlyProcessing, pollInFlight, portalTestInFlight, followUpInFlight })
+}
+
+/**
+ * True when a browser already owns a supplier profile.
+ *
+ * Used by routes that would queue work for a profile: a claim queued while the
+ * manual-login browser is still open cannot be picked up, because the poll cycle
+ * refuses to run until that browser closes.
+ */
+function supplierProfileInUse(): boolean {
+  return supplierProfileInUseWith({
+    isCurrentlyProcessing,
+    pollInFlight,
+    portalTestInFlight,
+    followUpInFlight,
+    portalBrowserHeld: holdPortalBrowser(),
+  })
+}
+
+async function pollAndProcessJob(manual = false): Promise<boolean> {
+  // `manual` is the "Poll Now" one-shot. It must run even while the worker is
+  // paused, so the running-state check is skipped for it. The other two guards
+  // still apply: a manual cycle must not overlap one already in flight, and it
+  // must not run while a supplier login browser holds the profile.
+  if (!shouldRunPollCycle({ workerRunning: isWorkerRunning, pollInFlight, portalBrowserHeld: holdPortalBrowser(), portalTestInFlight, followUpInFlight, manual })) return false
+  pollInFlight = true
   lastPollTime = new Date().toLocaleTimeString("en-IN")
-  nextPollCountdown = Math.round(config.pollIntervalMs / 1000)
   let submissionOutcomeUnknown = false
 
   try {
     const poll = await client.pollJob()
-    if (!poll.hasJob || !poll.job) return
+    if (!poll.hasJob || !poll.job) return false
 
     isCurrentlyProcessing = true
     const jobHeader = poll.job
@@ -83,7 +141,7 @@ async function pollAndProcessJob(): Promise<void> {
       logger.error(`Could not retrieve bundle for job #${jobHeader.jobId}. Skipping.`)
       isCurrentlyProcessing = false
       activeJobInfo = null
-      return
+      return false
     }
 
     await client.updateProgress(jobHeader.jobId, {
@@ -181,37 +239,277 @@ async function pollAndProcessJob(): Promise<void> {
   } finally {
     isCurrentlyProcessing = false
     activeJobInfo = null
+    pollInFlight = false
     await client.sendHeartbeat("online", { status: "idle" })
   }
+  return true
 }
 
 let schedulerStarted = false
+let idlePolls = 0
+
+// ---------------------------------------------------------------------------------------------------------------
+// Follow-up Ticket Worker
+//
+// Filing a claim is not the end of the job: the marketplace ticket is not final for days. This worker runs on its
+// own, much slower cadence than filing. On each cycle it asks the server for the next ticket that is due, opens
+// that panel's saved session, reads the ticket state, and reports it back. The server reschedules the next check
+// (every 2 days by default) and stops the ticket once it reaches a final state.
+//
+// It never runs while filing is in flight, and filing never runs while it is in flight, because both drive the
+// same supplier browser profile. It also never runs while the worker is paused: re-opening supplier portals is
+// exactly what a pause must stop.
+// ---------------------------------------------------------------------------------------------------------------
+
+let followUpTimer: NodeJS.Timeout | null = null
+let lastFollowUpCheckTime = ""
+let followUpChecksRun = 0
+let lastFollowUpResult = ""
+
+/**
+ * Run one follow-up cycle. Returns true when a ticket was actually checked.
+ *
+ * On any failure after the server handed out a ticket, the outcome is reported as an error so the ticket is
+ * rescheduled rather than left leased until the lease expires.
+ */
+async function pollAndProcessFollowUp(): Promise<boolean> {
+  if (!isWorkerRunning) return false
+  if (engineBusy() || holdPortalBrowser()) return false
+  followUpInFlight = true
+  lastFollowUpCheckTime = new Date().toLocaleTimeString("en-IN")
+
+  let leased: { followUpId: number; claimId: number; marketplace: string; accountName: string; marketplaceClaimId: string; portalUrl: string } | null = null
+  try {
+    const poll = await client.pollFollowUp()
+    if (!poll.hasFollowUp || !poll.followUp) return false
+    leased = poll.followUp
+    const followUp = poll.followUp
+    const panelKey = panelKeyForMarketplace(String(followUp.marketplace || ""))
+    logger.info(
+      `=== Follow-up check #${followUp.followUpId} (${followUp.marketplace} · panel ${panelKey} · ticket ${followUp.marketplaceClaimId} · claim #${followUp.claimId}) ===`,
+    )
+
+    const profilePath = profileDirFor(config.userDataDir, followUp.marketplace)
+    if (!readSessionSavedAt(profilePath)) {
+      const note = `No saved ${followUp.marketplace} sign-in on this PC. Connect the panel from the dashboard.`
+      logger.warn(`Follow-up #${followUp.followUpId}: ${note}`)
+      await client.reportFollowUp(followUp.followUpId, { outcome: "login_required", note })
+      lastFollowUpResult = `${followUp.marketplace}: waiting for panel sign-in`
+      return true
+    }
+
+    const browserRunner = new BrowserRunner()
+    // Resolve the marketplace class *before* opening a browser. A marketplace with no automation entry is not a
+    // failed check: it has no reader either, so it is reported as unsupported and stopped, exactly like a
+    // marketplace whose checkClaimStatus() default says "not implemented". Reporting it as an error would burn
+    // three attempts and stop it with a misleading "the check kept failing".
+    let engine: ReturnType<typeof getAutomationEngine>
+    try {
+      engine = getAutomationEngine(
+        followUp.marketplace,
+        browserRunner,
+        followUpExecutionBundle({
+          claimId: followUp.claimId,
+          marketplace: followUp.marketplace,
+          accountName: followUp.accountName,
+          portalUrl: followUp.portalUrl,
+        }),
+        new Map(),
+        path.join(config.workDir, `follow-up-${followUp.followUpId}`),
+      )
+    } catch (engineError) {
+      const note = engineError instanceof Error ? engineError.message : `Automation is not enabled for ${followUp.marketplace}.`
+      logger.warn(`Follow-up #${followUp.followUpId}: ${note}`)
+      await client.reportFollowUp(followUp.followUpId, { outcome: "not_supported", note })
+      lastFollowUpResult = `${followUp.marketplace}: automation not enabled`
+      return true
+    }
+
+    const isHeadless = config.browserMode === "headless"
+    const browserSession = await browserRunner.launch({ profileDir: profilePath, headless: isHeadless })
+    try {
+      await browserRunner.connectToPage(browserSession.port)
+
+      const result = await engine.checkClaimStatus(followUp.marketplaceClaimId)
+      if (!result.supported) {
+        logger.info(`Follow-up #${followUp.followUpId}: ${result.reason}`)
+        await client.reportFollowUp(followUp.followUpId, { outcome: "not_supported", note: result.reason })
+        lastFollowUpResult = `${followUp.marketplace}: status check not implemented`
+      } else {
+        const statusText = String(result.statusText || "").trim()
+        if (!statusText) {
+          await client.reportFollowUp(followUp.followUpId, {
+            outcome: "not_found",
+            note: "The panel opened but no ticket state was found for this reference.",
+            screenshotPath: result.screenshotPath,
+          })
+          lastFollowUpResult = `${followUp.marketplace}: ticket state not found`
+        } else {
+          await client.reportFollowUp(followUp.followUpId, {
+            outcome: "status_read",
+            statusText,
+            normalizedStatus: result.normalizedStatus,
+            note: result.note,
+            screenshotPath: result.screenshotPath,
+          })
+          lastFollowUpResult = `${followUp.marketplace}: ${statusText}`
+        }
+      }
+    } finally {
+      await browserRunner.close()
+    }
+    followUpChecksRun += 1
+    return true
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Follow-up check failed."
+    logger.error("Follow-up check failed:", err)
+    lastFollowUpResult = message.slice(0, 200)
+    if (leased) {
+      await client
+        .reportFollowUp(leased.followUpId, { outcome: "error", note: message.slice(0, 400) })
+        .catch(() => undefined)
+    }
+    return false
+  } finally {
+    followUpInFlight = false
+  }
+}
+
+/**
+ * Schedule the next follow-up look-up. Like the filing chain, the timer is cleared when the worker pauses and
+ * restarted by engineStart(), so a pause cannot leave a follow-up check running behind it.
+ */
+function scheduleNextFollowUp(delayMs: number): void {
+  if (followUpTimer) clearTimeout(followUpTimer)
+  followUpTimer = setTimeout(() => {
+    void (async () => {
+      try {
+        await pollAndProcessFollowUp()
+      } catch (err) {
+        logger.error("Follow-up cycle failed.", err)
+      }
+      if (isWorkerRunning) scheduleNextFollowUp(config.followUpCheckIntervalMs)
+      else followUpTimer = null
+    })()
+  }, delayMs)
+}
+
+/**
+ * Poll cadence. Claims are picked up quickly while work is flowing and the
+ * interval backs off while the queue is empty, so an idle warehouse PC or
+ * server stays well under the low-spec CPU budget (AGENTS.md rule 13).
+ */
+function pollDelayMs(processedJob: boolean): number {
+  if (processedJob) {
+    idlePolls = 0
+    return Math.max(5000, Math.round(config.pollIntervalMs / 2))
+  }
+  idlePolls += 1
+  if (idlePolls > 10) return config.pollIntervalMs * 3
+  if (idlePolls > 4) return config.pollIntervalMs * 2
+  return config.pollIntervalMs
+}
+
+/**
+ * Schedule the next poll. `pollTimer` stays non-null for the whole life of the
+ * poll chain and is cleared only when the worker is paused, so a resume cannot
+ * start a second chain. `pollInFlight` in pollAndProcessJob() is the second
+ * guard: even if two timers fired, only one cycle can lease work.
+ */
+function scheduleNextPoll(delayMs: number): void {
+  if (pollTimer) clearTimeout(pollTimer)
+  nextPollCountdown = Math.max(1, Math.round(delayMs / 1000))
+  pollTimer = setTimeout(() => {
+    void (async () => {
+      let processed = false
+      try {
+        processed = await pollAndProcessJob()
+      } catch (err) {
+        logger.error("Poll cycle failed.", err)
+      }
+      if (isWorkerRunning) {
+        scheduleNextPoll(pollDelayMs(processed))
+      } else {
+        pollTimer = null
+        nextPollCountdown = 0
+      }
+    })()
+  }, delayMs)
+}
+
+/**
+ * Serialized one-shot poll cycles.
+ *
+ * In paused mode there is no scheduled next poll, so a "run this claim" request
+ * that arrives while another one-shot is still running would be dropped by the
+ * pollInFlight guard and its claim would sit in the queue with nothing to pick it
+ * up. Chaining the requests gives each one its own cycle.
+ */
+let manualRunChain: Promise<void> = Promise.resolve()
+
+/**
+ * Run one poll cycle now without resuming a paused worker.
+ *
+ * This is what "Poll Now" / "Check for Claims Now" uses. A one-shot check must
+ * not silently switch continuous filing back on: the operator pauses the bot for
+ * a reason, and a manual check is not consent to resume it. If the worker is
+ * running, the current chain is nudged forward; if it is paused, only this single
+ * cycle runs and no next poll is scheduled.
+ */
+export function engineRunOnceNow(): Promise<void> {
+  if (!operatorSignedIn) return Promise.resolve()
+  idlePolls = 0
+  if (isWorkerRunning) {
+    scheduleNextPoll(1000)
+    return Promise.resolve()
+  }
+  manualRunChain = manualRunChain
+    .then(async () => {
+      // Only stand the scheduler down if the worker is *still* paused. It can
+      // have been resumed while this link waited its turn, and clearing the
+      // timer then would stop polling for good: the link finishes without
+      // scheduling a next poll, so the engine would report running while idle.
+      if (!isWorkerRunning) {
+        if (pollTimer) {
+          clearTimeout(pollTimer)
+          pollTimer = null
+        }
+        nextPollCountdown = 0
+      }
+      try {
+        // `true` = manual, so this single cycle runs even though the worker may
+        // be paused. No next poll is scheduled on this path, so the pause holds.
+        await pollAndProcessJob(true)
+      } catch (err) {
+        logger.error("Manual poll cycle failed.", err)
+      }
+    })
+    // A rejected link must not wedge the chain for every later request.
+    .catch(() => undefined)
+  return manualRunChain
+}
 
 function startScheduler(): void {
   isWorkerRunning = true
-  if (schedulerStarted) return
-  schedulerStarted = true
+  if (!schedulerStarted) {
+    schedulerStarted = true
 
-  if (pollTimer) clearInterval(pollTimer)
-  if (countdownTimer) clearInterval(countdownTimer)
+    if (countdownTimer) clearInterval(countdownTimer)
+    countdownTimer = setInterval(() => {
+      if (nextPollCountdown > 0) nextPollCountdown--
+    }, 1000)
 
-  pollTimer = setInterval(pollAndProcessJob, config.pollIntervalMs)
-  countdownTimer = setInterval(() => {
-    if (nextPollCountdown > 0) {
-      nextPollCountdown--
-    } else {
-      nextPollCountdown = Math.round(config.pollIntervalMs / 1000)
-    }
-  }, 1000)
+    // Send periodic heartbeat while the bot is signed in and running.
+    setInterval(async () => {
+      lastHeartbeatTime = new Date().toLocaleTimeString("en-IN")
+      const status = isWorkerRunning ? "online" : "offline"
+      await client.sendHeartbeat(status, { status: isCurrentlyProcessing ? "busy" : "idle", uptime: process.uptime() })
+    }, config.heartbeatIntervalMs)
+  }
 
-  // Send periodic heartbeat while the bot is signed in and running.
-  setInterval(async () => {
-    lastHeartbeatTime = new Date().toLocaleTimeString("en-IN")
-    const status = isWorkerRunning ? "online" : "offline"
-    await client.sendHeartbeat(status, { status: isCurrentlyProcessing ? "busy" : "idle", uptime: process.uptime() })
-  }, config.heartbeatIntervalMs)
-
-  void pollAndProcessJob()
+  if (!pollTimer) scheduleNextPoll(config.pollIntervalMs)
+  // The follow-up chain runs on its own timer so a slow ticket check never delays filing.
+  if (!followUpTimer) scheduleNextFollowUp(config.followUpCheckIntervalMs)
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -379,6 +677,19 @@ function getDashboardHtml(): string {
   </div>
 
   <main inert>
+    <section class="panel" id="overall-status" style="padding: 16px 18px;">
+      <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;">
+        <div style="display:flex;align-items:center;gap:12px;">
+          <span id="overall-dot" style="width:14px;height:14px;border-radius:50%;background:#64748b;display:inline-block;"></span>
+          <div>
+            <div id="overall-title" style="font-size:16px;font-weight:800;">Checking status…</div>
+            <div id="overall-detail" style="font-size:12px;color:var(--muted);margin-top:2px;">Reading panel sessions, the bot state, and ticket follow-ups.</div>
+          </div>
+        </div>
+        <div id="overall-chips" style="display:flex;flex-wrap:wrap;gap:8px;"></div>
+      </div>
+    </section>
+
     <section class="panel" id="onboarding" style="padding: 16px 18px;">
       <div class="panel-title" style="margin-bottom: 4px;">First-time setup — connect each supplier panel <span id="onboarding-count" style="font-size: 11px; font-weight: normal; color: var(--muted);"></span></div>
       <p style="color: var(--muted); font-size: 12px; line-height: 1.5; margin-bottom: 12px;">Do one panel at a time. For each marketplace, save the supplier ID and password, then sign in: the supplier page opens in a visible browser window. Complete any OTP or CAPTCHA there yourself — the cookies are saved on this PC so sign-in sticks across restarts. A panel whose session expires drops back to Connect here.</p>
@@ -416,6 +727,29 @@ function getDashboardHtml(): string {
       <div class="panel-title" style="margin-bottom: 4px;">Panel-wise continuous filing</div>
       <p style="color: var(--muted); font-size: 12px; line-height: 1.5; margin-bottom: 12px;">Each supplier panel keeps its own login cookies and queue. The bot rotates through the ready panels, so one panel waiting on OTP or cooling down never stops the others.</p>
       <div id="panel-strip" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px;"></div>
+    </section>
+
+    <section class="panel" id="follow-ups" style="padding: 16px 18px;">
+      <div class="panel-title" style="margin-bottom: 4px;">Ticket follow-ups <span id="followup-count" style="font-size: 11px; font-weight: normal; color: var(--muted);"></span></div>
+      <p style="color: var(--muted); font-size: 12px; line-height: 1.5; margin-bottom: 12px;">After a claim is filed, the bot re-opens that panel on its own every 2 days, reads the ticket status, and records it here until the ticket is approved or rejected. The ticket ID is the marketplace's own reference number.</p>
+      <div class="table-container" style="max-height: 280px;">
+        <table>
+          <thead>
+            <tr>
+              <th>Marketplace</th>
+              <th>Ticket ID</th>
+              <th>Claim status</th>
+              <th>Last check</th>
+              <th>Next check</th>
+              <th>Checks</th>
+              <th>State</th>
+            </tr>
+          </thead>
+          <tbody id="followups-table-body">
+            <tr><td colspan="7" style="text-align: center; padding: 20px; color: var(--muted);">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
     </section>
 
     <!-- KPI Overview -->
@@ -513,6 +847,10 @@ function getDashboardHtml(): string {
   <script>
     let currentTab = 'all';
     let allJobs = [];
+    let panelCache = [];
+    let panelsLoaded = false;
+    let statusCache = {};
+    let followUpData = { loaded: true, rows: [], summary: {} };
     let isRunning = true;
 
     function escapeHtml(value) {
@@ -603,6 +941,7 @@ function getDashboardHtml(): string {
         if (!res.ok) return;
         const data = await res.json();
         isRunning = data.isRunning;
+        statusCache = data;
         document.getElementById('toggle-worker-btn').innerText = isRunning ? '⏸ Pause Bot' : '▶ Start Bot';
         const statusText = !data.signedIn
           ? 'Waiting for sign-in'
@@ -620,6 +959,7 @@ function getDashboardHtml(): string {
         } else {
           document.getElementById('active-task-label').innerText = data.signedIn ? (isRunning ? 'Idle / waiting for the next claim' : 'Paused') : 'Sign in to start';
         }
+        renderOverall();
       } catch (err) {
         console.error(err);
       }
@@ -642,11 +982,13 @@ function getDashboardHtml(): string {
         const res = await fetch('/api/panels');
         if (!res.ok) return;
         const data = await res.json();
+        panelCache = data.panels || [];
+        panelsLoaded = true;
         const strip = document.getElementById('panel-strip');
         const dot = { idle: '#10b981', preparing: '#3b82f6', submitting: '#3b82f6', manual_action: '#f59e0b', cooldown: '#ef4444', disabled: '#64748b' };
         const label = { idle: 'Ready', preparing: 'Preparing', submitting: 'Filing', manual_action: 'Needs you', cooldown: 'Cooling down', disabled: 'Off' };
         strip.innerHTML = (data.panels || []).map(p =>
-          '<div style="background:#080f0d;border:1px solid var(--line);border-radius:8px;padding:10px 12px;">' +
+          '<div style="background:#080f0d;border:1px solid ' + (p.sessionSavedAt ? 'rgba(16,185,129,0.45)' : 'var(--line)') + ';border-radius:8px;padding:10px 12px;">' +
           '<div style="display:flex;align-items:center;gap:6px;font-size:12px;font-weight:700;">' +
           '<span style="width:8px;height:8px;border-radius:50%;background:' + (dot[p.state] || '#64748b') + ';display:inline-block;"></span>' +
           '<span>' + p.name + '</span>' +
@@ -659,6 +1001,7 @@ function getDashboardHtml(): string {
           ((p.state === 'manual_action' || p.state === 'cooldown') ? '<button class="btn btn-secondary" style="margin-top:6px;" data-key="' + p.key + '" onclick="clearPanelHold(this.dataset.key)">Rejoin rotation</button>' : '') +
           '</div>'
         ).join('');
+        renderOverall();
       } catch (err) {
         console.error(err);
       }
@@ -671,6 +1014,126 @@ function getDashboardHtml(): string {
       } catch (err) {
         console.error(err);
       }
+    }
+
+    async function loadFollowUps() {
+      const body = document.getElementById('followups-table-body');
+      try {
+        const res = await fetch('/api/follow-ups?pageSize=100');
+        if (!res.ok) {
+          // Distinguish "sign in" from "could not read". Either way the table must not pretend the ticket list
+          // is empty, and the headline must not claim everything is green.
+          const payload = await res.json().catch(() => ({}));
+          const message = payload.error || ('Ticket follow-ups could not be read (HTTP ' + res.status + ').');
+          followUpData = { loaded: false, rows: [], summary: {}, error: message };
+          document.getElementById('followup-count').textContent = '(unavailable)';
+          body.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:20px;color:#fbbf24;">' + escapeHtml(message) + '</td></tr>';
+          renderOverall();
+          return;
+        }
+        followUpData = await res.json();
+        followUpData.loaded = true;
+        renderFollowUps();
+        renderOverall();
+      } catch (err) {
+        followUpData = { loaded: false, rows: [], summary: {}, error: 'Ticket follow-ups could not be read.' };
+        document.getElementById('followup-count').textContent = '(unavailable)';
+        body.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:20px;color:#fbbf24;">Ticket follow-ups could not be read.</td></tr>';
+        renderOverall();
+      }
+    }
+
+    function followUpState(row) {
+      if (row.isActive) {
+        if (row.errorStreak > 0) return { text: 'Retrying after a failed check', color: '#fbbf24' };
+        return { text: 'Checking every ' + Math.round((row.checkIntervalHours || 48) / 24) + ' day(s)', color: '#6ee7b7' };
+      }
+      const reasons = {
+        ticket_resolved: { text: 'Finished — ticket resolved', color: '#10b981' },
+        check_not_supported: { text: 'Paused — this panel has no automatic check yet', color: '#94a3b8' },
+        repeated_errors: { text: 'Stopped — the check kept failing', color: '#f87171' },
+        max_checks_reached: { text: 'Stopped — check limit reached', color: '#fbbf24' }
+      };
+      return reasons[row.stopReason] || { text: 'Stopped', color: '#94a3b8' };
+    }
+
+    function whenText(iso) {
+      if (!iso) return '—';
+      const then = new Date(iso).getTime();
+      if (!then) return '—';
+      const diffMin = Math.round((then - Date.now()) / 60000);
+      const abs = Math.abs(diffMin);
+      const amount = abs < 60 ? abs + ' min' : (abs < 2880 ? Math.round(abs / 60) + ' h' : Math.round(abs / 1440) + ' d');
+      return diffMin >= 0 ? 'in ' + amount : amount + ' ago';
+    }
+
+    function renderFollowUps() {
+      const rows = followUpData.rows || [];
+      const summary = followUpData.summary || {};
+      const body = document.getElementById('followups-table-body');
+      document.getElementById('followup-count').textContent =
+        '(' + (summary.active || 0) + ' tracking · ' + (summary.due || 0) + ' due now · ' + (summary.resolved || 0) + ' resolved)';
+      if (!rows.length) {
+        body.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:20px;color:var(--muted);">No followed-up tickets yet. A ticket appears here as soon as a claim is filed.</td></tr>';
+        return;
+      }
+      body.innerHTML = rows.map(r => {
+        const state = followUpState(r);
+        return '<tr>' +
+          '<td><strong>' + (r.marketplace || '—') + '</strong><div style="font-size:11px;color:var(--muted);">' + (r.accountName || '') + (r.orderNumber ? ' · ' + r.orderNumber : '') + '</div></td>' +
+          '<td><span class="badge" style="background:var(--primary-light);color:var(--primary);font-family:monospace;">' + (r.marketplaceClaimId || '—') + '</span></td>' +
+          '<td>' + (r.claimStatus || '—') + (r.statusAtLastCheck ? '<div style="font-size:11px;color:var(--muted);">' + r.statusAtLastCheck + '</div>' : '') + '</td>' +
+          '<td>' + whenText(r.lastCheckedAt) + '</td>' +
+          '<td>' + (r.isActive ? whenText(r.nextCheckAt) : '—') + '</td>' +
+          '<td>' + (r.checkCount || 0) + '</td>' +
+          '<td><span style="font-size:11px;color:' + state.color + ';">' + state.text + '</span>' +
+          (r.lastError ? '<div style="font-size:11px;color:var(--muted);" title="' + r.lastError.replace(/"/g, '&quot;') + '">' + r.lastError + '</div>' : '') +
+          '</td>' +
+          '</tr>';
+      }).join('');
+    }
+
+    function renderOverall() {
+      const panels = panelCache || [];
+      const follow = followUpData.summary || {};
+      const reasons = [];
+      if (!statusCache.signedIn) reasons.push('sign in to start the bot');
+      else if (!isRunning) reasons.push('the bot is paused');
+      const notConnected = panels.filter(p => !p.sessionSavedAt);
+      if (notConnected.length) reasons.push('connect ' + notConnected.length + ' panel(s): ' + notConnected.map(p => p.name).join(', '));
+      const needsYou = panels.filter(p => p.state === 'manual_action');
+      if (needsYou.length) reasons.push(needsYou.map(p => p.name).join(', ') + ' need(s) you in the supplier browser');
+      const cooling = panels.filter(p => p.state === 'cooldown');
+      if (cooling.length) reasons.push(cooling.map(p => p.name).join(', ') + ' stopped after repeated failures');
+      if (follow.withErrors) reasons.push(follow.withErrors + ' ticket check(s) failing');
+      if (followUpData && followUpData.loaded === false) reasons.push('ticket follow-ups could not be loaded');
+      if (!panelsLoaded && statusCache.signedIn) reasons.push('panel status could not be loaded');
+
+      const dot = document.getElementById('overall-dot');
+      const title = document.getElementById('overall-title');
+      const detail = document.getElementById('overall-detail');
+      if (!panels.length && !statusCache.signedIn) {
+        dot.style.background = '#64748b';
+        title.textContent = 'Waiting for sign-in';
+        detail.textContent = 'Sign in to start the 24/7 claim bot.';
+      } else if (reasons.length) {
+        dot.style.background = '#f59e0b';
+        title.textContent = 'Action required';
+        detail.textContent = 'Please ' + reasons.join(' · ') + '.';
+      } else {
+        dot.style.background = '#10b981';
+        title.textContent = 'All panels green';
+        detail.textContent = 'Every panel is connected and the bot is ' + (isRunning ? 'running' : 'ready') + '. ' +
+          (follow.active || 0) + ' ticket(s) being followed up' + (follow.due ? ', ' + follow.due + ' due now' : '') + '.';
+      }
+
+      document.getElementById('overall-chips').innerHTML = panels.map(p => {
+        const ready = Boolean(p.sessionSavedAt) && p.state === 'idle';
+        const color = ready ? '#10b981' : (!p.sessionSavedAt || p.state === 'manual_action' || p.state === 'cooldown' ? '#f59e0b' : '#3b82f6');
+        const text = !p.sessionSavedAt ? 'Connect' : (p.state === 'idle' ? 'Ready' : (p.state === 'manual_action' ? 'Needs you' : (p.state === 'cooldown' ? 'Cooling down' : 'Working')));
+        return '<span style="display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:600;padding:3px 9px;border-radius:20px;border:1px solid ' + color + '55;background:' + color + '1a;color:' + color + ';">' +
+          '<span style="width:7px;height:7px;border-radius:50%;background:' + color + ';display:inline-block;"></span>' + p.name + ' · ' + text + '</span>';
+      }).join('');
     }
 
     function setTab(tab) {
@@ -753,7 +1216,10 @@ function getDashboardHtml(): string {
     }
 
     async function toggleWorker() {
-      await fetch('/api/scheduler/toggle', { method: 'POST' });
+      // Send the desired action, not a blind toggle, so the server sets the state the operator saw
+      // when they clicked, even if another client changed it in between.
+      const action = isRunning ? 'pause' : 'start';
+      await fetch('/api/scheduler/toggle?action=' + action, { method: 'POST' });
       await loadStatus();
     }
 
@@ -991,11 +1457,13 @@ function getDashboardHtml(): string {
     loadStatus();
     loadJobs();
     loadPanels();
+    loadFollowUps();
     connectSse();
     setInterval(loadStatus, 2000);
     setInterval(loadJobs, 10000);
     setInterval(loadPanels, 5000);
     setInterval(loadPortalLogins, 30000);
+    setInterval(loadFollowUps, 60000);
   </script>
 </body>
 </html>`
@@ -1041,10 +1509,6 @@ function readJson(req: http.IncomingMessage): Promise<Record<string, unknown>> {
 
 async function beginClaimWork(): Promise<void> {
   operatorSignedIn = true
-  if (externalControl) {
-    externalControl.onSignedIn()
-    return
-  }
   await client.register()
   startScheduler()
 }
@@ -1066,11 +1530,135 @@ export async function resumeClaimBotIfSignedIn(): Promise<boolean> {
   return true
 }
 
-export function startDesktopAppServer(port = 3005, control?: DesktopBotControl): Promise<http.Server> {
-  externalControl = control ?? null
+// ---------------------------------------------------------------------------------------------------------------
+// Engine control surface
+//
+// The Electron shell embeds this module and calls these functions directly.
+// A remote client (desktop app pointed at a Linux server) reaches the same
+// state through the HTTP routes below. Both read one set of variables, so the
+// worker loop, the tray and the dashboard can never disagree.
+// ---------------------------------------------------------------------------------------------------------------
+
+export type EngineStatusSnapshot = {
+  workerRunning: boolean
+  isCurrentlyProcessing: boolean
+  activeSummary: string | null
+  signedIn: boolean
+  backendUrl: string
+  agentUuid: string
+  agentName: string
+  nextPollCountdown: number
+  lastHeartbeatTime: string
+  lastPollTime: string
+  lastFollowUpCheckTime: string
+  followUpChecksRun: number
+  lastFollowUpResult: string
+  activeJobInfo: unknown
+}
+
+export function engineStatus(): EngineStatusSnapshot {
+  return {
+    workerRunning: isWorkerRunning,
+    isCurrentlyProcessing,
+    activeSummary: activeJobInfo ? `${activeJobInfo.marketplace} #${activeJobInfo.jobId}` : null,
+    signedIn: operatorSignedIn,
+    backendUrl: config.backendUrl,
+    agentUuid: config.agentUuid,
+    agentName: config.agentName,
+    nextPollCountdown,
+    lastHeartbeatTime,
+    lastPollTime,
+    lastFollowUpCheckTime,
+    followUpChecksRun,
+    lastFollowUpResult,
+    activeJobInfo,
+  }
+}
+
+/** Resume the worker. A no-op until an Admin/Supervisor is signed in. */
+export function engineStart(): void {
+  if (!operatorSignedIn) return
+  startScheduler()
+}
+
+/** Pause the worker. It stays resident and resumes on engineStart(). */
+export function enginePause(): void {
+  isWorkerRunning = false
+}
+
+export function engineSetBackendUrl(url: string): void {
+  config = saveAgentConfig({ backendUrl: url })
+  client = new AgentBackendClient(config)
+}
+
+export function engineBindInfo(): EngineBind | null {
+  return engineBind
+}
+
+export function startDesktopAppServer(bind: EngineBind = resolveEngineBind()): Promise<http.Server> {
+  engineBind = bind
+  // Long-running process: install the crash guards before anything can throw, so
+  // one failed request cannot take the bot down and a fatal error exits cleanly
+  // for the supervisor to restart.
+  installCrashGuards()
+  // Prune the local evidence cache once at startup so an installed engine and a
+  // server engine both honour the 24-hour cache rule (AGENTS.md rule 13).
+  void client.pruneOldEvidenceFiles().catch(() => undefined)
   return new Promise((resolve, reject) => {
     const server = http.createServer(async (req, res) => {
       const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`)
+
+      // The health probe is the only route that never needs the engine token, so
+      // Docker, systemd and load balancers can check liveness without a secret.
+      // Keep it to liveness only: on a non-loopback bind anyone who can reach the
+      // port sees this, so it must not disclose the backend URL, the operator's
+      // sign-in state, or the exact runtime and platform version. Those live on
+      // the authenticated /api/v1/engine/info route instead.
+      if (url.pathname === "/api/health") {
+        sendJson(res, 200, {
+          ok: true,
+          status: isCurrentlyProcessing ? "busy" : isWorkerRunning ? "running" : "idle",
+          uptimeSeconds: Math.round(process.uptime()),
+        })
+        return
+      }
+
+      // Fail-closed: when the engine is reachable off this machine, every route
+      // except the health probe needs the bearer token. resolveEngineBind()
+      // guarantees a token exists for a non-loopback bind, so this can never be
+      // anonymous. Keep this gate above every other /api route.
+      if (bind.remoteAccess) {
+        const provided = bearerTokenFromHeader(req.headers.authorization)
+        if (!engineTokenMatches(provided, bind.authToken)) {
+          sendJson(res, 401, { error: "A valid engine token is required." })
+          return
+        }
+      }
+
+      if (url.pathname === "/api/v1/engine/info") {
+        sendJson(res, 200, {
+          engine: "return-app-automation-engine",
+          version: process.env.RETURN_APP_VERSION || "dev",
+          platform: process.platform,
+          arch: process.arch,
+          node: process.version,
+          pid: process.pid,
+          engineMode: bind.mode,
+          bindHost: bind.host,
+          bindPort: bind.port,
+          uptimeSeconds: Math.round(process.uptime()),
+          dataDir: agentDataDir(),
+          status: engineStatus(),
+          panels: getPanelStatuses(config.userDataDir).map((p) => ({
+            key: p.key,
+            name: p.name,
+            state: p.state,
+            automated: p.automated,
+            sessionSaved: Boolean(p.sessionSavedAt),
+          })),
+        })
+        return
+      }
 
       if (url.pathname === "/" || url.pathname === "/index.html") {
         res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" })
@@ -1079,22 +1667,22 @@ export function startDesktopAppServer(port = 3005, control?: DesktopBotControl):
       }
 
       if (url.pathname === "/api/status") {
+        const status = engineStatus()
         sendJson(res, 200, {
-          isRunning: externalControl ? externalControl.isRunning() : isWorkerRunning,
-          isCurrentlyProcessing: externalControl ? externalControl.isProcessing() : isCurrentlyProcessing,
-          activeJobInfo,
-          activeSummary: externalControl
-            ? externalControl.activeSummary()
-            : activeJobInfo
-              ? `${activeJobInfo.marketplace} #${activeJobInfo.jobId}`
-              : null,
-          nextPollCountdown: externalControl ? externalControl.nextPollSeconds() : nextPollCountdown,
-          lastHeartbeatTime,
-          lastPollTime: externalControl ? externalControl.lastPollTime() : lastPollTime,
-          backendUrl: externalControl ? externalControl.backendUrl() : config.backendUrl,
-          agentUuid: config.agentUuid,
-          agentName: config.agentName,
-          signedIn: operatorSignedIn,
+          isRunning: status.workerRunning,
+          isCurrentlyProcessing: status.isCurrentlyProcessing,
+          activeJobInfo: status.activeJobInfo,
+          activeSummary: status.activeSummary,
+          nextPollCountdown: status.nextPollCountdown,
+          lastHeartbeatTime: status.lastHeartbeatTime,
+          lastPollTime: status.lastPollTime,
+          lastFollowUpCheckTime: status.lastFollowUpCheckTime,
+          followUpChecksRun: status.followUpChecksRun,
+          lastFollowUpResult: status.lastFollowUpResult,
+          backendUrl: status.backendUrl,
+          agentUuid: status.agentUuid,
+          agentName: status.agentName,
+          signedIn: status.signedIn,
         })
         return
       }
@@ -1131,8 +1719,7 @@ export function startDesktopAppServer(port = 3005, control?: DesktopBotControl):
 
       if (url.pathname === "/api/operator/logout" && req.method === "POST") {
         operatorSignedIn = false
-        if (externalControl) externalControl.onSignedOut()
-        else isWorkerRunning = false
+        isWorkerRunning = false
         await logoutOperator()
         logger.info("Operator signed out. Claim bot is paused until the next sign-in.")
         sendJson(res, 200, { ok: true })
@@ -1147,6 +1734,22 @@ export function startDesktopAppServer(port = 3005, control?: DesktopBotControl):
         const jobs = await client.getRecentJobs()
         res.writeHead(200, { "Content-Type": "application/json" })
         res.end(JSON.stringify(jobs))
+        return
+      }
+
+      if (url.pathname === "/api/follow-ups" && req.method === "GET") {
+        if (!operatorSignedIn) {
+          sendJson(res, 401, { error: "Sign in before viewing ticket follow-ups." })
+          return
+        }
+        // Pass the real outcome through. A failed read must not look like an empty list, or the dashboard would
+        // report "no tickets are tracked" while nothing could actually be read.
+        const data = await client.getFollowUps({ pageSize: 100 })
+        if (!data.ok) {
+          sendJson(res, data.status, { error: data.error })
+          return
+        }
+        sendJson(res, 200, { rows: data.rows, total: data.total, summary: data.summary })
         return
       }
 
@@ -1176,19 +1779,21 @@ export function startDesktopAppServer(port = 3005, control?: DesktopBotControl):
           sendJson(res, 401, { error: "Sign in before starting the claim bot." })
           return
         }
-        const running = externalControl ? externalControl.isRunning() : isWorkerRunning
-        if (running) {
-          if (externalControl) externalControl.pause()
-          else isWorkerRunning = false
-          logger.info("Claim bot paused. It stays on this PC and resumes when Start Bot is used.")
-        } else if (externalControl) {
-          externalControl.onSignedIn()
-          logger.info("Claim bot resumed.")
+        // An optional `action` query parameter lets a remote caller send the desired state instead of a
+        // blind toggle, so a stale menu label does not start the worker when the operator meant to pause
+        // it (or vice versa) after another client changed the state. Without it, the endpoint toggles.
+        const action = url.searchParams.get("action")
+        if (action === "start") {
+          engineStart()
+        } else if (action === "pause") {
+          enginePause()
+        } else if (isWorkerRunning) {
+          enginePause()
         } else {
-          startScheduler()
-          logger.info("Claim bot resumed.")
+          engineStart()
         }
-        sendJson(res, 200, { ok: true, isRunning: externalControl ? externalControl.isRunning() : isWorkerRunning })
+        logger.info(action ? `Claim bot ${action === "start" ? "resumed" : "paused"}.` : "Claim bot toggled.")
+        sendJson(res, 200, { ok: true, isRunning: isWorkerRunning })
         return
       }
 
@@ -1198,8 +1803,8 @@ export function startDesktopAppServer(port = 3005, control?: DesktopBotControl):
           return
         }
         logger.info("Manual claim check triggered from the desktop bot.")
-        if (externalControl) externalControl.pollNow()
-        else void pollAndProcessJob()
+        // A one-shot check must not resume a paused worker (see engineRunOnceNow).
+        void engineRunOnceNow()
         sendJson(res, 200, { ok: true })
         return
       }
@@ -1275,23 +1880,31 @@ export function startDesktopAppServer(port = 3005, control?: DesktopBotControl):
           sendJson(res, 401, { error: "Sign in before testing a supplier login." })
           return
         }
-        if (isCurrentlyProcessing || externalControl?.isProcessing()) {
-          sendJson(res, 409, { error: "A claim is running. Wait until it finishes, then test the login." })
+        if (engineBusy()) {
+          sendJson(res, 409, { error: "A claim or another login test is running. Wait for it to finish, then test the login." })
           return
         }
-        if (externalControl?.isRunning()) externalControl.pause()
-        else isWorkerRunning = false
+        // Two login tests at once would drive the same supplier profile and the
+        // same debug port, so the second one gets a 409 above rather than racing.
+        portalTestInFlight = true
+        // The test needs the supplier profile to itself, so the poller is paused
+        // for its duration. Remember whether it was running: a failed test must
+        // put the engine back exactly as it was, otherwise a mistyped password
+        // would leave a 24/7 bot paused with no obvious cause.
+        const wasRunning = isWorkerRunning
+        isWorkerRunning = false
         try {
           const body = await readJson(req)
           const result = await testPortalLogin(String(body.marketplace || "Meesho"), String(body.username || ""), String(body.password || ""))
-          if (result.ok && operatorSignedIn) {
-            if (externalControl) externalControl.onSignedIn()
-            else startScheduler()
-          }
           sendJson(res, result.ok ? 200 : 400, result)
         } catch (error) {
           logger.error("Supplier login test failed.", error)
           sendJson(res, 500, { error: error instanceof Error ? error.message : "Could not open the supplier login." })
+        } finally {
+          portalTestInFlight = false
+          if (wasRunning && operatorSignedIn) {
+            engineStart()
+          }
         }
         return
       }
@@ -1301,8 +1914,8 @@ export function startDesktopAppServer(port = 3005, control?: DesktopBotControl):
           sendJson(res, 401, { error: "Sign in before running a claim." })
           return
         }
-        if (isCurrentlyProcessing || externalControl?.isProcessing()) {
-          sendJson(res, 409, { error: "A claim is already running. Let it finish before starting the next one." })
+        if (supplierProfileInUse()) {
+          sendJson(res, 409, { error: "A claim or a supplier login is using the browser profile. Wait for it to finish, then run the claim." })
           return
         }
         try {
@@ -1312,11 +1925,7 @@ export function startDesktopAppServer(port = 3005, control?: DesktopBotControl):
             sendJson(res, result.status, { error: result.message })
             return
           }
-          if (externalControl) externalControl.pollNow()
-          else {
-            isWorkerRunning = true
-            void pollAndProcessJob()
-          }
+          void engineRunOnceNow()
           sendJson(res, 200, { ok: true, message: "That claim is next. The bot will open the supplier panel for it." })
         } catch (error) {
           sendJson(res, 400, { error: error instanceof Error ? error.message : "Could not run that claim." })
@@ -1335,9 +1944,12 @@ export function startDesktopAppServer(port = 3005, control?: DesktopBotControl):
           try {
             const data = JSON.parse(body) as { backendUrl?: string }
             const updates = typeof data.backendUrl === "string" ? { backendUrl: data.backendUrl } : {}
-            config = saveAgentConfig(updates)
-            if (updates.backendUrl && externalControl) externalControl.setBackendUrl(updates.backendUrl)
-            client = new AgentBackendClient(config)
+            if (updates.backendUrl) {
+              engineSetBackendUrl(updates.backendUrl)
+            } else {
+              config = saveAgentConfig(updates)
+              client = new AgentBackendClient(config)
+            }
             logger.info(`Agent configuration updated. Backend URL: ${config.backendUrl}`)
             if (operatorSignedIn) await client.register()
             const { apiKey: _apiKey, ...publicConfig } = config
@@ -1379,8 +1991,14 @@ export function startDesktopAppServer(port = 3005, control?: DesktopBotControl):
     })
 
     server.once("error", reject)
-    server.listen(port, "127.0.0.1", () => {
-      logger.info(`Claim bot window is ready at http://127.0.0.1:${port}`)
+    server.listen(bind.port, bind.host, () => {
+      if (bind.remoteAccess) {
+        logger.info(
+          `Automation engine listening on ${bind.host}:${bind.port} (remote mode; bearer token required on every route except /api/health).`,
+        )
+      } else {
+        logger.info(`Claim bot window is ready at ${localEngineUrl(bind)}`)
+      }
       resolve(server)
     })
   })
@@ -1426,14 +2044,16 @@ async function main() {
 
   logger.info(`Starting 24/7 Claim Desktop Bot (Backend: ${config.backendUrl})...`)
 
-  const port = 3005
-  await startDesktopAppServer(port)
+  const bind = resolveEngineBind()
+  await startDesktopAppServer(bind)
   await resumeClaimBotIfSignedIn()
 
-  // Open native desktop app window unless running with --headless or in CI
+  // A server deployment never opens a window; a desktop run does unless asked not to.
   const isHeadlessArg = process.argv.includes("--no-window") || process.env.HEADLESS === "true"
-  if (!isHeadlessArg) {
-    launchAppWindow(`http://127.0.0.1:${port}`)
+  if (bind.mode === "local" && !isHeadlessArg) {
+    // Use the bound host, not a hardcoded 127.0.0.1: ENGINE_HOST=::1 listens on
+    // IPv6 loopback only, where 127.0.0.1 would be refused.
+    launchAppWindow(localEngineUrl(bind))
   }
 }
 

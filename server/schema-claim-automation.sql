@@ -136,3 +136,40 @@ CROSS JOIN (VALUES
 ) AS v(field_key, field_label, field_type, required, min_count, max_count, max_file_size_mb, sort_order)
 WHERE m.name = 'Flipkart'
 ON CONFLICT (template_id, field_key) DO NOTHING;
+
+-- 7. Claim follow-ups (ticket tracking)
+-- After a claim is filed the marketplace ticket is not final. A follow-up row is created when the filing job
+-- completes, and the desktop re-opens the supplier portal on a cadence (default every 48 hours), reads the
+-- ticket status, and writes it back here until the ticket reaches a terminal state or the check is stopped.
+-- Additive only: no existing table or column is touched.
+CREATE TABLE IF NOT EXISTS claim_automation_follow_ups (
+  id serial PRIMARY KEY,
+  claim_id integer NOT NULL REFERENCES claims(id) ON DELETE RESTRICT,
+  job_id integer REFERENCES claim_automation_jobs(id) ON DELETE SET NULL,
+  marketplace_id integer REFERENCES marketplaces(id) ON DELETE SET NULL,
+  marketplace_credential_id integer REFERENCES marketplace_credentials(id) ON DELETE SET NULL,
+  marketplace_claim_id text NOT NULL DEFAULT '',
+  account_name text NOT NULL DEFAULT '',
+  stage text NOT NULL DEFAULT 'scheduled',
+  is_active boolean NOT NULL DEFAULT true,
+  stop_reason text NOT NULL DEFAULT '',
+  status_at_last_check text NOT NULL DEFAULT '',
+  last_checked_at timestamptz,
+  next_check_at timestamptz NOT NULL DEFAULT now(),
+  check_interval_hours integer NOT NULL DEFAULT 48,
+  check_count integer NOT NULL DEFAULT 0,
+  error_streak integer NOT NULL DEFAULT 0,
+  lease_expires_at timestamptz,
+  agent_id integer REFERENCES claim_automation_agents(id) ON DELETE SET NULL,
+  last_error text NOT NULL DEFAULT '',
+  history jsonb NOT NULL DEFAULT '[]',
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS claim_automation_follow_ups_claim_idx ON claim_automation_follow_ups (claim_id);
+CREATE INDEX IF NOT EXISTS claim_automation_follow_ups_marketplace_idx ON claim_automation_follow_ups (marketplace_id);
+CREATE UNIQUE INDEX IF NOT EXISTS claim_automation_follow_ups_claim_uidx ON claim_automation_follow_ups (claim_id);
+CREATE INDEX IF NOT EXISTS claim_automation_follow_ups_due_idx ON claim_automation_follow_ups (next_check_at ASC)
+  WHERE is_active = true;
+CREATE INDEX IF NOT EXISTS claim_automation_follow_ups_lease_idx ON claim_automation_follow_ups (lease_expires_at)
+  WHERE lease_expires_at IS NOT NULL;

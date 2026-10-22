@@ -18,7 +18,7 @@ COPY package.json package-lock.json ./
 RUN npm ci
 
 # Copy application source files
-COPY tsconfig.json tsconfig.server.json vite.config.ts index.html ./
+COPY tsconfig.json tsconfig.server.json tsconfig.desktop.json vite.config.ts index.html ./
 COPY public/ ./public/
 COPY src/ ./src/
 COPY server/ ./server/

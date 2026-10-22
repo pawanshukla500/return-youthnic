@@ -1,8 +1,7 @@
 import fs from "node:fs"
-import os from "node:os"
-import path from "node:path"
 import { loadAgentConfig } from "./config.js"
 import { protectSecret, revealSecret } from "./local-secrets.js"
+import { agentSubdir, writeSecretFile } from "./paths.js"
 
 export type OperatorProfile = {
   name: string
@@ -15,7 +14,7 @@ type StoredSession = OperatorProfile & {
 }
 
 function sessionFile(): string {
-  return path.join(os.homedir(), ".taskflow-claim-agent", "operator-session.json")
+  return agentSubdir("operator-session.json")
 }
 
 function readStored(): StoredSession | null {
@@ -32,9 +31,8 @@ function readStored(): StoredSession | null {
 }
 
 function writeStored(session: StoredSession): void {
-  const file = sessionFile()
-  fs.mkdirSync(path.dirname(file), { recursive: true })
-  fs.writeFileSync(file, JSON.stringify({ ...session, token: protectSecret(session.token) }), { encoding: "utf8" })
+  // The operator bearer token is a secret: owner-only file permissions.
+  writeSecretFile(sessionFile(), JSON.stringify({ ...session, token: protectSecret(session.token) }))
 }
 
 export function operatorAuthorization(): string | null {

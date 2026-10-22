@@ -2,6 +2,7 @@ import child_process from "node:child_process"
 import fs from "node:fs"
 import path from "node:path"
 import WebSocket from "ws"
+import { browserSandboxArgs, currentBrowserSandboxState } from "./browser-flags.js"
 import { logger } from "./logger.js"
 
 function whichBinaries(names: string[]): string | null {
@@ -96,6 +97,8 @@ export class BrowserRunner {
   private ws: WebSocket | null = null
   private proc: child_process.ChildProcess | null = null
   private debugPort = 0
+  /** Set by launch(). Declared so the profileDirectory getter is typed. */
+  private profileDir = ""
 
   get profileDirectory(): string {
     return this.profileDir
@@ -133,7 +136,11 @@ export class BrowserRunner {
       "--window-size=1280,900",
       "--disable-dev-shm-usage",
       "--disable-gpu",
-      "--no-sandbox",
+      // Sandboxed by default. browserSandboxArgs() only adds --no-sandbox when
+      // BROWSER_NO_SANDBOX=1, or when running as root on Linux where Chromium
+      // refuses to start otherwise. A supplier page is untrusted input, so the
+      // sandbox is what keeps it away from the profile cookies.
+      ...browserSandboxArgs(currentBrowserSandboxState()),
       "--disable-extensions",
       "--disable-background-networking",
       "--disable-sync",

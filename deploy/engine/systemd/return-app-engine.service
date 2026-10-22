@@ -1,0 +1,48 @@
+[Unit]
+Description=Return App Marketplace Claims Automation Engine
+Documentation=https://github.com/pawanshukla500/return-youthnic/blob/main/docs/LINUX-SERVER.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Create this user once:  sudo useradd --system --create-home --shell /usr/sbin/nologin returnapp
+User=returnapp
+Group=returnapp
+
+# Node 22+ must be on the host. Adjust WorkingDirectory to the checkout.
+WorkingDirectory=/opt/return-app
+EnvironmentFile=/etc/return-app/engine.env
+# --max-old-space-size matches the desktop shell and AGENTS.md rule 13: the engine
+# must stay inside 256 MB of V8 heap. Without it Node sizes the heap from the
+# host's total RAM, which on a large server is far above what the engine is
+# allowed to use and can push the box into an OOM kill mid-claim.
+ExecStart=/usr/bin/node --max-old-space-size=256 --import tsx desktop-agent/src/desktop-app-server.ts --no-window
+
+# The engine must survive a crash and come back without a desktop session.
+Restart=always
+RestartSec=5
+# Give an in-flight claim time to finish before a restart escalates to SIGKILL.
+KillSignal=SIGTERM
+TimeoutStopSec=120
+KillMode=mixed
+
+# Chromium needs a writable /dev/shm; give it real space instead of a small tmpfs.
+PrivateTmp=false
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=false
+ReadWritePaths=/var/lib/return-app-engine
+LimitNOFILE=65535
+# Backstop for the heap cap: if the engine or its browser children still grow past
+# the budget, the kernel kills this unit instead of the whole host.
+MemoryMax=1500M
+
+# Logs go to the journal and to the engine's own daily file under
+# AGENT_DATA_DIR/logs. Secrets are never logged.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=return-app-engine
+
+[Install]
+WantedBy=multi-user.target

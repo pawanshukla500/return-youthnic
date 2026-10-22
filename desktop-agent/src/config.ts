@@ -2,6 +2,7 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { protectSecret, revealSecret } from "./local-secrets.js"
+import { agentDataDir, ensureAgentDataDir, writeSecretFile } from "./paths.js"
 
 export type AgentConfig = {
   agentUuid: string
@@ -10,6 +11,7 @@ export type AgentConfig = {
   apiKey: string
   pollIntervalMs: number
   heartbeatIntervalMs: number
+  followUpCheckIntervalMs: number
   browserMode: "visible" | "headless"
   browserPath: string
   userDataDir: string
@@ -18,6 +20,25 @@ export type AgentConfig = {
 }
 
 export const DEFAULT_PRODUCTION_URL = "https://return.youthnic.shop"
+
+/**
+ * Pick a millisecond interval from the first usable candidate.
+ *
+ * `Number("")` and `Number("abc")` are 0 and NaN, and Node clamps either timer delay to 1 ms, so a blank or
+ * misspelled value would silently turn a slow look-up into a tight loop against the backend (and, on the
+ * follow-up worker, hammer the server every millisecond). A candidate that is not a finite number of at least
+ * `minimumMs` is skipped, so an unusable environment value falls through to the saved setting and then to the
+ * documented default instead of being used as-is.
+ *
+ * Pure, so it is covered by desktop-agent/config.test.ts rather than by reading the environment.
+ */
+export function pickIntervalMs(candidates: unknown[], fallback: number, minimumMs = 1000): number {
+  for (const candidate of candidates) {
+    const raw = typeof candidate === "number" ? candidate : Number(String(candidate ?? "").trim())
+    if (Number.isFinite(raw) && raw >= minimumMs) return Math.floor(raw)
+  }
+  return fallback
+}
 
 export function isTrustedBackendUrl(value: string): boolean {
   try {
@@ -33,11 +54,7 @@ export function isTrustedBackendUrl(value: string): boolean {
 }
 
 export function loadAgentConfig(): AgentConfig {
-  const homeDir = os.homedir()
-  const baseDir = path.join(homeDir, ".taskflow-claim-agent")
-  if (!fs.existsSync(baseDir)) {
-    fs.mkdirSync(baseDir, { recursive: true })
-  }
+  const baseDir = ensureAgentDataDir()
 
   const configFile = path.join(baseDir, "config.json")
   let saved: Partial<AgentConfig> = {}
@@ -67,8 +84,12 @@ export function loadAgentConfig(): AgentConfig {
     agentName: process.env.AGENT_NAME || saved.agentName || `Warehouse-Agent-${hostname}`,
     backendUrl,
     apiKey: process.env.AGENT_API_KEY || revealSecret(saved.apiKey || "") || "",
-    pollIntervalMs: Number(process.env.POLL_INTERVAL_MS || saved.pollIntervalMs || 10000),
-    heartbeatIntervalMs: Number(process.env.HEARTBEAT_INTERVAL_MS || saved.heartbeatIntervalMs || 15000),
+    pollIntervalMs: pickIntervalMs([process.env.POLL_INTERVAL_MS, saved.pollIntervalMs], 10000),
+    heartbeatIntervalMs: pickIntervalMs([process.env.HEARTBEAT_INTERVAL_MS, saved.heartbeatIntervalMs], 15000),
+    // Follow-up ticket checks run on their own, much slower cadence than claim filing. The server only hands
+    // out a follow-up when one is actually due (every 2 days by default), so a 30-minute look-up is cheap and
+    // keeps an idle warehouse PC well inside the low-spec CPU budget.
+    followUpCheckIntervalMs: pickIntervalMs([process.env.FOLLOWUP_INTERVAL_MS, saved.followUpCheckIntervalMs], 1800000),
     browserMode: (process.env.BROWSER_MODE || saved.browserMode || "visible") as "visible" | "headless",
     browserPath: process.env.BROWSER_PATH || saved.browserPath || "",
     userDataDir: path.join(baseDir, "browser-profiles"),
@@ -79,7 +100,8 @@ export function loadAgentConfig(): AgentConfig {
   // Persist if first run or if legacy localhost URL was upgraded
   if (!fs.existsSync(configFile) || saved.backendUrl !== backendUrl) {
     try {
-      fs.writeFileSync(configFile, JSON.stringify({ ...config, apiKey: protectSecret(config.apiKey) }, null, 2), "utf8")
+      // config.json holds the PC API key, so it is written owner-only.
+      writeSecretFile(configFile, JSON.stringify({ ...config, apiKey: protectSecret(config.apiKey) }, null, 2))
     } catch {
       // ignore
     }
@@ -94,10 +116,9 @@ export function saveAgentConfig(updates: Partial<AgentConfig>): AgentConfig {
   }
   const current = loadAgentConfig()
   const updated: AgentConfig = { ...current, ...updates }
-  const homeDir = os.homedir()
-  const configFile = path.join(homeDir, ".taskflow-claim-agent", "config.json")
+  const configFile = path.join(agentDataDir(), "config.json")
   try {
-    fs.writeFileSync(configFile, JSON.stringify({ ...updated, apiKey: protectSecret(updated.apiKey) }, null, 2), "utf8")
+    writeSecretFile(configFile, JSON.stringify({ ...updated, apiKey: protectSecret(updated.apiKey) }, null, 2))
   } catch {
     // ignore
   }
