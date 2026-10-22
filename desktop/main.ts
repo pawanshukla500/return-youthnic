@@ -504,6 +504,7 @@ async function checkForClaimsNow(): Promise<void> {
   await fetch(new URL("/api/scheduler/poll-now", target.url), {
     method: "POST",
     headers: { Authorization: `Bearer ${target.token}` },
+    signal: AbortSignal.timeout(5000),
   }).catch(() => undefined)
 }
 
