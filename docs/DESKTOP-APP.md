@@ -5,9 +5,12 @@ claim-bot server + CDP browser automation), not a website wrapper. It signs the
 operator in, keeps six supplier panels logged in with their own cookies, polls
 the Return App server for claim jobs, and files them through a visible system
 browser — Meesho fully automatically, the other panels assisted (prepare +
-operator confirm). After a claim is filed it keeps re-opening that panel every
-2 days to read the ticket status until the ticket is finished. Closing the window
-keeps it running in the tray.
+operator confirm). After a claim is filed, the engine is designed to re-open
+that panel every 2 days to read the ticket status until the ticket is finished.
+No marketplace's `checkClaimStatus()` reader is implemented yet, so tickets
+currently stop with "not supported" rather than guessing a status;
+implementing the reader in a marketplace class turns tracking on for it.
+Closing the window keeps it running in the tray.
 
 ## 1. Install
 

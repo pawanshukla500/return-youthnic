@@ -848,6 +848,7 @@ function getDashboardHtml(): string {
     let currentTab = 'all';
     let allJobs = [];
     let panelCache = [];
+    let panelsLoaded = false;
     let statusCache = {};
     let followUpData = { loaded: true, rows: [], summary: {} };
     let isRunning = true;
@@ -982,6 +983,7 @@ function getDashboardHtml(): string {
         if (!res.ok) return;
         const data = await res.json();
         panelCache = data.panels || [];
+        panelsLoaded = true;
         const strip = document.getElementById('panel-strip');
         const dot = { idle: '#10b981', preparing: '#3b82f6', submitting: '#3b82f6', manual_action: '#f59e0b', cooldown: '#ef4444', disabled: '#64748b' };
         const label = { idle: 'Ready', preparing: 'Preparing', submitting: 'Filing', manual_action: 'Needs you', cooldown: 'Cooling down', disabled: 'Off' };
@@ -1105,6 +1107,7 @@ function getDashboardHtml(): string {
       if (cooling.length) reasons.push(cooling.map(p => p.name).join(', ') + ' stopped after repeated failures');
       if (follow.withErrors) reasons.push(follow.withErrors + ' ticket check(s) failing');
       if (followUpData && followUpData.loaded === false) reasons.push('ticket follow-ups could not be loaded');
+      if (!panelsLoaded && statusCache.signedIn) reasons.push('panel status could not be loaded');
 
       const dot = document.getElementById('overall-dot');
       const title = document.getElementById('overall-title');
