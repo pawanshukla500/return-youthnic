@@ -8,6 +8,7 @@ import {
   cleanVmsSku,
   dedupeVmsMappings,
   dedupeVmsRows,
+  inferCategoryFromTitle,
   normalizeVmsMarketplace,
   probeVmsCatalogue,
 } from "../vms/catalog.js"
@@ -203,4 +204,17 @@ test("[synthetic] buildMappingInsertChunks properly partitions and generates par
     const placeholders = (chunk.sql.match(/\$\d+/g) || []).map((t) => Number(t.slice(1)))
     assert.deepEqual(placeholders, placeholders.map((_, i) => i + 1))
   }
+})
+
+test("[synthetic] inferCategoryFromTitle classifies apparel titles accurately", () => {
+  assert.equal(inferCategoryFromTitle("Women Blue Cotton Kurta"), "Kurta")
+  assert.equal(inferCategoryFromTitle("Embroidered Georgette Saree With Blouse"), "Sarees")
+  assert.equal(inferCategoryFromTitle("Floral Print Kurta Set with Dupatta"), "Kurta Set")
+  assert.equal(inferCategoryFromTitle("Rayon Co-ord Set for Women"), "Kurta Set")
+  assert.equal(inferCategoryFromTitle("Women Printed Kaftan"), "Kurta Set")
+  assert.equal(inferCategoryFromTitle("Silk Blend Unstitched Dress Material"), "Dress Material")
+  assert.equal(inferCategoryFromTitle("Semi-Stitched Lehenga Choli"), "Lehenga Choli")
+  assert.equal(inferCategoryFromTitle("Traditional Designer Top"), "Ethnic Wear")
+  assert.equal(inferCategoryFromTitle(""), "")
+  assert.equal(inferCategoryFromTitle(null), "")
 })
