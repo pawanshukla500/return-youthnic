@@ -466,6 +466,7 @@ SELECT
       WHEN COALESCE(m.canonical_title, l.title, '') ILIKE '%pant set%' 
         OR COALESCE(m.canonical_title, l.title, '') ILIKE '%kaftan%' 
         OR COALESCE(m.canonical_title, l.title, '') ILIKE '%co ord%' 
+        OR COALESCE(m.canonical_title, l.title, '') ILIKE '%co-ord%' 
         OR COALESCE(m.canonical_title, l.title, '') ILIKE '%kurta set%' THEN 'Kurta Set'
       WHEN COALESCE(m.canonical_title, l.title, '') ILIKE '%kurti%' 
         OR COALESCE(m.canonical_title, l.title, '') ILIKE '%kurta%' THEN 'Kurta'
@@ -496,6 +497,7 @@ WHERE l.${listingCol} IS NOT NULL AND btrim(l.${listingCol}::text) <> ''
       WHEN COALESCE(l.title, '') ILIKE '%pant set%' 
         OR COALESCE(l.title, '') ILIKE '%kaftan%' 
         OR COALESCE(l.title, '') ILIKE '%co ord%' 
+        OR COALESCE(l.title, '') ILIKE '%co-ord%' 
         OR COALESCE(l.title, '') ILIKE '%kurta set%' THEN 'Kurta Set'
       WHEN COALESCE(l.title, '') ILIKE '%kurti%' 
         OR COALESCE(l.title, '') ILIKE '%kurta%' THEN 'Kurta'
@@ -510,10 +512,12 @@ ${hasSkuImages ? "LEFT JOIN best_photos bp ON bp.sku_key = l.sku_key" : ""}
 WHERE l.${listingCol} IS NOT NULL AND btrim(l.${listingCol}::text) <> ''
   AND l.match_key IS NOT NULL AND btrim(l.match_key::text) <> ''`
     } else {
+      const titleCol = pickVmsColumn(cols, ["title", "product_title", "name", "item_name"])
       const selectParts = [
         `COALESCE(btrim(${listingCol}::text), '') AS listing_sku`,
         `COALESCE(btrim(${masterCol}::text), '') AS master_sku`,
         catCol ? `COALESCE(btrim(${catCol}::text), '') AS category` : `''::text AS category`,
+        titleCol ? `COALESCE(btrim(${titleCol}::text), '') AS title` : `''::text AS title`,
         imgCol ? `COALESCE(btrim(${imgCol}::text), '') AS image_url` : `''::text AS image_url`,
         mpCol ? `COALESCE(btrim(${mpCol}::text), '') AS marketplace` : `''::text AS marketplace`,
       ]
@@ -524,6 +528,7 @@ WHERE l.${listingCol} IS NOT NULL AND btrim(l.${listingCol}::text) <> ''
       listing_sku: string
       master_sku: string
       category: string
+      title?: string
       image_url: string
       marketplace: string
     }>(sql)
@@ -540,7 +545,7 @@ WHERE l.${listingCol} IS NOT NULL AND btrim(l.${listingCol}::text) <> ''
       list.push({
         listingSku,
         masterSku,
-        category: cleanVmsCategory(r.category) || inferCategoryFromTitle(r.category),
+        category: cleanVmsCategory(r.category) || inferCategoryFromTitle(r.category) || inferCategoryFromTitle(r.title),
         imageUrl: cleanVmsImageUrl(r.image_url),
         marketplace: normalizeVmsMarketplace(r.marketplace),
       })
@@ -710,12 +715,12 @@ export async function dryRunVmsCatalogue(db: pg.Pool): Promise<VmsDryRun> {
      FROM product_master`,
   )
   const existingSet = new Set<string>()
-  const imageByListing = new Map<string, string>()
+  const imagesByListing = new Map<string, string[]>()
   for (const r of existing.rows) {
     existingSet.add(`${r.marketplace}|${r.listing_sku}`)
-    if (!imageByListing.has(r.listing_sku)) {
-      imageByListing.set(r.listing_sku, r.image_url)
-    }
+    const list = imagesByListing.get(r.listing_sku) || []
+    list.push(r.image_url)
+    imagesByListing.set(r.listing_sku, list)
   }
 
   let mappingsToInsert = 0
@@ -728,9 +733,10 @@ export async function dryRunVmsCatalogue(db: pg.Pool): Promise<VmsDryRun> {
   let matched = 0
   let blank = 0
   for (const [sku] of bySku) {
-    if (imageByListing.has(sku)) {
-      matched++
-      if (!imageByListing.get(sku)) blank++
+    const list = imagesByListing.get(sku)
+    if (list) {
+      matched += list.length
+      blank += list.filter((img) => !img).length
     }
   }
 
