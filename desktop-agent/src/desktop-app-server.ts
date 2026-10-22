@@ -1773,13 +1773,20 @@ export function startDesktopAppServer(bind: EngineBind = resolveEngineBind()): P
           sendJson(res, 401, { error: "Sign in before starting the claim bot." })
           return
         }
-        if (isWorkerRunning) {
+        // An optional `action` query parameter lets a remote caller send the desired state instead of a
+        // blind toggle, so a stale menu label does not start the worker when the operator meant to pause
+        // it (or vice versa) after another client changed the state. Without it, the endpoint toggles.
+        const action = url.searchParams.get("action")
+        if (action === "start") {
+          engineStart()
+        } else if (action === "pause") {
           enginePause()
-          logger.info("Claim bot paused. It stays on this machine and resumes when Start Bot is used.")
+        } else if (isWorkerRunning) {
+          enginePause()
         } else {
           engineStart()
-          logger.info("Claim bot resumed.")
         }
+        logger.info(action ? `Claim bot ${action === "start" ? "resumed" : "paused"}.` : "Claim bot toggled.")
         sendJson(res, 200, { ok: true, isRunning: isWorkerRunning })
         return
       }

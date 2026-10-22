@@ -180,7 +180,13 @@ async function toggleWorker(): Promise<ShellStatus> {
     if (current.workerRunning) enginePause()
     else engineStart()
   } else {
-    await fetch(new URL("/api/scheduler/toggle", target.url), {
+    // Send the desired action, not a blind toggle, so a stale menu label does not start the worker when
+    // the operator meant to pause it (or vice versa) after another client changed the state between the
+    // menu display and the click.
+    const action = before.workerRunning ? "pause" : "start"
+    const toggleUrl = new URL("/api/scheduler/toggle", target.url)
+    toggleUrl.searchParams.set("action", action)
+    await fetch(toggleUrl, {
       method: "POST",
       headers: { Authorization: `Bearer ${target.token}` },
       signal: AbortSignal.timeout(5000),
