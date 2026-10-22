@@ -13,6 +13,25 @@ export type MarketplaceAutomationResult = {
   manualActionReason?: string
 }
 
+/**
+ * Result of reading a filed ticket's state on a supplier portal.
+ *
+ * `supported: false` means this marketplace has no status reader yet. The engine
+ * reports it back, and the server stops chasing that ticket instead of opening the
+ * portal every two days for nothing.
+ */
+export type ClaimStatusCheckResult =
+  | { supported: false; reason: string }
+  | {
+      supported: true
+      /** Exactly what the portal shows for the ticket state. The server normalizes it. */
+      statusText: string
+      /** Optional normalized state when the portal wording is ambiguous. */
+      normalizedStatus?: string
+      screenshotPath?: string
+      note?: string
+    }
+
 export abstract class BaseMarketplaceAutomation {
   abstract readonly marketplaceName: string
 
@@ -24,6 +43,26 @@ export abstract class BaseMarketplaceAutomation {
   ) {}
 
   abstract execute(action: "prepare" | "submit"): Promise<MarketplaceAutomationResult>
+
+  /**
+   * Read the state of a ticket that was filed on this marketplace earlier.
+   *
+   * The follow-up worker calls this with the supplier browser already open on the
+   * panel's saved profile, so the stored session carries the sign-in. `statusText`
+   * is whatever the portal shows; the server normalizes it and decides whether the
+   * ticket is finished.
+   *
+   * The default says "not supported", which stops the follow-up for that
+   * marketplace: the engine will not keep opening a portal every two days for a
+   * check that does not exist. Implement it in a marketplace class to turn ticket
+   * tracking on for that marketplace.
+   */
+  async checkClaimStatus(_marketplaceClaimId: string): Promise<ClaimStatusCheckResult> {
+    return {
+      supported: false,
+      reason: `Automated ticket status check is not implemented for ${this.marketplaceName} yet.`,
+    }
+  }
 
   protected async delay(ms = 1000): Promise<void> {
     await this.browser.delay(ms)

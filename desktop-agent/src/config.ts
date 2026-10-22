@@ -11,6 +11,7 @@ export type AgentConfig = {
   apiKey: string
   pollIntervalMs: number
   heartbeatIntervalMs: number
+  followUpCheckIntervalMs: number
   browserMode: "visible" | "headless"
   browserPath: string
   userDataDir: string
@@ -66,6 +67,10 @@ export function loadAgentConfig(): AgentConfig {
     apiKey: process.env.AGENT_API_KEY || revealSecret(saved.apiKey || "") || "",
     pollIntervalMs: Number(process.env.POLL_INTERVAL_MS || saved.pollIntervalMs || 10000),
     heartbeatIntervalMs: Number(process.env.HEARTBEAT_INTERVAL_MS || saved.heartbeatIntervalMs || 15000),
+    // Follow-up ticket checks run on their own, much slower cadence than claim filing. The server only hands
+    // out a follow-up when one is actually due (every 2 days by default), so a 30-minute look-up is cheap and
+    // keeps an idle warehouse PC well inside the low-spec CPU budget.
+    followUpCheckIntervalMs: Number(process.env.FOLLOWUP_INTERVAL_MS || saved.followUpCheckIntervalMs || 1800000),
     browserMode: (process.env.BROWSER_MODE || saved.browserMode || "visible") as "visible" | "headless",
     browserPath: process.env.BROWSER_PATH || saved.browserPath || "",
     userDataDir: path.join(baseDir, "browser-profiles"),

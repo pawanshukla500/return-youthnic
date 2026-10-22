@@ -134,6 +134,7 @@ Every statement is idempotent. A normal start drops nothing. The app tables are 
 | `server/logistics.ts` | Database | The partner index used by detection. Detection uses the courier name, not the tracking link | `loadPartnerIndex`, `applyPartners` |
 | `server/claim-automation-routes.ts` | Routes | Unified claim creation, desktop bot polling and status updates | `mountClaimAutomationRoutes` |
 | `server/claim-automation-service.ts` | Database | Ticket synchronizer linking claims to the register, job queue management | `syncClaimTicketToRegister`, `createOrQueueAutomationJob`, `pollAutomationJob`, `updateAutomationJob` |
+| `server/claim-follow-up-service.ts` | Database | Ticket follow-up tracking: the row created when a filing job completes, the agent lease on the next due ticket check, and the record that reschedules or stops it | `createFollowUpForJob`, `leaseNextDueFollowUp`, `recordFollowUpResult`, `normalizeFollowUpStatus`, `decideFollowUpStep` |
 | `server/product-master-routes.ts` | Routes | Staged batched product master import routes (`/start`, `/batch`, `/cancel`) | `mountProductMasterRoutes` |
 | `server/product-master.ts` | Database | 500-row chunking, in-memory staging with TTL, and isolated batch commits | `stageMasterImport`, `commitMasterBatch`, `cancelMasterImport` |
 | `server/oms/master-bridge.ts` | Database | Pure channel mapping and nightly OMSGuru to product master mapping bridge | `marketplaceForChannel`, `bridgeMasterMappings` |
@@ -200,8 +201,9 @@ server guide: [LINUX-SERVER.md](LINUX-SERVER.md); decisions and alternatives:
   - **Mode 3 — Headless Linux Server.** The engine alone under Docker or systemd (`deploy/engine/`), headless Chromium over CDP, no window, no desktop environment. Closing the desktop client does not stop automation.
 - **Automation engine (`desktop-agent/src/desktop-app-server.ts`):**
   - Owns the single worker loop, the panel queue, the browser runner and the control API. `pollAndProcessJob()` returns whether it handled a claim, and the scheduler backs off 10s → 20s → 30s while the queue is empty.
+  - Owns the follow-up ticket worker on its own, much slower cadence (`FOLLOWUP_INTERVAL_MS`, 30 minutes by default). Each cycle asks the server for the next due ticket check, opens that panel's saved session, calls the marketplace's `checkClaimStatus()`, and reports the result. The two workers never overlap: both drive the same supplier profile, so `followUpInFlight` blocks a filing cycle and vice versa (`poll-guard.ts`).
   - Serves the dashboard HTML, the legacy dashboard routes, and two engine routes: `GET /api/health` (liveness, never authenticated) and `GET /api/v1/engine/info` (version, bind, uptime, worker status, panel states, data dir).
-  - Exposes `engineStatus()`, `engineStart()`, `enginePause()`, `enginePollNow()`, `engineSetBackendUrl()` for an in-process client.
+  - Exposes `engineStatus()`, `engineStart()`, `enginePause()`, `engineRunOnceNow()`, `engineSetBackendUrl()` for an in-process client.
 - **Engine bind and remote-access policy (`desktop-agent/src/engine-config.ts`):**
   - A loopback bind (`127.0.0.1` / `::1` / `localhost`) is local mode with no token; the OS user boundary is the guard.
   - Any other bind is remote mode and `ENGINE_TOKEN` is **mandatory** (minimum 24 characters). Without it the engine refuses to start, so a reachable engine can never be anonymous.
@@ -216,6 +218,7 @@ server guide: [LINUX-SERVER.md](LINUX-SERVER.md); decisions and alternatives:
   - Six isolated supplier panels (Meesho, Flipkart, Amazon, Myntra VB, Myntra EJ, Ajio), each with its own browser profile, cookies, and queue.
   - Round-robin worker skips busy/held/cooling-down panels; a panel that needs OTP/CAPTCHA never blocks the others. State is exposed to the dashboard and tray via `GET /api/panels`.
   - Meesho is fully automated (a claim counts only on a new 9–15 digit Meesho ticket); other panels run assisted (prepare + evidence, operator confirms submit) and never auto-complete.
+  - Ticket status reading is a separate, per-marketplace capability. `BaseMarketplaceAutomation.checkClaimStatus()` defaults to `{ supported: false }`, so a marketplace without a reader stops its follow-ups instead of pretending to check; implementing it in a marketplace class turns tracking on for that marketplace.
 - **Local secrets (`desktop-agent/src/local-secrets.ts`):** Operator token and PC API key are encrypted with the OS credential store (DPAPI on Windows) inside the packaged app, with a safe file fallback outside Electron.
 - **Update check (`desktop-agent/src/update-check.ts`):** Compares the running version against the newest `desktop-v*` GitHub release; the dashboard offers the OS-matched installer download. Check-and-notify only — no silent auto-install.
 - **Low-Spec Hardware Discipline (4GB RAM & 2-Core CPU):**
@@ -278,7 +281,8 @@ server/                       Express API, database setup, file parsers, the reg
   schema-register.sql         Partners, tracking evidence, scan snapshots
   schema-scan-history.sql     Scan history snapshots and indexes
   schema-claims.sql           Claim lifecycle, financial reconciliation, evidence and history
-  schema-claim-automation.sql Claim automation queue, worker authorization, partial indexes
+  schema-claim-automation.sql Claim automation queue, worker authorization, ticket follow-ups, partial indexes
+  claim-follow-up-service.ts  Ticket follow-up tracking (due checks, reschedule every 2 days, stop on a final state)
   format.ts, dates.ts, lifecycle.ts   Display formatting, IST dates, lifecycle counts
   seed.ts                     Empty. Left from the removed demo seed; safe to delete
   oms/                        OMSGuru client, catalog, SKU, invoice and order code

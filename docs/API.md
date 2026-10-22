@@ -114,6 +114,9 @@ No rate limiting is configured. No rate-limit package is in `package.json`. CORS
 | POST | `/api/automation/agent/register` | Admin/Supervisor | Enrolls one Server PC and returns its API key once. |
 | POST | `/api/automation/agent/heartbeat` | Agent key | Reports online, busy, or offline state. |
 | GET | `/api/automation/agent/poll` | Agent key | Leases the oldest eligible Meesho job for this Server PC. |
+| GET | `/api/automation/follow-ups/due` | Agent key | Leases the next due ticket follow-up for this Server PC. |
+| POST | `/api/automation/follow-ups/:id/result` | Agent key | Records one ticket check and reschedules or stops it. |
+| GET | `/api/automation/follow-ups` | Signed-in user | Ticket follow-ups for the dashboard, scoped to the account. |
 | GET | `/api/app/latest` | No | Version metadata and changelog for Android app in-app updates (`AppUpdater.kt`). Picks the newest `v1.0.*` GitHub release itself. |
 | GET | `/download/return-scan.apk` | No | Streams the latest signed Android APK binary for warehouse scanners; redirects to the tag-specific GitHub asset. |
 | POST | `/api/admin/product-master/import/start` | Admin | Stages product master import in memory and returns batch progress plan. |
@@ -214,7 +217,10 @@ The Windows claim bot (Electron, `npm run desktop`) uses these agent routes. It 
 - `GET /api/automation/agent/poll`: atomically leases the oldest queued or approved Meesho job. Expired leases retry up to the configured maximum.
 - `GET /api/automation/jobs/:id/bundle`: returns the claim, portal login, and evidence list for that job.
 - `POST /api/automation/jobs/:id/progress`: reports a stage such as prepared or manual action. Stage `not_eligible` (the marketplace refused the order) sets the claim to `manual_action_required` with the refusal text as a remark and clears any stale marketplace ticket id and completion time on the job.
-- `POST /api/automation/jobs/:id/complete`: stores the marketplace ticket id and marks the job completed.
+- `POST /api/automation/jobs/:id/complete`: stores the marketplace ticket id and marks the job completed, and creates the ticket follow-up that starts the 2-day status checks.
+- `GET /api/automation/follow-ups/due`: leases the oldest active follow-up whose next check is due, scoped to the accounts the enrolling user may see. Reading a ticket has no external side effect, so an expired lease is simply returned to the queue.
+- `POST /api/automation/follow-ups/:id/result`: records one check. The outcome is one of `status_read`, `not_supported`, `login_required`, `not_found`, `error`. A read schedules the next check 48 hours out and advances the claim status when the ticket text maps to a lifecycle state; `approved`, `rejected`, `paid` and `reconciled` stop the follow-up, a missing reader stops it with `check_not_supported`, three failed checks stop it with `repeated_errors`, and an expired sign-in keeps it active without spending a check.
+- `GET /api/automation/follow-ups`: the follow-up list plus a summary (active, due, resolved, stopped, failing), scoped to the signed-in user's accounts.
 
 All routes after enrollment require `X-Agent-UUID` and `X-Agent-Key`. Bundle and progress routes also verify that the job belongs to that agent. `AUTOMATION_SECRET_KEY` is mandatory and must contain at least 32 characters before marketplace credentials can be encrypted or decrypted.
 

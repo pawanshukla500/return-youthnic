@@ -5,7 +5,9 @@ claim-bot server + CDP browser automation), not a website wrapper. It signs the
 operator in, keeps six supplier panels logged in with their own cookies, polls
 the Return App server for claim jobs, and files them through a visible system
 browser — Meesho fully automatically, the other panels assisted (prepare +
-operator confirm). Closing the window keeps it running in the tray.
+operator confirm). After a claim is filed it keeps re-opening that panel every
+2 days to read the ticket status until the ticket is finished. Closing the window
+keeps it running in the tray.
 
 ## 1. Install
 
@@ -60,6 +62,44 @@ operator confirm). Closing the window keeps it running in the tray.
 - **Updates**: setup box → Check for updates → download the new setup and
   install over this version (cookies kept). No silent auto-install.
 
+### Overall status and the green panel state
+
+The dashboard opens with one headline that answers "is anything waiting on me?":
+
+- **All panels green** — every panel has saved cookies, the bot is running, and
+  no ticket check is failing. Each panel chip is green with its own name.
+- **Action required** — the headline turns amber and names exactly what to do:
+  sign in, start the paused bot, connect the panels that have no saved session,
+  open the panels that say *Needs you*, or look at ticket checks that are failing.
+
+The headline is derived, not typed: it reads the same `/api/status`,
+`/api/panels` and follow-up data the rest of the page shows, so it can never
+disagree with the panel strip underneath it. A panel card is outlined green the
+moment its cookies are saved, and each chip carries its own state
+(*Ready* / *Working* / *Needs you* / *Cooling down* / *Connect*).
+
+### Ticket follow-ups (checked every 2 days)
+
+Filing a claim is not the end of it: a marketplace ticket stays open for days.
+When a filing job completes, the server creates a follow-up for that ticket, and
+the bot re-opens that panel on its own every 2 days — using the panel's saved
+cookies, no password needed — reads the ticket status, and records it. The
+**Ticket follow-ups** table shows the marketplace, the marketplace's own ticket
+ID, the claim status, when the last check ran, when the next one is due, how many
+checks have run, and the current state.
+
+The check stops by itself when there is nothing left to chase:
+
+| Outcome | What you see |
+|---|---|
+| Ticket approved / rejected / paid / reconciled | *Finished — ticket resolved*; the claim status moves with it |
+| Three checks in a row fail | *Stopped — the check kept failing*; look at the ticket once by hand |
+| The panel has no automatic status reader yet | *Paused — this panel has no automatic check yet* (see [section 4](#4-what-each-panel-does-today)) |
+| The saved session expired | The ticket stays active, and the dashboard asks you to connect that panel again |
+
+Follow-up checks never run while a claim is being filed, and filing never runs
+while a check is open: both use the same supplier browser profile.
+
 ## 4. What each panel does today
 
 | Panel | Mode | Confirmation rule |
@@ -70,6 +110,13 @@ operator confirm). Closing the window keeps it running in the tray.
 A job is never marked submitted from a screenshot alone. Duplicate filing is
 prevented by server-side leases + bounded attempts; an uncertain submission
 stops for manual reconciliation instead of retrying blind.
+
+**Ticket status reading is not built per marketplace yet.** The engine asks each
+marketplace class for the ticket state, and the shared default answers "not
+implemented", which stops the follow-up for that panel instead of guessing. Once
+the status page for a marketplace is described, that marketplace implements
+`checkClaimStatus()` and its tickets start being tracked automatically. Until
+then, the table is honest about it rather than showing a made-up state.
 
 ## 5. Recovery
 
@@ -95,13 +142,20 @@ stops for manual reconciliation instead of retrying blind.
   `schtasks /create /TN "ReturnAppClaimBot" /TR "\"C:\Program Files\Return App\Return App.exe\" --hidden" /SC ONLOGON /F`.
 - **Sign-in loops**: delete `%USERPROFILE%\.taskflow-claim-agent\operator-session.json`
   and sign in again (one-time; DPAPI-bound tokens don't roam between machines).
+- **Follow-ups say "no automatic check yet"**: expected for marketplaces whose
+  status page has not been implemented. The ticket is not lost; the panel needs
+  its `checkClaimStatus()` implementation before it can be tracked automatically.
+- **Follow-ups say "the check kept failing"**: the panel opened but the ticket
+  could not be read. Open that ticket once by hand, then check the panel cookies
+  in First-time setup.
 
 ## 7. Dashboard local API (all require operator sign-in)
 
 | Route | Purpose |
 |---|---|
-| `GET /api/status` | Worker state, active job, next poll, backend URL |
+| `GET /api/status` | Worker state, active job, next poll, backend URL, follow-up worker state |
 | `GET /api/panels` | Six panels: state, active job, cookie status, last result |
+| `GET /api/follow-ups` | Ticket follow-ups for the dashboard (proxied to the server with the operator's token) |
 | `POST /api/panels/:key/clear` | Clear a panel hold so it rejoins rotation |
 | `GET /api/security` | Whether OS credential store encryption is active |
 | `GET /api/updates/check` | Newest `desktop-v*` release vs running version + download links |
@@ -193,6 +247,11 @@ Full server setup, health checks, systemd and Docker are in
 - Full auto-filing for Flipkart/Amazon/Myntra/Ajio (assisted today; writing
   untested portal scripts would be mock automation). This also means only Meesho
   is useful in headless remote mode.
+- **No marketplace implements `checkClaimStatus()` yet.** The follow-up
+  framework is complete end to end (schema, service, routes, worker, dashboard),
+  but every panel currently answers "not implemented", so follow-ups stop with
+  that reason instead of reading a ticket. Each marketplace's status page needs
+  its own reader before its tickets are tracked; no ticket state is ever guessed.
 - Silent auto-update (needs code signing + notarization first).
 - The installer is **not code-signed**. Windows SmartScreen will warn on first
   run until a certificate is bought.

@@ -103,6 +103,7 @@ engine is bound to a non-loopback host.
 | `/api/status` | GET | Worker running/processing, active job, next poll, backend URL. |
 | `/api/panels` | GET | Per-panel state, cookie/session status, last result. |
 | `/api/panels/:key/clear` | POST | Clear a panel hold so it rejoins the rotation. |
+| `/api/follow-ups` | GET | Ticket follow-ups for the dashboard (proxied to the backend with the operator's token). |
 | `/api/jobs` | GET | Recent claim jobs. |
 | `/api/jobs/run-one` | POST | Queue one specific claim now. |
 | `/api/scheduler/toggle` | POST | Pause / resume the worker. |
@@ -186,6 +187,16 @@ engine on `127.0.0.1:3005` and registers itself to start hidden at login.
 
 ## 8. Operations
 
+### Ticket follow-ups
+
+After a claim is filed, the engine re-opens that panel on its own every 2 days, reads the
+ticket status, and reports it to the backend, which reschedules or stops it. The engine's
+own look-up cadence is `FOLLOWUP_INTERVAL_MS` (30 minutes by default); the backend only
+hands out a ticket when it is genuinely due, so this is a cheap poll. A follow-up check
+never runs at the same time as a filing job, because both drive the same supplier profile.
+The engine exposes the state on `GET /api/status` (`lastFollowUpCheckTime`,
+`followUpChecksRun`, `lastFollowUpResult`).
+
 ### Health checks
 
 `GET /api/health` returns `200` with the worker state. Wire it into your monitoring:
@@ -245,4 +256,7 @@ volumes. No code change is required.
 - Only the Meesho panel files claims automatically. Flipkart, Amazon, Myntra and Ajio run
   assisted and need a visible browser and an operator, so they are not useful in headless
   Mode 3 yet.
+- No marketplace implements the ticket status reader (`checkClaimStatus()`) yet. The
+  follow-up framework runs end to end, but each panel currently answers "not implemented",
+  so its follow-ups stop with that reason rather than reading a ticket.
 - No AI reply service is wired in. See `docs/notes/ai-provider-comparison.md`.

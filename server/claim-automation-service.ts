@@ -2,6 +2,7 @@ import crypto from "node:crypto"
 import type pg from "pg"
 import { accountCondition, scopeFor, type AccountScope } from "./access.js"
 import { ServiceError, type Actor } from "./register-service.js"
+import { createFollowUpForJob } from "./claim-follow-up-service.js"
 import { listClaimTemplates } from "./claims-service.js"
 import {
   MEESHO_PACKET_STATE,
@@ -1136,6 +1137,11 @@ export async function completeJobSubmission(
        WHERE id = $1`,
       [jobId, data.marketplaceClaimId, data.screenshotPath || null, completedLog],
     )
+
+    // Start tracking the ticket. The desktop re-opens the supplier portal on a cadence and reads the ticket
+    // status until it reaches a final state (server/claim-follow-up-service.ts). One row per claim: re-filing
+    // resets the timer instead of adding a second follow-up.
+    await createFollowUpForJob(client, jobId, data.marketplaceClaimId)
 
     await client.query(
       `INSERT INTO claim_status_history (claim_id, from_status, to_status, reason, changed_by)

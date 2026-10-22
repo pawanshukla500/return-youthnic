@@ -25,6 +25,12 @@ import {
   updateJobProgress,
 } from "./claim-automation-service.js"
 import { createClaim, getClaim } from "./claims-service.js"
+import {
+  leaseNextDueFollowUp,
+  listFollowUps,
+  recordFollowUpResult,
+  type FollowUpOutcome,
+} from "./claim-follow-up-service.js"
 
 function text(value: unknown): string {
   return typeof value === "string" ? value.trim() : ""
@@ -430,6 +436,44 @@ export function mountClaimAutomationRoutes(app: Express, requireUser: RequestHan
   })
 
   // -------------------------------------------------------------------------------------------------------------
+  // Follow-up ticket checks (the desktop re-opens a supplier portal on a cadence and reads the ticket status)
+  // -------------------------------------------------------------------------------------------------------------
+
+  app.get("/api/automation/follow-ups/due", async (req, res, next) => {
+    try {
+      const agentUuid = text(req.query.agentUuid || req.headers["x-agent-uuid"])
+      if (!agentUuid) throw new ServiceError(400, "Agent UUID required.")
+      const db = getPool()
+      await authenticateAutomationAgent(db, agentUuid, agentCredentials(req).apiKey)
+      const followUp = await leaseNextDueFollowUp(db, agentUuid, await scopeForAutomationAgent(db, agentUuid))
+      res.json({ hasFollowUp: Boolean(followUp), followUp })
+    } catch (error) {
+      sendError(res, error, next)
+    }
+  })
+
+  app.post("/api/automation/follow-ups/:id/result", async (req, res, next) => {
+    try {
+      const id = positiveId(req.params.id)
+      if (!id) throw new ServiceError(404, "Follow-up not found.")
+      const credentials = agentCredentials(req)
+      await authenticateAutomationAgent(getPool(), credentials.uuid, credentials.apiKey)
+      const body = (req.body ?? {}) as Record<string, unknown>
+      const result = await recordFollowUpResult(getPool(), credentials.uuid, id, {
+        outcome: (text(body.outcome) as FollowUpOutcome) || "error",
+        statusText: text(body.statusText),
+        normalizedStatus: text(body.normalizedStatus),
+        note: text(body.note),
+        screenshotPath: text(body.screenshotPath),
+      })
+      if (result.marketplaceId !== null) publishChange({ kind: "claim.updated", marketplaceId: result.marketplaceId })
+      res.json({ ok: true, ...result })
+    } catch (error) {
+      sendError(res, error, next)
+    }
+  })
+
+  // -------------------------------------------------------------------------------------------------------------
   // Admin & Supervisor Operations (Dashboard, Jobs, Credentials, Approvals)
   // -------------------------------------------------------------------------------------------------------------
 
@@ -451,6 +495,21 @@ export function mountClaimAutomationRoutes(app: Express, requireUser: RequestHan
         search: text(q.search) || undefined,
         page: positiveId(q.page) || 1,
         pageSize: positiveId(q.pageSize) || 25,
+      })
+      res.json(result)
+    } catch (error) {
+      sendError(res, error, next)
+    }
+  })
+
+  app.get("/api/automation/follow-ups", requireUser, async (req, res, next) => {
+    try {
+      const q = req.query as Record<string, unknown>
+      const result = await listFollowUps(getPool(), scopeOf(req), {
+        activeOnly: String(q.activeOnly || "") === "true",
+        search: text(q.search) || undefined,
+        page: positiveId(q.page) || 1,
+        pageSize: positiveId(q.pageSize) || 50,
       })
       res.json(result)
     } catch (error) {

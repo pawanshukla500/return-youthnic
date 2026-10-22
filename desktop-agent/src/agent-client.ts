@@ -20,6 +20,28 @@ export type JobPollResult = {
   }
 }
 
+export type FollowUpOutcome = "status_read" | "not_supported" | "login_required" | "not_found" | "error"
+
+export type FollowUpPollResult = {
+  hasFollowUp: boolean
+  followUp?: {
+    followUpId: number
+    claimId: number
+    marketplace: string
+    accountName: string
+    marketplaceClaimId: string
+    portalUrl: string
+  }
+}
+
+export type FollowUpReport = {
+  outcome: FollowUpOutcome
+  statusText?: string
+  normalizedStatus?: string
+  note?: string
+  screenshotPath?: string
+}
+
 export type JobExecutionBundle = {
   jobId: number
   claimId: number
@@ -157,6 +179,57 @@ export class AgentBackendClient {
     } catch (err) {
       logger.debug("Poll job check failed:", err)
       return { hasJob: false }
+    }
+  }
+
+  /**
+   * Ask the server for the next follow-up ticket check that is due for this agent.
+   *
+   * The server only hands out a row when one is actually due (every 2 days by default), so an empty answer is
+   * the normal case for most cycles.
+   */
+  async pollFollowUp(): Promise<FollowUpPollResult> {
+    if (!this.isRegistered) {
+      const ok = await this.register()
+      if (!ok) return { hasFollowUp: false }
+    }
+    try {
+      const url = `${this.config.backendUrl}/api/automation/follow-ups/due?agentUuid=${encodeURIComponent(this.config.agentUuid)}`
+      const res = await fetch(url, {
+        headers: {
+          "X-Agent-UUID": this.config.agentUuid,
+          "X-Agent-Key": this.apiKey,
+        },
+      })
+      if (!res.ok) {
+        if (res.status === 401 || res.status === 404) this.isRegistered = false
+        return { hasFollowUp: false }
+      }
+      return (await res.json()) as FollowUpPollResult
+    } catch (err) {
+      logger.debug("Follow-up check failed:", err)
+      return { hasFollowUp: false }
+    }
+  }
+
+  /** Report the outcome of one follow-up check so the server can reschedule or stop the ticket. */
+  async reportFollowUp(followUpId: number, data: FollowUpReport): Promise<void> {
+    try {
+      const url = `${this.config.backendUrl}/api/automation/follow-ups/${followUpId}/result`
+      const res = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Agent-UUID": this.config.agentUuid,
+          "X-Agent-Key": this.apiKey,
+        },
+        body: JSON.stringify(data),
+      })
+      if (!res.ok) throw new Error(`Follow-up report failed with HTTP ${res.status}.`)
+      logger.info(`Follow-up #${followUpId} reported (${data.outcome}${data.statusText ? `: ${data.statusText}` : ""}).`)
+    } catch (err) {
+      logger.error("Failed to report follow-up result:", err)
+      throw err
     }
   }
 
@@ -322,6 +395,30 @@ export class AgentBackendClient {
       return { ok: false, status: res.status, message: `Backend responded with HTTP ${res.status}`, latencyMs }
     } catch (err: any) {
       return { ok: false, status: 0, message: err?.message || String(err), latencyMs: Date.now() - start }
+    }
+  }
+
+  /**
+   * Read the ticket follow-ups for the dashboard.
+   *
+   * This is a signed-in operator read, not an agent poll, so it carries the operator's bearer token, exactly
+   * like the evidence download. An empty list is returned when nobody is signed in or the server is
+   * unreachable, so the dashboard renders "sign in" instead of failing.
+   */
+  async getFollowUps(filter: { pageSize?: number } = {}): Promise<{ rows: any[]; total: number; summary: any }> {
+    const empty = { rows: [] as any[], total: 0, summary: {} }
+    try {
+      const authorization = operatorAuthorization()
+      if (!authorization) return empty
+      const q = new URLSearchParams()
+      if (filter.pageSize) q.set("pageSize", String(filter.pageSize))
+      const url = `${this.config.backendUrl}/api/automation/follow-ups?${q.toString()}`
+      const res = await fetch(url, { headers: { Authorization: authorization } })
+      if (!res.ok) return empty
+      return (await res.json()) as { rows: any[]; total: number; summary: any }
+    } catch (err) {
+      logger.debug("Failed to fetch ticket follow-ups from backend:", err)
+      return empty
     }
   }
 

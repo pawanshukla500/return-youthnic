@@ -28,6 +28,14 @@ export type PollCycleState = {
    * the same profile the login test is using.
    */
   portalTestInFlight?: boolean
+  /**
+   * A follow-up ticket check is running.
+   *
+   * The follow-up worker opens the same supplier profile the filing worker uses,
+   * so the two must never overlap. A filing cycle waits for the check to finish,
+   * and a check waits for the engine to be idle.
+   */
+  followUpInFlight?: boolean
   /** A one-shot "Poll Now" rather than the scheduled chain. */
   manual?: boolean
 }
@@ -45,6 +53,9 @@ export function shouldRunPollCycle(state: PollCycleState): boolean {
   if (state.pollInFlight) return false
   if (state.portalBrowserHeld) return false
   if (state.portalTestInFlight) return false
+  // A follow-up ticket check owns the supplier profile while it runs. A manual
+  // one-shot must wait for it too: both drive the same profile and debug port.
+  if (state.followUpInFlight) return false
   return true
 }
 
@@ -62,8 +73,14 @@ export function engineBusy(state: {
   isCurrentlyProcessing: boolean
   pollInFlight: boolean
   portalTestInFlight?: boolean
+  followUpInFlight?: boolean
 }): boolean {
-  return state.isCurrentlyProcessing || state.pollInFlight || Boolean(state.portalTestInFlight)
+  return (
+    state.isCurrentlyProcessing ||
+    state.pollInFlight ||
+    Boolean(state.portalTestInFlight) ||
+    Boolean(state.followUpInFlight)
+  )
 }
 
 /**
@@ -78,6 +95,7 @@ export function supplierProfileInUse(state: {
   isCurrentlyProcessing: boolean
   pollInFlight: boolean
   portalTestInFlight?: boolean
+  followUpInFlight?: boolean
   portalBrowserHeld: boolean
 }): boolean {
   return engineBusy(state) || state.portalBrowserHeld

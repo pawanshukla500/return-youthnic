@@ -57,6 +57,25 @@ describe("poll cycle guard", () => {
       false,
     )
   })
+
+  it("never starts while a follow-up ticket check owns the profile, manual or not", () => {
+    // A follow-up check opens the same supplier profile the filing worker uses.
+    // The two must never overlap, and a manual one-shot is no exception.
+    assert.equal(
+      shouldRunPollCycle({ workerRunning: true, pollInFlight: false, portalBrowserHeld: false, followUpInFlight: true }),
+      false,
+    )
+    assert.equal(
+      shouldRunPollCycle({
+        workerRunning: false,
+        pollInFlight: false,
+        portalBrowserHeld: false,
+        followUpInFlight: true,
+        manual: true,
+      }),
+      false,
+    )
+  })
 })
 
 describe("engine busy guard", () => {
@@ -88,6 +107,16 @@ describe("engine busy guard", () => {
   it("treats an omitted login-test flag as idle", () => {
     assert.equal(engineBusy({ isCurrentlyProcessing: false, pollInFlight: false, portalTestInFlight: undefined }), false)
   })
+
+  it("reports busy while a follow-up ticket check is open", () => {
+    // The follow-up worker drives the panel's supplier profile too. Routes that
+    // would open a browser on that profile (a login test, run-one) must see it.
+    assert.equal(engineBusy({ isCurrentlyProcessing: false, pollInFlight: false, followUpInFlight: true }), true)
+  })
+
+  it("treats an omitted follow-up flag as idle", () => {
+    assert.equal(engineBusy({ isCurrentlyProcessing: false, pollInFlight: false, followUpInFlight: undefined }), false)
+  })
 })
 
 describe("supplier profile guard", () => {
@@ -107,5 +136,6 @@ describe("supplier profile guard", () => {
     assert.equal(supplierProfileInUse({ ...idle, isCurrentlyProcessing: true }), true)
     assert.equal(supplierProfileInUse({ ...idle, pollInFlight: true }), true)
     assert.equal(supplierProfileInUse({ ...idle, portalTestInFlight: true }), true)
+    assert.equal(supplierProfileInUse({ ...idle, followUpInFlight: true }), true)
   })
 })

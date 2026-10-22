@@ -16,6 +16,7 @@ import { closePortalLoginBrowser, holdPortalBrowser, listPortalLogins, PORTAL_CH
 import { clearPanelHold, getPanelStatuses, markPanelBusy, markPanelResult, panelKeyForMarketplace } from "./panel-queue.js"
 import { localEncryptionAvailable } from "./local-secrets.js"
 import { checkForUpdates } from "./update-check.js"
+import { followUpExecutionBundle } from "./follow-up-bundle.js"
 
 /**
  * The engine owns exactly one worker loop. The Electron shell embeds this
@@ -48,6 +49,14 @@ let pollInFlight = false
  * browser profile and debug port.
  */
 let portalTestInFlight = false
+/**
+ * A follow-up ticket check is open.
+ *
+ * The check opens the same supplier profile the filing worker uses, so the two
+ * must never overlap. Poll cycles and the routes that would start a supplier
+ * browser test this through poll-guard.ts.
+ */
+let followUpInFlight = false
 let activeJobInfo: any = null
 let lastHeartbeatTime: string = ""
 let lastPollTime: string = ""
@@ -84,7 +93,7 @@ logger.onLog((entry) => {
  * supplier profile must test this instead. See poll-guard.ts for the tested rule.
  */
 function engineBusy(): boolean {
-  return engineBusyWith({ isCurrentlyProcessing, pollInFlight, portalTestInFlight })
+  return engineBusyWith({ isCurrentlyProcessing, pollInFlight, portalTestInFlight, followUpInFlight })
 }
 
 /**
@@ -99,6 +108,7 @@ function supplierProfileInUse(): boolean {
     isCurrentlyProcessing,
     pollInFlight,
     portalTestInFlight,
+    followUpInFlight,
     portalBrowserHeld: holdPortalBrowser(),
   })
 }
@@ -108,7 +118,7 @@ async function pollAndProcessJob(manual = false): Promise<boolean> {
   // paused, so the running-state check is skipped for it. The other two guards
   // still apply: a manual cycle must not overlap one already in flight, and it
   // must not run while a supplier login browser holds the profile.
-  if (!shouldRunPollCycle({ workerRunning: isWorkerRunning, pollInFlight, portalBrowserHeld: holdPortalBrowser(), portalTestInFlight, manual })) return false
+  if (!shouldRunPollCycle({ workerRunning: isWorkerRunning, pollInFlight, portalBrowserHeld: holdPortalBrowser(), portalTestInFlight, followUpInFlight, manual })) return false
   pollInFlight = true
   lastPollTime = new Date().toLocaleTimeString("en-IN")
   let submissionOutcomeUnknown = false
@@ -238,6 +248,152 @@ async function pollAndProcessJob(manual = false): Promise<boolean> {
 let schedulerStarted = false
 let idlePolls = 0
 
+// ---------------------------------------------------------------------------------------------------------------
+// Follow-up Ticket Worker
+//
+// Filing a claim is not the end of the job: the marketplace ticket is not final for days. This worker runs on its
+// own, much slower cadence than filing. On each cycle it asks the server for the next ticket that is due, opens
+// that panel's saved session, reads the ticket state, and reports it back. The server reschedules the next check
+// (every 2 days by default) and stops the ticket once it reaches a final state.
+//
+// It never runs while filing is in flight, and filing never runs while it is in flight, because both drive the
+// same supplier browser profile. It also never runs while the worker is paused: re-opening supplier portals is
+// exactly what a pause must stop.
+// ---------------------------------------------------------------------------------------------------------------
+
+let followUpTimer: NodeJS.Timeout | null = null
+let lastFollowUpCheckTime = ""
+let followUpChecksRun = 0
+let lastFollowUpResult = ""
+
+/**
+ * Run one follow-up cycle. Returns true when a ticket was actually checked.
+ *
+ * On any failure after the server handed out a ticket, the outcome is reported as an error so the ticket is
+ * rescheduled rather than left leased until the lease expires.
+ */
+async function pollAndProcessFollowUp(): Promise<boolean> {
+  if (!isWorkerRunning) return false
+  if (engineBusy() || holdPortalBrowser()) return false
+  followUpInFlight = true
+  lastFollowUpCheckTime = new Date().toLocaleTimeString("en-IN")
+
+  let leased: { followUpId: number; claimId: number; marketplace: string; accountName: string; marketplaceClaimId: string; portalUrl: string } | null = null
+  try {
+    const poll = await client.pollFollowUp()
+    if (!poll.hasFollowUp || !poll.followUp) return false
+    leased = poll.followUp
+    const followUp = poll.followUp
+    const panelKey = panelKeyForMarketplace(String(followUp.marketplace || ""))
+    logger.info(
+      `=== Follow-up check #${followUp.followUpId} (${followUp.marketplace} · panel ${panelKey} · ticket ${followUp.marketplaceClaimId} · claim #${followUp.claimId}) ===`,
+    )
+
+    const profilePath = profileDirFor(config.userDataDir, followUp.marketplace)
+    if (!readSessionSavedAt(profilePath)) {
+      const note = `No saved ${followUp.marketplace} sign-in on this PC. Connect the panel from the dashboard.`
+      logger.warn(`Follow-up #${followUp.followUpId}: ${note}`)
+      await client.reportFollowUp(followUp.followUpId, { outcome: "login_required", note })
+      lastFollowUpResult = `${followUp.marketplace}: waiting for panel sign-in`
+      return true
+    }
+
+    const browserRunner = new BrowserRunner()
+    // Resolve the marketplace class *before* opening a browser. A marketplace with no automation entry is not a
+    // failed check: it has no reader either, so it is reported as unsupported and stopped, exactly like a
+    // marketplace whose checkClaimStatus() default says "not implemented". Reporting it as an error would burn
+    // three attempts and stop it with a misleading "the check kept failing".
+    let engine: ReturnType<typeof getAutomationEngine>
+    try {
+      engine = getAutomationEngine(
+        followUp.marketplace,
+        browserRunner,
+        followUpExecutionBundle({
+          claimId: followUp.claimId,
+          marketplace: followUp.marketplace,
+          accountName: followUp.accountName,
+          portalUrl: followUp.portalUrl,
+        }),
+        new Map(),
+        path.join(config.workDir, `follow-up-${followUp.followUpId}`),
+      )
+    } catch (engineError) {
+      const note = engineError instanceof Error ? engineError.message : `Automation is not enabled for ${followUp.marketplace}.`
+      logger.warn(`Follow-up #${followUp.followUpId}: ${note}`)
+      await client.reportFollowUp(followUp.followUpId, { outcome: "not_supported", note })
+      lastFollowUpResult = `${followUp.marketplace}: automation not enabled`
+      return true
+    }
+
+    const isHeadless = config.browserMode === "headless"
+    const browserSession = await browserRunner.launch({ profileDir: profilePath, headless: isHeadless })
+    try {
+      await browserRunner.connectToPage(browserSession.port)
+
+      const result = await engine.checkClaimStatus(followUp.marketplaceClaimId)
+      if (!result.supported) {
+        logger.info(`Follow-up #${followUp.followUpId}: ${result.reason}`)
+        await client.reportFollowUp(followUp.followUpId, { outcome: "not_supported", note: result.reason })
+        lastFollowUpResult = `${followUp.marketplace}: status check not implemented`
+      } else {
+        const statusText = String(result.statusText || "").trim()
+        if (!statusText) {
+          await client.reportFollowUp(followUp.followUpId, {
+            outcome: "not_found",
+            note: "The panel opened but no ticket state was found for this reference.",
+            screenshotPath: result.screenshotPath,
+          })
+          lastFollowUpResult = `${followUp.marketplace}: ticket state not found`
+        } else {
+          await client.reportFollowUp(followUp.followUpId, {
+            outcome: "status_read",
+            statusText,
+            normalizedStatus: result.normalizedStatus,
+            note: result.note,
+            screenshotPath: result.screenshotPath,
+          })
+          lastFollowUpResult = `${followUp.marketplace}: ${statusText}`
+        }
+      }
+    } finally {
+      await browserRunner.close()
+    }
+    followUpChecksRun += 1
+    return true
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Follow-up check failed."
+    logger.error("Follow-up check failed:", err)
+    lastFollowUpResult = message.slice(0, 200)
+    if (leased) {
+      await client
+        .reportFollowUp(leased.followUpId, { outcome: "error", note: message.slice(0, 400) })
+        .catch(() => undefined)
+    }
+    return false
+  } finally {
+    followUpInFlight = false
+  }
+}
+
+/**
+ * Schedule the next follow-up look-up. Like the filing chain, the timer is cleared when the worker pauses and
+ * restarted by engineStart(), so a pause cannot leave a follow-up check running behind it.
+ */
+function scheduleNextFollowUp(delayMs: number): void {
+  if (followUpTimer) clearTimeout(followUpTimer)
+  followUpTimer = setTimeout(() => {
+    void (async () => {
+      try {
+        await pollAndProcessFollowUp()
+      } catch (err) {
+        logger.error("Follow-up cycle failed.", err)
+      }
+      if (isWorkerRunning) scheduleNextFollowUp(config.followUpCheckIntervalMs)
+      else followUpTimer = null
+    })()
+  }, delayMs)
+}
+
 /**
  * Poll cadence. Claims are picked up quickly while work is flowing and the
  * interval backs off while the queue is empty, so an idle warehouse PC or
@@ -352,6 +508,8 @@ function startScheduler(): void {
   }
 
   if (!pollTimer) scheduleNextPoll(config.pollIntervalMs)
+  // The follow-up chain runs on its own timer so a slow ticket check never delays filing.
+  if (!followUpTimer) scheduleNextFollowUp(config.followUpCheckIntervalMs)
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -519,6 +677,19 @@ function getDashboardHtml(): string {
   </div>
 
   <main inert>
+    <section class="panel" id="overall-status" style="padding: 16px 18px;">
+      <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;">
+        <div style="display:flex;align-items:center;gap:12px;">
+          <span id="overall-dot" style="width:14px;height:14px;border-radius:50%;background:#64748b;display:inline-block;"></span>
+          <div>
+            <div id="overall-title" style="font-size:16px;font-weight:800;">Checking status…</div>
+            <div id="overall-detail" style="font-size:12px;color:var(--muted);margin-top:2px;">Reading panel sessions, the bot state, and ticket follow-ups.</div>
+          </div>
+        </div>
+        <div id="overall-chips" style="display:flex;flex-wrap:wrap;gap:8px;"></div>
+      </div>
+    </section>
+
     <section class="panel" id="onboarding" style="padding: 16px 18px;">
       <div class="panel-title" style="margin-bottom: 4px;">First-time setup — connect each supplier panel <span id="onboarding-count" style="font-size: 11px; font-weight: normal; color: var(--muted);"></span></div>
       <p style="color: var(--muted); font-size: 12px; line-height: 1.5; margin-bottom: 12px;">Do one panel at a time. For each marketplace, save the supplier ID and password, then sign in: the supplier page opens in a visible browser window. Complete any OTP or CAPTCHA there yourself — the cookies are saved on this PC so sign-in sticks across restarts. A panel whose session expires drops back to Connect here.</p>
@@ -556,6 +727,29 @@ function getDashboardHtml(): string {
       <div class="panel-title" style="margin-bottom: 4px;">Panel-wise continuous filing</div>
       <p style="color: var(--muted); font-size: 12px; line-height: 1.5; margin-bottom: 12px;">Each supplier panel keeps its own login cookies and queue. The bot rotates through the ready panels, so one panel waiting on OTP or cooling down never stops the others.</p>
       <div id="panel-strip" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px;"></div>
+    </section>
+
+    <section class="panel" id="follow-ups" style="padding: 16px 18px;">
+      <div class="panel-title" style="margin-bottom: 4px;">Ticket follow-ups <span id="followup-count" style="font-size: 11px; font-weight: normal; color: var(--muted);"></span></div>
+      <p style="color: var(--muted); font-size: 12px; line-height: 1.5; margin-bottom: 12px;">After a claim is filed, the bot re-opens that panel on its own every 2 days, reads the ticket status, and records it here until the ticket is approved or rejected. The ticket ID is the marketplace's own reference number.</p>
+      <div class="table-container" style="max-height: 280px;">
+        <table>
+          <thead>
+            <tr>
+              <th>Marketplace</th>
+              <th>Ticket ID</th>
+              <th>Claim status</th>
+              <th>Last check</th>
+              <th>Next check</th>
+              <th>Checks</th>
+              <th>State</th>
+            </tr>
+          </thead>
+          <tbody id="followups-table-body">
+            <tr><td colspan="7" style="text-align: center; padding: 20px; color: var(--muted);">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
     </section>
 
     <!-- KPI Overview -->
@@ -653,6 +847,9 @@ function getDashboardHtml(): string {
   <script>
     let currentTab = 'all';
     let allJobs = [];
+    let panelCache = [];
+    let statusCache = {};
+    let followUpData = { rows: [], summary: {} };
     let isRunning = true;
 
     function escapeHtml(value) {
@@ -743,6 +940,7 @@ function getDashboardHtml(): string {
         if (!res.ok) return;
         const data = await res.json();
         isRunning = data.isRunning;
+        statusCache = data;
         document.getElementById('toggle-worker-btn').innerText = isRunning ? '⏸ Pause Bot' : '▶ Start Bot';
         const statusText = !data.signedIn
           ? 'Waiting for sign-in'
@@ -760,6 +958,7 @@ function getDashboardHtml(): string {
         } else {
           document.getElementById('active-task-label').innerText = data.signedIn ? (isRunning ? 'Idle / waiting for the next claim' : 'Paused') : 'Sign in to start';
         }
+        renderOverall();
       } catch (err) {
         console.error(err);
       }
@@ -782,11 +981,12 @@ function getDashboardHtml(): string {
         const res = await fetch('/api/panels');
         if (!res.ok) return;
         const data = await res.json();
+        panelCache = data.panels || [];
         const strip = document.getElementById('panel-strip');
         const dot = { idle: '#10b981', preparing: '#3b82f6', submitting: '#3b82f6', manual_action: '#f59e0b', cooldown: '#ef4444', disabled: '#64748b' };
         const label = { idle: 'Ready', preparing: 'Preparing', submitting: 'Filing', manual_action: 'Needs you', cooldown: 'Cooling down', disabled: 'Off' };
         strip.innerHTML = (data.panels || []).map(p =>
-          '<div style="background:#080f0d;border:1px solid var(--line);border-radius:8px;padding:10px 12px;">' +
+          '<div style="background:#080f0d;border:1px solid ' + (p.sessionSavedAt ? 'rgba(16,185,129,0.45)' : 'var(--line)') + ';border-radius:8px;padding:10px 12px;">' +
           '<div style="display:flex;align-items:center;gap:6px;font-size:12px;font-weight:700;">' +
           '<span style="width:8px;height:8px;border-radius:50%;background:' + (dot[p.state] || '#64748b') + ';display:inline-block;"></span>' +
           '<span>' + p.name + '</span>' +
@@ -799,6 +999,7 @@ function getDashboardHtml(): string {
           ((p.state === 'manual_action' || p.state === 'cooldown') ? '<button class="btn btn-secondary" style="margin-top:6px;" data-key="' + p.key + '" onclick="clearPanelHold(this.dataset.key)">Rejoin rotation</button>' : '') +
           '</div>'
         ).join('');
+        renderOverall();
       } catch (err) {
         console.error(err);
       }
@@ -811,6 +1012,115 @@ function getDashboardHtml(): string {
       } catch (err) {
         console.error(err);
       }
+    }
+
+    async function loadFollowUps() {
+      const body = document.getElementById('followups-table-body');
+      try {
+        const res = await fetch('/api/follow-ups?pageSize=100');
+        if (!res.ok) {
+          followUpData = { rows: [], summary: {} };
+          body.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:20px;color:var(--muted);">Sign in to see ticket follow-ups.</td></tr>';
+          renderOverall();
+          return;
+        }
+        followUpData = await res.json();
+        renderFollowUps();
+        renderOverall();
+      } catch (err) {
+        console.error(err);
+      }
+    }
+
+    function followUpState(row) {
+      if (row.isActive) {
+        if (row.errorStreak > 0) return { text: 'Retrying after a failed check', color: '#fbbf24' };
+        return { text: 'Checking every ' + Math.round((row.checkIntervalHours || 48) / 24) + ' day(s)', color: '#6ee7b7' };
+      }
+      const reasons = {
+        ticket_resolved: { text: 'Finished — ticket resolved', color: '#10b981' },
+        check_not_supported: { text: 'Paused — this panel has no automatic check yet', color: '#94a3b8' },
+        repeated_errors: { text: 'Stopped — the check kept failing', color: '#f87171' },
+        max_checks_reached: { text: 'Stopped — check limit reached', color: '#fbbf24' }
+      };
+      return reasons[row.stopReason] || { text: 'Stopped', color: '#94a3b8' };
+    }
+
+    function whenText(iso) {
+      if (!iso) return '—';
+      const then = new Date(iso).getTime();
+      if (!then) return '—';
+      const diffMin = Math.round((then - Date.now()) / 60000);
+      const abs = Math.abs(diffMin);
+      const amount = abs < 60 ? abs + ' min' : (abs < 2880 ? Math.round(abs / 60) + ' h' : Math.round(abs / 1440) + ' d');
+      return diffMin >= 0 ? 'in ' + amount : amount + ' ago';
+    }
+
+    function renderFollowUps() {
+      const rows = followUpData.rows || [];
+      const summary = followUpData.summary || {};
+      const body = document.getElementById('followups-table-body');
+      document.getElementById('followup-count').textContent =
+        '(' + (summary.active || 0) + ' tracking · ' + (summary.due || 0) + ' due now · ' + (summary.resolved || 0) + ' resolved)';
+      if (!rows.length) {
+        body.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:20px;color:var(--muted);">No followed-up tickets yet. A ticket appears here as soon as a claim is filed.</td></tr>';
+        return;
+      }
+      body.innerHTML = rows.map(r => {
+        const state = followUpState(r);
+        return '<tr>' +
+          '<td><strong>' + (r.marketplace || '—') + '</strong><div style="font-size:11px;color:var(--muted);">' + (r.accountName || '') + (r.orderNumber ? ' · ' + r.orderNumber : '') + '</div></td>' +
+          '<td><span class="badge" style="background:var(--primary-light);color:var(--primary);font-family:monospace;">' + (r.marketplaceClaimId || '—') + '</span></td>' +
+          '<td>' + (r.claimStatus || '—') + (r.statusAtLastCheck ? '<div style="font-size:11px;color:var(--muted);">' + r.statusAtLastCheck + '</div>' : '') + '</td>' +
+          '<td>' + whenText(r.lastCheckedAt) + '</td>' +
+          '<td>' + (r.isActive ? whenText(r.nextCheckAt) : '—') + '</td>' +
+          '<td>' + (r.checkCount || 0) + '</td>' +
+          '<td><span style="font-size:11px;color:' + state.color + ';">' + state.text + '</span>' +
+          (r.lastError ? '<div style="font-size:11px;color:var(--muted);" title="' + r.lastError.replace(/"/g, '&quot;') + '">' + r.lastError + '</div>' : '') +
+          '</td>' +
+          '</tr>';
+      }).join('');
+    }
+
+    function renderOverall() {
+      const panels = panelCache || [];
+      const follow = followUpData.summary || {};
+      const reasons = [];
+      if (!statusCache.signedIn) reasons.push('sign in to start the bot');
+      else if (!isRunning) reasons.push('the bot is paused');
+      const notConnected = panels.filter(p => !p.sessionSavedAt);
+      if (notConnected.length) reasons.push('connect ' + notConnected.length + ' panel(s): ' + notConnected.map(p => p.name).join(', '));
+      const needsYou = panels.filter(p => p.state === 'manual_action');
+      if (needsYou.length) reasons.push(needsYou.map(p => p.name).join(', ') + ' need(s) you in the supplier browser');
+      const cooling = panels.filter(p => p.state === 'cooldown');
+      if (cooling.length) reasons.push(cooling.map(p => p.name).join(', ') + ' stopped after repeated failures');
+      if (follow.withErrors) reasons.push(follow.withErrors + ' ticket check(s) failing');
+
+      const dot = document.getElementById('overall-dot');
+      const title = document.getElementById('overall-title');
+      const detail = document.getElementById('overall-detail');
+      if (!panels.length && !statusCache.signedIn) {
+        dot.style.background = '#64748b';
+        title.textContent = 'Waiting for sign-in';
+        detail.textContent = 'Sign in to start the 24/7 claim bot.';
+      } else if (reasons.length) {
+        dot.style.background = '#f59e0b';
+        title.textContent = 'Action required';
+        detail.textContent = 'Please ' + reasons.join(' · ') + '.';
+      } else {
+        dot.style.background = '#10b981';
+        title.textContent = 'All panels green';
+        detail.textContent = 'Every panel is connected and the bot is ' + (isRunning ? 'running' : 'ready') + '. ' +
+          (follow.active || 0) + ' ticket(s) being followed up' + (follow.due ? ', ' + follow.due + ' due now' : '') + '.';
+      }
+
+      document.getElementById('overall-chips').innerHTML = panels.map(p => {
+        const ready = Boolean(p.sessionSavedAt) && p.state === 'idle';
+        const color = ready ? '#10b981' : (!p.sessionSavedAt || p.state === 'manual_action' || p.state === 'cooldown' ? '#f59e0b' : '#3b82f6');
+        const text = !p.sessionSavedAt ? 'Connect' : (p.state === 'idle' ? 'Ready' : (p.state === 'manual_action' ? 'Needs you' : (p.state === 'cooldown' ? 'Cooling down' : 'Working')));
+        return '<span style="display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:600;padding:3px 9px;border-radius:20px;border:1px solid ' + color + '55;background:' + color + '1a;color:' + color + ';">' +
+          '<span style="width:7px;height:7px;border-radius:50%;background:' + color + ';display:inline-block;"></span>' + p.name + ' · ' + text + '</span>';
+      }).join('');
     }
 
     function setTab(tab) {
@@ -1131,11 +1441,13 @@ function getDashboardHtml(): string {
     loadStatus();
     loadJobs();
     loadPanels();
+    loadFollowUps();
     connectSse();
     setInterval(loadStatus, 2000);
     setInterval(loadJobs, 10000);
     setInterval(loadPanels, 5000);
     setInterval(loadPortalLogins, 30000);
+    setInterval(loadFollowUps, 60000);
   </script>
 </body>
 </html>`
@@ -1222,6 +1534,9 @@ export type EngineStatusSnapshot = {
   nextPollCountdown: number
   lastHeartbeatTime: string
   lastPollTime: string
+  lastFollowUpCheckTime: string
+  followUpChecksRun: number
+  lastFollowUpResult: string
   activeJobInfo: unknown
 }
 
@@ -1237,6 +1552,9 @@ export function engineStatus(): EngineStatusSnapshot {
     nextPollCountdown,
     lastHeartbeatTime,
     lastPollTime,
+    lastFollowUpCheckTime,
+    followUpChecksRun,
+    lastFollowUpResult,
     activeJobInfo,
   }
 }
@@ -1342,6 +1660,9 @@ export function startDesktopAppServer(bind: EngineBind = resolveEngineBind()): P
           nextPollCountdown: status.nextPollCountdown,
           lastHeartbeatTime: status.lastHeartbeatTime,
           lastPollTime: status.lastPollTime,
+          lastFollowUpCheckTime: status.lastFollowUpCheckTime,
+          followUpChecksRun: status.followUpChecksRun,
+          lastFollowUpResult: status.lastFollowUpResult,
           backendUrl: status.backendUrl,
           agentUuid: status.agentUuid,
           agentName: status.agentName,
@@ -1397,6 +1718,15 @@ export function startDesktopAppServer(bind: EngineBind = resolveEngineBind()): P
         const jobs = await client.getRecentJobs()
         res.writeHead(200, { "Content-Type": "application/json" })
         res.end(JSON.stringify(jobs))
+        return
+      }
+
+      if (url.pathname === "/api/follow-ups" && req.method === "GET") {
+        if (!operatorSignedIn) {
+          sendJson(res, 401, { error: "Sign in before viewing ticket follow-ups." })
+          return
+        }
+        sendJson(res, 200, await client.getFollowUps({ pageSize: 100 }))
         return
       }
 
