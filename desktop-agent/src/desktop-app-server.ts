@@ -1213,7 +1213,10 @@ function getDashboardHtml(): string {
     }
 
     async function toggleWorker() {
-      await fetch('/api/scheduler/toggle', { method: 'POST' });
+      // Send the desired action, not a blind toggle, so the server sets the state the operator saw
+      // when they clicked, even if another client changed it in between.
+      const action = isRunning ? 'pause' : 'start';
+      await fetch('/api/scheduler/toggle?action=' + action, { method: 'POST' });
       await loadStatus();
     }
 
