@@ -2688,6 +2688,33 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
   - Remove the `statement_timeout` guard in `refreshUnmappedListingSkus`.
   - Reintroduce raw stdin heredocs to `run_cmd_retry` in `.github/workflows/deploy.yml`.
 
+### 2026-10-23, Antigravity Agent: Return volume chart RTO & Customer Return ratio (daily-wise & daily average)
+
+- **Task:** Add RTO (Return to Origin) and Customer Return ratio breakdowns to the 7-day Return Volume chart on the Dashboard, both daily-wise and as daily averages, attached cleanly inside the chart card so operators can easily identify RTO and Customer Return ratios alongside Received and Issues.
+- **Backend changes (`server/dashboard.ts`):**
+  - Updated `loadDailyBars` to query `rto` and `customer` counts per day alongside `received` and `issues`, strictly adhering to Account Scoping (Rule 1).
+  - Added pure `computeVolumeRatios` helper calculating 7-day totals (`totalReceived`, `totalCustomer`, `totalRto`, `totalIssues`), daily averages (`dailyAvg`, `dailyAvgCustomer`, `dailyAvgRto`, `dailyAvgIssues`), and ratio percentages (`customerRatioPct`, `rtoRatioPct`, `issueRatioPct`), safe against divide-by-zero.
+  - Updated `loadDashboard` to return `volumeSummary` and enriched `chartBars` with `rto`, `customer`, `customerPct`, `rtoPct`, `issuePct`, and segmented heights.
+- **Frontend changes (`src/pages/Dashboard.tsx`):**
+  - Enhanced `volume-panel` card with "Return volume & ratio" title, subtitle, and an interactive toggle for the attached daily table.
+  - Added Customer Return and RTO dots in the legend with overall ratio percentages.
+  - Added 7-day daily average summary pills (`Daily avg`, `CR avg`, `RTO avg`) in the legend.
+  - Rendered Received bars as stacked columns (Customer Return bottom segment + RTO top segment) preserving total height while displaying proportion, alongside the Issues bar.
+  - Added daily ratio chips under each day's column (`CR % · RTO %`) with a visual micro-split progress bar.
+  - Attached a daily ratio breakdown matrix directly below the chart: Day, Received, Visual Split Ratio, Customer Returns (qty + %), RTO (qty + %), Issues, and a 7-Day Average & Total footer row.
+- **Styles (`src/index.css`):**
+  - Added styles for `.dot.customer`, `.dot.rto`, `.volume-legend`, `.legend-items`, `.legend-averages`, `.avg-pill`, `.bar-stacked`, `.bar-segment`, `.daily-ratio-tag`, `.ratio-mini-bar`, `.volume-ratio-attached`, and `.ratio-table-*`.
+- **Tests Added (`server/tests/iron.test.ts`):**
+  - Added unit tests: `[synthetic] computeVolumeRatios calculates daily averages and RTO / Customer Return ratios accurately` and `[synthetic] computeVolumeRatios handles empty periods gracefully without division by zero`.
+- **Verification:**
+  - `npm.cmd run typecheck`: Passed with 0 errors across all 3 projects (`tsconfig.json`, `tsconfig.server.json`, `tsconfig.desktop.json`).
+  - `npm.cmd run build`: Passed (Vite client 2.12s, esbuild server 32ms).
+  - `npm.cmd test`: 579 tests: 539 passed, 0 failed, 40 skipped.
+- **The next agent must not:**
+  - Remove account condition scoping on `loadDailyBars`.
+  - Assume received returns are only single-category without preserving the Customer Return vs RTO division.
+
+
 
 
 

@@ -3,6 +3,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { buildInsights, normalizeFilters, pct, sizeOfLine, sizeRank } from "../analytics.js"
+import { computeVolumeRatios } from "../dashboard.js"
 import { canDispatchIron, canReceiveIron, ironBatchNumber, ironBatchStateOf, ironLocationOf, ironStateOf, receiveProblem } from "../iron.js"
 import { changeVisibleTo } from "../live.js"
 import { countsAsReturnIssue, scanStatusFor } from "../register-rules.js"
@@ -118,4 +119,49 @@ test("Iron batches go to a khaata unless the Return Team chose the return desk",
   assert.equal(ironLocationOf("khaata"), "khaata")
   assert.equal(ironLocationOf(undefined), "khaata")
   assert.equal(ironLocationOf("anything else"), "khaata")
+})
+
+test("[synthetic] computeVolumeRatios calculates daily averages and RTO / Customer Return ratios accurately", () => {
+  const days = [
+    { received: 1275, issues: 30, rto: 489, customer: 786 },
+    { received: 812, issues: 8, rto: 314, customer: 498 },
+    { received: 1266, issues: 8, rto: 390, customer: 876 },
+    { received: 1637, issues: 15, rto: 488, customer: 1149 },
+    { received: 1149, issues: 1, rto: 452, customer: 697 },
+    { received: 3531, issues: 50, rto: 1196, customer: 2335 },
+    { received: 0, issues: 0, rto: 0, customer: 0 },
+  ]
+  const summary = computeVolumeRatios(days)
+  assert.equal(summary.totalReceived, 9670)
+  assert.equal(summary.totalCustomer, 6341)
+  assert.equal(summary.totalRto, 3329)
+  assert.equal(summary.totalIssues, 112)
+  assert.equal(summary.dailyAvg, "1381.4")
+  assert.equal(summary.dailyAvgCustomer, "905.9")
+  assert.equal(summary.dailyAvgRto, "475.6")
+  assert.equal(summary.dailyAvgIssues, "16.0")
+  assert.equal(summary.customerRatioPct, 65.6)
+  assert.equal(summary.rtoRatioPct, 34.4)
+  assert.equal(summary.issueRatioPct, 1.2)
+})
+
+test("[synthetic] computeVolumeRatios handles empty periods gracefully without division by zero", () => {
+  const emptyDays = [
+    { received: 0, issues: 0, rto: 0, customer: 0 },
+    { received: 0, issues: 0, rto: 0, customer: 0 },
+    { received: 0, issues: 0, rto: 0, customer: 0 },
+    { received: 0, issues: 0, rto: 0, customer: 0 },
+    { received: 0, issues: 0, rto: 0, customer: 0 },
+    { received: 0, issues: 0, rto: 0, customer: 0 },
+    { received: 0, issues: 0, rto: 0, customer: 0 },
+  ]
+  const summary = computeVolumeRatios(emptyDays)
+  assert.equal(summary.totalReceived, 0)
+  assert.equal(summary.totalCustomer, 0)
+  assert.equal(summary.totalRto, 0)
+  assert.equal(summary.dailyAvg, "0.0")
+  assert.equal(summary.dailyAvgCustomer, "0.0")
+  assert.equal(summary.dailyAvgRto, "0.0")
+  assert.equal(summary.customerRatioPct, 0)
+  assert.equal(summary.rtoRatioPct, 0)
 })
