@@ -166,6 +166,7 @@ export async function loadHeadline(db: pg.Pool, scope: AccountScope): Promise<He
 }
 
 // Received and issue counts for the last 7 IST days, oldest first. Days with no scans count as zero.
+// Also breaks down received returns into RTO and Customer Returns for ratio analytics.
 export async function loadDailyBars(db: pg.Pool, scope: AccountScope) {
   const params: unknown[] = []
   const condition = accountCondition(scope, "er.marketplace_id", params)
@@ -174,6 +175,7 @@ export async function loadDailyBars(db: pg.Pool, scope: AccountScope) {
     SELECT
       to_char(d.dt, 'Dy') AS weekday,
       to_char(d.dt, 'FMDD') AS d,
+      d.dt::date::text AS date_str,
       (SELECT COUNT(*)::int
          FROM receipt_scans rs
          JOIN expected_returns er ON er.id = rs.expected_return_id
@@ -181,13 +183,31 @@ export async function loadDailyBars(db: pg.Pool, scope: AccountScope) {
       (SELECT COUNT(*)::int
          FROM receipt_scans rs
          JOIN expected_returns er ON er.id = rs.expected_return_id
-        WHERE rs.outcome = 'issue' AND ${SCAN_DAY_IST} = d.dt::date AND ${condition}) AS issues
+        WHERE rs.outcome = 'issue' AND ${SCAN_DAY_IST} = d.dt::date AND ${condition}) AS issues,
+      (SELECT COUNT(*)::int
+         FROM receipt_scans rs
+         JOIN expected_returns er ON er.id = rs.expected_return_id
+        WHERE (er.return_type = 'RTO' OR er.return_type ILIKE '%rto%' OR er.return_type ILIKE '%courier%' OR er.return_type ILIKE '%undelivered%')
+          AND ${SCAN_DAY_IST} = d.dt::date AND ${condition}) AS rto,
+      (SELECT COUNT(*)::int
+         FROM receipt_scans rs
+         JOIN expected_returns er ON er.id = rs.expected_return_id
+        WHERE NOT (er.return_type = 'RTO' OR er.return_type ILIKE '%rto%' OR er.return_type ILIKE '%courier%' OR er.return_type ILIKE '%undelivered%')
+          AND ${SCAN_DAY_IST} = d.dt::date AND ${condition}) AS customer
     FROM generate_series((${TODAY_IST} - 6)::timestamp, ${TODAY_IST}::timestamp, interval '1 day') AS d(dt)
     ORDER BY d.dt
     `,
     params,
   )
-  return result.rows as { weekday: string; d: string; received: number; issues: number }[]
+  return result.rows as {
+    weekday: string
+    d: string
+    date_str: string
+    received: number
+    issues: number
+    rto: number
+    customer: number
+  }[]
 }
 
 // Most common issue labels across the scans the user can see.
@@ -494,6 +514,51 @@ export async function loadWarehouseOperations(db: pg.Pool, scope: AccountScope):
   }
 }
 
+export type VolumeSummary = {
+  totalReceived: number
+  totalCustomer: number
+  totalRto: number
+  totalIssues: number
+  dailyAvg: string
+  dailyAvgCustomer: string
+  dailyAvgRto: string
+  dailyAvgIssues: string
+  customerRatioPct: number
+  rtoRatioPct: number
+  issueRatioPct: number
+}
+
+export function computeVolumeRatios(
+  days: { received: number; issues: number; rto: number; customer: number }[],
+): VolumeSummary {
+  const weekTotal = days.reduce((sum, day) => sum + Number(day.received || 0), 0)
+  const weekRto = days.reduce((sum, day) => sum + Number(day.rto || 0), 0)
+  const weekCustomer = days.reduce((sum, day) => sum + Number(day.customer || 0), 0)
+  const weekIssues = days.reduce((sum, day) => sum + Number(day.issues || 0), 0)
+
+  const dailyAvg = (weekTotal / 7).toFixed(1)
+  const dailyAvgRto = (weekRto / 7).toFixed(1)
+  const dailyAvgCustomer = (weekCustomer / 7).toFixed(1)
+  const dailyAvgIssues = (weekIssues / 7).toFixed(1)
+  const rtoRatioPct = weekTotal ? Math.round((weekRto / weekTotal) * 1000) / 10 : 0
+  const customerRatioPct = weekTotal ? Math.round((weekCustomer / weekTotal) * 1000) / 10 : 0
+  const issueRatioPct = weekTotal ? Math.round((weekIssues / weekTotal) * 1000) / 10 : 0
+
+  return {
+    totalReceived: weekTotal,
+    totalCustomer: weekCustomer,
+    totalRto: weekRto,
+    totalIssues: weekIssues,
+    dailyAvg,
+    dailyAvgCustomer,
+    dailyAvgRto,
+    dailyAvgIssues,
+    customerRatioPct,
+    rtoRatioPct,
+    issueRatioPct,
+  }
+}
+
 export async function loadDashboard(db: pg.Pool, scope: AccountScope) {
   const [headline, days, reasons, markets, skus, operations] = await Promise.all([
     loadHeadline(db, scope),
@@ -504,11 +569,12 @@ export async function loadDashboard(db: pg.Pool, scope: AccountScope) {
     loadWarehouseOperations(db, scope),
   ])
   const issueTotal = markets.reduce((sum, row) => sum + Number(row.issue_count), 0)
-  const peak = Math.max(0, ...days.map((day) => day.received))
+  const peak = Math.max(0, ...days.map((day) => Number(day.received)))
   // Bar heights are percentages of the busiest day in the window.
   const barHeight = (value: number) => (peak ? Math.round((value / peak) * 100) : 0)
-  const weekTotal = days.reduce((sum, day) => sum + day.received, 0)
+  const summary = computeVolumeRatios(days)
   const topReason = Math.max(0, ...reasons.map((reason) => reason.reason_count))
+
   return {
     stats: [
       {
@@ -540,15 +606,33 @@ export async function loadDashboard(db: pg.Pool, scope: AccountScope) {
         tone: "purple",
       },
     ],
-    dailyAvg: (weekTotal / 7).toFixed(1),
-    chartBars: days.map((day) => ({
-      weekday: String(day.weekday),
-      d: String(day.d),
-      received: Number(day.received),
-      issues: Number(day.issues),
-      v: barHeight(Number(day.received)),
-      i: barHeight(Number(day.issues)),
-    })),
+    dailyAvg: summary.dailyAvg,
+    volumeSummary: summary,
+    chartBars: days.map((day) => {
+      const received = Number(day.received)
+      const issues = Number(day.issues)
+      const rto = Number(day.rto)
+      const customer = Number(day.customer)
+      const customerPct = received ? Math.round((customer / received) * 1000) / 10 : 0
+      const rtoPct = received ? Math.round((rto / received) * 1000) / 10 : 0
+      const issuePct = received ? Math.round((issues / received) * 1000) / 10 : 0
+      return {
+        weekday: String(day.weekday),
+        d: String(day.d),
+        dateStr: String(day.date_str || ""),
+        received,
+        issues,
+        rto,
+        customer,
+        customerPct,
+        rtoPct,
+        issuePct,
+        v: barHeight(received),
+        i: barHeight(issues),
+        customerHeight: barHeight(customer),
+        rtoHeight: barHeight(rto),
+      }
+    }),
     reasons: reasons.map((reason) => ({
       name: reason.reason,
       count: formatCount(reason.reason_count),

@@ -8,10 +8,42 @@ import { useWorkspace } from "../workspace"
 
 type MarketSlice = { name: string; count: string; pct: string; share: number }
 
+export type VolumeSummary = {
+  totalReceived: number
+  totalCustomer: number
+  totalRto: number
+  totalIssues: number
+  dailyAvg: string
+  dailyAvgCustomer: string
+  dailyAvgRto: string
+  dailyAvgIssues: string
+  customerRatioPct: number
+  rtoRatioPct: number
+  issueRatioPct: number
+}
+
+export type ChartBar = {
+  weekday: string
+  d: string
+  dateStr?: string
+  received: number
+  issues: number
+  rto: number
+  customer: number
+  customerPct: number
+  rtoPct: number
+  issuePct?: number
+  v: number
+  i: number
+  customerHeight?: number
+  rtoHeight?: number
+}
+
 type DashboardData = {
   stats: Stat[]
   dailyAvg: string
-  chartBars: { weekday: string; d: string; received: number; issues: number; v: number; i: number }[]
+  volumeSummary?: VolumeSummary
+  chartBars: ChartBar[]
   reasons: { name: string; count: string; width: number }[]
   marketIssues: { total: string; subtitle: string; slices: MarketSlice[] }
   skus: { sku: string; name: string; issues: string; rate: string }[]
@@ -36,6 +68,7 @@ export function Dashboard() {
   const { openPage } = useWorkspace()
   const [data, setData] = useState<DashboardData | null>(null)
   const [error, setError] = useState("")
+  const [showRatioBreakdown, setShowRatioBreakdown] = useState(true)
 
   useEffect(() => {
     api<DashboardData>("/api/dashboard").then(setData).catch((err: Error) => setError(err.message))
@@ -225,46 +258,216 @@ export function Dashboard() {
         <article className="panel volume-panel">
           <div className="panel-head">
             <div>
-              <h2>Return volume</h2>
-              <p>Received vs issue returns over the last 7 days</p>
+              <h2>Return volume & ratio</h2>
+              <p>Received vs issues · RTO & Customer Return ratio over the last 7 days</p>
             </div>
-            <span className="filter-button">Last 7 days</span>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <button
+                type="button"
+                className="text-button"
+                style={{ fontSize: 12, cursor: "pointer" }}
+                onClick={() => setShowRatioBreakdown((prev) => !prev)}
+                title="Toggle daily RTO & Customer Return ratio breakdown table"
+              >
+                {showRatioBreakdown ? "Hide daily table" : "Show daily table"}
+              </button>
+              <span className="filter-button">Last 7 days</span>
+            </div>
           </div>
-          <div className="legend">
-            <span>
-              <i className="dot received" />
-              Received
-            </span>
-            <span>
-              <i className="dot issues" />
-              Issues
-            </span>
-            <strong>
-              Daily avg. <b>{data.dailyAvg}</b>
-            </strong>
+
+          <div className="legend volume-legend">
+            <div className="legend-items">
+              <span title="Customer Returns (Reverse Pickups)">
+                <i className="dot customer" />
+                Customer Return ({data.volumeSummary?.customerRatioPct ?? "—"}%)
+              </span>
+              <span title="Return to Origin (Courier Returns / Undelivered)">
+                <i className="dot rto" />
+                RTO ({data.volumeSummary?.rtoRatioPct ?? "—"}%)
+              </span>
+              <span title="Returns flagged with damages, wrong item or defects">
+                <i className="dot issues" />
+                Issues
+              </span>
+            </div>
+            <div className="legend-averages">
+              <span className="avg-pill total" title="7-day average daily returns received">
+                Daily avg. <b>{data.dailyAvg}</b>
+              </span>
+              <span className="avg-pill customer" title="7-day average daily customer returns">
+                CR avg. <b>{data.volumeSummary?.dailyAvgCustomer ?? "—"}</b>
+              </span>
+              <span className="avg-pill rto" title="7-day average daily RTO shipments">
+                RTO avg. <b>{data.volumeSummary?.dailyAvgRto ?? "—"}</b>
+              </span>
+            </div>
           </div>
+
           <div className="bar-chart">
-            {data.chartBars.map((bar) => (
-              <div className="bar-group" key={`${bar.weekday}-${bar.d}`}>
-                <div className="bars">
-                  <i
-                    className={bar.received ? "bar received" : "bar received empty"}
-                    style={{ height: bar.received ? `${bar.v}%` : "0" }}
-                    title={`${bar.received} received`}
-                  />
-                  <i
-                    className={bar.issues ? "bar issues" : "bar issues empty"}
-                    style={{ height: bar.issues ? `${bar.i}%` : "0" }}
-                    title={`${bar.issues} issues`}
-                  />
+            {data.chartBars.map((bar) => {
+              const hasScans = bar.received > 0
+              return (
+                <div className="bar-group" key={`${bar.weekday}-${bar.d}`}>
+                  <div className="bars">
+                    {/* Stacked Received Bar: Customer Return (bottom) + RTO (top) */}
+                    <div
+                      className={hasScans ? "bar-stacked" : "bar-stacked empty"}
+                      style={{ height: hasScans ? `${bar.v}%` : "0%" }}
+                      title={`${bar.weekday} ${bar.d}: ${bar.received.toLocaleString()} received • Customer: ${bar.customer.toLocaleString()} (${bar.customerPct}%) • RTO: ${bar.rto.toLocaleString()} (${bar.rtoPct}%)`}
+                    >
+                      {hasScans && (
+                        <>
+                          <i
+                            className="bar-segment rto"
+                            style={{ height: `${(bar.rto / bar.received) * 100}%` }}
+                            title={`RTO: ${bar.rto.toLocaleString()} (${bar.rtoPct}%)`}
+                          />
+                          <i
+                            className="bar-segment customer"
+                            style={{ height: `${(bar.customer / bar.received) * 100}%` }}
+                            title={`Customer Return: ${bar.customer.toLocaleString()} (${bar.customerPct}%)`}
+                          />
+                        </>
+                      )}
+                    </div>
+                    {/* Issues Bar */}
+                    <i
+                      className={bar.issues ? "bar issues" : "bar issues empty"}
+                      style={{ height: bar.issues ? `${bar.i}%` : "0%" }}
+                      title={`${bar.issues.toLocaleString()} issues (${bar.issuePct ?? 0}%)`}
+                    />
+                  </div>
+                  <strong>{hasScans ? bar.received.toLocaleString() : "0"}</strong>
+                  {hasScans ? (
+                    <div
+                      className="daily-ratio-tag"
+                      title={`Customer Return: ${bar.customer.toLocaleString()} (${bar.customerPct}%) | RTO: ${bar.rto.toLocaleString()} (${bar.rtoPct}%)`}
+                    >
+                      <div className="ratio-mini-bar">
+                        <span className="mini-cr" style={{ width: `${bar.customerPct}%` }} />
+                        <span className="mini-rto" style={{ width: `${bar.rtoPct}%` }} />
+                      </div>
+                      <span className="ratio-text">{bar.customerPct}% / {bar.rtoPct}%</span>
+                    </div>
+                  ) : (
+                    <div className="daily-ratio-tag empty">
+                      <span className="ratio-text">—</span>
+                    </div>
+                  )}
+                  <span>
+                    {bar.weekday} {bar.d}
+                  </span>
                 </div>
-                <strong>{bar.received}</strong>
-                <span>
-                  {bar.weekday} {bar.d}
+              )
+            })}
+          </div>
+
+          {/* Attached Daily RTO & Customer Return Breakdown Table */}
+          {showRatioBreakdown && (
+            <div className="volume-ratio-attached">
+              <div className="ratio-table-header">
+                <span className="ratio-col-day">Day</span>
+                <span className="ratio-col-total">Received</span>
+                <span className="ratio-col-split">RTO vs Customer Ratio</span>
+                <span className="ratio-col-cr">Customer Return</span>
+                <span className="ratio-col-rto">RTO</span>
+                <span className="ratio-col-issues">Issues</span>
+              </div>
+              <div className="ratio-table-body">
+                {data.chartBars.map((bar) => {
+                  const hasData = bar.received > 0
+                  return (
+                    <div className={`ratio-table-row ${hasData ? "" : "empty-day"}`} key={`ratio-${bar.weekday}-${bar.d}`}>
+                      <span className="ratio-col-day">
+                        <strong>{bar.weekday}</strong> <small>{bar.d}</small>
+                      </span>
+                      <span className="ratio-col-total">
+                        {hasData ? bar.received.toLocaleString() : "0"}
+                      </span>
+                      <div className="ratio-col-split">
+                        {hasData ? (
+                          <>
+                            <div className="split-progress-bar">
+                              <span
+                                className="split-cr"
+                                style={{ width: `${bar.customerPct}%` }}
+                                title={`Customer Return: ${bar.customerPct}%`}
+                              />
+                              <span
+                                className="split-rto"
+                                style={{ width: `${bar.rtoPct}%` }}
+                                title={`RTO: ${bar.rtoPct}%`}
+                              />
+                            </div>
+                            <span className="split-labels">
+                              <b className="cr-text">{bar.customerPct}% CR</b>
+                              <b className="rto-text">{bar.rtoPct}% RTO</b>
+                            </span>
+                          </>
+                        ) : (
+                          <span className="split-na">—</span>
+                        )}
+                      </div>
+                      <span className="ratio-col-cr">
+                        <strong>{hasData ? bar.customer.toLocaleString() : "0"}</strong>
+                        {hasData && <small>({bar.customerPct}%)</small>}
+                      </span>
+                      <span className="ratio-col-rto">
+                        <strong>{hasData ? bar.rto.toLocaleString() : "0"}</strong>
+                        {hasData && <small>({bar.rtoPct}%)</small>}
+                      </span>
+                      <span className="ratio-col-issues">
+                        <span className={bar.issues > 0 ? "issue-badge" : "issue-zero"}>
+                          {bar.issues.toLocaleString()}
+                        </span>
+                      </span>
+                    </div>
+                  )
+                })}
+              </div>
+              {/* 7-Day Average & Total Footer */}
+              <div className="ratio-table-footer">
+                <span className="ratio-col-day">
+                  <strong>7-Day Avg</strong>
+                </span>
+                <span className="ratio-col-total">
+                  <strong>{data.dailyAvg}</strong>
+                  <small>/day</small>
+                </span>
+                <div className="ratio-col-split">
+                  <div className="split-progress-bar">
+                    <span
+                      className="split-cr"
+                      style={{ width: `${data.volumeSummary?.customerRatioPct ?? 0}%` }}
+                      title={`Average Customer Return: ${data.volumeSummary?.customerRatioPct ?? 0}%`}
+                    />
+                    <span
+                      className="split-rto"
+                      style={{ width: `${data.volumeSummary?.rtoRatioPct ?? 0}%` }}
+                      title={`Average RTO: ${data.volumeSummary?.rtoRatioPct ?? 0}%`}
+                    />
+                  </div>
+                  <span className="split-labels">
+                    <b className="cr-text">{data.volumeSummary?.customerRatioPct ?? 0}% CR avg</b>
+                    <b className="rto-text">{data.volumeSummary?.rtoRatioPct ?? 0}% RTO avg</b>
+                  </span>
+                </div>
+                <span className="ratio-col-cr">
+                  <strong>{data.volumeSummary?.dailyAvgCustomer ?? "0"}</strong>
+                  <small>/day ({data.volumeSummary?.customerRatioPct ?? 0}%)</small>
+                </span>
+                <span className="ratio-col-rto">
+                  <strong>{data.volumeSummary?.dailyAvgRto ?? "0"}</strong>
+                  <small>/day ({data.volumeSummary?.rtoRatioPct ?? 0}%)</small>
+                </span>
+                <span className="ratio-col-issues">
+                  <span className="issue-badge">
+                    {data.volumeSummary?.dailyAvgIssues ?? "0"}/d
+                  </span>
                 </span>
               </div>
-            ))}
-          </div>
+            </div>
+          )}
         </article>
 
         <article className="panel reason-panel">
