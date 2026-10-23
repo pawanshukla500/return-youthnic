@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react"
 import { api, downloadFile } from "./api"
 import { DateField } from "./date-field"
 import { useLiveChanges } from "./live"
-import type { AccountOption, AnalyticsReport as Report, IssueCategory } from "./types"
+import type { AccountOption, AnalyticsReport as Report, IssueCategory, StructuredInsight } from "./types"
 import { Icon } from "./ui"
 
 // Return analytics from the stored scans (server/analytics.ts): date, marketplace, size, SKU, reason and received-issue
@@ -153,30 +153,50 @@ export function AnalyticsReport() {
       {report && t && p && (
         <>
           <div className="analytics-kpis">
-            <Kpi label="Returns received" value={n(t.scans)} sub={`${delta(t.scans, p.scans)} vs previous ${n(p.scans)}`} />
-            <Kpi label="Units received" value={n(t.units)} sub={`${delta(t.units, p.units)} vs previous ${n(p.units)}`} />
+            <Kpi
+              label="Returns received"
+              value={n(t.scans)}
+              sub={`${delta(t.scans, p.scans)} vs previous ${n(p.scans)}`}
+              pill={
+                t.customerRatioPct !== undefined && t.rtoRatioPct !== undefined
+                  ? `${t.customerRatioPct}% Cust · ${t.rtoRatioPct}% RTO`
+                  : undefined
+              }
+            />
+            <Kpi
+              label="Units received"
+              value={n(t.units)}
+              sub={`${delta(t.units, p.units)} vs previous ${n(p.units)}`}
+              pill={t.missingUnits > 0 ? `${n(t.missingUnits)} not received` : "100% intact"}
+            />
             <Kpi
               label="Issue rate"
               value={`${t.issueRatePct}%`}
               sub={`${n(t.issueScans)} issue returns · ${n(t.issueUnits)} units`}
+              status={t.issueRatePct >= 10 ? "critical" : t.issueRatePct >= 5 ? "warning" : "positive"}
+              statusText={t.issueRatePct >= 10 ? "Elevated defect risk" : t.issueRatePct >= 5 ? "Moderate issues" : "Healthy pass rate"}
             />
-            <Kpi label="Iron Send" value={n(t.ironUnits)} sub={`units · not an issue · ${n(report.iron.units.overdue)} overdue now`} />
-            <Kpi label="SKUs returned" value={n(t.skus)} sub={`${n(t.missingUnits)} units not received`} />
+            <Kpi
+              label="Iron Send"
+              value={n(t.ironUnits)}
+              sub={`units · not an issue`}
+              status={report.iron.units.overdue > 0 ? "critical" : "neutral"}
+              statusText={report.iron.units.overdue > 0 ? `${n(report.iron.units.overdue)} overdue inward` : `${n(report.iron.units.pending)} pending inward`}
+            />
+            <Kpi
+              label="SKUs returned"
+              value={n(t.skus)}
+              sub={report.bySize[0] ? `Top size: ${report.bySize[0].size} (${report.bySize[0].sharePct}%)` : `${n(t.missingUnits)} missing units`}
+              pill={report.bySku[0] ? `Top: ${report.bySku[0].sku}` : undefined}
+            />
           </div>
 
-          {report.insights.length > 0 && (
-            <div className="card analytics-insights">
-              <strong>Insights</strong>
-              <ul>
-                {report.insights.map((line) => (
-                  <li key={line}>{line}</li>
-                ))}
-              </ul>
-            </div>
-          )}
+          <ExecutiveInsightsSection report={report} />
 
           {view === "charts" ? (
             <div className="analytics-grid">
+              <ReturnTypeBreakdownCard report={report} />
+
               <section className="card analytics-card span-2">
                 <header>
                   <h3>Date-wise returns</h3>
@@ -279,13 +299,227 @@ export function AnalyticsReport() {
   )
 }
 
-function Kpi({ label, value, sub }: { label: string; value: string; sub: string }) {
+function Kpi({
+  label,
+  value,
+  sub,
+  pill,
+  status,
+  statusText,
+}: {
+  label: string
+  value: string
+  sub: string
+  pill?: string
+  status?: "positive" | "warning" | "critical" | "neutral"
+  statusText?: string
+}) {
   return (
-    <div className="card analytics-kpi">
-      <span>{label}</span>
+    <div className={`card analytics-kpi ${status ? `kpi-status-${status}` : ""}`}>
+      <div className="kpi-header">
+        <span>{label}</span>
+        {statusText && <span className={`kpi-status-badge ${status || "neutral"}`}>{statusText}</span>}
+      </div>
       <strong>{value}</strong>
-      <small>{sub}</small>
+      <div className="kpi-footer">
+        <small>{sub}</small>
+        {pill && <span className="kpi-micro-pill">{pill}</span>}
+      </div>
     </div>
+  )
+}
+
+function ExecutiveInsightsSection({ report }: { report: Report }) {
+  const [filter, setFilter] = useState<"all" | "alert" | "channel" | "catalog" | "ops">("all")
+  const detailed: StructuredInsight[] = report.detailedInsights || []
+
+  const counts = useMemo(() => {
+    return {
+      all: detailed.length,
+      alert: detailed.filter((i) => i.category === "alert").length,
+      channel: detailed.filter((i) => i.category === "channel").length,
+      catalog: detailed.filter((i) => i.category === "catalog").length,
+      ops: detailed.filter((i) => i.category === "ops").length,
+    }
+  }, [detailed])
+
+  const visibleInsights = useMemo(() => {
+    if (filter === "all") return detailed
+    return detailed.filter((i) => i.category === filter)
+  }, [detailed, filter])
+
+  if (!detailed.length && (!report.insights || !report.insights.length)) return null
+
+  if (!detailed.length) {
+    return (
+      <div className="card analytics-insights">
+        <strong>Insights</strong>
+        <ul>
+          {report.insights.map((line) => (
+            <li key={line}>{line}</li>
+          ))}
+        </ul>
+      </div>
+    )
+  }
+
+  const categoryPills: { id: "all" | "alert" | "channel" | "catalog" | "ops"; label: string; icon: string }[] = [
+    { id: "all", label: "All Insights", icon: "✦" },
+    { id: "alert", label: "Risks & Quality", icon: "🚨" },
+    { id: "channel", label: "Volume & RTO Mix", icon: "📦" },
+    { id: "catalog", label: "Catalog & Sizing", icon: "🏷️" },
+    { id: "ops", label: "Inward & Iron", icon: "🔄" },
+  ]
+
+  return (
+    <section className="card analytics-insights-panel">
+      <header className="analytics-insights-header">
+        <div className="analytics-insights-title-wrap">
+          <div className="analytics-insights-title">
+            <span className="analytics-insights-icon">✦</span>
+            <h3>Executive Insights & Signals</h3>
+          </div>
+          <small className="analytics-insights-sub">
+            Automated findings across {n(report.totals.scans)} returns ({n(report.totals.units)} units) · {n(report.totals.skus)} SKUs
+          </small>
+        </div>
+        <div className="analytics-insights-filters" role="tablist" aria-label="Insight categories">
+          {categoryPills.map((p) => {
+            const count = counts[p.id]
+            if (p.id !== "all" && count === 0) return null
+            return (
+              <button
+                key={p.id}
+                type="button"
+                role="tab"
+                aria-selected={filter === p.id}
+                className={`analytics-insight-filter-btn ${filter === p.id ? "active" : ""}`}
+                onClick={() => setFilter(p.id)}
+              >
+                <span>{p.icon}</span>
+                <span>{p.label}</span>
+                <span className="filter-count">{count}</span>
+              </button>
+            )
+          })}
+        </div>
+      </header>
+
+      {visibleInsights.length > 0 ? (
+        <div className="analytics-insights-grid">
+          {visibleInsights.map((insight) => (
+            <article key={insight.id} className={`insight-card severity-${insight.severity}`}>
+              <div className="insight-card-top">
+                <span className={`insight-badge badge-${insight.category} badge-sev-${insight.severity}`}>
+                  <i className="severity-dot" />
+                  {insight.badge}
+                </span>
+                {insight.metric && <span className="insight-metric-pill">{insight.metric}</span>}
+              </div>
+              <h4 className="insight-title">{insight.title}</h4>
+              <p className="insight-detail">{insight.detail}</p>
+              {insight.action && (
+                <div className="insight-action">
+                  <span className="action-tag">ACTIONABLE</span>
+                  <span className="action-text">{insight.action}</span>
+                </div>
+              )}
+            </article>
+          ))}
+        </div>
+      ) : (
+        <div className="analytics-empty-filter">
+          <p>No insights found for this category in the selected period.</p>
+          <button type="button" className="btn btn-sm" onClick={() => setFilter("all")}>
+            View all {detailed.length} insights
+          </button>
+        </div>
+      )}
+    </section>
+  )
+}
+
+function ReturnTypeBreakdownCard({ report }: { report: Report }) {
+  const t = report.totals
+  const custScans = t.customerScans ?? 0
+  const rtoScans = t.rtoScans ?? 0
+  const custUnits = t.customerUnits ?? 0
+  const rtoUnits = t.rtoUnits ?? 0
+  const custPct = t.customerRatioPct ?? (t.scans ? Math.round((custScans / t.scans) * 1000) / 10 : 0)
+  const rtoPct = t.rtoRatioPct ?? (t.scans ? Math.round((rtoScans / t.scans) * 1000) / 10 : 0)
+  const ratio = rtoScans > 0 ? (custScans / rtoScans).toFixed(1) : "—"
+
+  return (
+    <section className="card return-type-card span-2">
+      <header className="return-type-header">
+        <div>
+          <h3>Return Type Breakdown</h3>
+          <small>Customer Returns vs Courier RTO distribution</small>
+        </div>
+        <div className="return-type-badge">
+          <span>Ratio: <strong>{ratio} : 1</strong> Cust-to-RTO</span>
+        </div>
+      </header>
+
+      <div className="return-type-split-bar-wrap">
+        <div className="return-type-split-bar" role="progressbar" aria-label="Customer vs RTO split">
+          <div
+            className="split-bar-seg cust"
+            style={{ width: `${Math.max(4, custPct)}%` }}
+            title={`Customer Returns: ${n(custScans)} scans (${custPct}%), ${n(custUnits)} units`}
+          />
+          <div
+            className="split-bar-seg rto"
+            style={{ width: `${Math.max(4, rtoPct)}%` }}
+            title={`RTO: ${n(rtoScans)} scans (${rtoPct}%), ${n(rtoUnits)} units`}
+          />
+        </div>
+        <div className="return-type-legend">
+          <div className="legend-item cust">
+            <span className="legend-dot cust" />
+            <div>
+              <strong>Customer Returns ({custPct}%)</strong>
+              <small>{n(custScans)} returns · {n(custUnits)} units received</small>
+            </div>
+          </div>
+          <div className="legend-item rto">
+            <span className="legend-dot rto" />
+            <div>
+              <strong>RTO / Courier Undelivered ({rtoPct}%)</strong>
+              <small>{n(rtoScans)} returns · {n(rtoUnits)} units received</small>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {report.byMarketplace.length > 0 && (
+        <div className="return-type-mkt-table">
+          <div className="mkt-row header">
+            <span>Marketplace</span>
+            <span className="num">Returns</span>
+            <span className="num">Customer %</span>
+            <span className="num">RTO %</span>
+            <span className="bar-col">Channel Split</span>
+          </div>
+          {report.byMarketplace.slice(0, 6).map((m) => {
+            const mCust = m.customerRatioPct ?? (m.scans ? Math.round(((m.customerScans ?? 0) / m.scans) * 1000) / 10 : 0)
+            const mRto = m.rtoRatioPct ?? (m.scans ? Math.round(((m.rtoScans ?? 0) / m.scans) * 1000) / 10 : 0)
+            return (
+              <div key={m.marketplaceId} className="mkt-row">
+                <span className="mkt-name">{m.marketplace}</span>
+                <span className="num">{n(m.scans)}</span>
+                <span className="num cust-val">{mCust}%</span>
+                <span className="num rto-val">{mRto}%</span>
+                <div className="mkt-mini-bar">
+                  <div className="mini-seg cust" style={{ width: `${mCust}%` }} />
+                  <div className="mini-seg rto" style={{ width: `${mRto}%` }} />
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </section>
   )
 }
 
@@ -502,6 +736,9 @@ function TableView({ report }: { report: Report }) {
                 <th>Date</th>
                 <th className="num">Returns</th>
                 <th className="num">Units</th>
+                <th className="num">Customer</th>
+                <th className="num">RTO</th>
+                <th className="num">RTO %</th>
                 <th className="num">Issue returns</th>
                 <th className="num">Issue units</th>
                 <th className="num">Iron Send</th>
@@ -513,6 +750,9 @@ function TableView({ report }: { report: Report }) {
                   <td>{shortDay(d.day)}</td>
                   <td className="num">{n(d.scans)}</td>
                   <td className="num">{n(d.units)}</td>
+                  <td className="num">{n(d.customerScans ?? 0)}</td>
+                  <td className="num">{n(d.rtoScans ?? 0)}</td>
+                  <td className="num">{d.rtoRatioPct ?? (d.scans ? Math.round(((d.rtoScans ?? 0) / d.scans) * 1000) / 10 : 0)}%</td>
                   <td className="num">{n(d.issueScans)}</td>
                   <td className="num">{n(d.issueUnits)}</td>
                   <td className="num">{n(d.ironUnits)}</td>
@@ -522,7 +762,7 @@ function TableView({ report }: { report: Report }) {
           </table>
         </div>
       </section>
-      <section className="card analytics-card">
+      <section className="card analytics-card span-2">
         <header>
           <h3>Marketplace-wise</h3>
         </header>
@@ -533,6 +773,9 @@ function TableView({ report }: { report: Report }) {
                 <th>Marketplace</th>
                 <th className="num">Returns</th>
                 <th className="num">Units</th>
+                <th className="num">Customer</th>
+                <th className="num">RTO</th>
+                <th className="num">RTO %</th>
                 <th className="num">Issue rate</th>
                 <th className="num">Iron Send</th>
               </tr>
@@ -543,6 +786,9 @@ function TableView({ report }: { report: Report }) {
                   <td>{m.marketplace}</td>
                   <td className="num">{n(m.scans)}</td>
                   <td className="num">{n(m.units)}</td>
+                  <td className="num">{n(m.customerScans ?? 0)}</td>
+                  <td className="num">{n(m.rtoScans ?? 0)}</td>
+                  <td className="num">{m.rtoRatioPct ?? (m.scans ? Math.round(((m.rtoScans ?? 0) / m.scans) * 1000) / 10 : 0)}%</td>
                   <td className="num">{m.issueRatePct}%</td>
                   <td className="num">{n(m.ironUnits)}</td>
                 </tr>

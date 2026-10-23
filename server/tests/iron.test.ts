@@ -2,7 +2,7 @@
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { buildInsights, normalizeFilters, pct, sizeOfLine, sizeRank } from "../analytics.js"
+import { buildDetailedInsights, buildInsights, normalizeFilters, pct, sizeOfLine, sizeRank } from "../analytics.js"
 import { computeVolumeRatios } from "../dashboard.js"
 import { canDispatchIron, canReceiveIron, ironBatchNumber, ironBatchStateOf, ironLocationOf, ironStateOf, receiveProblem } from "../iron.js"
 import { changeVisibleTo } from "../live.js"
@@ -86,6 +86,94 @@ test("insights mention Iron Send as not an issue, and say when nothing was scann
   assert.ok(lines.some((line) => /3 units were sent for ironing\. They are not counted as issues/.test(line)))
   assert.ok(lines.some((line) => /2 ironed units are overdue/.test(line)))
   assert.ok(!lines.some((line) => /Most common issue: Iron Send/.test(line)), "Iron Send is never the most common issue")
+})
+
+test("buildDetailedInsights categorizes volume, return type mix, quality risks, and operational status", () => {
+  const empty = {
+    filters: { dateFrom: "2026-10-01", dateTo: "2026-10-07", marketplaceId: null, categoryCode: "" },
+    totals: { scans: 0, issueScans: 0, units: 0, issueUnits: 0, ironUnits: 0, clearScans: 0, expectedUnits: 0, missingUnits: 0, issueRatePct: 0, skus: 0 },
+    previous: { scans: 0, issueScans: 0, units: 0, issueUnits: 0, ironUnits: 0, dateFrom: "", dateTo: "" },
+    byDay: [], byWeek: [], byMarketplace: [], bySku: [], bySize: [], byIssueCategory: [], byReason: [],
+  }
+  const emptyInsights = buildDetailedInsights(empty)
+  assert.equal(emptyInsights.length, 1)
+  assert.equal(emptyInsights[0]?.badge, "NO ACTIVITY")
+
+  const richReport = {
+    ...empty,
+    totals: {
+      ...empty.totals,
+      scans: 120,
+      units: 140,
+      customerScans: 80,
+      rtoScans: 40,
+      customerUnits: 95,
+      rtoUnits: 45,
+      issueScans: 18,
+      issueUnits: 20,
+      issueRatePct: 15,
+      rtoRatioPct: 33.3,
+      customerRatioPct: 66.7,
+      ironUnits: 12,
+      skus: 25,
+    },
+    previous: {
+      ...empty.previous,
+      scans: 100,
+      units: 110,
+      issueScans: 8,
+      issueUnits: 10,
+      ironUnits: 5,
+      dateFrom: "2026-09-24",
+      dateTo: "2026-09-30",
+    },
+    byMarketplace: [
+      { marketplaceId: 1, marketplace: "Meesho", scans: 70, units: 80, issueScans: 14, issueRatePct: 20, issueUnits: 15, ironUnits: 6, rtoScans: 25, customerScans: 45 },
+      { marketplaceId: 2, marketplace: "Flipkart", scans: 50, units: 60, issueScans: 4, issueRatePct: 8, issueUnits: 5, ironUnits: 6, rtoScans: 15, customerScans: 35 },
+    ],
+    bySize: [
+      { size: "M", units: 56, sharePct: 40, scans: 48, issueScans: 8, issueUnits: 10, ironUnits: 4 },
+      { size: "L", units: 42, sharePct: 30, scans: 36, issueScans: 5, issueUnits: 6, ironUnits: 4 },
+    ],
+    bySku: [
+      { sku: "SYN-KURTA-BLUE", marketplaceSku: "SYN-KURTA-BLUE_M", productName: "Blue Kurta Set", size: "M", units: 35, scans: 30, issueScans: 6, issueUnits: 8, ironUnits: 2, topReason: "Size too large" },
+    ],
+    byReason: [
+      { reason: "Size too large", canonical: "Fitting Issue", units: 40, scans: 35, issueUnits: 5 },
+    ],
+    byIssueCategory: [
+      { code: "damaged", label: "Damaged item", units: 15, lines: 12, operational: false },
+      { code: "iron_send", label: "Iron Send", units: 12, lines: 8, operational: true },
+    ],
+  }
+
+  const detailed = buildDetailedInsights(richReport, { pending: 15, overdue: 6 })
+  assert.ok(detailed.length >= 6, "generates structured insights across all dimensions")
+
+  // Volume trend
+  const vol = detailed.find((i) => i.id === "volume-trend")
+  assert.ok(vol && vol.category === "trend" && vol.metric?.includes("20%"))
+
+  // Return type split
+  const channel = detailed.find((i) => i.id === "channel-split")
+  assert.ok(channel && channel.category === "channel" && channel.badge === "RETURN TYPE SPLIT")
+  assert.ok(channel?.detail.includes("80 Customer Returns"))
+
+  // Quality risk
+  const quality = detailed.find((i) => i.id === "issue-rate-high")
+  assert.ok(quality && quality.category === "alert" && quality.severity === "critical")
+
+  // Marketplace disparity
+  const mkt = detailed.find((i) => i.id === "mkt-risk-1")
+  assert.ok(mkt && mkt.badge === "MARKETPLACE DEFECTS")
+
+  // Sizing concentration
+  const size = detailed.find((i) => i.id === "size-concentration")
+  assert.ok(size && size.category === "catalog" && size.metric?.includes("Size M"))
+
+  // Inward overdue
+  const ops = detailed.find((i) => i.id === "iron-overdue")
+  assert.ok(ops && ops.category === "ops" && ops.severity === "critical")
 })
 
 test("a live change reaches only the users whose accounts include it", () => {

@@ -28,6 +28,24 @@ export type AnalyticsCounts = {
   units: number
   issueUnits: number
   ironUnits: number
+  rtoScans?: number
+  customerScans?: number
+  rtoUnits?: number
+  customerUnits?: number
+}
+
+export type InsightCategory = "alert" | "trend" | "catalog" | "channel" | "ops"
+export type InsightSeverity = "critical" | "warning" | "info" | "positive"
+
+export type StructuredInsight = {
+  id: string
+  category: InsightCategory
+  severity: InsightSeverity
+  badge: string
+  title: string
+  detail: string
+  metric?: string
+  action?: string
 }
 
 export type AnalyticsReport = {
@@ -37,17 +55,31 @@ export type AnalyticsReport = {
     expectedUnits: number
     missingUnits: number
     issueRatePct: number
+    rtoRatioPct?: number
+    customerRatioPct?: number
     skus: number
   }
-  previous: AnalyticsCounts & { dateFrom: string; dateTo: string }
-  byDay: (AnalyticsCounts & { day: string })[]
-  byWeek: (AnalyticsCounts & { weekStart: string })[]
-  byMarketplace: (AnalyticsCounts & { marketplaceId: number; marketplace: string; issueRatePct: number })[]
+  previous: AnalyticsCounts & {
+    dateFrom: string
+    dateTo: string
+    rtoRatioPct?: number
+    customerRatioPct?: number
+  }
+  byDay: (AnalyticsCounts & { day: string; rtoRatioPct?: number; customerRatioPct?: number })[]
+  byWeek: (AnalyticsCounts & { weekStart: string; rtoRatioPct?: number; customerRatioPct?: number })[]
+  byMarketplace: (AnalyticsCounts & {
+    marketplaceId: number
+    marketplace: string
+    issueRatePct: number
+    rtoRatioPct?: number
+    customerRatioPct?: number
+  })[]
   bySku: (AnalyticsCounts & { sku: string; marketplaceSku: string; productName: string; size: string; topReason: string })[]
   bySize: (AnalyticsCounts & { size: string; sharePct: number })[]
   byIssueCategory: { code: string; label: string; units: number; lines: number; operational: boolean }[]
   byReason: { reason: string; canonical: string; units: number; scans: number; issueUnits: number }[]
   insights: string[]
+  detailedInsights: StructuredInsight[]
 }
 
 const DAY = /^\d{4}-\d{2}-\d{2}$/
@@ -100,7 +132,10 @@ export function sizeRank(size: string): number {
 }
 
 // Short sentences for the screen and the weekly email. Only facts from the figures; nothing is guessed.
-export function buildInsights(report: Omit<AnalyticsReport, "insights">, iron?: { pending: number; overdue: number }): string[] {
+export function buildInsights(
+  report: Omit<AnalyticsReport, "insights" | "detailedInsights">,
+  iron?: { pending: number; overdue: number },
+): string[] {
   const out: string[] = []
   const t = report.totals
   if (t.scans === 0) {
@@ -120,6 +155,13 @@ export function buildInsights(report: Omit<AnalyticsReport, "insights">, iron?: 
   } else {
     out.push(`${t.scans.toLocaleString("en-IN")} returns scanned, issue rate ${t.issueRatePct}%.`)
   }
+  if ((t.customerScans ?? 0) > 0 || (t.rtoScans ?? 0) > 0) {
+    const custScans = t.customerScans ?? 0
+    const rtoScans = t.rtoScans ?? 0
+    const custPct = pct(custScans, t.scans)
+    const rtoPct = pct(rtoScans, t.scans)
+    out.push(`Return mix: ${custPct}% Customer Returns (${custScans.toLocaleString("en-IN")}), ${rtoPct}% RTO (${rtoScans.toLocaleString("en-IN")}).`)
+  }
   const worst = [...report.byMarketplace].filter((m) => m.scans >= 20).sort((a, b) => b.issueRatePct - a.issueRatePct)[0]
   if (worst && worst.issueRatePct > 0) {
     out.push(`${worst.marketplace} has the highest issue rate: ${worst.issueRatePct}% of ${worst.scans} returns.`)
@@ -135,6 +177,209 @@ export function buildInsights(report: Omit<AnalyticsReport, "insights">, iron?: 
   if (t.ironUnits > 0) out.push(`${t.ironUnits} units were sent for ironing. They are not counted as issues.`)
   if (iron && iron.overdue > 0) out.push(`${iron.overdue} ironed units are overdue with the Inward Team (${iron.pending} pending in all).`)
   return out
+}
+
+// Structured insight cards with categorical tags, metrics, and actionable hints (inspired by 21st.dev UI design).
+export function buildDetailedInsights(
+  report: Omit<AnalyticsReport, "insights" | "detailedInsights">,
+  iron?: { pending: number; overdue: number },
+): StructuredInsight[] {
+  const items: StructuredInsight[] = []
+  const t = report.totals
+  if (t.scans === 0) {
+    items.push({
+      id: "no-returns",
+      category: "trend",
+      severity: "info",
+      badge: "NO ACTIVITY",
+      title: "No returns scanned in this period",
+      detail: "No receipt scans were recorded within the selected date range and filter criteria.",
+    })
+    return items
+  }
+
+  const prev = report.previous
+  // 1. Volume & Trend
+  if (prev.scans > 0) {
+    const change = pct(t.scans - prev.scans, prev.scans)
+    const isUp = change >= 0
+    items.push({
+      id: "volume-trend",
+      category: "trend",
+      severity: isUp && change > 25 ? "warning" : "info",
+      badge: "VOLUME TREND",
+      title: `${t.scans.toLocaleString("en-IN")} returns received (${isUp ? "+" : ""}${change}% vs previous period)`,
+      detail: `Received ${t.scans.toLocaleString("en-IN")} returns (${t.units.toLocaleString("en-IN")} units) across ${t.skus.toLocaleString("en-IN")} SKUs, compared to ${prev.scans.toLocaleString("en-IN")} returns in the prior period.`,
+      metric: `${isUp ? "▲" : "▼"} ${Math.abs(change)}% (${t.scans - prev.scans > 0 ? "+" : ""}${(t.scans - prev.scans).toLocaleString("en-IN")})`,
+      action: isUp && change > 25 ? "Surge in return volume. Ensure adequate staffing at unboxing and return scanning stations." : undefined,
+    })
+  } else {
+    items.push({
+      id: "volume-baseline",
+      category: "trend",
+      severity: "info",
+      badge: "PERIOD VOLUME",
+      title: `${t.scans.toLocaleString("en-IN")} returns scanned (${t.units.toLocaleString("en-IN")} units)`,
+      detail: `Total of ${t.scans.toLocaleString("en-IN")} physical return parcels received containing ${t.units.toLocaleString("en-IN")} items.`,
+      metric: `${t.scans.toLocaleString("en-IN")} scans`,
+    })
+  }
+
+  // 2. Return Type & Channel Split (Customer Return vs RTO)
+  const custScans = t.customerScans ?? 0
+  const rtoScans = t.rtoScans ?? 0
+  if (custScans > 0 || rtoScans > 0) {
+    const custPct = pct(custScans, t.scans)
+    const rtoPct = pct(rtoScans, t.scans)
+    const isHighRto = rtoPct >= 35
+    const ratioStr = rtoScans > 0 ? `${(custScans / rtoScans).toFixed(1)} : 1` : "—"
+    items.push({
+      id: "channel-split",
+      category: "channel",
+      severity: isHighRto ? "warning" : "info",
+      badge: "RETURN TYPE SPLIT",
+      title: `Customer Returns represent ${custPct}% of volume (RTO ${rtoPct}%)`,
+      detail: `Breakdown: ${custScans.toLocaleString("en-IN")} Customer Returns (${(t.customerUnits ?? 0).toLocaleString("en-IN")} units) and ${rtoScans.toLocaleString("en-IN")} RTOs (${(t.rtoUnits ?? 0).toLocaleString("en-IN")} units). Customer to RTO ratio stands at ${ratioStr}.`,
+      metric: `${custPct}% Cust / ${rtoPct}% RTO`,
+      action: isHighRto
+        ? "RTO rate is above 35%. Check courier non-delivery reports (NDR) and verify address accuracy at dispatch."
+        : "Customer returns represent the majority of returns. Review product descriptions, customer sizing feedback, and quality checks.",
+    })
+  }
+
+  // 3. Issue & Defect Rate
+  if (t.issueRatePct >= 10) {
+    items.push({
+      id: "issue-rate-high",
+      category: "alert",
+      severity: "critical",
+      badge: "HIGH ISSUE RATE",
+      title: `Critical issue rate at ${t.issueRatePct}% (${t.issueScans.toLocaleString("en-IN")} defect returns)`,
+      detail: `${t.issueScans.toLocaleString("en-IN")} returns arrived with physical defects, damages, missing items, or wrong products, accounting for ${t.issueUnits.toLocaleString("en-IN")} defective units.`,
+      metric: `${t.issueRatePct}% issue rate`,
+      action: "Examine damaged packaging and initiate supplier/courier claim filings where applicable.",
+    })
+  } else if (t.issueRatePct > 0) {
+    items.push({
+      id: "issue-rate-normal",
+      category: "alert",
+      severity: t.issueRatePct >= 5 ? "warning" : "positive",
+      badge: t.issueRatePct >= 5 ? "DEFECT NOTICE" : "HEALTHY DEFECT RATE",
+      title: `Issue rate is ${t.issueRatePct}% (${t.issueScans.toLocaleString("en-IN")} returns with issues)`,
+      detail: `${t.issueScans.toLocaleString("en-IN")} returns flagged with physical issues (${t.issueUnits.toLocaleString("en-IN")} units). ${t.clearScans.toLocaleString("en-IN")} returns arrived completely clear.`,
+      metric: `${t.issueRatePct}% issues`,
+    })
+  }
+
+  // 4. Marketplace Issue Disparity
+  const mktsWithScans = [...report.byMarketplace].filter((m) => m.scans >= 10)
+  const worstMkt = [...mktsWithScans].sort((a, b) => b.issueRatePct - a.issueRatePct)[0]
+  if (worstMkt && worstMkt.issueRatePct > (t.issueRatePct || 5)) {
+    items.push({
+      id: `mkt-risk-${worstMkt.marketplaceId}`,
+      category: "alert",
+      severity: worstMkt.issueRatePct >= 12 ? "warning" : "info",
+      badge: "MARKETPLACE DEFECTS",
+      title: `${worstMkt.marketplace} exhibits highest defect rate (${worstMkt.issueRatePct}%)`,
+      detail: `${worstMkt.issueScans} of ${worstMkt.scans} returns from ${worstMkt.marketplace} had issues (${worstMkt.issueUnits} units). Average issue rate across all channels is ${t.issueRatePct}%.`,
+      metric: `${worstMkt.issueRatePct}% on ${worstMkt.marketplace}`,
+      action: `Audit returns received under ${worstMkt.marketplace} to verify if courier mishandling or wrong items are concentrated on this channel.`,
+    })
+  }
+
+  // 5. Channel Volume Leader
+  if (report.byMarketplace.length > 1) {
+    const topMkt = [...report.byMarketplace].sort((a, b) => b.scans - a.scans)[0]
+    if (topMkt && topMkt.scans > 0) {
+      const share = pct(topMkt.scans, t.scans)
+      if (share >= 35) {
+        items.push({
+          id: `mkt-vol-${topMkt.marketplaceId}`,
+          category: "channel",
+          severity: "info",
+          badge: "VOLUME CONCENTRATION",
+          title: `${topMkt.marketplace} accounts for ${share}% of all returns`,
+          detail: `${topMkt.scans.toLocaleString("en-IN")} returns (${topMkt.units.toLocaleString("en-IN")} units) were processed from ${topMkt.marketplace}. RTO share on this channel is ${pct(topMkt.rtoScans ?? 0, topMkt.scans)}%.`,
+          metric: `${share}% volume share`,
+        })
+      }
+    }
+  }
+
+  // 6. Garment Sizing Concentration
+  const topSize = [...report.bySize].filter((s) => s.size !== "Unknown").sort((a, b) => b.units - a.units)[0]
+  if (topSize && topSize.units > 0) {
+    const isConcentrated = topSize.sharePct >= 30
+    items.push({
+      id: "size-concentration",
+      category: "catalog",
+      severity: isConcentrated ? "warning" : "info",
+      badge: "SIZE CONCENTRATION",
+      title: `Size ${topSize.size} leads returns with ${topSize.sharePct}% share (${topSize.units.toLocaleString("en-IN")} units)`,
+      detail: `Garment size ${topSize.size} was returned most frequently (${topSize.units.toLocaleString("en-IN")} units, ${topSize.issueUnits.toLocaleString("en-IN")} with issues). Heavy size concentration often signals a fit or grading variance.`,
+      metric: `Size ${topSize.size} (${topSize.sharePct}%)`,
+      action: isConcentrated
+        ? `Review garment dimensions and size charts for size ${topSize.size} against buyer fit expectations.`
+        : undefined,
+    })
+  }
+
+  // 7. Top Returned SKU Driver
+  const topSku = report.bySku[0]
+  if (topSku && topSku.units > 0) {
+    const skuShare = pct(topSku.units, t.units)
+    items.push({
+      id: "top-sku",
+      category: "catalog",
+      severity: topSku.issueUnits > 5 ? "warning" : "info",
+      badge: "TOP SKU RETURN",
+      title: `Top returned SKU: ${topSku.sku} (${topSku.units.toLocaleString("en-IN")} units)`,
+      detail: `${topSku.sku}${topSku.productName ? ` (${topSku.productName})` : ""} represents ${skuShare}% of all returned units (${topSku.units.toLocaleString("en-IN")} units, ${topSku.issueUnits.toLocaleString("en-IN")} with issues).${topSku.topReason ? ` Most stated reason: "${topSku.topReason}".` : ""}`,
+      metric: `${topSku.units} units (${skuShare}%)`,
+      action: topSku.issueUnits > 5 ? "Inspect SKU fabric quality and packaging integrity at dispatch." : undefined,
+    })
+  }
+
+  // 8. Top Reason
+  const topReason = report.byReason.find((r) => r.reason !== "Not given")
+  if (topReason && topReason.units > 0) {
+    const reasonShare = pct(topReason.units, t.units)
+    items.push({
+      id: "top-reason",
+      category: "catalog",
+      severity: "info",
+      badge: "PRIMARY RETURN REASON",
+      title: `Top reason: "${topReason.reason}" (${reasonShare}% of units)`,
+      detail: `${topReason.units.toLocaleString("en-IN")} units returned under "${topReason.reason}" across ${topReason.scans.toLocaleString("en-IN")} returns${topReason.canonical ? ` (canonical category: ${topReason.canonical})` : ""}.`,
+      metric: `${topReason.units} units`,
+    })
+  }
+
+  // 9. Operational & Iron Status
+  if (iron && iron.overdue > 0) {
+    items.push({
+      id: "iron-overdue",
+      category: "ops",
+      severity: "critical",
+      badge: "INWARD OVERDUE",
+      title: `${iron.overdue.toLocaleString("en-IN")} ironed units overdue with Inward Team`,
+      detail: `There are ${iron.pending.toLocaleString("en-IN")} units currently pending with the Inward Team, of which ${iron.overdue.toLocaleString("en-IN")} units have exceeded the overdue SLA.`,
+      metric: `${iron.overdue} overdue`,
+      action: "Directly coordinate with the Inward Team to reconcile and receive overdue ironed stock.",
+    })
+  } else if (t.ironUnits > 0) {
+    items.push({
+      id: "iron-send",
+      category: "ops",
+      severity: "info",
+      badge: "IRON SEND",
+      title: `${t.ironUnits.toLocaleString("en-IN")} units sent for ironing`,
+      detail: `${t.ironUnits.toLocaleString("en-IN")} return units routed to Iron Send for refurbishment. These are operational workflows and not classified as defective returns.`,
+      metric: `${t.ironUnits} units`,
+    })
+  }
+
+  return items
 }
 
 type Where = { sql: string; params: unknown[] }
@@ -170,6 +415,11 @@ function linesCte(where: string): string {
              i.marketplace_sku, i.product_sku, i.product_name,
              COALESCE(NULLIF(btrim(i.return_reason), ''), NULLIF(btrim(er.return_reason), ''), 'Not given') AS reason,
              COALESCE(crr.label, '') AS canonical,
+             CASE
+               WHEN (er.return_type = 'RTO' OR er.return_type ILIKE '%rto%' OR er.return_type ILIKE '%courier%' OR er.return_type ILIKE '%undelivered%')
+               THEN 'RTO'
+               ELSE 'Customer Return'
+             END AS return_type,
              COALESCE((SELECT SUM(x.qty) FROM receipt_scan_issues x
                         LEFT JOIN receipt_issue_categories c ON c.code = x.category_code
                         WHERE x.receipt_scan_item_id = i.id AND NOT COALESCE(c.is_operational, false)), 0)::int AS issue_units,
@@ -190,7 +440,11 @@ const COUNT_COLUMNS = `
   COUNT(DISTINCT scan_id) FILTER (WHERE outcome = 'issue')::int AS issue_scans,
   COALESCE(SUM(received_qty), 0)::int AS units,
   COALESCE(SUM(issue_units), 0)::int AS issue_units,
-  COALESCE(SUM(iron_units), 0)::int AS iron_units`
+  COALESCE(SUM(iron_units), 0)::int AS iron_units,
+  COUNT(DISTINCT scan_id) FILTER (WHERE return_type = 'RTO')::int AS rto_scans,
+  COUNT(DISTINCT scan_id) FILTER (WHERE return_type = 'Customer Return')::int AS customer_scans,
+  COALESCE(SUM(received_qty) FILTER (WHERE return_type = 'RTO'), 0)::int AS rto_units,
+  COALESCE(SUM(received_qty) FILTER (WHERE return_type = 'Customer Return'), 0)::int AS customer_units`
 
 function counts(row: Record<string, unknown>): AnalyticsCounts {
   return {
@@ -199,6 +453,10 @@ function counts(row: Record<string, unknown>): AnalyticsCounts {
     units: Number(row.units || 0),
     issueUnits: Number(row.issue_units || 0),
     ironUnits: Number(row.iron_units || 0),
+    rtoScans: Number(row.rto_scans || 0),
+    customerScans: Number(row.customer_scans || 0),
+    rtoUnits: Number(row.rto_units || 0),
+    customerUnits: Number(row.customer_units || 0),
   }
 }
 
@@ -277,12 +535,26 @@ export async function loadAnalytics(
   const bySku = bySkuRaw.rows.map((row) => {
     const c = counts(row)
     const size = sizeOfLine(String(row.marketplace_sku || ""), String(row.sku || ""), String(row.product_name || ""))
-    const acc = sizeMap.get(size) ?? { scans: 0, issueScans: 0, units: 0, issueUnits: 0, ironUnits: 0 }
+    const acc = sizeMap.get(size) ?? {
+      scans: 0,
+      issueScans: 0,
+      units: 0,
+      issueUnits: 0,
+      ironUnits: 0,
+      rtoScans: 0,
+      customerScans: 0,
+      rtoUnits: 0,
+      customerUnits: 0,
+    }
     acc.scans += c.scans
     acc.issueScans += c.issueScans
     acc.units += c.units
     acc.issueUnits += c.issueUnits
     acc.ironUnits += c.ironUnits
+    acc.rtoScans = (acc.rtoScans ?? 0) + (c.rtoScans ?? 0)
+    acc.customerScans = (acc.customerScans ?? 0) + (c.customerScans ?? 0)
+    acc.rtoUnits = (acc.rtoUnits ?? 0) + (c.rtoUnits ?? 0)
+    acc.customerUnits = (acc.customerUnits ?? 0) + (c.customerUnits ?? 0)
     sizeMap.set(size, acc)
     return {
       ...c,
@@ -297,7 +569,8 @@ export async function loadAnalytics(
     .map(([size, c]) => ({ ...c, size, sharePct: pct(c.units, totalCounts.units) }))
     .sort((a, b) => sizeRank(a.size) - sizeRank(b.size))
 
-  const base: Omit<AnalyticsReport, "insights"> = {
+  const prevCounts = counts(previous.rows[0] ?? {})
+  const base: Omit<AnalyticsReport, "insights" | "detailedInsights"> = {
     filters,
     totals: {
       ...totalCounts,
@@ -305,11 +578,35 @@ export async function loadAnalytics(
       expectedUnits: Number(totalRow.expected_units || 0),
       missingUnits: Number(totalRow.missing_units || 0),
       issueRatePct: pct(totalCounts.issueScans, totalCounts.scans),
+      rtoRatioPct: pct(totalCounts.rtoScans ?? 0, totalCounts.scans),
+      customerRatioPct: pct(totalCounts.customerScans ?? 0, totalCounts.scans),
       skus: Number(totalRow.skus || 0),
     },
-    previous: { ...counts(previous.rows[0] ?? {}), dateFrom: prevFrom, dateTo: prevTo },
-    byDay: byDay.rows.map((row) => ({ ...counts(row), day: String(row.day) })),
-    byWeek: byWeek.rows.map((row) => ({ ...counts(row), weekStart: String(row.week_start) })),
+    previous: {
+      ...prevCounts,
+      dateFrom: prevFrom,
+      dateTo: prevTo,
+      rtoRatioPct: pct(prevCounts.rtoScans ?? 0, prevCounts.scans),
+      customerRatioPct: pct(prevCounts.customerScans ?? 0, prevCounts.scans),
+    },
+    byDay: byDay.rows.map((row) => {
+      const c = counts(row)
+      return {
+        ...c,
+        day: String(row.day),
+        rtoRatioPct: pct(c.rtoScans ?? 0, c.scans),
+        customerRatioPct: pct(c.customerScans ?? 0, c.scans),
+      }
+    }),
+    byWeek: byWeek.rows.map((row) => {
+      const c = counts(row)
+      return {
+        ...c,
+        weekStart: String(row.week_start),
+        rtoRatioPct: pct(c.rtoScans ?? 0, c.scans),
+        customerRatioPct: pct(c.customerScans ?? 0, c.scans),
+      }
+    }),
     byMarketplace: byMarketplace.rows.map((row) => {
       const c = counts(row)
       return {
@@ -317,6 +614,8 @@ export async function loadAnalytics(
         marketplaceId: Number(row.marketplace_id),
         marketplace: String(row.marketplace),
         issueRatePct: pct(c.issueScans, c.scans),
+        rtoRatioPct: pct(c.rtoScans ?? 0, c.scans),
+        customerRatioPct: pct(c.customerScans ?? 0, c.scans),
       }
     }),
     bySku: bySku.slice(0, 50),
@@ -336,7 +635,11 @@ export async function loadAnalytics(
       issueUnits: Number(row.issue_units || 0),
     })),
   }
-  return { ...base, insights: buildInsights(base, options.iron) }
+  return {
+    ...base,
+    insights: buildInsights(base, options.iron),
+    detailedInsights: buildDetailedInsights(base, options.iron),
+  }
 }
 
 // The report as CSV, one section after the other, for the Download button.
@@ -354,20 +657,75 @@ export function analyticsCsv(report: AnalyticsReport): string {
     lines.push("")
   }
   const f = report.filters
-  section("Period", ["From", "To", "Returns", "Units", "Issue returns", "Issue rate %", "Issue units", "Iron Send units"], [
-    [f.dateFrom, f.dateTo, report.totals.scans, report.totals.units, report.totals.issueScans, report.totals.issueRatePct, report.totals.issueUnits, report.totals.ironUnits],
-  ])
-  section("Date-wise", ["Date", "Returns", "Units", "Issue returns", "Issue units", "Iron Send units"],
-    report.byDay.map((d) => [d.day, d.scans, d.units, d.issueScans, d.issueUnits, d.ironUnits]))
-  section("Marketplace-wise", ["Marketplace", "Returns", "Units", "Issue returns", "Issue rate %", "Issue units", "Iron Send units"],
-    report.byMarketplace.map((m) => [m.marketplace, m.scans, m.units, m.issueScans, m.issueRatePct, m.issueUnits, m.ironUnits]))
-  section("Size-wise", ["Size", "Units", "Share %", "Returns", "Issue units", "Iron Send units"],
-    report.bySize.map((s) => [s.size, s.units, s.sharePct, s.scans, s.issueUnits, s.ironUnits]))
-  section("SKU-wise (top 50)", ["SKU", "Marketplace SKU", "Size", "Units", "Returns", "Issue units", "Iron Send units", "Top reason"],
-    report.bySku.map((s) => [s.sku, s.marketplaceSku, s.size, s.units, s.scans, s.issueUnits, s.ironUnits, s.topReason]))
-  section("Return reason-wise", ["Reason", "Canonical reason", "Units", "Returns", "Issue units"],
-    report.byReason.map((r) => [r.reason, r.canonical, r.units, r.scans, r.issueUnits]))
-  section("Received issues", ["Issue", "Units", "Lines", "Counted as issue"],
-    report.byIssueCategory.map((c) => [c.label, c.units, c.lines, c.operational ? "No (operational)" : "Yes"]))
+  section(
+    "Period",
+    ["From", "To", "Returns", "Units", "Customer returns", "RTO returns", "RTO %", "Issue returns", "Issue rate %", "Issue units", "Iron Send units"],
+    [
+      [
+        f.dateFrom,
+        f.dateTo,
+        report.totals.scans,
+        report.totals.units,
+        report.totals.customerScans ?? 0,
+        report.totals.rtoScans ?? 0,
+        `${report.totals.rtoRatioPct ?? 0}%`,
+        report.totals.issueScans,
+        report.totals.issueRatePct,
+        report.totals.issueUnits,
+        report.totals.ironUnits,
+      ],
+    ],
+  )
+  section(
+    "Date-wise",
+    ["Date", "Returns", "Units", "Customer returns", "RTO returns", "RTO %", "Issue returns", "Issue units", "Iron Send units"],
+    report.byDay.map((d) => [
+      d.day,
+      d.scans,
+      d.units,
+      d.customerScans ?? 0,
+      d.rtoScans ?? 0,
+      `${d.rtoRatioPct ?? 0}%`,
+      d.issueScans,
+      d.issueUnits,
+      d.ironUnits,
+    ]),
+  )
+  section(
+    "Marketplace-wise",
+    ["Marketplace", "Returns", "Units", "Customer returns", "RTO returns", "RTO %", "Issue returns", "Issue rate %", "Issue units", "Iron Send units"],
+    report.byMarketplace.map((m) => [
+      m.marketplace,
+      m.scans,
+      m.units,
+      m.customerScans ?? 0,
+      m.rtoScans ?? 0,
+      `${m.rtoRatioPct ?? 0}%`,
+      m.issueScans,
+      m.issueRatePct,
+      m.issueUnits,
+      m.ironUnits,
+    ]),
+  )
+  section(
+    "Size-wise",
+    ["Size", "Units", "Share %", "Returns", "Issue units", "Iron Send units"],
+    report.bySize.map((s) => [s.size, s.units, s.sharePct, s.scans, s.issueUnits, s.ironUnits]),
+  )
+  section(
+    "SKU-wise (top 50)",
+    ["SKU", "Marketplace SKU", "Size", "Units", "Returns", "Issue units", "Iron Send units", "Top reason"],
+    report.bySku.map((s) => [s.sku, s.marketplaceSku, s.size, s.units, s.scans, s.issueUnits, s.ironUnits, s.topReason]),
+  )
+  section(
+    "Return reason-wise",
+    ["Reason", "Canonical reason", "Units", "Returns", "Issue units"],
+    report.byReason.map((r) => [r.reason, r.canonical, r.units, r.scans, r.issueUnits]),
+  )
+  section(
+    "Received issues",
+    ["Issue", "Units", "Lines", "Counted as issue"],
+    report.byIssueCategory.map((c) => [c.label, c.units, c.lines, c.operational ? "No (operational)" : "Yes"]),
+  )
   return lines.join("\n")
 }

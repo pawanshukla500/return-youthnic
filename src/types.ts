@@ -293,7 +293,28 @@ export type IronSummary = {
 
 // ---- Return analytics (server/analytics.ts) ----
 
-export type AnalyticsCounts = { scans: number; issueScans: number; units: number; issueUnits: number; ironUnits: number }
+export type AnalyticsCounts = {
+  scans: number
+  issueScans: number
+  units: number
+  issueUnits: number
+  ironUnits: number
+  rtoScans?: number
+  customerScans?: number
+  rtoUnits?: number
+  customerUnits?: number
+}
+
+export type StructuredInsight = {
+  id: string
+  category: "alert" | "trend" | "catalog" | "channel" | "ops"
+  severity: "critical" | "warning" | "info" | "positive"
+  badge: string
+  title: string
+  detail: string
+  metric?: string
+  action?: string
+}
 
 export type AnalyticsReport = {
   filters: { dateFrom: string; dateTo: string; marketplaceId: number | null; categoryCode: string }
@@ -302,17 +323,31 @@ export type AnalyticsReport = {
     expectedUnits: number
     missingUnits: number
     issueRatePct: number
+    rtoRatioPct?: number
+    customerRatioPct?: number
     skus: number
   }
-  previous: AnalyticsCounts & { dateFrom: string; dateTo: string }
-  byDay: (AnalyticsCounts & { day: string })[]
-  byWeek: (AnalyticsCounts & { weekStart: string })[]
-  byMarketplace: (AnalyticsCounts & { marketplaceId: number; marketplace: string; issueRatePct: number })[]
+  previous: AnalyticsCounts & {
+    dateFrom: string
+    dateTo: string
+    rtoRatioPct?: number
+    customerRatioPct?: number
+  }
+  byDay: (AnalyticsCounts & { day: string; rtoRatioPct?: number; customerRatioPct?: number })[]
+  byWeek: (AnalyticsCounts & { weekStart: string; rtoRatioPct?: number; customerRatioPct?: number })[]
+  byMarketplace: (AnalyticsCounts & {
+    marketplaceId: number
+    marketplace: string
+    issueRatePct: number
+    rtoRatioPct?: number
+    customerRatioPct?: number
+  })[]
   bySku: (AnalyticsCounts & { sku: string; marketplaceSku: string; productName: string; size: string; topReason: string })[]
   bySize: (AnalyticsCounts & { size: string; sharePct: number })[]
   byIssueCategory: { code: string; label: string; units: number; lines: number; operational: boolean }[]
   byReason: { reason: string; canonical: string; units: number; scans: number; issueUnits: number }[]
   insights: string[]
+  detailedInsights?: StructuredInsight[]
   iron: IronSummary
 }
 
