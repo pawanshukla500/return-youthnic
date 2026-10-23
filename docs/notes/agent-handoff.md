@@ -2714,6 +2714,34 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
   - Remove account condition scoping on `loadDailyBars`.
   - Assume received returns are only single-category without preserving the Customer Return vs RTO division.
 
+### 2026-10-23, Antigravity Agent: Detailed Executive Insights and Return Type Split in Analytics Report (21st.dev UI)
+
+- **Task:** Make the Return Analytics tab (`/reports` -> Return Analytics) more detailed and simple to study, incorporating 21st.dev inspired UI patterns: executive insight cards with category filters, RTO vs Customer Return channel breakdown, visual status pills, and actionable recommendations.
+- **Backend changes (`server/analytics.ts`):**
+  - Updated `linesCte` to classify each line as `'RTO'` or `'Customer Return'` using the standard project rule (`(er.return_type = 'RTO' OR er.return_type ILIKE '%rto%' OR er.return_type ILIKE '%courier%' OR er.return_type ILIKE '%undelivered%')`).
+  - Added `rto_scans`, `customer_scans`, `rto_units`, `customer_units` to `COUNT_COLUMNS` and `AnalyticsCounts`.
+  - Added `StructuredInsight` type (`id`, `category`, `severity`, `badge`, `title`, `detail`, `metric`, `action`).
+  - Implemented `buildDetailedInsights` generating rich structured cards across 5 categories (`alert` Risks & Defects, `channel` Channel Mix & RTO Split, `trend` Volume & Period Trend, `catalog` Sizing & SKU Defect Concentration, `ops` Inward & Iron Operations).
+  - Maintained full backward compatibility for `buildInsights` returning `string[]` (used by weekly email reports and existing tests), while also including Customer Return vs RTO ratio.
+  - Added Customer Return and RTO columns to `analyticsCsv` export.
+- **Frontend changes (`src/AnalyticsReport.tsx`, `src/types.ts`):**
+  - Updated `AnalyticsReport` and `AnalyticsCounts` in `src/types.ts`.
+  - Implemented `ExecutiveInsightsSection`: an executive signals panel featuring an interactive category tab bar (`All Insights`, `🚨 Risks & Quality`, `📦 Volume & RTO Mix`, `🏷️ Catalog & Sizing`, `🔄 Inward & Iron`) with counts, 2-column responsive grid, severity dots, metric badges, and actionable advice callouts.
+  - Implemented `ReturnTypeBreakdownCard`: a prominent widget featuring a dual-gradient segmented progress bar (Blue for Customer Returns, Amber for RTO), exact scan and unit counts, ratio calculation (e.g. `2.1 : 1`), and a channel-wise breakdown table with mini stacked bars for top marketplaces.
+  - Enhanced `Kpi` tiles with visual status badges (`Healthy pass rate`, `Moderate issues`, `Elevated defect risk`), micro-pills, and context-rich secondary lines.
+  - Updated `TableView` to include Customer Return, RTO, and RTO % columns in Date-wise and Marketplace-wise tables.
+- **Styles (`src/features.css`):**
+  - Added 21st.dev inspired styles for `.analytics-insights-panel`, `.analytics-insights-filters`, `.analytics-insight-filter-btn`, `.analytics-insights-grid`, `.insight-card`, `.insight-badge`, `.badge-sev-*`, `.insight-metric-pill`, `.insight-title`, `.insight-detail`, `.insight-action`, `.return-type-card`, `.return-type-split-bar`, `.split-bar-seg`, `.return-type-mkt-table`, and responsive media query rules.
+- **Tests Added (`server/tests/iron.test.ts`):**
+  - Added unit test: `buildDetailedInsights categorizes volume, return type mix, quality risks, and operational status`.
+- **Verification:**
+  - `npm.cmd run typecheck`: Passed with 0 errors across 3 tsconfig projects.
+  - `npm.cmd run build`: Passed (Vite client 2.19s, esbuild server 45ms).
+  - `npm.cmd test`: 580 tests run: 540 passed, 0 failed, 40 skipped.
+- **The next agent must not:**
+  - Break backward compatibility of `buildInsights` or remove account condition scoping on `scanWhere`.
+
+
 
 
 
