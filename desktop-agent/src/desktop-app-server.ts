@@ -12,12 +12,13 @@ import { AgentBackendClient } from "./agent-client.js"
 import { BrowserRunner, findSystemBrowser } from "./browser-runner.js"
 import { getAutomationEngine, isMarketplaceSupported } from "./marketplaces/registry.js"
 import { currentOperator, loginOperator, logoutOperator } from "./operator-session.js"
-import { closePortalLoginBrowser, holdPortalBrowser, listPortalLogins, PORTAL_CHANNELS, profileDirFor, queueOneClaim, readSessionSavedAt, savePortalLogin, testPortalLogin } from "./portal-login.js"
+import { closePortalLoginBrowser, holdPortalBrowser, listPortalLogins, PORTAL_CHANNELS, queueOneClaim, savePortalLogin, testPortalLogin } from "./portal-login.js"
 import { clearPanelHold, getPanelStatuses, markPanelBusy, markPanelResult, panelKeyForMarketplace } from "./panel-queue.js"
 import { localEncryptionAvailable } from "./local-secrets.js"
 import { checkForUpdates } from "./update-check.js"
 import { followUpExecutionBundle } from "./follow-up-bundle.js"
-import { describeBrowserAdapter, openSupplierBrowser } from "./browser-adapter.js"
+import { describeBrowserAdapter, openSupplierBrowser, resolveBrowserAdapterKind } from "./browser-adapter.js"
+import { profileDirFor, readSessionSavedAt, supplierSessionDir } from "./supplier-session.js"
 import { aiUsageSnapshot, buildDiagnosticPrompt, decideFollowUpAssist, loadAiAssistConfig, providerFromConfig, requestAiProposal, validateAiProposal, type AssistanceContext } from "./ai-assistant.js"
 import { findApprovedProcedure, isCacheStale, loadLocalMemory, markSynced, pruneLocalEvents, recordLocalEvent, saveLocalMemory, upsertCachedProcedure } from "./ai-memory-cache.js"
 import type { CachedProcedure } from "./ai-memory-cache.js"
@@ -160,8 +161,8 @@ async function pollAndProcessJob(manual = false): Promise<boolean> {
     const evidenceFilesMap = await client.downloadEvidenceFiles(bundle.claimId, bundle.evidenceFiles)
     logger.info(`Downloaded ${evidenceFilesMap.size} evidence files for Claim #${bundle.claimId}.`)
 
-    // Open the supplier browser through the shared adapter (external system
-    // browser by default; native WebContentsView when BROWSER_ADAPTER=native).
+    // Open the supplier browser through the shared adapter (bundled browser in
+    // the desktop app, system browser everywhere else).
     const supplierBrowser = await openSupplierBrowser({
       panelKey,
       profileDir: profileDirFor(config.userDataDir, bundle.marketplace),
@@ -179,7 +180,7 @@ async function pollAndProcessJob(manual = false): Promise<boolean> {
         path.join(config.workDir, `claim-${bundle.claimId}`),
       )
 
-      const sessionSaved = Boolean(readSessionSavedAt(profileDirFor(config.userDataDir, bundle.marketplace)))
+      const sessionSaved = Boolean(readSessionSavedAt(supplierSessionDir(config.userDataDir, bundle.marketplace, resolveBrowserAdapterKind())))
       const action = jobHeader.stage === "submitting" || sessionSaved ? "submit" : "prepare"
       const result = await engine.execute(action)
 
@@ -402,8 +403,8 @@ async function pollAndProcessFollowUp(): Promise<boolean> {
       `=== Follow-up check #${followUp.followUpId} (${followUp.marketplace} · panel ${panelKey} · ticket ${followUp.marketplaceClaimId} · claim #${followUp.claimId}) ===`,
     )
 
-    const profilePath = profileDirFor(config.userDataDir, followUp.marketplace)
-    if (!readSessionSavedAt(profilePath)) {
+    const sessionDir = supplierSessionDir(config.userDataDir, followUp.marketplace, resolveBrowserAdapterKind())
+    if (!readSessionSavedAt(sessionDir)) {
       const note = `No saved ${followUp.marketplace} sign-in on this PC. Connect the panel from the dashboard.`
       logger.warn(`Follow-up #${followUp.followUpId}: ${note}`)
       await client.reportFollowUp(followUp.followUpId, { outcome: "login_required", note })
@@ -424,11 +425,11 @@ async function pollAndProcessFollowUp(): Promise<boolean> {
       return true
     }
 
-    // One adapter for filing and follow-ups: external system browser by default,
-    // native WebContentsView only when BROWSER_ADAPTER=native inside the desktop app.
+    // One adapter for filing and follow-ups: the bundled browser in the desktop
+    // app, the system browser everywhere else (BROWSER_ADAPTER=external forces it).
     const supplierBrowser = await openSupplierBrowser({
       panelKey,
-      profileDir: profilePath,
+      profileDir: profileDirFor(config.userDataDir, followUp.marketplace),
       headless: config.browserMode === "headless",
     })
     const browserRunner = supplierBrowser.browser
@@ -740,6 +741,11 @@ function getDashboardHtml(): string {
 
     [hidden] { display: none !important; }
     .login-gate { position: fixed; inset: 0; z-index: 80; background: #060b09; display: flex; align-items: center; justify-content: center; padding: 24px; }
+    .server-box { margin-top: 14px; font-size: 12px; color: var(--muted); }
+    .server-box summary { cursor: pointer; }
+    .server-row { display: flex; gap: 6px; margin-top: 8px; }
+    .server-row .form-control { flex: 1; min-width: 0; }
+    .server-note { margin-top: 6px; }
     .login-card { width: min(420px, 100%); background: #111e1b; border: 1px solid var(--card-border); border-radius: 16px; padding: 28px 26px; box-shadow: 0 24px 48px rgba(0,0,0,0.45); }
     .login-card h1 { font-size: 22px; margin: 8px 0 8px; }
     .login-card p { color: var(--muted); font-size: 13px; line-height: 1.55; margin-bottom: 18px; }
@@ -782,6 +788,16 @@ function getDashboardHtml(): string {
       <input id="login-password" class="form-control" type="password" autocomplete="current-password" required />
       <div class="login-error" id="login-error"></div>
       <button class="btn btn-primary" id="login-submit" type="submit">Sign in and run the bot</button>
+      <details class="server-box">
+        <summary>Server: <span id="gate-backend-url">${config.backendUrl}</span> <span id="gate-ping"></span></summary>
+        <div class="server-row">
+          <input id="gate-backend-url-input" class="form-control" type="text" value="${config.backendUrl}" />
+          <button class="btn btn-secondary" type="button" onclick="gateApplyBackendUrl()">Apply</button>
+          <button class="btn btn-secondary" type="button" onclick="gateTestConnection()">Test</button>
+        </div>
+        <div class="server-note" id="gate-result"></div>
+        <div class="server-note">Changing the server signs this PC out. Sign in again to the new server.</div>
+      </details>
     </form>
   </div>
 
@@ -831,7 +847,7 @@ function getDashboardHtml(): string {
 
     <section class="panel" id="portal-setup" style="padding: 16px 18px;">
       <div class="panel-title" style="margin-bottom: 6px;">Supplier login, then one claim</div>
-      <p style="color: var(--muted); font-size: 12px; line-height: 1.5; margin-bottom: 12px;">Do one marketplace at a time. Leave the ID and password blank to use the bot login already saved on the web. Test login opens the system browser, signs in, and stores the cookies on this PC. If a code appears, type it in that window before closing it.</p>
+      <p style="color: var(--muted); font-size: 12px; line-height: 1.5; margin-bottom: 12px;">Do one marketplace at a time. Leave the ID and password blank to use the bot login already saved on the web. Test login opens the supplier browser window built into this app (no Edge or Chrome needed), signs in, and stores the cookies on this PC. If a code appears, type it in that window before closing it.</p>
       <div style="display: flex; flex-wrap: wrap; gap: 10px; align-items: end;">
         <label style="font-size: 12px; font-weight: 600;">Marketplace<br>
           <select id="portal-marketplace" class="form-control" style="min-width: 140px; margin-top: 4px;">
@@ -900,6 +916,7 @@ function getDashboardHtml(): string {
         </table>
       </div>
       <div id="ai-usage-line" style="font-size: 11px; color: var(--muted); margin-top: 10px;"></div>
+      <div id="aimemory-message" style="font-size: 12px; margin-top: 6px;"></div>
     </section>
 
     <!-- KPI Overview -->
@@ -1058,6 +1075,7 @@ function getDashboardHtml(): string {
         const res = await fetch('/api/operator/login', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          signal: AbortSignal.timeout(30000),
           body: JSON.stringify({
             email: document.getElementById('login-email').value,
             password: document.getElementById('login-password').value,
@@ -1072,7 +1090,9 @@ function getDashboardHtml(): string {
         showSignedIn(data.user);
         await loadStatus();
       } catch (err) {
-        error.textContent = 'Sign-in failed. Check that the claim bot is still running.';
+        error.textContent = (err && err.name === 'TimeoutError')
+          ? 'Sign-in timed out. Check the server connection and try again.'
+          : 'Sign-in failed. Check that the claim bot is still running.';
       } finally {
         button.disabled = false;
       }
@@ -1147,7 +1167,7 @@ function getDashboardHtml(): string {
           '<div style="font-size:11px;color:var(--muted);margin-top:4px;">' + (label[p.state] || p.state) +
           (p.activeJobId ? ' · job #' + p.activeJobId : '') +
           (p.sessionSavedAt ? ' · cookies ✓' : ' · no cookies') + '</div>' +
-          (p.lastResult ? '<div style="font-size:11px;color:#a7f3d0;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="' + p.lastResult.replace(/"/g, '&quot;') + '">' + p.lastResult + '</div>' : '') +
+          (p.lastResult ? '<div style="font-size:11px;color:#a7f3d0;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="' + escapeHtml(p.lastResult) + '">' + escapeHtml(p.lastResult) + '</div>' : '') +
           ((p.state === 'manual_action' || p.state === 'cooldown') ? '<button class="btn btn-secondary" style="margin-top:6px;" data-key="' + p.key + '" onclick="clearPanelHold(this.dataset.key)">Rejoin rotation</button>' : '') +
           '</div>'
         ).join('');
@@ -1281,25 +1301,36 @@ function getDashboardHtml(): string {
         const color = dot[r.status] || '#94a3b8';
         const canDisable = r.status !== 'disabled';
         return '<tr>' +
-          '<td><strong>' + r.marketplace + '</strong></td>' +
-          '<td>' + r.title + '<div style="font-size:11px;color:var(--muted);">' + r.steps.length + ' step(s)</div></td>' +
-          '<td style="font-family:monospace;font-size:11px;">' + r.errorSignature + '</td>' +
-          '<td><span style="font-size:11px;color:' + color + ';">' + r.status + '</span></td>' +
-          '<td>' + (canDisable ? '<button class="btn btn-danger" type="button" style="padding:4px 10px;" onclick="disableAiProcedure(\'' + r.id.replace(/'/g, '') + '\')">Disable</button>' : '') + '</td>' +
+          '<td><strong>' + escapeHtml(r.marketplace) + '</strong></td>' +
+          '<td>' + escapeHtml(r.title) + '<div style="font-size:11px;color:var(--muted);">' + r.steps.length + ' step(s)</div></td>' +
+          '<td style="font-family:monospace;font-size:11px;">' + escapeHtml(r.errorSignature) + '</td>' +
+          '<td><span style="font-size:11px;color:' + color + ';">' + escapeHtml(r.status) + '</span></td>' +
+          '<td>' + (canDisable ? '<button class="btn btn-danger" type="button" style="padding:4px 10px;" data-id="' + escapeHtml(String(r.id)) + '" onclick="disableAiProcedure(this.dataset.id)">Disable</button>' : '') + '</td>' +
           '</tr>';
       }).join('');
     }
 
     async function disableAiProcedure(id) {
+      const message = document.getElementById('aimemory-message');
+      message.style.color = '#a7f3d0';
+      message.textContent = 'Updating that procedure...';
       try {
         const res = await fetch('/api/v1/ai-memory/disable', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ id })
         });
-        if (!res.ok) alert('Could not disable that procedure.');
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          message.style.color = '#fca5a5';
+          message.textContent = data.error || 'Could not disable that procedure.';
+          return;
+        }
+        message.style.color = '#6ee7b7';
+        message.textContent = 'Procedure disabled on this PC.';
       } catch (err) {
-        alert('Could not disable that procedure.');
+        message.style.color = '#fca5a5';
+        message.textContent = 'Could not reach the claim bot. Check the connection and try again.';
       }
       loadAiMemory();
     }
@@ -1426,29 +1457,111 @@ function getDashboardHtml(): string {
       }).join('');
     }
 
+    let workerBusy = false;
     async function toggleWorker() {
       // Send the desired action, not a blind toggle, so the server sets the state the operator saw
       // when they clicked, even if another client changed it in between.
-      const action = isRunning ? 'pause' : 'start';
-      await fetch('/api/scheduler/toggle?action=' + action, { method: 'POST' });
-      await loadStatus();
+      if (workerBusy) return;
+      workerBusy = true;
+      try {
+        const action = isRunning ? 'pause' : 'start';
+        const res = await fetch('/api/scheduler/toggle?action=' + action, { method: 'POST' });
+        if (!res.ok) {
+          document.getElementById('agent-status-text').innerText = 'Worker control failed (HTTP ' + res.status + ').';
+        }
+      } catch (err) {
+        document.getElementById('agent-status-text').innerText = 'Worker control failed (offline?).';
+      } finally {
+        workerBusy = false;
+        await loadStatus();
+      }
     }
 
     async function pollNow() {
-      await fetch('/api/scheduler/poll-now', { method: 'POST' });
-      await loadStatus();
-      await loadJobs();
+      if (workerBusy) return;
+      workerBusy = true;
+      try {
+        const res = await fetch('/api/scheduler/poll-now', { method: 'POST' });
+        if (!res.ok) {
+          document.getElementById('agent-status-text').innerText = 'Poll failed (HTTP ' + res.status + ').';
+        }
+      } catch (err) {
+        document.getElementById('agent-status-text').innerText = 'Poll failed (offline?).';
+      } finally {
+        workerBusy = false;
+        await loadStatus();
+        await loadJobs();
+      }
     }
 
     async function updateBackendUrl() {
       const url = document.getElementById('backend-url-input').value.trim();
       if (!url) return;
-      await fetch('/api/config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ backendUrl: url })
-      });
-      testBackendConnection();
+      const resultSpan = document.getElementById('ping-result');
+      try {
+        const res = await fetch('/api/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ backendUrl: url })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          resultSpan.innerText = '[X] ' + (data.error || 'Server was not changed.');
+          resultSpan.style.color = '#f87171';
+          return;
+        }
+        document.getElementById('gate-backend-url-input').value = data.config.backendUrl;
+        document.getElementById('gate-backend-url').innerText = data.config.backendUrl;
+        if (data.signedOut) {
+          resultSpan.innerText = '[OK] Server changed. Sign in again to the new server.';
+          resultSpan.style.color = '#34d399';
+          showSignedOut();
+          await loadStatus();
+          return;
+        }
+        testBackendConnection();
+      } catch (err) {
+        resultSpan.innerText = '[X] Connection failed';
+        resultSpan.style.color = '#f87171';
+      }
+    }
+    async function gateTestConnection() {
+      const out = document.getElementById('gate-result');
+      out.innerText = 'Pinging...';
+      try {
+        const res = await fetch('/api/test-connection');
+        const data = await res.json();
+        out.innerText = data.ok ? '[OK] Connected (' + data.latencyMs + 'ms)' : '[X] ' + (data.message || 'No connection');
+      } catch (err) {
+        out.innerText = '[X] Connection failed';
+      }
+    }
+    async function gateApplyBackendUrl() {
+      const input = document.getElementById('gate-backend-url-input');
+      const out = document.getElementById('gate-result');
+      const url = input.value.trim();
+      if (!url) return;
+      try {
+        const res = await fetch('/api/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ backendUrl: url })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          out.innerText = '[X] ' + (data.error || 'Server was not changed.');
+          return;
+        }
+        document.getElementById('backend-url-input').value = data.config.backendUrl;
+        input.value = data.config.backendUrl;
+        document.getElementById('gate-backend-url').innerText = data.config.backendUrl;
+        showSignedOut();
+        await loadStatus();
+        await gateTestConnection();
+        out.innerText = '[OK] Server changed. Sign in to the new server above.';
+      } catch (err) {
+        out.innerText = '[X] Connection failed';
+      }
     }
 
     async function testBackendConnection() {
@@ -1577,7 +1690,9 @@ function getDashboardHtml(): string {
 
     async function savePortal() {
       const message = document.getElementById('portal-message');
-      message.textContent = '';
+      message.style.color = '#a7f3d0';
+      message.textContent = 'Saving the supplier login...';
+      try {
       const res = await fetch('/api/portal-logins', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1596,12 +1711,17 @@ function getDashboardHtml(): string {
       message.style.color = '#6ee7b7';
       message.textContent = 'Supplier login saved. Test it, then run the waiting claim.';
       await loadPortalLogins();
+      } catch (err) {
+        message.style.color = '#fca5a5';
+        message.textContent = 'Could not reach the claim bot. Check the connection and try again.';
+      }
     }
 
     async function testPortal() {
       const message = document.getElementById('portal-message');
       message.style.color = '#a7f3d0';
       message.textContent = 'Opening the supplier login...';
+      try {
       const res = await fetch('/api/portal-logins/test', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1614,6 +1734,10 @@ function getDashboardHtml(): string {
       const data = await res.json().catch(() => ({}));
       message.style.color = res.ok ? '#6ee7b7' : '#fca5a5';
       message.textContent = data.message || data.error || 'Could not open the supplier login.';
+      } catch (err) {
+        message.style.color = '#fca5a5';
+        message.textContent = 'Could not reach the claim bot. Check the connection and try again.';
+      }
     }
 
     async function runOneClaim(jobId) {
@@ -2029,10 +2153,8 @@ export function startDesktopAppServer(bind: EngineBind = resolveEngineBind()): P
       }
 
       if (url.pathname === "/api/test-connection") {
-        if (!operatorSignedIn) {
-          sendJson(res, 401, { error: "Sign in before testing the server connection." })
-          return
-        }
+        // Read-only ping on purpose: a signed-out operator whose backend URL is
+        // wrong must be able to see that before signing in.
         const result = await client.testConnection()
         res.writeHead(200, { "Content-Type": "application/json" })
         res.end(JSON.stringify(result))
@@ -2194,10 +2316,6 @@ export function startDesktopAppServer(bind: EngineBind = resolveEngineBind()): P
       }
 
       if (url.pathname === "/api/config" && req.method === "POST") {
-        if (!operatorSignedIn) {
-          sendJson(res, 401, { error: "Sign in before changing the server connection." })
-          return
-        }
         let body = ""
         req.on("data", (chunk) => { body += chunk })
         req.on("end", async () => {
@@ -2205,11 +2323,26 @@ export function startDesktopAppServer(bind: EngineBind = resolveEngineBind()): P
             const data = JSON.parse(body) as { backendUrl?: string }
             const updates = typeof data.backendUrl === "string" ? { backendUrl: data.backendUrl } : {}
             if (updates.backendUrl) {
+              // A backend change always signs the operator out first: the saved
+              // session token belongs to the old server, and pointing the engine
+              // at a different server must never leak it. The operator signs in
+              // again, deliberately, to the new server.
               engineSetBackendUrl(updates.backendUrl)
-            } else {
-              config = saveAgentConfig(updates)
-              client = new AgentBackendClient(config)
+              operatorSignedIn = false
+              isWorkerRunning = false
+              await logoutOperator()
+              logger.info(`Agent backend URL changed. Signed out; new backend: ${config.backendUrl}`)
+              const { apiKey: _apiKey, ...publicConfig } = config
+              res.writeHead(200, { "Content-Type": "application/json" })
+              res.end(JSON.stringify({ ok: true, signedOut: true, config: publicConfig }))
+              return
             }
+            if (!operatorSignedIn) {
+              sendJson(res, 401, { error: "Sign in before changing the engine settings." })
+              return
+            }
+            config = saveAgentConfig(updates)
+            client = new AgentBackendClient(config)
             logger.info(`Agent configuration updated. Backend URL: ${config.backendUrl}`)
             if (operatorSignedIn) await client.register()
             const { apiKey: _apiKey, ...publicConfig } = config

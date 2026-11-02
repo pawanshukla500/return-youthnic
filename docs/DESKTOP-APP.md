@@ -1,11 +1,11 @@
 # Return App Desktop — install, operate, troubleshoot
 
 The desktop app is a real installed Windows application (Electron shell + local
-claim-bot server + CDP browser automation), not a website wrapper. It signs the
+claim-bot server + supplier browser automation), not a website wrapper. It signs the
 operator in, keeps six supplier panels logged in with their own cookies, polls
-the Return App server for claim jobs, and files them through a visible system
-browser — Meesho fully automatically, the other panels assisted (prepare +
-operator confirm). After a claim is filed, the engine is designed to re-open
+the Return App server for claim jobs, and files them through the supplier browser
+window built into the app â€” no Edge, Chrome, or Chromium install needed. Meesho files
+fully automatically, the other panels assisted (prepare +
 that panel every 2 days to read the ticket status until the ticket is finished.
 No marketplace's `checkClaimStatus()` reader is implemented yet, so tickets
 currently stop with "not supported" rather than guessing a status;
@@ -23,9 +23,9 @@ Closing the window keeps it running in the tray.
      hidden at every sign-in, retries on failure every minute, and relaunches it
      within 15 minutes if it stops for any reason — see
      [section 8](#8-long-running-reliability-247-operation));
-   - warns if no Edge/Chrome/Chromium browser is installed (install one or
-     set a `BROWSER_PATH` environment variable — the bot drives it);
-   - launches the app after setup.
+   - needs no system browser: the supplier browser ships inside the app (native
+     WebContentsView, the default; `BROWSER_ADAPTER=external` still drives Edge/Chrome
+     via `BROWSER_PATH` on servers that need it);
 4. No Node.js, no commands, no manual services. Uninstall removes the app and
    the scheduled task; supplier cookies and sign-in are kept under
    `%USERPROFILE%\.taskflow-claim-agent` so a reinstall never forces a full
@@ -138,8 +138,9 @@ then, the table is honest about it rather than showing a made-up state.
 - **Bot idle, jobs queued**: check operator still signed in (`/api/status`),
   panel cookies in First-time setup, backend URL reachable (Test Ping).
 - **Browser never opens**: install Edge/Chrome or set `BROWSER_PATH`; see the
+- **Browser never opens**: the bundled browser needs no install. This entry only
+  applies with `BROWSER_ADAPTER=external`: then install Edge/Chrome or set `BROWSER_PATH`, and see the
   bot log for `No compatible Chromium browser`.
-- **Zombie browser processes**: the runner closes the full process tree
   (`taskkill /T /F`); if one survives a hard kill, end it in Task Manager.
 - **Task missing**: reinstall, or recreate with
   `schtasks /create /TN "ReturnAppClaimBot" /TR "\"C:\Program Files\Return App\Return App.exe\" --hidden" /SC ONLOGON /F`.
