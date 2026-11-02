@@ -9,12 +9,15 @@ import path from "node:path"
 import {
   emptyLocalMemory,
   findApprovedProcedure,
+  isCacheStale,
   loadLocalMemory,
+  markSynced,
   pruneLocalEvents,
   recordLocalEvent,
   saveLocalMemory,
   upsertCachedProcedure,
   LOCAL_EVENT_CAP,
+  MEMORY_SYNC_TTL_MS,
   type CachedProcedure,
 } from "./src/ai-memory-cache.ts"
 
@@ -88,4 +91,26 @@ test("events are capped and pruned after 24h", () => {
     note: "",
   })
   assert.equal(pruneLocalEvents(old, Date.now()).events.length, 0)
+})
+
+test("a cache that never synced is stale", () => {
+  assert.equal(isCacheStale(emptyLocalMemory(), Date.now()), true)
+  assert.equal(isCacheStale(loadLocalMemory("/definitely/not/a/dir"), Date.now()), true)
+})
+
+test("sync marks the cache fresh until the TTL passes", () => {
+  const now = Date.now()
+  const synced = markSynced(emptyLocalMemory(), now)
+  assert.equal(isCacheStale(synced, now), false)
+  assert.equal(isCacheStale(synced, now + MEMORY_SYNC_TTL_MS), false)
+  assert.equal(isCacheStale(synced, now + MEMORY_SYNC_TTL_MS + 1), true)
+})
+
+test("syncedAt survives a save and load round-trip", () => {
+  const dir = tempDir()
+  const memory = markSynced(upsertCachedProcedure(emptyLocalMemory(), approved()), Date.now())
+  saveLocalMemory(dir, memory)
+  const loaded = loadLocalMemory(dir)
+  assert.equal(typeof loaded.syncedAt, "string")
+  assert.equal(isCacheStale(loaded, Date.now()), false)
 })

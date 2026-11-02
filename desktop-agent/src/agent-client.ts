@@ -34,6 +34,18 @@ export type FollowUpPollResult = {
   }
 }
 
+export type AiMemoryProcedureDto = {
+  id: number
+  marketplace: string
+  errorSignature: string
+  title: string
+  steps: string[]
+  status: string
+  updatedAt: string
+}
+
+export type OperatorTaskKind = "missing_evidence" | "pending_approval" | "claim_rejection" | "tracking_failure" | "expired_session" | "operator_action" | "overdue_work"
+
 export type FollowUpReport = {
   outcome: FollowUpOutcome
   statusText?: string
@@ -249,6 +261,48 @@ export class AgentBackendClient {
     } catch (err) {
       logger.error("Failed to report follow-up result:", err)
       throw err
+    }
+  }
+
+  /** Approved recovery procedures in this agent's scope, for the local memory cache sync. */
+  async getApprovedProcedures(): Promise<AiMemoryProcedureDto[] | null> {
+    try {
+      const url = `${this.config.backendUrl}/api/automation/ai-memory/procedures`
+      const res = await fetch(url, {
+        headers: { "X-Agent-UUID": this.config.agentUuid, "X-Agent-Key": this.apiKey },
+      })
+      if (!res.ok) {
+        logger.error(`Approved procedures sync failed (${res.status}). Keeping the local cache.`)
+        return null
+      }
+      const body = (await res.json().catch(() => null)) as { procedures?: unknown } | null
+      const rows = Array.isArray(body?.procedures) ? (body.procedures as AiMemoryProcedureDto[]) : []
+      return rows.filter((r) => r && typeof r.id !== "undefined" && Array.isArray(r.steps))
+    } catch (err) {
+      logger.error("Approved procedures sync failed; keeping the local cache:", err)
+      return null
+    }
+  }
+
+  /** File an operator task the worker cannot finish alone. Scoped server-side; never throws. */
+  async createOperatorTask(data: { claimId: number; marketplace: string; kind: OperatorTaskKind; title: string; note?: string }): Promise<number | null> {
+    try {
+      const url = `${this.config.backendUrl}/api/automation/tasks`
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Agent-UUID": this.config.agentUuid, "X-Agent-Key": this.apiKey },
+        body: JSON.stringify(data),
+      })
+      if (!res.ok) {
+        logger.error(`Operator task creation failed (${res.status}). The check result was still reported.`)
+        return null
+      }
+      const body = (await res.json().catch(() => null)) as { task?: { id?: unknown } } | null
+      const id = Number(body?.task?.id)
+      return Number.isInteger(id) && id > 0 ? id : null
+    } catch (err) {
+      logger.error("Operator task creation failed; the check result was still reported:", err)
+      return null
     }
   }
 

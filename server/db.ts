@@ -44,6 +44,7 @@ const SCHEMA_FILES = [
   "schema-claim-automation.sql",
   "schema-vms.sql",
   "schema-ai-memory.sql",
+  "schema-ai-tasks.sql",
 ] as const
 
 // History tables whose rows must never be destroyed by any code path. Listed here so they cannot silently

@@ -35,6 +35,22 @@ export type LocalAiMemory = {
   version: 1
   procedures: CachedProcedure[]
   events: CachedEvent[]
+  /** ISO timestamp of the last successful server sync. Absent on old caches. */
+  syncedAt?: string
+}
+
+export const MEMORY_SYNC_TTL_MS = 6 * 60 * 60 * 1000
+
+/** True when the mirror has never synced or the last sync is older than the TTL. */
+export function isCacheStale(memory: LocalAiMemory, nowMs: number, ttlMs = MEMORY_SYNC_TTL_MS): boolean {
+  if (!memory.syncedAt) return true
+  const synced = Date.parse(memory.syncedAt)
+  if (!Number.isFinite(synced)) return true
+  return nowMs - synced > ttlMs
+}
+
+export function markSynced(memory: LocalAiMemory, nowMs: number): LocalAiMemory {
+  return { ...memory, syncedAt: new Date(nowMs).toISOString() }
 }
 
 export const LOCAL_MEMORY_FILE = "ai-memory.json"
@@ -54,7 +70,7 @@ export function loadLocalMemory(dir: string): LocalAiMemory {
     const raw = fs.readFileSync(memoryFilePath(dir), "utf8")
     const parsed = JSON.parse(raw) as Partial<LocalAiMemory>
     if (!Array.isArray(parsed.procedures) || !Array.isArray(parsed.events)) return emptyLocalMemory()
-    return {
+    const memory: LocalAiMemory = {
       version: 1,
       procedures: parsed.procedures.filter(
         (p): p is CachedProcedure =>
@@ -64,6 +80,8 @@ export function loadLocalMemory(dir: string): LocalAiMemory {
         (e): e is CachedEvent => Boolean(e) && typeof e.at === "string" && typeof e.step === "string",
       ),
     }
+    if (typeof parsed.syncedAt === "string" && parsed.syncedAt) memory.syncedAt = parsed.syncedAt
+    return memory
   } catch {
     return emptyLocalMemory()
   }
