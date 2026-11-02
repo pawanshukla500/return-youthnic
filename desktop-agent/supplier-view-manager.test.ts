@@ -1,0 +1,95 @@
+import { describe, it } from "node:test"
+import assert from "node:assert/strict"
+import {
+  hideSupplierViews,
+  layoutSupplierViews,
+  registerSupplierView,
+  setSupplierViewHost,
+  showSupplierView,
+  supplierViewStatus,
+  unregisterSupplierView,
+  type SupplierViewHost,
+} from "./src/native-browser-view.js"
+
+type FakeView = { bounds: unknown; setBounds(bounds: unknown): void }
+
+function fakeView(): FakeView {
+  return {
+    bounds: null,
+    setBounds(bounds: unknown) {
+      this.bounds = bounds
+    },
+  }
+}
+
+function toView(fake: FakeView) {
+  return fake as unknown as Parameters<typeof registerSupplierView>[1]
+}
+
+function fakeHost() {
+  const calls: string[] = []
+  const host: SupplierViewHost = {
+    addView: () => {
+      calls.push("add")
+    },
+    removeView: () => {
+      calls.push("remove")
+    },
+    contentBounds: () => ({ x: 0, y: 0, width: 1600, height: 900 }),
+    showWindow: () => {
+      calls.push("show")
+    },
+    focusWindow: () => {
+      calls.push("focus")
+    },
+    isWindowDestroyed: () => false,
+  }
+  return { host, calls }
+}
+
+describe("main-window supplier view manager", () => {
+  it("reports no views and hides nothing when empty", () => {
+    setSupplierViewHost(null)
+    assert.deepEqual(supplierViewStatus(), [])
+    assert.deepEqual(hideSupplierViews(), [])
+    assert.equal(showSupplierView("meesho"), false)
+  })
+
+  it("shows, hides and re-shows a registered view inside the shell host", () => {
+    const { host, calls } = fakeHost()
+    const view = fakeView()
+    setSupplierViewHost(host)
+    registerSupplierView("meesho", toView(view))
+    assert.deepEqual(supplierViewStatus(), [{ panelKey: "meesho", visible: false }])
+
+    assert.equal(showSupplierView("meesho"), true)
+    assert.deepEqual(calls, ["remove", "add", "show", "focus"])
+    assert.deepEqual(view.bounds, { x: 0, y: 0, width: 1600, height: 900 })
+    assert.deepEqual(supplierViewStatus(), [{ panelKey: "meesho", visible: true }])
+
+    layoutSupplierViews()
+    assert.deepEqual(view.bounds, { x: 0, y: 0, width: 1600, height: 900 })
+
+    assert.deepEqual(hideSupplierViews(), ["meesho"])
+    assert.equal(calls[calls.length - 1], "remove")
+    assert.deepEqual(supplierViewStatus(), [{ panelKey: "meesho", visible: false }])
+
+    assert.equal(showSupplierView("meesho"), true)
+    assert.deepEqual(supplierViewStatus(), [{ panelKey: "meesho", visible: true }])
+
+    unregisterSupplierView("meesho", toView(view))
+    assert.deepEqual(supplierViewStatus(), [])
+    setSupplierViewHost(null)
+  })
+
+  it("refuses to show when the host window is gone", () => {
+    const { host } = fakeHost()
+    setSupplierViewHost({ ...host, isWindowDestroyed: () => true })
+    const view = fakeView()
+    registerSupplierView("flipkart", toView(view))
+    assert.equal(showSupplierView("flipkart"), false)
+    layoutSupplierViews()
+    unregisterSupplierView("flipkart", toView(view))
+    setSupplierViewHost(null)
+  })
+})

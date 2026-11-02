@@ -11,11 +11,13 @@ import { logger } from "./logger.js"
  * signs in fresh on its own partition, and the engine asks for login only when
  * that session is expired, revoked, or invalid.
  *
- * Lifetime is lazy: the host window and a panel's view are created on first use
- * and torn down after the job/follow-up finishes, while the partition (cookies)
- * persists. The view is shown on screen only when the operator must step in
- * (OTP/CAPTCHA, assisted submit); automation itself runs with the window hidden
- * so the warehouse PC stays usable.
+ * Lifetime is lazy: a panel's view is created on first use and torn down after
+ * the job/follow-up finishes, while the partition (cookies) persists. In the
+ * packaged app the view attaches to the shell's main window (registered via
+ * `setSupplierViewHost`) — never a per-panel `BrowserWindow`. The view is
+ * attached on screen only when the operator must step in (OTP/CAPTCHA,
+ * assisted submit); automation itself runs detached so the warehouse PC stays
+ * usable.
  *
  * Concurrency: the caller (engine worker / follow-up worker via poll-guard.ts)
  * guarantees at most one driver per panel at a time. This module adds a second
@@ -56,6 +58,127 @@ function requireElectronMain(electron: ElectronApi): void {
   }
 }
 
+/**
+ * Main-window host for supplier views, provided by the Electron shell
+ * (`desktop/main.ts` registers the single app window after creating it).
+ *
+ * Supplier `WebContentsView`s are attached to this host instead of to a
+ * per-panel `BrowserWindow`, so marketplace work always happens inside the
+ * main application window. The interface is structural (not the Electron
+ * `BrowserWindow` type) so the manager stays unit-testable with fakes and
+ * the engine stays import-safe outside Electron.
+ */
+export type SupplierViewHost = {
+  addView(view: Electron.CrossProcessExports.WebContentsView): void
+  removeView(view: Electron.CrossProcessExports.WebContentsView): void
+  contentBounds(): { x: number; y: number; width: number; height: number }
+  showWindow(): void
+  focusWindow(): void
+  isWindowDestroyed(): boolean
+}
+
+let supplierViewHost: SupplierViewHost | null = null
+
+/** Register (or clear) the main-window host. Called once by the Electron shell. */
+export function setSupplierViewHost(host: SupplierViewHost | null): void {
+  supplierViewHost = host
+  layoutSupplierViews()
+}
+
+type ManagedSupplierView = {
+  view: Electron.CrossProcessExports.WebContentsView
+  visible: boolean
+  popups: Electron.CrossProcessExports.WebContentsView[]
+}
+
+const managedSupplierViews = new Map<string, ManagedSupplierView>()
+
+/** Track a supplier view in the main-window manager. Exported for tests and the shell. */
+export function registerSupplierView(panelKey: string, view: Electron.CrossProcessExports.WebContentsView): void {
+  const existing = managedSupplierViews.get(panelKey)
+  if (existing && existing.view === view) return
+  managedSupplierViews.set(panelKey, { view, visible: existing?.visible ?? false, popups: [] })
+}
+
+/** Drop a supplier view from the main-window manager. Exported for tests and the shell. */
+export function unregisterSupplierView(panelKey: string, view: Electron.CrossProcessExports.WebContentsView): void {
+  const existing = managedSupplierViews.get(panelKey)
+  if (existing && existing.view === view) managedSupplierViews.delete(panelKey)
+}
+
+/** Dashboard/engine status: which panels own an in-window supplier view. */
+export function supplierViewStatus(): Array<{ panelKey: string; visible: boolean }> {
+  return [...managedSupplierViews.entries()].map(([panelKey, entry]) => ({ panelKey, visible: entry.visible }))
+}
+
+/** Re-fit every visible supplier view after the main window resizes. */
+export function layoutSupplierViews(): void {
+  const host = supplierViewHost
+  if (!host || host.isWindowDestroyed()) return
+  const bounds = host.contentBounds()
+  for (const entry of managedSupplierViews.values()) {
+    if (!entry.visible) continue
+    try {
+      entry.view.setBounds(bounds)
+    } catch {
+      // A destroyed view is unregistered on close; ignore the race here.
+    }
+  }
+}
+
+/** Detach every visible supplier view (sessions keep their cookies). Returns the hidden panels. */
+export function hideSupplierViews(): string[] {
+  const host = supplierViewHost
+  const hidden: string[] = []
+  for (const [panelKey, entry] of managedSupplierViews) {
+    if (!entry.visible) continue
+    entry.visible = false
+    try {
+      host?.removeView(entry.view)
+    } catch {
+      // ignore teardown races
+    }
+    for (const popup of entry.popups) {
+      try {
+        host?.removeView(popup)
+      } catch {
+        // ignore teardown races
+      }
+    }
+    hidden.push(panelKey)
+  }
+  return hidden
+}
+
+/** Attach a panel's view to the main window (tab-switch back from the dashboard). */
+export function showSupplierView(panelKey: string): boolean {
+  const host = supplierViewHost
+  const entry = managedSupplierViews.get(panelKey)
+  if (!host || host.isWindowDestroyed() || !entry) return false
+  if (!entry.visible) {
+    try {
+      host.removeView(entry.view)
+    } catch {
+      // ensure a single attach
+    }
+    host.addView(entry.view)
+    entry.view.setBounds(host.contentBounds())
+    for (const popup of entry.popups) {
+      try {
+        host.removeView(popup)
+      } catch {
+        // ensure a single attach
+      }
+      host.addView(popup)
+      popup.setBounds(host.contentBounds())
+    }
+    entry.visible = true
+  }
+  host.showWindow()
+  host.focusWindow()
+  return true
+}
+
 async function elementCenter(
   contents: Electron.CrossProcessExports.WebContents,
   selector: string,
@@ -89,6 +212,22 @@ class NativeSupplierBrowser implements SupplierBrowserApi {
     const { BrowserWindow, WebContentsView } = this.electron
     requireElectronMain(this.electron)
     const partition = `${PARTITION_PREFIX}${this.options.panelKey}`
+    const shellHost = supplierViewHost && !supplierViewHost.isWindowDestroyed() ? supplierViewHost : null
+    if (shellHost) {
+      // Main-window embedding (packaged app): the shell owns the window, so
+      // no per-panel BrowserWindow is ever created. The view stays detached
+      // — off-screen but fully functional for automation — until
+      // showForManualStep() attaches it to the main window.
+      if (!this.view) {
+        this.view = new WebContentsView({
+          webPreferences: { partition, contextIsolation: true, nodeIntegration: false, sandbox: true },
+        })
+        this.attachViewHandlers()
+        registerSupplierView(this.options.panelKey, this.view)
+      }
+      this.ownedHost = false
+      return
+    }
     if (!this.host || (this.host as unknown as { isDestroyed?: () => boolean }).isDestroyed?.()) {
       this.host = new BrowserWindow({
         show: false,
@@ -111,14 +250,105 @@ class NativeSupplierBrowser implements SupplierBrowserApi {
       this.view.setBounds({ x: 0, y: 0, width: 1280, height: 800 })
       // Operator-visible only when manual completion is needed (OTP/CAPTCHA,
       // assisted submit). Automation runs headless-in-window otherwise.
-      this.view.webContents.on("dom-ready", () => undefined)
+      this.attachViewHandlers()
+      registerSupplierView(this.options.panelKey, this.view)
     }
   }
 
   /** Bring the panel on screen so the operator can complete OTP/CAPTCHA by hand. */
   async showForManualStep(): Promise<void> {
+    if (this.view && supplierViewHost && !supplierViewHost.isWindowDestroyed()) {
+      showSupplierView(this.options.panelKey)
+      return
+    }
     this.host?.show()
     this.host?.focus()
+  }
+
+  /** Popup, download and lifecycle wiring shared by both host paths. */
+  private attachViewHandlers(): void {
+    if (!this.view) return
+    // Operator-visible only when manual completion is needed (OTP/CAPTCHA,
+    // assisted submit). Automation runs headless-in-window otherwise.
+    this.view.webContents.on("dom-ready", () => undefined)
+    this.contents.setWindowOpenHandler(({ url }) => {
+      // Authenticated popups stay in-app on the panel's own partition: they
+      // are attached to the main window, never a system browser and never a
+      // second app window.
+      void this.openPopupInApp(url).catch((err) => {
+        logger.warn(`Native adapter: could not open the in-app popup for ${this.options.panelKey}.`, err)
+      })
+      return { action: "deny" }
+    })
+    try {
+      this.contents.session.on("will-download", (_event, item) => {
+        void this.savePortalDownload(item).catch((err) => {
+          logger.warn(`Native adapter: could not save the portal download for ${this.options.panelKey}.`, err)
+        })
+      })
+    } catch {
+      // Sessions without download support (unit tests): downloads stay manual.
+    }
+  }
+
+  private async openPopupInApp(url: string): Promise<void> {
+    const { WebContentsView } = this.electron
+    const popup = new WebContentsView({
+      webPreferences: {
+        partition: `${PARTITION_PREFIX}${this.options.panelKey}`,
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true,
+      },
+    })
+    const entry = managedSupplierViews.get(this.options.panelKey)
+    if (entry && entry.view === this.view) entry.popups.push(popup)
+    popup.webContents.once("destroyed", () => {
+      try {
+        supplierViewHost?.removeView(popup)
+      } catch {
+        // ignore teardown races
+      }
+      const live = managedSupplierViews.get(this.options.panelKey)
+      if (live) live.popups = live.popups.filter((candidate) => candidate !== popup)
+    })
+    await popup.webContents.loadURL(url)
+    const host = supplierViewHost
+    if (host && !host.isWindowDestroyed()) {
+      try {
+        host.removeView(popup)
+      } catch {
+        // ensure a single attach
+      }
+      host.addView(popup)
+      popup.setBounds(host.contentBounds())
+      host.showWindow()
+    } else if (this.host) {
+      this.host.contentView.addChildView(popup)
+      popup.setBounds({ x: 0, y: 0, width: 1280, height: 800 })
+      await this.showForManualStep()
+    }
+  }
+
+  private async savePortalDownload(item: Electron.CrossProcessExports.DownloadItem): Promise<void> {
+    const fileName = item.getFilename() || `portal-download-${Date.now()}`
+    const { default: nodePath } = await import("node:path")
+    const { default: fs } = await import("node:fs")
+    const downloadsDir = this.electron.app.getPath("downloads")
+    fs.mkdirSync(downloadsDir, { recursive: true })
+    const savePath = nodePath.join(downloadsDir, fileName)
+    item.setSavePath(savePath)
+    await new Promise<void>((resolve) => {
+      item.once("done", (_event, state) => {
+        if (state === "completed") {
+          logger.info(`Portal download saved: ${savePath}`)
+        } else {
+          logger.warn(`Portal download did not complete (${state}): ${fileName}`)
+        }
+        resolve()
+      })
+    })
+    await this.showForManualStep()
   }
 
   private get contents(): Electron.CrossProcessExports.WebContents {
@@ -282,8 +512,26 @@ class NativeSupplierBrowser implements SupplierBrowserApi {
 
   async close(): Promise<void> {
     try {
-      if (this.view && this.host) {
-        this.host.contentView.removeChildView(this.view)
+      if (this.view) {
+        try {
+          supplierViewHost?.removeView(this.view)
+        } catch {
+          // ignore teardown races
+        }
+        const entry = managedSupplierViews.get(this.options.panelKey)
+        if (entry && entry.view === this.view) {
+          for (const popup of entry.popups) {
+            try {
+              supplierViewHost?.removeView(popup)
+            } catch {
+              // ignore teardown races
+            }
+          }
+        }
+        unregisterSupplierView(this.options.panelKey, this.view)
+        if (this.host) {
+          this.host.contentView.removeChildView(this.view)
+        }
       }
     } catch {
       // Teardown best-effort: partitions persist, views do not need to.

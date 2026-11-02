@@ -13,6 +13,7 @@ import { BrowserRunner, findSystemBrowser } from "./browser-runner.js"
 import { getAutomationEngine, isMarketplaceSupported } from "./marketplaces/registry.js"
 import { currentOperator, loginOperator, logoutOperator } from "./operator-session.js"
 import { closePortalLoginBrowser, holdPortalBrowser, listPortalLogins, PORTAL_CHANNELS, queueOneClaim, savePortalLogin, testPortalLogin } from "./portal-login.js"
+import { hideSupplierViews, showSupplierView, supplierViewStatus } from "./native-browser-view.js"
 import { clearPanelHold, getPanelStatuses, markPanelBusy, markPanelResult, panelKeyForMarketplace } from "./panel-queue.js"
 import { localEncryptionAvailable } from "./local-secrets.js"
 import { checkForUpdates } from "./update-check.js"
@@ -836,7 +837,7 @@ function getDashboardHtml(): string {
 
     <section class="panel" id="onboarding" style="padding: 16px 18px;">
       <div class="panel-title" style="margin-bottom: 4px;">First-time setup — connect each supplier panel <span id="onboarding-count" style="font-size: 11px; font-weight: normal; color: var(--muted);"></span></div>
-      <p style="color: var(--muted); font-size: 12px; line-height: 1.5; margin-bottom: 12px;">Do one panel at a time. For each marketplace, save the supplier ID and password, then sign in: the supplier page opens in a visible browser window. Complete any OTP or CAPTCHA there yourself — the cookies are saved on this PC so sign-in sticks across restarts. A panel whose session expires drops back to Connect here.</p>
+      <p style="color: var(--muted); font-size: 12px; line-height: 1.5; margin-bottom: 12px;">Do one panel at a time. For each marketplace, save the supplier ID and password, then sign in: the supplier page opens inside this app window. Complete any OTP or CAPTCHA there yourself — the cookies are saved on this PC so sign-in sticks across restarts. A panel whose session expires drops back to Connect here.</p>
       <div id="onboarding-steps" style="display: grid; gap: 8px;"></div>
       <div style="display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 12px; font-size: 12px; color: var(--muted);">
         <span id="security-line">Checking credential storage…</span>
@@ -865,6 +866,12 @@ function getDashboardHtml(): string {
       </div>
       <div id="portal-status" style="margin-top: 10px; font-size: 12px; color: #a7f3d0;"></div>
       <div id="portal-message" style="margin-top: 6px; font-size: 12px; color: #fca5a5;"></div>
+      <div id="supplier-browser-row" style="display: none; margin-top: 10px; font-size: 12px; align-items: center; gap: 10px; flex-wrap: wrap;">
+        <span id="supplier-browser-status" style="color: #a7f3d0;">Supplier browser: dashboard</span>
+        <button class="btn btn-secondary" type="button" style="font-size: 11px; padding: 2px 8px;" onclick="showSupplierBrowser()">Show supplier browser</button>
+        <button class="btn btn-secondary" type="button" style="font-size: 11px; padding: 2px 8px;" onclick="hideSupplierBrowser()">Hide supplier browser</button>
+      </div>
+      <div id="portal-browser-message" style="margin-top: 6px; font-size: 12px; color: #fca5a5;"></div>
     </section>
 
     <section class="panel" id="panel-queue" style="padding: 16px 18px;">
@@ -1130,6 +1137,7 @@ function getDashboardHtml(): string {
           document.getElementById('active-task-label').innerText = data.signedIn ? (isRunning ? 'Idle / waiting for the next claim' : 'Paused') : 'Sign in to start';
         }
         renderOverall();
+        void loadSupplierBrowser();
       } catch (err) {
         console.error(err);
       }
@@ -1677,8 +1685,8 @@ function getDashboardHtml(): string {
           return;
         }
         const list = data.downloads || [];
-        const platform = (navigator.platform || '').toLowerCase();
-        const wantExt = platform.includes('win') ? '.exe' : (platform.includes('mac') ? '.dmg' : '.deb');
+        // Windows-only desktop: the NSIS .exe is the only setup asset.
+        const wantExt = '.exe';
         const best = list.find((d) => (d.name || '').toLowerCase().endsWith(wantExt)) || list[0];
         out.innerHTML = 'Update available: ' + data.latestTag +
           (best ? ' — <a href="' + best.url + '" target="_blank" rel="noopener" style="color:#6ee7b7;font-weight:700;">Download ' + best.name + '</a>' : '') +
@@ -1734,6 +1742,62 @@ function getDashboardHtml(): string {
       const data = await res.json().catch(() => ({}));
       message.style.color = res.ok ? '#6ee7b7' : '#fca5a5';
       message.textContent = data.message || data.error || 'Could not open the supplier login.';
+      } catch (err) {
+        message.style.color = '#fca5a5';
+        message.textContent = 'Could not reach the claim bot. Check the connection and try again.';
+      }
+    }
+
+    async function loadSupplierBrowser() {
+      const row = document.getElementById('supplier-browser-row');
+      const status = document.getElementById('supplier-browser-status');
+      try {
+        const res = await fetch('/api/portal-browser');
+        if (!res.ok) { row.style.display = 'none'; return; }
+        const data = await res.json();
+        const views = data.views || [];
+        if (views.length === 0) { row.style.display = 'none'; return; }
+        row.style.display = 'flex';
+        const visible = views.filter((v) => v.visible);
+        status.textContent = visible.length > 0
+          ? 'Supplier browser: ' + visible.map((v) => v.panelKey).join(', ') + ' (inside this window)'
+          : 'Supplier browser: hidden (sessions kept)';
+      } catch { row.style.display = 'none'; }
+    }
+
+    async function showSupplierBrowser() {
+      const message = document.getElementById('portal-browser-message');
+      message.style.color = '#a7f3d0';
+      message.textContent = 'Opening the supplier browser inside this window...';
+      try {
+      const res = await fetch('/api/portal-browser/show', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ marketplace: document.getElementById('portal-marketplace').value }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        message.style.color = '#fca5a5';
+        message.textContent = data.error || 'No open supplier browser for that marketplace.';
+        return;
+      }
+      message.style.color = '#6ee7b7';
+      message.textContent = 'Supplier browser is open inside this window.';
+      await loadSupplierBrowser();
+      } catch (err) {
+        message.style.color = '#fca5a5';
+        message.textContent = 'Could not reach the claim bot. Check the connection and try again.';
+      }
+    }
+
+    async function hideSupplierBrowser() {
+      const message = document.getElementById('portal-browser-message');
+      try {
+      const res = await fetch('/api/portal-browser/hide', { method: 'POST' });
+      const data = await res.json().catch(() => ({}));
+      message.style.color = '#6ee7b7';
+      message.textContent = (data.hidden || []).length > 0 ? 'Supplier browser hidden; the session stays saved.' : 'No supplier browser is open.';
+      await loadSupplierBrowser();
       } catch (err) {
         message.style.color = '#fca5a5';
         message.textContent = 'Could not reach the claim bot. Check the connection and try again.';
@@ -2287,6 +2351,44 @@ export function startDesktopAppServer(bind: EngineBind = resolveEngineBind()): P
           if (wasRunning && operatorSignedIn) {
             engineStart()
           }
+        }
+        return
+      }
+
+      if (url.pathname === "/api/portal-browser" && req.method === "GET") {
+        if (!operatorSignedIn) {
+          sendJson(res, 401, { error: "Sign in before viewing the supplier browser." })
+          return
+        }
+        sendJson(res, 200, { views: supplierViewStatus() })
+        return
+      }
+
+      if (url.pathname === "/api/portal-browser/hide" && req.method === "POST") {
+        if (!operatorSignedIn) {
+          sendJson(res, 401, { error: "Sign in before hiding the supplier browser." })
+          return
+        }
+        const hidden = hideSupplierViews()
+        sendJson(res, 200, { ok: true, hidden })
+        return
+      }
+
+      if (url.pathname === "/api/portal-browser/show" && req.method === "POST") {
+        if (!operatorSignedIn) {
+          sendJson(res, 401, { error: "Sign in before showing the supplier browser." })
+          return
+        }
+        try {
+          const body = await readJson(req)
+          const panelKey = panelKeyForMarketplace(String(body.marketplace || ""))
+          if (showSupplierView(panelKey)) {
+            sendJson(res, 200, { ok: true, panelKey })
+          } else {
+            sendJson(res, 404, { error: "No open supplier browser for that marketplace. Test the login first." })
+          }
+        } catch (error) {
+          sendJson(res, 400, { error: error instanceof Error ? error.message : "Could not show the supplier browser." })
         }
         return
       }

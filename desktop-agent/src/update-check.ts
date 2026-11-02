@@ -42,6 +42,17 @@ function parseVersion(value: string): number[] {
 
 export type UpdateAsset = { name: string; url: string }
 
+/**
+ * Windows-only desktop: the setup asset is always the NSIS `.exe`.
+ * GitHub release assets are filtered by name so a stale or foreign
+ * installer can never become the offered download.
+ */
+export function selectWindowsSetupAsset(downloads: UpdateAsset[]): UpdateAsset | null {
+  const exe = downloads.find((asset) => asset.url && asset.name.toLowerCase().endsWith(".exe"))
+  if (exe) return exe
+  return downloads.find((asset) => Boolean(asset.url)) || null
+}
+
 export type UpdateCheckResult = {
   ok: boolean
   currentVersion: string
@@ -77,7 +88,7 @@ export async function checkForUpdates(fetchImpl: typeof fetch = fetch): Promise<
     const downloads = (desktop.assets || [])
       .filter((a) => a.browser_download_url)
       .map((a) => ({ name: a.name || "setup", url: a.browser_download_url as string }))
-    const asset = downloads[0]?.url || null
+    const asset = selectWindowsSetupAsset(downloads)?.url || null
     return {
       ok: true,
       currentVersion,
