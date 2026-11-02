@@ -18,7 +18,10 @@ import { localEncryptionAvailable } from "./local-secrets.js"
 import { checkForUpdates } from "./update-check.js"
 import { followUpExecutionBundle } from "./follow-up-bundle.js"
 import { describeBrowserAdapter, openSupplierBrowser } from "./browser-adapter.js"
-import { aiUsageSnapshot, loadAiAssistConfig } from "./ai-assistant.js"
+import { aiUsageSnapshot, buildDiagnosticPrompt, decideFollowUpAssist, loadAiAssistConfig, providerFromConfig, requestAiProposal, validateAiProposal, type AssistanceContext } from "./ai-assistant.js"
+import { findApprovedProcedure, loadLocalMemory, pruneLocalEvents, recordLocalEvent, saveLocalMemory } from "./ai-memory-cache.js"
+import { normalizeErrorSignature } from "../../server/ai-memory.js"
+import { buildAiMemoryPayload, disableLocalProcedure } from "./ai-memory-panel.js"
 import { nightlyFollowUpOnly, nightlyWindowStatus, shouldSkipFollowUpCycle } from "./follow-up-window.js"
 
 /**
@@ -155,20 +158,17 @@ async function pollAndProcessJob(manual = false): Promise<boolean> {
     const evidenceFilesMap = await client.downloadEvidenceFiles(bundle.claimId, bundle.evidenceFiles)
     logger.info(`Downloaded ${evidenceFilesMap.size} evidence files for Claim #${bundle.claimId}.`)
 
-    // Launch browser
-    const browserRunner = new BrowserRunner()
-    const isHeadless = config.browserMode === "headless" || bundle.automationMode === "headless"
-    const profilePath = profileDirFor(config.userDataDir, bundle.marketplace)
-
-    const browserSession = await browserRunner.launch({
-      profileDir: profilePath,
-      headless: isHeadless,
+    // Open the supplier browser through the shared adapter (external system
+    // browser by default; native WebContentsView when BROWSER_ADAPTER=native).
+    const supplierBrowser = await openSupplierBrowser({
+      panelKey,
+      profileDir: profileDirFor(config.userDataDir, bundle.marketplace),
+      headless: config.browserMode === "headless" || bundle.automationMode === "headless",
     })
+    const browserRunner = supplierBrowser.browser
 
     let keepBrowserOpen = false
     try {
-      await browserRunner.connectToPage(browserSession.port)
-
       const engine = getAutomationEngine(
         bundle.marketplace,
         browserRunner,
@@ -201,6 +201,7 @@ async function pollAndProcessJob(manual = false): Promise<boolean> {
       } else if (result.stage === "manual_intervention_required") {
         keepBrowserOpen = true
         holdPortalBrowser(browserRunner)
+        await browserRunner.showForManualStep?.()
         markPanelResult(panelKey, "manual_action", result.manualActionReason || "Manual action required on portal.")
         await client.updateProgress(jobHeader.jobId, {
           stage: "manual_intervention_required",
@@ -220,7 +221,7 @@ async function pollAndProcessJob(manual = false): Promise<boolean> {
         await client.cleanClaimEvidenceFiles(bundle.claimId)
       }
     } finally {
-      if (!keepBrowserOpen) await browserRunner.close()
+      if (!keepBrowserOpen) await supplierBrowser.close()
     }
   } catch (err: any) {
     logger.error("Error processing automation job:", err)
@@ -269,6 +270,75 @@ let lastFollowUpCheckTime = ""
 let followUpChecksRun = 0
 let lastFollowUpResult = ""
 
+const ASSIST_SYSTEM_PROMPT =
+  "You assist a warehouse claim bot. Propose one safe, evidence-grounded recovery step. " +
+  + "Never invent ticket IDs, evidence, or credentials. Reply with the proposed action text only."
+
+/**
+ * Assistance pass after one follow-up check: approved memory first, a bounded AI
+ * draft second, human review otherwise. Advisory only â€” it never changes what was
+ * reported to the server and never executes a marketplace action. Best-effort: any
+ * failure is logged and the worker moves on.
+ */
+async function runFollowUpAssist(input: {
+  followUpId: number
+  claimId: number
+  marketplace: string
+  marketplaceClaimId: string
+  outcome: string
+  note: string
+  statusText: string
+  normalizedStatus: string
+  statusChanged: boolean
+}): Promise<void> {
+  try {
+    const step = "follow-up-check"
+    const signature =
+      input.outcome === "status_read"
+        ? normalizeErrorSignature(`ticket status ${input.normalizedStatus || input.statusText} ${input.marketplace}`)
+        : normalizeErrorSignature(`${input.marketplace} follow-up ${input.outcome} ${input.note}`.slice(0, 200))
+    const dir = agentDataDir()
+    const memory = pruneLocalEvents(loadLocalMemory(dir), Date.now())
+    const hit = findApprovedProcedure(memory, input.marketplace, signature)
+    const assistConfig = loadAiAssistConfig()
+    const provider = providerFromConfig(assistConfig)
+    const decision = decideFollowUpAssist({
+      outcome: input.outcome,
+      statusChanged: input.statusChanged,
+      memoryHit: hit ? { procedureId: hit.id, title: hit.title, steps: hit.steps } : null,
+      aiEnabled: provider !== null,
+    })
+    if (decision.action === "no-action") return
+    const stamp = new Date().toISOString()
+    if (decision.action === "memory-hit") {
+      logger.info(`Follow-up #${input.followUpId}: approved recovery "${decision.procedure.title}". Review it on the engine dashboard before the next window.`)
+      saveLocalMemory(dir, recordLocalEvent(memory, { at: stamp, claimId: input.claimId, marketplace: input.marketplace, step, outcome: "memory_hit", note: decision.procedure.title.slice(0, 200) }))
+      lastFollowUpResult = `${input.marketplace}: approved recovery available`
+      return
+    }
+    if (decision.action === "ai-needed" && provider) {
+      const ctx: AssistanceContext = { marketplace: input.marketplace, claimId: input.claimId, knownTicketId: input.marketplaceClaimId, step, errorSignature: signature }
+      const text = await requestAiProposal(provider, { prompt: buildDiagnosticPrompt(ctx, input.note), system: ASSIST_SYSTEM_PROMPT, maxTokens: 400 }, assistConfig.maxCallsPerJob)
+      const proposal = text ? { kind: "draft_response", summary: text, ticketRef: input.marketplaceClaimId } : null
+      if (proposal && validateAiProposal(proposal, ctx)) {
+        logger.info(`Follow-up #${input.followUpId}: AI draft ready for operator review (not sent).`)
+        saveLocalMemory(dir, recordLocalEvent(memory, { at: stamp, claimId: input.claimId, marketplace: input.marketplace, step, outcome: "ai_proposal", note: proposal.summary.slice(0, 200) }))
+        lastFollowUpResult = `${input.marketplace}: AI draft ready for review`
+      } else {
+        logger.info(`Follow-up #${input.followUpId}: AI proposal failed validation; needs a human.`)
+        saveLocalMemory(dir, recordLocalEvent(memory, { at: stamp, claimId: input.claimId, marketplace: input.marketplace, step, outcome: "human_review", note: "AI proposal rejected" }))
+        lastFollowUpResult = `${input.marketplace}: needs operator review`
+      }
+      return
+    }
+    logger.info(`Follow-up #${input.followUpId}: needs operator review (${input.outcome}).`)
+    saveLocalMemory(dir, recordLocalEvent(memory, { at: stamp, claimId: input.claimId, marketplace: input.marketplace, step, outcome: "human_review", note: input.outcome.slice(0, 200) }))
+    lastFollowUpResult = `${input.marketplace}: needs operator review`
+  } catch (err) {
+    logger.warn(`Follow-up #${input.followUpId}: assistance pass skipped (${err instanceof Error ? err.message : err}).`)
+  }
+}
+
 /**
  * Run one follow-up cycle. Returns true when a ticket was actually checked.
  *
@@ -302,6 +372,7 @@ async function pollAndProcessFollowUp(): Promise<boolean> {
       logger.warn(`Follow-up #${followUp.followUpId}: ${note}`)
       await client.reportFollowUp(followUp.followUpId, { outcome: "login_required", note })
       lastFollowUpResult = `${followUp.marketplace}: waiting for panel sign-in`
+      await runFollowUpAssist({ followUpId: followUp.followUpId, claimId: followUp.claimId, marketplace: followUp.marketplace, marketplaceClaimId: followUp.marketplaceClaimId, outcome: "login_required", note, statusText: "", normalizedStatus: "", statusChanged: false })
       return true
     }
 
@@ -362,8 +433,9 @@ async function pollAndProcessFollowUp(): Promise<boolean> {
             screenshotPath: result.screenshotPath,
           })
           lastFollowUpResult = `${followUp.marketplace}: ticket state not found`
+          await runFollowUpAssist({ followUpId: followUp.followUpId, claimId: followUp.claimId, marketplace: followUp.marketplace, marketplaceClaimId: followUp.marketplaceClaimId, outcome: "not_found", note: "ticket state not found on panel", statusText: "", normalizedStatus: "", statusChanged: false })
         } else {
-          await client.reportFollowUp(followUp.followUpId, {
+          const followUpReport = await client.reportFollowUp(followUp.followUpId, {
             outcome: "status_read",
             statusText,
             normalizedStatus: result.normalizedStatus,
@@ -371,6 +443,7 @@ async function pollAndProcessFollowUp(): Promise<boolean> {
             screenshotPath: result.screenshotPath,
           })
           lastFollowUpResult = `${followUp.marketplace}: ${statusText}`
+          await runFollowUpAssist({ followUpId: followUp.followUpId, claimId: followUp.claimId, marketplace: followUp.marketplace, marketplaceClaimId: followUp.marketplaceClaimId, outcome: "status_read", note: result.note || "", statusText, normalizedStatus: result.normalizedStatus || "", statusChanged: followUpReport.statusChanged })
         }
       }
     } finally {
@@ -385,6 +458,7 @@ async function pollAndProcessFollowUp(): Promise<boolean> {
     if (leased) {
       await client
         .reportFollowUp(leased.followUpId, { outcome: "error", note: message.slice(0, 400) })
+      await runFollowUpAssist({ followUpId: leased.followUpId, claimId: leased.claimId, marketplace: leased.marketplace, marketplaceClaimId: leased.marketplaceClaimId, outcome: "error", note: message.slice(0, 200), statusText: "", normalizedStatus: "", statusChanged: false })
         .catch(() => undefined)
     }
     return false
@@ -749,7 +823,7 @@ function getDashboardHtml(): string {
 
     <section class="panel" id="follow-ups" style="padding: 16px 18px;">
       <div class="panel-title" style="margin-bottom: 4px;">Ticket follow-ups <span id="followup-count" style="font-size: 11px; font-weight: normal; color: var(--muted);"></span></div>
-      <p style="color: var(--muted); font-size: 12px; line-height: 1.5; margin-bottom: 12px;">After a claim is filed, the bot re-opens that panel on its own every 2 days, reads the ticket status, and records it here until the ticket is approved or rejected. The ticket ID is the marketplace's own reference number.</p>
+      <p style="color: var(--muted); font-size: 12px; line-height: 1.5; margin-bottom: 12px;">After a claim is filed, the bot re-opens that panel on its own in the nightly 01:00-02:00 IST window once the ticket is 48 hours old, reads the ticket status, and records it here until the ticket is approved or rejected. The ticket ID is the marketplace's own reference number.</p>
       <div class="table-container" style="max-height: 280px;">
         <table>
           <thead>
@@ -768,6 +842,28 @@ function getDashboardHtml(): string {
           </tbody>
         </table>
       </div>
+    </section>
+
+    <section class="panel" id="ai-memory" style="padding: 16px 18px;">
+      <div class="panel-title" style="margin-bottom: 4px;">Approved AI memory <span id="aimemory-count" style="font-size: 11px; font-weight: normal; color: var(--muted);"></span></div>
+      <p style="color: var(--muted); font-size: 12px; line-height: 1.5; margin-bottom: 12px;">Only approved recovery procedures drive the worker without a new AI call. AI suggestions stay pending until an operator approves them. Disable is a local safety kill-switch for this PC.</p>
+      <div class="table-container" style="max-height: 240px;">
+        <table>
+          <thead>
+            <tr>
+              <th>Marketplace</th>
+              <th>Procedure</th>
+              <th>Error signature</th>
+              <th>Status</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="aimemory-table-body">
+            <tr><td colspan="5" style="text-align: center; padding: 20px; color: var(--muted);">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div id="ai-usage-line" style="font-size: 11px; color: var(--muted); margin-top: 10px;"></div>
     </section>
 
     <!-- KPI Overview -->
@@ -1109,6 +1205,67 @@ function getDashboardHtml(): string {
           '</td>' +
           '</tr>';
       }).join('');
+    }
+
+    let aiMemoryData = { procedures: [], events: [], usage: {}, assistEnabled: false };
+
+    async function loadAiMemory() {
+      const body = document.getElementById('aimemory-table-body');
+      try {
+        const res = await fetch('/api/v1/ai-memory');
+        if (!res.ok) {
+          document.getElementById('aimemory-count').textContent = '(unavailable)';
+          body.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:20px;color:#fbbf24;">AI memory could not be read.</td></tr>';
+          return;
+        }
+        aiMemoryData = await res.json();
+        renderAiMemory();
+      } catch (err) {
+        document.getElementById('aimemory-count').textContent = '(unavailable)';
+        body.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:20px;color:#fbbf24;">AI memory could not be read.</td></tr>';
+      }
+    }
+
+    function renderAiMemory() {
+      const rows = aiMemoryData.procedures || [];
+      const usage = aiMemoryData.usage || {};
+      const body = document.getElementById('aimemory-table-body');
+      document.getElementById('aimemory-count').textContent =
+        '(' + rows.filter(r => r.status === 'approved').length + ' approved · ' + rows.length + ' total)';
+      document.getElementById('ai-usage-line').textContent =
+        'AI assistance ' + (aiMemoryData.assistEnabled ? 'on' : 'off') +
+        ' · model calls ' + (usage.calls || 0) + ' · failures ' + (usage.failures || 0) +
+        (usage.lastLatencyMs != null ? ' · last call ' + usage.lastLatencyMs + ' ms' : '');
+      if (!rows.length) {
+        body.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:20px;color:var(--muted);">No approved procedures yet. The worker records verified fixes here after an operator approves them.</td></tr>';
+        return;
+      }
+      const dot = { approved: '#10b981', pending: '#f59e0b', disabled: '#64748b' };
+      body.innerHTML = rows.map(r => {
+        const color = dot[r.status] || '#94a3b8';
+        const canDisable = r.status !== 'disabled';
+        return '<tr>' +
+          '<td><strong>' + r.marketplace + '</strong></td>' +
+          '<td>' + r.title + '<div style="font-size:11px;color:var(--muted);">' + r.steps.length + ' step(s)</div></td>' +
+          '<td style="font-family:monospace;font-size:11px;">' + r.errorSignature + '</td>' +
+          '<td><span style="font-size:11px;color:' + color + ';">' + r.status + '</span></td>' +
+          '<td>' + (canDisable ? '<button class="btn btn-danger" type="button" style="padding:4px 10px;" onclick="disableAiProcedure(\'' + r.id.replace(/'/g, '') + '\')">Disable</button>' : '') + '</td>' +
+          '</tr>';
+      }).join('');
+    }
+
+    async function disableAiProcedure(id) {
+      try {
+        const res = await fetch('/api/v1/ai-memory/disable', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id })
+        });
+        if (!res.ok) alert('Could not disable that procedure.');
+      } catch (err) {
+        alert('Could not disable that procedure.');
+      }
+      loadAiMemory();
     }
 
     function renderOverall() {
@@ -1476,12 +1633,14 @@ function getDashboardHtml(): string {
     loadJobs();
     loadPanels();
     loadFollowUps();
+    loadAiMemory();
     connectSse();
     setInterval(loadStatus, 2000);
     setInterval(loadJobs, 10000);
     setInterval(loadPanels, 5000);
     setInterval(loadPortalLogins, 30000);
     setInterval(loadFollowUps, 60000);
+    setInterval(loadAiMemory, 60000);
   </script>
 </body>
 </html>`
@@ -1841,6 +2000,47 @@ export function startDesktopAppServer(bind: EngineBind = resolveEngineBind()): P
         const result = await client.testConnection()
         res.writeHead(200, { "Content-Type": "application/json" })
         res.end(JSON.stringify(result))
+        return
+      }
+
+      if (url.pathname === "/api/v1/ai-memory" && req.method === "GET") {
+        if (!operatorSignedIn) {
+          sendJson(res, 401, { error: "Sign in before viewing AI memory." })
+          return
+        }
+        sendJson(res, 200, buildAiMemoryPayload(
+          pruneLocalEvents(loadLocalMemory(agentDataDir()), Date.now()),
+          aiUsageSnapshot(),
+          loadAiAssistConfig().enabled,
+        ))
+        return
+      }
+
+      if (url.pathname === "/api/v1/ai-memory/disable" && req.method === "POST") {
+        if (!operatorSignedIn) {
+          sendJson(res, 401, { error: "Sign in before changing AI memory." })
+          return
+        }
+        try {
+          const body = await readJson(req)
+          const id = String(body.id || "").trim()
+          if (!id) {
+            sendJson(res, 400, { error: "A procedure id is required." })
+            return
+          }
+          const dir = agentDataDir()
+          const current = pruneLocalEvents(loadLocalMemory(dir), Date.now())
+          const next = disableLocalProcedure(current, id)
+          if (!next.found) {
+            sendJson(res, 404, { error: "No cached procedure has that id." })
+            return
+          }
+          saveLocalMemory(dir, next.memory)
+          logger.info("AI memory procedure disabled locally by operator: " + id)
+          sendJson(res, 200, { ok: true, id, changed: next.changed })
+        } catch (error) {
+          sendJson(res, 400, { error: error instanceof Error ? error.message : "Could not update AI memory." })
+        }
         return
       }
 

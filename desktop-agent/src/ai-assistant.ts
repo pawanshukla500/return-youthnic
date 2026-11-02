@@ -209,6 +209,46 @@ export async function requestAiProposal(
   return null
 }
 
+export type FollowUpMemoryHit = {
+  procedureId: string
+  title: string
+  steps: string[]
+}
+
+export type FollowUpAssistInput = {
+  outcome: string
+  /** True when the ticket state differs from the previous check. */
+  statusChanged: boolean
+  /** Approved-procedure match from the local memory cache, if any. */
+  memoryHit: FollowUpMemoryHit | null
+  /** True when the operator enabled AI and a gateway is configured. */
+  aiEnabled: boolean
+}
+
+export type FollowUpAssistDecision =
+  | { action: "no-action"; reason: string }
+  | { action: "memory-hit"; procedure: FollowUpMemoryHit }
+  | { action: "ai-needed" }
+  | { action: "human-review"; reason: string }
+
+/**
+ * Memory-first routing for one follow-up check. Unchanged tickets and
+ * unsupported readers need nothing; an approved procedure beats a model call;
+ * a model call beats an unassisted guess; anything else goes to a human.
+ * Never executes an action — the caller only logs, drafts, or escalates.
+ */
+export function decideFollowUpAssist(input: FollowUpAssistInput): FollowUpAssistDecision {
+  if (input.outcome === "status_read" && !input.statusChanged) {
+    return { action: "no-action", reason: "ticket state unchanged since the previous check" }
+  }
+  if (input.outcome === "not_supported") {
+    return { action: "no-action", reason: "marketplace has no status reader" }
+  }
+  if (input.memoryHit) return { action: "memory-hit", procedure: input.memoryHit }
+  if (input.aiEnabled) return { action: "ai-needed" }
+  return { action: "human-review", reason: "no approved procedure and AI assistance is off" }
+}
+
 /**
  * Build the safe diagnostic context sent to the model. Contains the claim,
  * marketplace, step, error signature and approved-procedure outcome — never

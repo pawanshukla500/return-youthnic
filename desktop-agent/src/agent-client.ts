@@ -225,8 +225,12 @@ export class AgentBackendClient {
     }
   }
 
-  /** Report the outcome of one follow-up check so the server can reschedule or stop the ticket. */
-  async reportFollowUp(followUpId: number, data: FollowUpReport): Promise<void> {
+  /**
+   * Report the outcome of one follow-up check so the server can reschedule or stop
+   * the ticket. Returns whether the ticket state changed since the previous check, so
+   * the worker can skip assistance work when nothing changed.
+   */
+  async reportFollowUp(followUpId: number, data: FollowUpReport): Promise<{ statusChanged: boolean }> {
     try {
       const url = `${this.config.backendUrl}/api/automation/follow-ups/${followUpId}/result`
       const res = await fetch(url, {
@@ -240,6 +244,8 @@ export class AgentBackendClient {
       })
       if (!res.ok) throw new Error(`Follow-up report failed with HTTP ${res.status}.`)
       logger.info(`Follow-up #${followUpId} reported (${data.outcome}${data.statusText ? `: ${data.statusText}` : ""}).`)
+      const body = (await res.json().catch(() => null)) as { statusChanged?: unknown } | null
+      return { statusChanged: body?.statusChanged === true }
     } catch (err) {
       logger.error("Failed to report follow-up result:", err)
       throw err

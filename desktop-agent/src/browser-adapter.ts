@@ -62,6 +62,8 @@ export type SupplierBrowserApi = {
   uploadViaChooser(buttonText: string, filePath: string): Promise<boolean>
   setFileInputFiles(selector: string, filePaths: string[]): Promise<boolean>
   close(): Promise<void>
+  /** Bring the panel on screen for manual steps. No-op when the adapter has no window to show. */
+  showForManualStep?(): Promise<void>
 }
 
 /** An opened supplier browser: the automation surface plus teardown. */
