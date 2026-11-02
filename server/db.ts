@@ -43,6 +43,7 @@ const SCHEMA_FILES = [
   "schema-meesho-claims.sql",
   "schema-claim-automation.sql",
   "schema-vms.sql",
+  "schema-ai-memory.sql",
 ] as const
 
 // History tables whose rows must never be destroyed by any code path. Listed here so they cannot silently

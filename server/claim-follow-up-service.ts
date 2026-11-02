@@ -1,6 +1,7 @@
 import type pg from "pg"
 import { accountCondition, type AccountScope } from "./access.js"
 import { ServiceError } from "./register-service.js"
+import { nextEligibleCheckAt } from "./nightly-window.js"
 
 /**
  * Claim follow-ups (marketplace ticket tracking).
@@ -431,7 +432,7 @@ export async function recordFollowUpResult(
         normalizedStatus || statusText,
         nextCheckCount,
         nextErrorStreak,
-        stopping ? null : nextCheckAtFrom(new Date()).toISOString(),
+        stopping ? null : nextEligibleCheckAt(new Date()).toISOString(),
         lastError,
         historyEntry,
       ],

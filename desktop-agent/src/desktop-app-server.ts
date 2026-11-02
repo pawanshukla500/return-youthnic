@@ -10,13 +10,16 @@ import { agentDataDir } from "./paths.js"
 import { logger } from "./logger.js"
 import { AgentBackendClient } from "./agent-client.js"
 import { BrowserRunner, findSystemBrowser } from "./browser-runner.js"
-import { getAutomationEngine } from "./marketplaces/registry.js"
+import { getAutomationEngine, isMarketplaceSupported } from "./marketplaces/registry.js"
 import { currentOperator, loginOperator, logoutOperator } from "./operator-session.js"
 import { closePortalLoginBrowser, holdPortalBrowser, listPortalLogins, PORTAL_CHANNELS, profileDirFor, queueOneClaim, readSessionSavedAt, savePortalLogin, testPortalLogin } from "./portal-login.js"
 import { clearPanelHold, getPanelStatuses, markPanelBusy, markPanelResult, panelKeyForMarketplace } from "./panel-queue.js"
 import { localEncryptionAvailable } from "./local-secrets.js"
 import { checkForUpdates } from "./update-check.js"
 import { followUpExecutionBundle } from "./follow-up-bundle.js"
+import { describeBrowserAdapter, openSupplierBrowser } from "./browser-adapter.js"
+import { aiUsageSnapshot, loadAiAssistConfig } from "./ai-assistant.js"
+import { nightlyFollowUpOnly, nightlyWindowStatus, shouldSkipFollowUpCycle } from "./follow-up-window.js"
 
 /**
  * The engine owns exactly one worker loop. The Electron shell embeds this
@@ -275,6 +278,10 @@ let lastFollowUpResult = ""
 async function pollAndProcessFollowUp(): Promise<boolean> {
   if (!isWorkerRunning) return false
   if (engineBusy() || holdPortalBrowser()) return false
+  if (shouldSkipFollowUpCycle(new Date(), nightlyFollowUpOnly())) {
+    lastFollowUpResult = "Next nightly tracking window 01:00-02:00 IST"
+    return false
+  }
   followUpInFlight = true
   lastFollowUpCheckTime = new Date().toLocaleTimeString("en-IN")
 
@@ -298,11 +305,26 @@ async function pollAndProcessFollowUp(): Promise<boolean> {
       return true
     }
 
-    const browserRunner = new BrowserRunner()
-    // Resolve the marketplace class *before* opening a browser. A marketplace with no automation entry is not a
-    // failed check: it has no reader either, so it is reported as unsupported and stopped, exactly like a
-    // marketplace whose checkClaimStatus() default says "not implemented". Reporting it as an error would burn
-    // three attempts and stop it with a misleading "the check kept failing".
+    // A marketplace with no automation entry is not a failed check: it has no
+    // reader either, so it is reported as unsupported and stopped, exactly like a
+    // marketplace whose checkClaimStatus() default says "not implemented". No browser
+    // is opened for it, so an unknown panel can never flash a window or burn a check.
+    if (!isMarketplaceSupported(followUp.marketplace)) {
+      const note = `Automation is not enabled for ${followUp.marketplace}.`
+      logger.warn(`Follow-up #${followUp.followUpId}: ${note}`)
+      await client.reportFollowUp(followUp.followUpId, { outcome: "not_supported", note })
+      lastFollowUpResult = `${followUp.marketplace}: automation not enabled`
+      return true
+    }
+
+    // One adapter for filing and follow-ups: external system browser by default,
+    // native WebContentsView only when BROWSER_ADAPTER=native inside the desktop app.
+    const supplierBrowser = await openSupplierBrowser({
+      panelKey,
+      profileDir: profilePath,
+      headless: config.browserMode === "headless",
+    })
+    const browserRunner = supplierBrowser.browser
     let engine: ReturnType<typeof getAutomationEngine>
     try {
       engine = getAutomationEngine(
@@ -318,18 +340,14 @@ async function pollAndProcessFollowUp(): Promise<boolean> {
         path.join(config.workDir, `follow-up-${followUp.followUpId}`),
       )
     } catch (engineError) {
+      await supplierBrowser.close().catch(() => undefined)
       const note = engineError instanceof Error ? engineError.message : `Automation is not enabled for ${followUp.marketplace}.`
       logger.warn(`Follow-up #${followUp.followUpId}: ${note}`)
       await client.reportFollowUp(followUp.followUpId, { outcome: "not_supported", note })
       lastFollowUpResult = `${followUp.marketplace}: automation not enabled`
       return true
     }
-
-    const isHeadless = config.browserMode === "headless"
-    const browserSession = await browserRunner.launch({ profileDir: profilePath, headless: isHeadless })
     try {
-      await browserRunner.connectToPage(browserSession.port)
-
       const result = await engine.checkClaimStatus(followUp.marketplaceClaimId)
       if (!result.supported) {
         logger.info(`Follow-up #${followUp.followUpId}: ${result.reason}`)
@@ -356,7 +374,7 @@ async function pollAndProcessFollowUp(): Promise<boolean> {
         }
       }
     } finally {
-      await browserRunner.close()
+      await supplierBrowser.close()
     }
     followUpChecksRun += 1
     return true
@@ -1554,6 +1572,9 @@ export type EngineStatusSnapshot = {
   followUpChecksRun: number
   lastFollowUpResult: string
   activeJobInfo: unknown
+  browserAdapter: string
+  aiAssist: { enabled: boolean; calls: number; failures: number; lastLatencyMs: number | null; lastModel: string }
+  nightlyWindow: { nightlyOnly: boolean; inWindow: boolean; nextWindowStartIso: string; msUntilWindow: number }
 }
 
 export function engineStatus(): EngineStatusSnapshot {
@@ -1572,6 +1593,9 @@ export function engineStatus(): EngineStatusSnapshot {
     followUpChecksRun,
     lastFollowUpResult,
     activeJobInfo,
+    browserAdapter: describeBrowserAdapter(),
+    aiAssist: { enabled: loadAiAssistConfig().enabled, ...aiUsageSnapshot() },
+    nightlyWindow: nightlyWindowStatus(new Date()),
   }
 }
 
