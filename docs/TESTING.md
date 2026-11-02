@@ -142,7 +142,7 @@ The repository includes automated GitHub Actions workflows:
 
 4. **`.github/workflows/desktop-release.yml`**:
    - Triggers on pushes to `main` (and PRs touching desktop paths, build-only) affecting `desktop/**`, `desktop-agent/**`, claim server code, `src/pages/Claims.tsx`, `package.json`, or itself.
-   - Builds installers on three runners in parallel: Windows NSIS, Linux AppImage + deb, macOS DMG + ZIP. Full `npm test` runs once (ubuntu).
+   - Builds the Windows NSIS installer on a Windows runner. Full `npm test` runs on the same runner.
    - On `main` pushes, publishes every installer to one `desktop-v<version>.<run>` release (`--latest=false`, so Android keeps the Latest badge) and prunes older `desktop-v*` tags to the newest two.
 
 ## Verification status

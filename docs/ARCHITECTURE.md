@@ -186,19 +186,18 @@ The native Android app is written in Kotlin for fast, ergonomics-focused warehou
 - **Resilient Uploads**: Direct upload to Firebase Storage and server media endpoints with fallback to Android `WorkManager` for background retry on network jitter.
 - **In-App Auto-Updates (`AppUpdater.kt`)**: Checks `/api/app/latest` on start and prompts the operator to update when a new version is published.
 
-### Cross-platform Desktop Application & Claim Bot (`desktop/` & `desktop-agent/`)
+### Windows Desktop Application & Claim Bot (`desktop/` & `desktop-agent/`)
 
 The system ships as **one automation engine** (`desktop-agent/`) driven by a thin Electron
-shell (`desktop/`) on Windows, Linux and macOS, and by a headless Linux service (Docker or
+shell (`desktop/`) on Windows, and by a headless Linux service (Docker or
 systemd) in server mode. The engine — not the shell — owns the worker loop, so closing a
 desktop window can never interrupt a claim. Operator guide: [DESKTOP-APP.md](DESKTOP-APP.md);
 server guide: [LINUX-SERVER.md](LINUX-SERVER.md); decisions and alternatives:
 [notes/architecture-decision.md](notes/architecture-decision.md).
 
-- **Three deployment modes, one codebase:**
-  - **Mode 1 — Windows Desktop.** Electron shell embeds the engine on `127.0.0.1:3005`. Tray, auto-start, `ReturnAppClaimBot` Scheduled Task, visible system browser.
-  - **Mode 2 — Linux Desktop.** Identical shell and engine; AppImage/deb packaging, system Chromium/Chrome, auto-start via a `.desktop` entry.
-  - **Mode 3 — Headless Linux Server.** The engine alone under Docker or systemd (`deploy/engine/`), headless Chromium over CDP, no window, no desktop environment. Closing the desktop client does not stop automation.
+- **Two deployment modes, one codebase:**
+  - **Windows Desktop.** Electron shell embeds the engine on `127.0.0.1:3005`. Tray, auto-start, `ReturnAppClaimBot` Scheduled Task, and the supplier browser embedded in the main window (no system browser).
+  - **Headless Linux Server.** The engine alone under Docker or systemd (`deploy/engine/`), headless Chromium over CDP, no window, no desktop environment. Closing the desktop client does not stop automation.
 - **Automation engine (`desktop-agent/src/desktop-app-server.ts`):**
   - Owns the single worker loop, the panel queue, the browser runner and the control API. `pollAndProcessJob()` returns whether it handled a claim, and the scheduler backs off 10s → 20s → 30s while the queue is empty.
   - Owns the follow-up ticket worker on its own, much slower cadence (`FOLLOWUP_INTERVAL_MS`, 30 minutes by default). Each cycle asks the server for the next due ticket check, opens that panel's saved session, calls the marketplace's `checkClaimStatus()`, and reports the result. The two workers never overlap: both drive the same supplier profile, so `followUpInFlight` blocks a filing cycle and vice versa (`poll-guard.ts`).
@@ -220,33 +219,33 @@ server guide: [LINUX-SERVER.md](LINUX-SERVER.md); decisions and alternatives:
   - Meesho is fully automated (a claim counts only on a new 9–15 digit Meesho ticket); other panels run assisted (prepare + evidence, operator confirms submit) and never auto-complete.
   - Ticket status reading is a separate, per-marketplace capability. `BaseMarketplaceAutomation.checkClaimStatus()` defaults to `{ supported: false }`, so a marketplace without a reader stops its follow-ups instead of pretending to check; implementing it in a marketplace class turns tracking on for that marketplace.
 - **Local secrets (`desktop-agent/src/local-secrets.ts`):** Operator token and PC API key are encrypted with the OS credential store (DPAPI on Windows) inside the packaged app, with a safe file fallback outside Electron.
-- **Update check (`desktop-agent/src/update-check.ts`):** Compares the running version against the newest `desktop-v*` GitHub release; the dashboard offers the OS-matched installer download. Check-and-notify only — no silent auto-install.
+- **Update check (`desktop-agent/src/update-check.ts`):** Compares the running version against the newest `desktop-v*` GitHub release; the dashboard offers the Windows installer download. Check-and-notify only — no silent auto-install.
 - **Low-Spec Hardware Discipline (4GB RAM & 2-Core CPU):**
   - **Memory Limits:** Caps V8 heap with `--max-old-space-size=256` and restricts renderer instances with `--renderer-process-limit=2`. Disables spellcheck (`spellcheck: false`) saving ~35MB RAM.
   - **Background Throttling & Low CPU Idle:** Native window timer throttling (`backgroundThrottling: true`) drops renderer activity to 1Hz when minimized to tray. Adaptive backoff scheduler polls every 5s during active claim queues, backing off smoothly to 10s -> 20s -> 30s when empty (< 0.5% idle CPU).
-  - **Zombie Process Elimination:** `BrowserRunner.close()` stops the whole browser process tree (`taskkill /T /F` on Windows, process-group kill on Linux/macOS).
+  - **Zombie Process Elimination:** `BrowserRunner.close()` stops the whole browser process tree (`taskkill /T /F` on Windows, process-group kill on headless engine hosts).
 - **Streaming Evidence Media Pipeline:**
   - Direct HTTP chunk-to-disk streaming (`ReadableStream.getReader()`) in `AgentClient.downloadEvidenceFiles`, eliminating RAM buffering during unboxing video downloads.
   - Automated disk pruning (`pruneOldEvidenceFiles`) cleans temporary media files older than 24 hours on startup.
 - **Installation & Deployment:**
-  - `electron-builder` targets: Windows NSIS (`Return.App.Setup.<version>.exe`, `perMachine: true`, `C:\Program Files\Return App\`), Linux AppImage + deb, macOS DMG + ZIP.
-  - `build/installer.nsh` custom steps: browser-presence warning, `ReturnAppClaimBot` Scheduled Task (sign-in trigger, hidden launch, restart on failure), task removal on uninstall.
+  - `electron-builder` target: Windows NSIS (`Return.App.Setup.<version>.exe`, `perMachine: true`, `C:\Program Files\Return App\`). No system browser is required.
+  - `build/installer.nsh` custom steps: `ReturnAppClaimBot` Scheduled Task (sign-in trigger, hidden launch, restart on failure), task removal on uninstall.
   - Packaged installs register auto-start by default. The app starts hidden in the tray and resumes work only after an Admin or Supervisor session is verified.
   - Every Server PC has a UUID and API key. Queue, credential, media and progress routes require both values; jobs use expiring leases and bounded retries.
-  - Automated continuous release via GitHub Actions (`.github/workflows/desktop-release.yml`, windows/ubuntu/macos matrix, one `desktop-v*` release, newest two kept).
+  - Automated continuous release via GitHub Actions (`.github/workflows/desktop-release.yml`, Windows runner only, one `desktop-v*` release, newest two kept).
 
 ## Directory structure
 
 
 ```text
-desktop/                      Thin Electron shell (Windows, Linux, macOS)
+desktop/                      Thin Windows Electron shell
   main.ts                     Window, tray, single-instance lock, auto-start, engine client
   preload.cjs                 Isolated IPC preload bridge (typed verbs)
 desktop-agent/                Marketplace claim automation engine (the portable core)
   src/desktop-app-server.ts   Engine entrypoint: single worker loop, control API, dashboard
   src/engine-config.ts        Bind + remote-access policy (fail-closed on a non-loopback bind)
   src/paths.ts                AGENT_DATA_DIR resolution for profiles, evidence cache, logs, session
-  src/browser-runner.ts       CDP browser launcher with per-OS process-tree cleanup
+  src/browser-runner.ts       CDP browser launcher with process-tree cleanup (Windows taskkill, POSIX process groups on engine hosts)
   src/agent-client.ts         Authenticated API client, leases, streaming and evidence-integrity checks
   src/panel-queue.ts          Six isolated panels, round-robin rotation, cooldowns
   src/local-secrets.ts        OS-credential-store encryption (DPAPI) with fallback
