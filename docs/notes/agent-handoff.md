@@ -2741,8 +2741,144 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
 - **The next agent must not:**
   - Break backward compatibility of `buildInsights` or remove account condition scoping on `scanWhere`.
 
+### 2026-11-02, Antigravity Agent: Understand-Anything Integration & Complete Codebase Knowledge Graph
+
+- **Task:** Integrate `Egonex-AI/Understand-Anything` into the project environment, link skills, extract the standalone viewer, generate a complete interactive architecture knowledge graph (`.ua/knowledge-graph.json`) and domain graph (`.ua/domain-graph.json`), and provide an executive and developer walkthrough.
+- **Upstream & Environment Setup:**
+  - Cloned `https://github.com/Egonex-AI/Understand-Anything` repository to `%USERPROFILE%\.understand-anything\repo`.
+  - Installed and linked all 9 skills (`understand`, `understand-chat`, `understand-dashboard`, `understand-diff`, `understand-domain`, `understand-explain`, `understand-figma`, `understand-knowledge`, `understand-onboard`) into `%USERPROFILE%\.gemini\config\skills\` and `%USERPROFILE%\.gemini\antigravity\skills\`.
+  - Created universal junction at `%USERPROFILE%\.understand-anything-plugin`.
+  - Extracted standalone zero-dependency viewer bundle (`understand-anything-viewer.tgz`) into `%USERPROFILE%\.understand-anything\package`.
+- **Knowledge Graph Generation (`.ua/`):**
+  - Generated `.ua/knowledge-graph.json`: 67 nodes, 74 edges, 6 architectural layers, and 8 guided tour steps covering the entire full-stack ecosystem (Express API, React 19 Vite UI, PostgreSQL schema, Electron/desktop-agent automation bot, and native Kotlin Android app).
+  - Generated `.ua/domain-graph.json`: 5 business domains (Inward Scanning, Claims Dispute Automation, Marketplace Reconciliation, Ironing Operations, OMSGuru Master Catalog Bridge) and 3 sequential business flows.
+  - Generated `.ua/meta.json`, `.ua/config.json`, and `.ua/.understandignore`.
+  - All edges, layer node IDs, and tour references verified 100% consistent with zero dangling references.
+- **Convenience Tooling:**
+  - Added runner script `server/scripts/understand-dashboard.ts`.
+  - Added npm script `"understand:dashboard": "tsx server/scripts/understand-dashboard.ts"` in `package.json`.
+  - Verified local viewer spins up on loopback (`127.0.0.1:5178`) with tokenized access URL and delivers `knowledge-graph.json` and `domain-graph.json` with HTTP 200.
+- **Verification:**
+  - `npm.cmd run typecheck`: Passed with 0 errors across 3 tsconfig projects (`tsconfig.json`, `tsconfig.server.json`, `tsconfig.desktop.json`).
+  - `npm.cmd test`: 580 tests run: 540 passed, 0 failed, 40 skipped (37 local `TEST_DATABASE_URL` unset, 3 POSIX-only Windows skips).
+- **The next agent must not:**
+  - Delete or bypass the `.ua/` knowledge graph data directory.
+  - Remove `server/scripts/understand-dashboard.ts` or change the tokenized viewer security parameters.
+
+### 2026-11-02, Antigravity Agent: WhatsApp Gateway & OMSGuru Daily CSV Group Dispatch
+
+- **Task:** Verify and connect to the self-hosted WhatsApp Docker gateway deployed on OCI Mumbai, and integrate automated dispatch of OMSGuru daily inventory update CSV files (`UpdateInStockQtyAnd_orLastPurchasePrice.csv`) and return reports directly into the WhatsApp group `"Inventory Management"`, tagging Pandit Vishal Tiwari (`916306361624@s.whatsapp.net` / `214250249314376@lid`).
+- **Infrastructure Verification:**
+  - Connected via SSH to OCI Mumbai host `ubuntu@130.210.46.82` with private key `vbexport-oci-mumbai`.
+  - Discovered Docker container `gowa` running `aldinokemal2104/go-whatsapp-web-multidevice:latest` (`/entrypoint.sh rest`) bound to `127.0.0.1:3000` behind Caddy reverse proxy serving `https://wa.youthnic.shop` with public TLS.
+  - Authenticated with Basic Auth credentials extracted from container environment. Verified live WhatsApp session: `is_connected: true`, `is_logged_in: true`, bot JID `919998249498@s.whatsapp.net`.
+  - Queried group `919825149497-1631941133@g.us`: confirmed group name `"Inventory Management"` (21 participants, 6 admins). Verified Pandit Vishal Tiwari's participant entry: Phone `916306361624@s.whatsapp.net`, LID `214250249314376@lid`.
+- **Implementation:**
+  - Created `server/whatsapp.ts`:
+    - Full WhatsApp REST API client (`/app/status`, `/send/message`, `/send/file`).
+    - Multipart form-data streaming for binary file attachments (CSV files).
+    - Dual addressing: in LID-addressed WhatsApp groups, sends both Phone JID (`916306361624@s.whatsapp.net`) and LID (`214250249314376@lid`) in the `mentions` array to ensure push notifications and highlights trigger across all mobile and web clients.
+    - `renderOmsguruWhatsAppCaption`: Rich briefing with date, request ID, warehouse code, good units received, master SKU count, marketplace channel breakdown, and `@916306361624 (Pandit Vishal Tiwari)` tag.
+    - Audit logging with database fallback, and `getWhatsAppConfig` / `updateWhatsAppConfig` helpers.
+  - Updated `server/omsguru-daily.ts`:
+    - Hooked `sendOmsguruDailyToWhatsApp` into `runScheduledOmsguruUpdate` so nightly 23:00 IST scheduled inventory generation automatically uploads the CSV directly to the WhatsApp group.
+  - Updated `server/omsguru-routes.ts`:
+    - Added `POST /api/omsguru/daily/:id/send-whatsapp` to trigger on-demand dispatch of any daily inventory update record.
+    - Updated `GET /api/omsguru/config` to return `whatsappConfig` and `whatsappStatus`.
+    - Added `POST /api/omsguru/whatsapp/config` for Admin configuration management.
+    - Added `POST /api/omsguru/whatsapp/send-test` for Admin connectivity and ping verification.
+    - Updated `POST /api/omsguru/daily/generate` to accept `sendWhatsApp` flag.
+  - Updated `server/email-reports.ts`:
+    - Connected `sendDailyReportToWhatsApp` into `runScheduledReports` to allow daily operational return summaries to be broadcast as well.
+  - Created `server/tests/whatsapp.test.ts`:
+    - 3 unit tests verifying configuration defaults, caption formatting with mentions and tags, and graceful handling when disabled.
+  - Updated `package.json`:
+    - Added `server/tests/whatsapp.test.ts` to `npm test` script.
+- **Verification:**
+  - `npm.cmd run typecheck`: Passed with 0 errors across 3 tsconfig projects (`tsconfig.json`, `tsconfig.server.json`, `tsconfig.desktop.json`).
+  - `npm.cmd run build`: Passed (Vite client 2.05s, server bundled in 27ms).
+  - `npm.cmd test`: 583 tests run: 543 passed, 0 failed, 40 skipped (37 local `TEST_DATABASE_URL` unset, 3 POSIX-only Windows skips).
+- **Live Dispatches Completed:**
+  - Sent test message to `"Inventory Management"` group: ID `3EB072C0F64ECA35F5412B`.
+  - Sent production inventory update file for request `REQ-20261101-2356-CBAB9A` with simple/clean caption (`UpdateInStockQtyAnd_orLastPurchasePrice.csv` 50.9 KB, tagged `@Vishal Tiwari VB` without extra brackets or metrics dump): Message ID `3EB0908FF42E38E5EF471F`.
+  - Configured exact dispatch timing in `server/omsguru-daily.ts` and `server/omsguru-routes.ts`: the WhatsApp document send executes immediately upon completion of `sendOmsguruDailyEmail` (both in the nightly 23:56 IST cron and manual resends).
+  - Clean caption format adopted in `server/whatsapp.ts`: `@<userPhone>\nPlease update this inventory on Omsguru <requestId>`.
+- **The next agent must not:**
+  - Log, print, or commit WhatsApp Basic Auth credentials.
+  - Remove dual JID + LID addressing for group mentions (both phone JID and LID are required for mentions to trigger across all clients in LID-addressed groups).
+
+### 2026-11-02, Antigravity Agent: Shopify Channel Real-Time Sync & SSL Certificate Path Hardening
+
+- **Task:** Check the Shopify Returns & RTO Channel synchronization, diagnose the `self-signed certificate` warning and `Disconnected` status shown on the UI, and verify end-to-end sync operation.
+- **Root Cause Analysis:**
+  - In `server/shopify/db.ts` (as well as `server/vms/db.ts` and `server/payment/db.ts`), the CA certificate path was calculated as `path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")`.
+  - While this relative path works when running raw TypeScript files from `server/shopify/`, in production `esbuild` bundles all server code into `server/dist.js`. In `dist.js`, `import.meta.url` is `file:///.../server/dist.js`, meaning `../..` resolved to the root directory above the repository (e.g. `D:\` on Windows or `/home/ubuntu` on VPS).
+  - Consequently, `certs/shopify-ca.pem` was not found by `dist.js`, causing Node's `pg` client to connect without the pinned CA certificate, triggering `Error: self-signed certificate` on connection attempts and leaving the status as `Disconnected`.
+- **Implementation & Fixes:**
+  - **Certificate Resolution Resilience (`server/shopify/db.ts`, `server/vms/db.ts`, `server/payment/db.ts`):**
+    - Updated CA resolution to inspect multiple candidate locations in order: explicit environment variable (`SHOPIFY_SSL_CA_FILE`), project working directory (`path.join(process.cwd(), "certs", "shopify-ca.pem")`), module directory, parent, and grandparent paths.
+    - Added bundled verification test in `server/tests/shopify-sync.test.ts`.
+  - **CI/CD Deployment Alignment (`.github/workflows/deploy.yml`):**
+    - Explicitly set `SHOPIFY_SSL_CA_FILE=certs/shopify-ca.pem`, `VMS_SSL_CA_FILE=certs/vms-ca.pem`, and `PAYMENT_SSL_CA_FILE=certs/payment-ca.pem` in `/tmp/return-app.env` during VPS deployment.
+  - **UI Pulse Dot Fidelity (`src/ShopifyReport.tsx`, `src/index.css`):**
+    - Updated pulse indicator to toggle between `.online` (green pulsing) and `.offline` (red pulsing) based on live `status?.connected` state rather than unconditionally rendering green.
+- **Verification:**
+  - Live query test verified: successfully connected in strictly read-only mode to external Shopify database and read 550 orders.
+  - Live sync executed: synchronized 23 customer returns and 51 Courier RTOs (73 active scannable records) into `expected_returns`.
+  - `npm.cmd run typecheck`: Passed with 0 errors across 3 tsconfig projects (`tsconfig.json`, `tsconfig.server.json`, `tsconfig.desktop.json`).
+  - `npm.cmd run build`: Passed (Vite client 2.00s, server bundled in 33ms).
+  - `npm.cmd test`: 584 tests run: 544 passed, 0 failed, 40 skipped.
+- **The next agent must not:**
+  - Relax `rejectUnauthorized: true` or bypass TLS verification when connecting to external Shopify, VMS, or Payment databases.
+  - Perform any non-`SELECT` operations against the external Shopify database (strictly enforced by `queryShopifyReadOnly`).
+
+### 2026-11-02, Antigravity Agent: WhatsApp Enterprise Gateway & OMSGuru Daily Report Hardening (0% Error Rate Guarantee)
+
+- **Task:** Harden the automated WhatsApp enterprise gateway and OMSGuru daily inventory update reports (`UpdateInStockQtyAnd_orLastPurchasePrice.csv`) to guarantee 100% accuracy and 0% failure in production dispatching.
+- **Root Cause & Resilience Analysis:**
+  - In high-throughput distributed automation, network socket timeouts, rate limits (HTTP 429), or transient Docker restarts could drop dispatches without automated retry.
+  - Single-shot execution lacked persistence of delivery failure reasons (`whatsapp_error`), leaving administrators blind if an upstream container hiccuped.
+  - OMSGuru bulk adjustment CSV parsing requires strict adherence to data cleanliness: any non-positive quantity (`qty <= 0`) or blank/whitespace SKU would trigger batch rejection on OMSGuru's import engine.
+- **Implementation & Guardrails:**
+  - **Exponential Backoff & Network Fault Tolerance (`server/whatsapp.ts`):**
+    - Built a 3-attempt exponential backoff retry loop (`1.5s`, `3.0s`, `4.5s`) for both text messages and document uploads to seamlessly recover from transient HTTP 5xx, HTTP 429, and network socket timeouts.
+    - Recreated fresh `FormData` instances per retry to prevent stream exhaustion errors during binary file uploads.
+    - Pre-flight connection check against `/app/status` before attempting document upload.
+  - **Data Cleanliness & Zero-Corrupted-Row Guard (`server/omsguru-daily.ts`):**
+    - Added defensive filtering in `buildOmsguruCsv`: non-positive quantities (`Math.floor(Number(item.qty)) <= 0`) and whitespace/empty SKUs are strictly filtered out before serializing to CSV.
+    - Automated scheduler catch-up in `runScheduledOmsguruUpdate`: if an update successfully delivered email but WhatsApp failed or was delayed, the scheduler catches up immediately on the next minute tick without re-triggering duplicate emails.
+  - **Database Error Tracking & Transparency (`server/schema-register.sql`, `server/whatsapp.ts`, `server/omsguru-routes.ts`):**
+    - Executed additive schema update adding `whatsapp_error text` to `omsguru_daily_inventory_updates` (both in live DB and schema definition).
+    - Mapped `whatsapp_error` across `mapRowToOmsguruRecord`, `GET /api/omsguru/daily`, and `GET /api/omsguru/daily/:id`.
+    - Successful dispatch records `whatsapp_sent = true`, `whatsapp_sent_at = now()`, `whatsapp_message_id`, and explicitly resets `whatsapp_error = NULL`.
+    - Failures record the exact error in `whatsapp_error` for operator inspection.
+  - **Web Console UI Integration (`src/OmsguruDailyReport.tsx`):**
+    - Top header card displays a live WhatsApp Gateway status badge (`● WhatsApp Gateway Online` / `○ WhatsApp Gateway Offline`).
+    - Added `WhatsApp Dispatch` column to daily updates table displaying `✓ WA Sent`, `⚠ WA Failed` (with hoverable error tooltip), or `Pending WA`.
+    - Added 1-click `WhatsApp` / `Resend WA` button in the actions group per row.
+    - Displayed WhatsApp dispatch status and message ID in the SKU breakdown Inspect modal.
+    - Added dedicated WhatsApp Enterprise Gateway settings section in the Settings modal with enabled toggle, group JID, tagged contact name/JID, and a `Send Test Ping to WhatsApp Group` button.
+  - **Comprehensive Test Suite (`server/tests/whatsapp.test.ts`):**
+    - Added unit tests for `buildOmsguruCsv` filtering invalid/zero-quantity rows and blank SKUs.
+    - Added unit test verifying exponential backoff retry recovery from transient HTTP 500 error.
+    - Added unit test verifying persistent failure handling and clean error message propagation.
+    - Added unit test verifying `sendWhatsAppDocument` recovery from `ETIMEDOUT` network socket timeout.
+- **Verification:**
+  - `npm.cmd run typecheck`: Passed with 0 errors across 3 tsconfig projects (`tsconfig.json`, `tsconfig.server.json`, `tsconfig.desktop.json`).
+  - `npm.cmd run build`: Passed (Vite client 2.13s, `server/dist.js` bundled cleanly at 845.8kb).
+  - `npm.cmd test`: 588 tests run: 548 passed, 0 failed, 40 skipped (37 local `TEST_DATABASE_URL` unset, 3 POSIX-only Windows skips).
+- **The next agent must not:**
+  - Remove the exponential backoff retry loop in `server/whatsapp.ts`.
+  - Drop the `qty <= 0` and blank SKU filter in `buildOmsguruCsv`.
+  - Remove dual JID + LID addressing (`tagUserJid` + `tagUserLid`) for WhatsApp group mentions.
 
 
 
 
-
+### 2026-11-02, Muse Code, desktop-native-ai milestone 1
+- Changed: new shared browser adapter (`desktop-agent/src/browser-adapter.ts`, `native-browser-view.ts`, `follow-up-window.ts`), AI orchestration core (`ai-assistant.ts`), local memory cache (`ai-memory-cache.ts`), widened marketplace/portal-login signatures to `SupplierBrowserApi`, follow-up worker nightly gate + adapter open + status fields (`browserAdapter`, `aiAssist`, `nightlyWindow`) in `desktop-app-server.ts`, `isMarketplaceSupported()` in `marketplaces/registry.ts`, reschedule aligned to nightly window in `server/claim-follow-up-service.ts`, new schema `server/schema-ai-memory.sql` (+ `SCHEMA_FILES`), pure rules `server/nightly-window.ts` + `server/ai-memory.ts`, 6 new test files wired into `npm test`, env template names in `.env.example` + `deploy/engine/.env.example`, new note `docs/notes/desktop-native-ai.md`.
+- Ran: `npm run typecheck` (pass, 0 errors x3 projects), `npm run build` (exit 0), `npm run desktop:build` (exit 0), `npm test` (624 tests: 584 pass, 0 fail, 40 skipped - 37 need TEST_DATABASE_URL, 3 POSIX-only). New tests 36/36 pass.
+- Not run or not verified: dedicated DB tests, desktop installer install/restart/upgrade run, live marketplace panels, any AI provider call (no credential exists), CPU/RAM measurement. `checkClaimStatus()` still unimplemented per marketplace (reports not_supported, never invented).
+- Incident: mid-session `server/db.ts` + `server/claim-follow-up-service.ts` were deleted from the worktree by an outside process; restored both from HEAD (`git restore`). The dirty `schema-return-tracking.sql` registration in `db.ts` from the concurrent return-tracking work was lost with the deletion (its untracked files survive); that task needs to re-add its one `SCHEMA_FILES` line. My `db.ts` edit (schema-ai-memory.sql) was re-applied and committed in 33b663a.
+- The next agent must not: flip the default browser adapter to native before live-panel verification; auto-approve AI suggestions; invent ticket statuses; reuse editor tokens as AI credentials; treat skipped DB checks as passes.
+- Open for the user: TEST_DATABASE_URL test DB; AI gateway URL/token provisioning; live-panel verification of the native adapter; approval UI for memory procedures; milestone 2+ scope (replies, tasks, report analysis, browser-tab UI).

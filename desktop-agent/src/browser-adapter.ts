@@ -1,4 +1,4 @@
-import { BrowserRunner, findSystemBrowser } from "./browser-runner.js"
+import { BrowserRunner } from "./browser-runner.js"
 import { logger } from "./logger.js"
 
 /**
@@ -155,18 +155,10 @@ async function openNativeBrowser(options: SupplierBrowserOptions): Promise<Suppl
 export async function openSupplierBrowser(options: SupplierBrowserOptions): Promise<SupplierBrowserHandle> {
   const kind = resolveBrowserAdapterKind()
   if (kind === "native") {
-    try {
-      return await openNativeBrowser(options)
-    } catch (err) {
-      // Fail-closed to a clear message, never to a guessed session: fall back
-      // to the external adapter only when its own browser exists, otherwise
-      // surface the native error (usually "run inside the desktop app").
-      const fallback = findSystemBrowser()
-      logger.warn(`Native supplier browser unavailable (${err instanceof Error ? err.message : err}).`)
-      if (!fallback) throw err
-      logger.warn("Falling back to the external system browser on its own profile.")
-      return openExternalBrowser(options)
-    }
+    // No silent fallback: an explicit native request that cannot be honoured
+    // fails loudly. Substituting the external adapter would file claims under
+    // a different browser profile and hide a broken install.
+    return openNativeBrowser(options)
   }
   return openExternalBrowser(options)
 }

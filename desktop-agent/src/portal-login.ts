@@ -3,6 +3,7 @@ import path from "node:path"
 import { loadAgentConfig } from "./config.js"
 import { operatorAuthorization } from "./operator-session.js"
 import { BrowserRunner } from "./browser-runner.js"
+import type { SupplierBrowserApi } from "./browser-adapter.js"
 import { logger } from "./logger.js"
 
 export const PORTAL_CHANNELS = [
@@ -179,7 +180,7 @@ async function saveTypedLogin(row: PortalLoginRow, username: string, password: s
 }
 
 export async function completePortalLogin(
-  browser: BrowserRunner,
+  browser: SupplierBrowserApi,
   input: { marketplace: string; portalUrl: string; username: string; password: string; waitMs?: number },
 ): Promise<{ ok: boolean; message: string }> {
   const portalUrl = input.portalUrl
@@ -261,7 +262,7 @@ export async function completePortalLogin(
   }
 }
 
-async function loggedIn(browser: BrowserRunner, marketplace: string): Promise<boolean> {
+async function loggedIn(browser: SupplierBrowserApi, marketplace: string): Promise<boolean> {
   const meesho = marketplace.toLowerCase().includes("meesho")
   return browser.evaluate<boolean>(`
     (() => {

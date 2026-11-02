@@ -37,6 +37,7 @@ export function normalizeErrorSignature(raw: string): string {
     .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/g, " <id> ")
     .replace(/\b\d{9,15}\b/g, " <ticket> ")
     .replace(/:\d{2,5}\b/g, ":<port>")
+    .replace(/\bport\s+\d+\b/g, "port <port>")
     .replace(/\b\d+\b/g, " <n> ")
     .replace(/\s+/g, " ")
     .trim()

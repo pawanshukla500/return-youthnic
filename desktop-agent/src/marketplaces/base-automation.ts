@@ -1,4 +1,4 @@
-import type { BrowserRunner } from "../browser-runner.js"
+import type { SupplierBrowserApi } from "../browser-adapter.js"
 import type { JobExecutionBundle } from "../agent-client.js"
 import { logger } from "../logger.js"
 
@@ -36,7 +36,7 @@ export abstract class BaseMarketplaceAutomation {
   abstract readonly marketplaceName: string
 
   constructor(
-    protected browser: BrowserRunner,
+    protected browser: SupplierBrowserApi,
     protected job: JobExecutionBundle,
     protected evidenceFilesMap: Map<string, string[]>,
     protected workDir: string,
