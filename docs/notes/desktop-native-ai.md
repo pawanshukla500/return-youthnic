@@ -80,6 +80,33 @@ Branch: `feature/desktop-native-ai`. Status: implemented, typechecked, built, te
 - No AI provider credential exists; `AI_GATEWAY_URL/TOKEN` are unset template
   names only. The coding-model session token was not reused.
 
+## Milestone 2 (branch `feature/desktop-native-ai-2`)
+
+- **Filing worker through the adapter.** `pollAndProcessJob` opens the supplier
+  browser via `openSupplierBrowser`; the hold-open manual-intervention flow
+  (`holdPortalBrowser`, now typed to the adapter surface) and teardown are
+  unchanged. Manual-intervention panels are surfaced via the adapter's
+  `showForManualStep()` (native) or the existing OS window (external, no-op).
+  Default remains external: identical behaviour until the operator opts into
+  native.
+- **Follow-up assistance loop (advisory only).** After each reported check the
+  worker runs `runFollowUpAssist`: memory-first (`decideFollowUpAssist`),
+  bounded AI draft when enabled, human review otherwise. It never changes what
+  was reported and never executes a marketplace action. The server now returns
+  an additive `statusChanged` flag (`recordFollowUpResult`, threaded through
+  `POST /api/automation/follow-ups/:id/result` and `AgentClient.reportFollowUp`)
+  so unchanged tickets skip assistance (workflow step 6).
+- **Memory dashboard section + safety kill-switch.** `GET /api/v1/ai-memory`
+  (procedures with status, newest 20 events, usage ledger, assist flag) renders
+  an "Approved AI memory" panel reusing the page's table styles; every field is
+  HTML-escaped server-side. `POST /api/v1/ai-memory/disable` flips one cached
+  procedure to `disabled` locally (operator-gated; upstream approval sync is a
+  later milestone). Follow-ups copy updated to the nightly window.
+- Verification: typecheck 0 errors, build + desktop:build exit 0, full suite
+  green (see PR). New tests: `ai-memory-panel.test.ts` (escaping, cap,
+  disable), `portal-hold.test.ts` (hold/close on the adapter surface),
+  `decideFollowUpAssist` cases in `ai-assistant.test.ts`.
+
 ## Operator knobs (names only, see `.env.example`, `deploy/engine/.env.example`)
 
 `BROWSER_ADAPTER`, `FOLLOWUP_NIGHTLY_ONLY`, `AI_ASSIST_ENABLED`,

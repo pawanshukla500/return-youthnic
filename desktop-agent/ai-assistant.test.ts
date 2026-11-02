@@ -7,6 +7,7 @@ import assert from "node:assert/strict"
 import {
   aiUsageSnapshot,
   buildDiagnosticPrompt,
+  decideFollowUpAssist,
   GatewayProvider,
   loadAiAssistConfig,
   providerFromConfig,
@@ -130,4 +131,37 @@ test("diagnostic prompts carry context, never credentials", () => {
   assert.match(prompt, /claim button not found/)
   assert.match(prompt, /SYN-Extra note here/)
   assert.doesNotMatch(prompt, /token/i)
+})
+
+test("unchanged tickets and unsupported readers need no assistance", () => {
+  assert.deepEqual(
+    decideFollowUpAssist({ outcome: "status_read", statusChanged: false, memoryHit: null, aiEnabled: true }),
+    { action: "no-action", reason: "ticket state unchanged since the previous check" },
+  )
+  assert.deepEqual(
+    decideFollowUpAssist({ outcome: "not_supported", statusChanged: false, memoryHit: null, aiEnabled: true }),
+    { action: "no-action", reason: "marketplace has no status reader" },
+  )
+})
+
+test("an approved procedure beats a model call", () => {
+  const hit = { procedureId: "SYN-P1", title: "SYN-Fix", steps: ["SYN-Step"] }
+  const decision = decideFollowUpAssist({ outcome: "error", statusChanged: false, memoryHit: hit, aiEnabled: true })
+  assert.equal(decision.action, "memory-hit")
+  if (decision.action === "memory-hit") assert.equal(decision.procedure.procedureId, "SYN-P1")
+})
+
+test("without memory the worker uses AI only when enabled", () => {
+  assert.equal(
+    decideFollowUpAssist({ outcome: "error", statusChanged: false, memoryHit: null, aiEnabled: true }).action,
+    "ai-needed",
+  )
+  assert.deepEqual(
+    decideFollowUpAssist({ outcome: "login_required", statusChanged: false, memoryHit: null, aiEnabled: false }),
+    { action: "human-review", reason: "no approved procedure and AI assistance is off" },
+  )
+  assert.equal(
+    decideFollowUpAssist({ outcome: "status_read", statusChanged: true, memoryHit: null, aiEnabled: false }).action,
+    "human-review",
+  )
 })
