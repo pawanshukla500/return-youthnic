@@ -280,9 +280,9 @@ async function loggedIn(browser: SupplierBrowserApi, marketplace: string): Promi
   `)
 }
 
-let heldBrowser: BrowserRunner | null = null
+let heldBrowser: SupplierBrowserApi | null = null
 
-export function holdPortalBrowser(browser?: BrowserRunner): boolean {
+export function holdPortalBrowser(browser?: SupplierBrowserApi): boolean {
   if (browser) heldBrowser = browser
   return heldBrowser !== null
 }

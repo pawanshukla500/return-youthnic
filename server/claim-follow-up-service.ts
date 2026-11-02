@@ -347,7 +347,7 @@ export async function recordFollowUpResult(
   agentUuid: string,
   followUpId: number,
   input: FollowUpResultInput,
-): Promise<{ marketplaceId: number | null; stopReason: string; normalizedStatus: string; isActive: boolean }> {
+): Promise<{ marketplaceId: number | null; stopReason: string; normalizedStatus: string; isActive: boolean; statusChanged: boolean }> {
   if (!FOLLOW_UP_OUTCOMES.includes(input.outcome)) throw new ServiceError(400, "Unknown follow-up outcome.")
 
   const client = await db.connect()
@@ -475,6 +475,7 @@ export async function recordFollowUpResult(
       stopReason: decision.stopReason,
       normalizedStatus,
       isActive: !stopping,
+      statusChanged: normalizedStatus !== "" && normalizedStatus !== String(row.status_at_last_check || ""),
     }
   } catch (error) {
     await client.query("ROLLBACK")
