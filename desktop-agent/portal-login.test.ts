@@ -3,7 +3,7 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import test from "node:test"
-import { profileDirFor, readSessionSavedAt, sessionMarkerPath } from "./src/portal-login.ts"
+import { profileDirFor, readSessionSavedAt, sessionMarkerPath, supplierSessionDir } from "./src/supplier-session.ts"
 
 test("marketplace profile folders stay stable for saved cookies", () => {
   const root = path.join(os.tmpdir(), "return-app-profiles")

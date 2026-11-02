@@ -115,7 +115,7 @@ export class BrowserRunner {
     const browserPath = options.executablePath || findSystemBrowser()
     if (!browserPath) {
       throw new Error(
-        "No compatible Chromium browser (Microsoft Edge, Google Chrome, or Chromium) found. Install Chrome/Chromium or set BROWSER_PATH to its executable.",
+        "No compatible Chromium browser (Microsoft Edge, Google Chrome, or Chromium) found. Inside the desktop app, unset BROWSER_ADAPTER (or remove a forced BROWSER_ADAPTER=external) to use the bundled browser instead; on servers, install Chrome/Chromium or set BROWSER_PATH to its executable.",
       )
     }
 

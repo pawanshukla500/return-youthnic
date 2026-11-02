@@ -4,7 +4,7 @@ import { logger } from "./logger.js"
 /**
  * Native supplier browser: the desktop app's bundled Chromium through `WebContentsView`.
  *
- * Desktop-only and opt-in (`BROWSER_ADAPTER=native`). Each marketplace panel gets
+ * Desktop-only and the default inside the desktop app (override with `BROWSER_ADAPTER=external`). Each marketplace panel gets
  * its own isolated, persistent Electron session (`persist:supplier-<panelKey>`),
  * so cookies and sign-in survive app restarts and updates. Nothing is ever copied
  * from the external system-browser profiles: the first run on the native adapter
@@ -225,18 +225,59 @@ class NativeSupplierBrowser implements SupplierBrowserApi {
   }
 
   async setFileInputFiles(selector: string, filePaths: string[]): Promise<boolean> {
-    // Electron opens its own file chooser for <input type=file>; programmatic
-    // assignment is blocked by design. Surface the panel so the operator (or an
-    // approved assisted step) picks the already-downloaded evidence files.
-    logger.warn(
-      `Native adapter: file input ${selector} needs ${filePaths.length} file(s); ` +
-        "showing the panel for operator-confirmed selection.",
-    )
-    await this.showForManualStep()
-    const ok = await this.evaluate<boolean>(
+    // Every path must exist locally: reporting success for a missing file
+    // would file a claim whose evidence never left the PC.
+    const { default: fs } = await import("node:fs")
+    for (const filePath of filePaths) {
+      if (!fs.existsSync(filePath)) {
+        logger.warn(`Native adapter: evidence file is missing on disk: ${filePath}`)
+        return false
+      }
+    }
+    const found = await this.evaluate<boolean>(
       `Boolean(document.querySelector(${JSON.stringify(selector)}))`,
     ).catch(() => false)
-    return ok
+    if (!found) {
+      logger.warn(`Native adapter: no file input matches ${selector}.`)
+      return false
+    }
+    // Electron has no silent file-chooser automation on purpose, but the main
+    // process can set the input through the debugger protocol â€” the same
+    // mechanism the external adapter uses over CDP. Anything that fails here
+    // (an already-attached debugger, a detached view) returns false and shows
+    // the panel, so the operator completes the pick by hand.
+    try {
+      const debuggerApi = this.contents.debugger
+      debuggerApi.attach("1.3")
+      try {
+        const doc = (await debuggerApi.sendCommand("DOM.getDocument", { depth: 0 })) as { root: { nodeId: number } }
+        const match = (await debuggerApi.sendCommand("DOM.querySelector", {
+          nodeId: doc.root.nodeId,
+          selector,
+        })) as { nodeId?: number }
+        if (!match || typeof match.nodeId !== "number") return false
+        await debuggerApi.sendCommand("DOM.setFileInputFiles", { nodeId: match.nodeId, files: filePaths })
+      } finally {
+        debuggerApi.detach()
+      }
+    } catch (err) {
+      logger.warn(`Native adapter: debugger file attach failed for ${selector}; showing the panel for a manual pick.`, err)
+      await this.showForManualStep()
+      return false
+    }
+    await this.delay(500)
+    // Confirm through the page itself: the input must hold the files, not
+    // merely exist. A zero count means the portal rejected the attach.
+    const attached = await this.evaluate<number>(
+      `(() => { const el = document.querySelector(${JSON.stringify(selector)}); ` +
+        `return el && el.files ? el.files.length : 0; })()`,
+    ).catch(() => 0)
+    if (attached <= 0) {
+      logger.warn(`Native adapter: ${selector} still holds no files after attach; showing the panel for a manual pick.`)
+      await this.showForManualStep()
+      return false
+    }
+    return true
   }
 
   async close(): Promise<void> {

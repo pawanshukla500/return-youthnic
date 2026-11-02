@@ -8,11 +8,11 @@ Branch: `feature/desktop-native-ai`. Status: implemented, typechecked, built, te
 
 - `openSupplierBrowser({ panelKey, profileDir, headless })` opens a supplier
   browser through the configured adapter. Default (`BROWSER_ADAPTER` unset or
-  `auto`) is the existing external system-Chromium runner: behaviour identical
-  to before, including headless Linux servers.
-- `BROWSER_ADAPTER=native` inside the Electron shell drives the bundled
-  Chromium through `WebContentsView`, one isolated persistent
-  `persist:supplier-<panel>` session per marketplace. Cookies survive restarts
+  `auto`) is the bundled Chromium (`WebContentsView`) inside the desktop app,
+  and the existing external system-Chromium runner everywhere else (headless
+  Linux servers, plain node, CI): behaviour identical to before there.
+  `BROWSER_ADAPTER=external` forces the system browser everywhere.
+- Inside the desktop app the adapter drives one isolated persistent
   and updates. No cookies are ever copied from external profiles; each adapter
   signs in fresh on its own profile, and login is requested only when that
   session is expired/revoked/invalid. OTP/CAPTCHA surfaces the panel window

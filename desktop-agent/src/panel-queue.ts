@@ -1,4 +1,5 @@
-import { profileDirFor, readSessionSavedAt } from "./portal-login.js"
+import { resolveBrowserAdapterKind } from "./browser-adapter.js"
+import { profileDirFor, readSessionSavedAt, supplierSessionDir } from "./supplier-session.js"
 
 /**
  * Panel-wise continuous claim queue.
@@ -127,9 +128,10 @@ export function getPanelStatuses(userDataDir: string): PanelStatus[] {
   return CLAIM_PANELS.map((p) => {
     const r = runtimeFor(p.key)
     const profileDir = profileDirFor(userDataDir, p.name)
+    const sessionDir = supplierSessionDir(userDataDir, p.name, resolveBrowserAdapterKind())
     let sessionSavedAt: string | null = null
     try {
-      sessionSavedAt = readSessionSavedAt(profileDir)
+      sessionSavedAt = readSessionSavedAt(sessionDir)
     } catch {
       sessionSavedAt = null
     }

@@ -7,18 +7,19 @@ import { logger } from "./logger.js"
  * Marketplace automation drives supplier portals through this interface instead of
  * constructing a concrete browser runner directly. Two adapters implement it:
  *
- * - `external` (default): the existing CDP-driven system Chromium/Edge runner
+ * - `external`: the existing CDP-driven system Chromium/Edge runner
  *   (`BrowserRunner`). Used for headless Linux operation, CI, and as the
  *   compatibility fallback. Behaviour is byte-for-byte the current behaviour.
- * - `native`: the Electron `WebContentsView` adapter backed by the desktop app's
+ * - `native` (default inside the desktop app): the Electron `WebContentsView` adapter backed by the desktop app's
  *   bundled Chromium (`native-browser-view.ts`). Desktop-only, opt-in via
  *   `BROWSER_ADAPTER=native`. Keeps one isolated, persistent
  *   `persist:supplier-<panel>` session per marketplace account, so cookies and
- *   sign-in survive restarts and updates without touching external profiles.
+ *   sign-in survive restarts and updates without touching external profiles. No Edge,
+ *   Chrome, or Chromium install is needed: the browser ships inside the app.
  *
- * The default stays `external` until the native adapter is verified against live
- * panels; flipping the default without that verification would change what every
- * installed warehouse PC drives. Session migration between adapters is
+ * The default is `native` inside the Electron shell (bundled Chromium) and
+ * `external` everywhere else (headless Linux servers, plain node, CI), so
+ * existing server installs behave exactly as before. Session migration between adapters is
  * deliberately unsupported: cookies are never copied across profile formats.
  * Each adapter signs in on its own profile, and the engine asks for login only
  * when that adapter's session is expired, revoked, or invalid.
@@ -73,17 +74,22 @@ export type SupplierBrowserHandle = {
   close(): Promise<void>
 }
 
+/** Default adapter: the bundled browser inside the desktop shell, the system browser everywhere else. Exported for tests. */
+export function defaultAdapterKind(bundledBrowserAvailable: boolean): BrowserAdapterKind {
+  return bundledBrowserAvailable ? "native" : "external"
+}
+
 export function resolveBrowserAdapterKind(): BrowserAdapterKind {
   const raw = String(process.env.BROWSER_ADAPTER || "").trim().toLowerCase()
   if (raw === "native") return "native"
   if (raw === "external") return "external"
-  if (raw === "" || raw === "auto") {
-    // Auto keeps the current behaviour everywhere: the external system browser.
-    // Native becomes the default only after it is verified against live panels.
-    return "external"
+  if (raw !== "" && raw !== "auto") {
+    logger.warn(`Unknown BROWSER_ADAPTER="${raw}". Falling back to the default adapter.`)
   }
-  logger.warn(`Unknown BROWSER_ADAPTER="${raw}". Using the external system browser.`)
-  return "external"
+  // Unset (or "auto"): native inside the desktop app where bundled Chromium
+  // exists, external on servers and plain node. Explicit "external" keeps the
+  // system browser everywhere, e.g. headless Linux operation.
+  return defaultAdapterKind(nativeBrowserAvailable())
 }
 
 /** True only inside the Electron shell (bundled Chromium available). */
@@ -137,9 +143,9 @@ async function openExternalBrowser(options: SupplierBrowserOptions): Promise<Sup
 async function openNativeBrowser(options: SupplierBrowserOptions): Promise<SupplierBrowserHandle> {
   if (!nativeBrowserAvailable()) {
     throw new Error(
-      "BROWSER_ADAPTER=native needs the Electron desktop shell (bundled Chromium). " +
-        "Unset BROWSER_ADAPTER to keep using the external system browser, " +
-        "or run inside the packaged desktop app.",
+      "The native supplier browser needs the Electron desktop shell (bundled Chromium). " +
+        "Run inside the packaged desktop app, or set BROWSER_ADAPTER=external " +
+        "to drive the system browser instead.",
     )
   }
   // Dynamic import on purpose: the engine also runs headless on Linux servers
@@ -150,7 +156,8 @@ async function openNativeBrowser(options: SupplierBrowserOptions): Promise<Suppl
 
 /**
  * Open a supplier browser through the configured adapter. Defaults to the
- * external system browser, so existing installs behave exactly as before.
+ * bundled browser in the desktop app and the system browser everywhere else,
+ * so existing server installs behave exactly as before.
  * Pass `headless: true` on servers; the native adapter ignores it and renders
  * in-window so an operator can complete OTP/CAPTCHA by hand.
  */

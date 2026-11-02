@@ -1,12 +1,13 @@
-// Checks for the shared supplier-browser adapter: kind resolution, the safe
-// default (external system browser), graceful behaviour outside Electron, and
-// the guarantee that the existing BrowserRunner satisfies the adapter surface
-// (so current marketplace automation keeps working unchanged).
+// Checks for the shared supplier-browser adapter: kind resolution, the shell-aware
+// default (bundled browser in Electron, system browser elsewhere), graceful behaviour
+// outside Electron, and the guarantee that the existing BrowserRunner satisfies the
+// adapter surface (so current marketplace automation keeps working unchanged).
 
 import test from "node:test"
 import assert from "node:assert/strict"
 import {
   describeBrowserAdapter,
+  defaultAdapterKind,
   nativeBrowserAvailable,
   openSupplierBrowser,
   resolveBrowserAdapterKind,
@@ -27,7 +28,10 @@ function withEnv(name: string, value: string | undefined, work: () => void): voi
   }
 }
 
-test("the default adapter is the external system browser", () => {
+test("the default adapter outside the desktop shell is the system browser", () => {
+  // This file runs in plain node (no Electron versions), so the default stays
+  // external here. Inside the packaged app the same unset value resolves to
+  // the bundled browser (see defaultAdapterKind below).
   withEnv("BROWSER_ADAPTER", undefined, () => {
     assert.equal(resolveBrowserAdapterKind(), "external")
   })
@@ -37,6 +41,11 @@ test("the default adapter is the external system browser", () => {
   withEnv("BROWSER_ADAPTER", "auto", () => {
     assert.equal(resolveBrowserAdapterKind(), "external")
   })
+})
+
+test("the default follows the shell: bundled browser in Electron, system browser elsewhere", () => {
+  assert.equal(defaultAdapterKind(true), "native")
+  assert.equal(defaultAdapterKind(false), "external")
 })
 
 test("explicit adapter selection is honoured; unknown values fall back safely", () => {

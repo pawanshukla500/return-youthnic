@@ -8,27 +8,13 @@
 ;     path: reboot, crash, or missed auto-start all relaunch the bot hidden
 ;     into the tray. Single-instance lock in the app prevents doubles with
 ;     the in-app auto-start entry.
-;  2. Warns (does not block) when no Chromium browser is found, because the
-;     claim engine drives the installed Edge/Chrome/Chromium.
+; No system browser is required: the supplier browser is bundled inside the app
+; (native WebContentsView, the default). The old Edge/Chrome warning was removed.
 ; On uninstall the scheduled task is removed. Supplier cookies and operator
 ; sign-in under %USERPROFILE%\.taskflow-claim-agent are intentionally kept so
 ; a reinstall or upgrade never forces every panel to sign in again.
 
 !macro customInstall
-  ; --- Browser presence check (warn only) ---
-  StrCpy $0 ""
-  ClearErrors
-  IfFileExists "C:\Program Files\Microsoft\Edge\Application\msedge.exe" +3 0
-  IfFileExists "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" +2 0
-  StrCpy $0 "edge"
-  ${If} $0 == ""
-    IfFileExists "C:\Program Files\Google\Chrome\Application\chrome.exe" +3 0
-    IfFileExists "C:\Program Files (x86)\Google\Chrome\Application\chrome.exe" +2 0
-    StrCpy $0 "chrome"
-  ${EndIf}
-  ${If} $0 == ""
-    MessageBox MB_OK|MB_ICONEXCLAMATION "Return App installed, but no Edge, Chrome, or Chromium browser was found.$\r$\n$\r$\nThe claim bot drives the system browser to file marketplace claims. Install Microsoft Edge or Google Chrome (or set the BROWSER_PATH environment variable), then use the dashboard's supplier-login setup."
-  ${EndIf}
 
   ; --- Scheduled task XML (logon trigger + watchdog repetition + restart on failure) ---
   ; MultipleInstancesPolicy=IgnoreNew means a trigger that fires while the task is

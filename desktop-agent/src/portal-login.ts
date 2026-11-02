@@ -1,9 +1,8 @@
-import fs from "node:fs"
-import path from "node:path"
 import { loadAgentConfig } from "./config.js"
 import { operatorAuthorization } from "./operator-session.js"
-import { BrowserRunner } from "./browser-runner.js"
-import type { SupplierBrowserApi } from "./browser-adapter.js"
+import { openSupplierBrowser, resolveBrowserAdapterKind, type SupplierBrowserApi } from "./browser-adapter.js"
+import { panelKeyForMarketplace } from "./panel-queue.js"
+import { profileDirFor, readSessionSavedAt, supplierSessionDir, writeSessionMarker } from "./supplier-session.js"
 import { logger } from "./logger.js"
 
 export const PORTAL_CHANNELS = [
@@ -39,34 +38,6 @@ type PortalSecret = {
   password: string
 }
 
-export function profileDirFor(userDataDir: string, marketplace: string): string {
-  const key = marketplace.toLowerCase().replace(/[^a-z0-9]/g, "_")
-  return path.join(userDataDir, `profile-${key}`)
-}
-
-export function sessionMarkerPath(profileDir: string): string {
-  return path.join(profileDir, "return-app-session.json")
-}
-
-export function readSessionSavedAt(profileDir: string): string | null {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(sessionMarkerPath(profileDir), "utf8")) as { savedAt?: string }
-    return parsed.savedAt || null
-  } catch {
-    return null
-  }
-}
-
-function writeSessionMarker(profileDir: string, accountName: string): void {
-  if (!profileDir) return
-  fs.mkdirSync(profileDir, { recursive: true })
-  fs.writeFileSync(
-    sessionMarkerPath(profileDir),
-    JSON.stringify({ accountName, savedAt: new Date().toISOString() }),
-    "utf8",
-  )
-}
-
 function backend(): string {
   return loadAgentConfig().backendUrl.replace(/\/$/, "")
 }
@@ -82,7 +53,8 @@ async function fetchPortalRows(): Promise<PortalLoginRow[]> {
   const res = await fetch(`${backend()}/api/automation/credentials`, { headers })
   if (!res.ok) throw new Error("Could not read the bot logins saved in the web app.")
   const body = (await res.json()) as { credentials?: Array<Record<string, unknown>> }
-  const userDataDir = loadAgentConfig().userDataDir
+  const config = loadAgentConfig()
+  const kind = resolveBrowserAdapterKind()
   return (body.credentials || []).map((row) => {
     const accountName = String(row.accountName || row.marketplaceName || "")
     return {
@@ -92,21 +64,22 @@ async function fetchPortalRows(): Promise<PortalLoginRow[]> {
       accountName,
       portalUrl: String(row.portalUrl || ""),
       usernameMasked: String(row.usernameMasked || ""),
-      sessionSavedAt: readSessionSavedAt(profileDirFor(userDataDir, accountName)),
+      sessionSavedAt: readSessionSavedAt(supplierSessionDir(config.userDataDir, accountName, kind)),
     }
   })
 }
 
 export async function listPortalLogins(): Promise<{ channels: PortalChannelStatus[] }> {
   const rows = await fetchPortalRows()
-  const userDataDir = loadAgentConfig().userDataDir
+  const config = loadAgentConfig()
+  const kind = resolveBrowserAdapterKind()
   const channels = PORTAL_CHANNELS.map((channel) => {
     const row = rows.find((item) => item.accountName.toLowerCase() === channel.name.toLowerCase() || item.marketplaceName.toLowerCase() === channel.name.toLowerCase())
     return {
       name: channel.name,
       configured: Boolean(row?.usernameMasked),
       usernameMasked: row?.usernameMasked || "",
-      sessionSavedAt: row?.sessionSavedAt || readSessionSavedAt(profileDirFor(userDataDir, channel.name)),
+      sessionSavedAt: row?.sessionSavedAt || readSessionSavedAt(supplierSessionDir(config.userDataDir, channel.name, kind)),
     }
   })
   return { channels }
@@ -181,7 +154,7 @@ async function saveTypedLogin(row: PortalLoginRow, username: string, password: s
 
 export async function completePortalLogin(
   browser: SupplierBrowserApi,
-  input: { marketplace: string; portalUrl: string; username: string; password: string; waitMs?: number },
+  input: { marketplace: string; portalUrl: string; username: string; password: string; waitMs?: number; sessionDir?: string },
 ): Promise<{ ok: boolean; message: string }> {
   const portalUrl = input.portalUrl
   if (!portalUrl) return { ok: false, message: `${input.marketplace} has no supplier portal address.` }
@@ -205,7 +178,7 @@ export async function completePortalLogin(
     }
 
     if (await loggedIn(browser, input.marketplace)) {
-      writeSessionMarker(browser.profileDirectory, input.marketplace)
+      writeSessionMarker(input.sessionDir || supplierSessionDir(loadAgentConfig().userDataDir, input.marketplace, resolveBrowserAdapterKind()), input.marketplace)
       logger.info(`${input.marketplace} login saved in the browser profile on this PC.`)
       return { ok: true, message: `${input.marketplace} is signed in and the cookies are saved on this PC.` }
     }
@@ -378,23 +351,32 @@ export async function signInMarketplace(input: {
   }
 
   const config = loadAgentConfig()
-  const profileDir = profileDirFor(config.userDataDir, row.accountName)
-  const browser = new BrowserRunner()
-  const session = await browser.launch({ profileDir, headless: false, port: 9333 })
+  const kind = resolveBrowserAdapterKind()
+  // Supplier sign-in always goes through the selected adapter: the embedded
+  // WebContentsView in the desktop app, the external system browser everywhere
+  // else. A hardcoded BrowserRunner here used to
+  // bypass the adapter, so Test Login ignored the native mode entirely.
+  const handle = await openSupplierBrowser({
+    panelKey: panelKeyForMarketplace(row.accountName),
+    profileDir: profileDirFor(config.userDataDir, row.accountName),
+    headless: false,
+    port: 9333,
+  })
+  const browser = handle.browser
   try {
-    await browser.connectToPage(session.port)
     const result = await completePortalLogin(browser, {
       marketplace: row.accountName,
       portalUrl: secret.portalUrl || row.portalUrl,
       username: secret.username,
       password: secret.password,
+      sessionDir: supplierSessionDir(config.userDataDir, row.accountName, kind),
     })
     if (!result.ok && input.holdOnPrompt) {
       heldBrowser = browser
     }
     return result
   } finally {
-    if (heldBrowser !== browser) await browser.close()
+    if (heldBrowser !== browser) await handle.close()
   }
 }
 
