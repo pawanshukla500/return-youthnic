@@ -39,7 +39,7 @@ Closing the window keeps it running in the tray.
    Flipkart, Amazon, Myntra VB, Myntra EJ, Ajio.
 3. Per panel: enter the supplier ID + password (or leave blank to reuse the
    bot login saved on the web), Save, then **Connect**. The supplier page
-   opens in a visible browser — complete OTP/CAPTCHA yourself. Cookies are
+   opens as a supplier tab inside this app window — complete OTP/CAPTCHA yourself, then use Hide supplier browser to return to the dashboard. Cookies are
    saved on this PC.
 4. The counter tracks `X of 6 connected`. A panel whose session expires drops
    back to Connect with "ID saved — sign in again".
@@ -50,6 +50,7 @@ Closing the window keeps it running in the tray.
 ## 3. Daily operation
 
 - **First-time setup box**: connect/reconnect panels, `X of 6 connected`, credential-storage mode, Check-for-updates button.
+- **Supplier browser tab**: while a supplier tab is open inside the app window, the dashboard shows its panel name with **Show/Hide supplier browser** buttons, so the operator can switch between the supplier page and the dashboard without a second window.
 - **Claims Queue Pipeline** table: filter, Run this claim, watch stages.
 - **Panel-wise strip**: per-panel state (Ready / Filing / Needs you /
   Cooling down). A held panel never blocks the others; **Rejoin rotation**

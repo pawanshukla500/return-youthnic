@@ -1,6 +1,6 @@
 import { describe, it } from "node:test"
 import assert from "node:assert/strict"
-import { checkForUpdates, isNewerRelease } from "./src/update-check.js"
+import { checkForUpdates, isNewerRelease, selectWindowsSetupAsset } from "./src/update-check.js"
 
 describe("desktop update check", () => {
   it("compares semver against desktop-v tags (run number ignored)", () => {
@@ -28,6 +28,29 @@ describe("desktop update check", () => {
     assert.equal(result.latestTag, "desktop-v9.9.9.1")
     assert.equal(result.downloadUrl, "https://example.invalid/setup.exe")
     assert.deepEqual(result.downloads, [{ name: "setup.exe", url: "https://example.invalid/setup.exe" }])
+  })
+
+  it("offers the Windows .exe even when other OS installers are listed first", async () => {
+    const fakeFetch = (async () => ({
+      ok: true,
+      json: async () => [
+        {
+          tag_name: "desktop-v9.9.9.1",
+          assets: [
+            { name: "Return.App.Setup.9.9.9.dmg", browser_download_url: "https://example.invalid/setup.dmg" },
+            { name: "Return.App.Setup.9.9.9.deb", browser_download_url: "https://example.invalid/setup.deb" },
+            { name: "Return.App.Setup.9.9.9.exe", browser_download_url: "https://example.invalid/setup.exe" },
+          ],
+        },
+      ],
+    })) as unknown as typeof fetch
+    const result = await checkForUpdates(fakeFetch)
+    assert.equal(result.ok, true)
+    assert.equal(result.downloadUrl, "https://example.invalid/setup.exe")
+    assert.deepEqual(selectWindowsSetupAsset(result.downloads), {
+      name: "Return.App.Setup.9.9.9.exe",
+      url: "https://example.invalid/setup.exe",
+    })
   })
 
   it("fails closed when the feed is unreachable", async () => {

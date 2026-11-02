@@ -1,4 +1,4 @@
-name: Build & Release Return App Desktop (Windows, Linux, macOS)
+name: Build & Release Return App Desktop (Windows)
 
 on:
   push:
@@ -52,28 +52,8 @@ concurrency:
 
 jobs:
   build-desktop:
-    name: Build Desktop Setup (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: windows-latest
-            dist: "npm run desktop:dist"
-            artifact: return-app-windows-setup
-            glob: "dist-electron/Return.App.Setup.*.exe"
-          - os: ubuntu-latest
-            dist: "npm run desktop:dist:linux"
-            artifact: return-app-linux-setup
-            glob: |
-              dist-electron/Return.App.Setup.*.AppImage
-              dist-electron/Return.App.Setup.*.deb
-          - os: macos-latest
-            dist: "npm run desktop:dist:mac"
-            artifact: return-app-macos-setup
-            glob: |
-              dist-electron/Return.App.Setup.*.dmg
-              dist-electron/Return.App.Setup.*.zip
-    runs-on: ${{ matrix.os }}
+    name: Build Desktop Setup (windows-latest)
+    runs-on: windows-latest
     steps:
       - name: Checkout Source Code
         uses: actions/checkout@v4
@@ -94,27 +74,26 @@ jobs:
         run: npm run build
 
       - name: Run Automated Tests
-        if: matrix.os == 'ubuntu-latest'
         run: npm test
 
       - name: Bundle Electron Main
         run: npm run desktop:build
 
       - name: Build Desktop Setup Installer
-        run: ${{ matrix.dist }}
+        run: npm run desktop:dist
 
       - name: Upload Setup Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
-          path: ${{ matrix.glob }}
+          name: return-app-windows-setup
+          path: "dist-electron/Return.App.Setup.*.exe"
           if-no-files-found: error
 
   publish-release:
     name: Publish Desktop Release to GitHub
     needs: build-desktop
     if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish)
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     permissions:
       contents: write
     steps:
@@ -133,7 +112,7 @@ jobs:
         shell: bash
         run: |
           shopt -s nullglob
-          FILES=(release-input/**/*.{exe,AppImage,deb,dmg,zip})
+          FILES=(release-input/**/*.exe)
           if [ ${#FILES[@]} -eq 0 ]; then
             echo "::error::No setup files found in downloaded artifacts."
             exit 1
@@ -149,12 +128,10 @@ jobs:
             --target "${{ github.sha }}" \
             --latest=false \
             --title "Return App Desktop $TAG_NAME" \
-            --notes "Cross-platform desktop installer for Return App ($TAG_NAME).
+            --notes "Windows-only desktop installer for Return App ($TAG_NAME).
 
-          ### Downloads
-          * **Windows**: \`Return.App.Setup.<version>.exe\` (NSIS, per-machine, Desktop + Start Menu shortcuts)
-          * **Linux (Ubuntu/Debian)**: \`.deb\` package or portable \`.AppImage\` — needs Chrome/Chromium or Edge installed, or set \`BROWSER_PATH\`
-          * **macOS**: \`.dmg\` disk image (also ships as \`.zip\`)
+          ### Download
+          * **Windows 10/11 x64**: \`Return.App.Setup.<version>.exe\` (NSIS, per-machine, Desktop + Start Menu shortcuts). No Chrome or Edge install needed — the supplier browser ships inside the app.
 
           ### Panel-wise continuous filing
           * **Six isolated supplier panels**: Meesho, Flipkart, Amazon, Myntra VB, Myntra EJ, Ajio — each keeps its own login cookies and queue.
@@ -163,8 +140,8 @@ jobs:
 
           ### System Specifications & Optimizations:
           * **Low-Spec Optimized**: Runs smoothly on **4GB RAM and 2-Core CPUs** 24/7 with V8 heap constraints (\`--max-old-space-size=256\`) and Chromium background throttling.
-          * **Auto-start on every OS**: Windows registry, Linux desktop entry, macOS login item — launches hidden into the tray.
-          * **Bounded Resource Use**: Native process-tree teardown on all platforms, streaming evidence downloads, 24-hour cache pruning, and adaptive idle polling." || \
+          * **Auto-start on Windows**: start-at-login entry plus the ReturnAppClaimBot scheduled task — launches hidden into the tray.
+          * **Bounded Resource Use**: native Windows process-tree teardown, streaming evidence downloads, 24-hour cache pruning, and adaptive idle polling." || \
           gh release upload "$TAG_NAME" "${FILES[@]}" --clobber
 
           # Keep only the newest two DESKTOP releases (current + previous, for rollback).

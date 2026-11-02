@@ -1,6 +1,6 @@
 import path from "node:path"
 import fs from "node:fs"
-import { app, BrowserWindow, Menu, Tray, nativeImage, Notification, ipcMain, shell, session, type NativeImage } from "electron"
+import { app, BrowserWindow, Menu, Tray, nativeImage, Notification, ipcMain, session, type NativeImage } from "electron"
 import {
   enginePause,
   engineRunOnceNow,
@@ -9,6 +9,7 @@ import {
   resumeClaimBotIfSignedIn,
   startDesktopAppServer,
 } from "../desktop-agent/src/desktop-app-server.js"
+import { layoutSupplierViews, setSupplierViewHost } from "../desktop-agent/src/native-browser-view.js"
 import { isInsecureRemoteUrl, isSameOrigin, localEngineUrl, resolveEngineBind, type EngineBind } from "../desktop-agent/src/engine-config.js"
 import { escapeHtml, scriptLiteral } from "../desktop-agent/src/html-escape.js"
 import { logger } from "../desktop-agent/src/logger.js"
@@ -199,18 +200,83 @@ async function toggleWorker(): Promise<ShellStatus> {
 // Main Application Window
 // ---------------------------------------------------------------------------------------------------------------
 
-function iconFor(name: "png" | "ico"): string {
-  // Windows prefers .ico, Linux/macOS prefer .png. Both ship in public/.
-  const ordered = process.platform === "win32" ? ["app-icon.ico", "app-icon.png"] : ["app-icon.png", "app-icon.ico"]
-  for (const file of ordered) {
+function iconFor(): string {
+  // Windows-only desktop: the .ico ships in public/ (the .png is the fallback).
+  for (const file of ["app-icon.ico", "app-icon.png"]) {
     const candidate = path.join(app.getAppPath(), "public", file)
     if (fs.existsSync(candidate)) return candidate
   }
-  return path.join(app.getAppPath(), "public", name === "ico" ? "app-icon.ico" : "app-icon.png")
+  return path.join(app.getAppPath(), "public", "app-icon.ico")
+}
+
+/**
+ * Register the single app window as the owner of every supplier browser view.
+ *
+ * The native adapter attaches marketplace `WebContentsView`s to this host, so
+ * supplier sign-in, OTP/CAPTCHA and evidence work happen inside the main
+ * window. No per-panel `BrowserWindow` and no system browser are involved.
+ */
+function registerSupplierViewHost(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  setSupplierViewHost({
+    addView: (view) => {
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.contentView.addChildView(view)
+    },
+    removeView: (view) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        try {
+          mainWindow.contentView.removeChildView(view)
+        } catch {
+          // ignore teardown races
+        }
+      }
+    },
+    contentBounds: () => {
+      if (!mainWindow || mainWindow.isDestroyed()) return { x: 0, y: 0, width: 0, height: 0 }
+      const bounds = mainWindow.getContentBounds()
+      return { x: 0, y: 0, width: Math.max(0, bounds.width), height: Math.max(0, bounds.height) }
+    },
+    showWindow: () => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        if (mainWindow.isMinimized()) mainWindow.restore()
+        mainWindow.show()
+      }
+    },
+    focusWindow: () => {
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.focus()
+    },
+    isWindowDestroyed: () => !mainWindow || mainWindow.isDestroyed(),
+  })
+}
+
+/**
+ * Save the update installer without leaving the app: the dashboard's update
+ * link opens here instead of a system browser, and the operator runs the
+ * downloaded `.exe` themselves.
+ */
+async function downloadUpdateAsset(url: string): Promise<void> {
+  const fileName = decodeURIComponent(url.split("?")[0].split("/").pop() || "Return.App.Setup.exe")
+  if (!fileName.toLowerCase().endsWith(".exe")) {
+    logger.warn(`Blocked a non-installer popup inside the app window: ${url}`)
+    return
+  }
+  const downloadsDir = app.getPath("downloads")
+  fs.mkdirSync(downloadsDir, { recursive: true })
+  const savePath = path.join(downloadsDir, fileName)
+  logger.info(`Downloading the update installer to ${savePath}`)
+  const res = await fetch(url)
+  if (!res.ok || !res.body) throw new Error(`The update download answered HTTP ${res.status}.`)
+  fs.writeFileSync(savePath, Buffer.from(await res.arrayBuffer()))
+  if (Notification.isSupported()) {
+    new Notification({
+      title: "Return App update downloaded",
+      body: `${fileName} is in Downloads. Close the app and run it to update; supplier cookies are kept.`,
+    }).show()
+  }
 }
 
 function createMainWindow(target: EngineTarget, startupError?: string): void {
-  const iconPath = iconFor("png")
+  const iconPath = iconFor()
   let appIcon: NativeImage | undefined
   if (fs.existsSync(iconPath)) {
     appIcon = nativeImage.createFromPath(iconPath)
@@ -235,6 +301,28 @@ function createMainWindow(target: EngineTarget, startupError?: string): void {
     })
   }
 
+  // Same-window downloads (update installer, evidence exports): save to the
+  // operator's Downloads folder and notify instead of opening a browser.
+  ses.on("will-download", (_event, item) => {
+    try {
+      const fileName = item.getFilename() || "download"
+      const savePath = path.join(app.getPath("downloads"), fileName)
+      item.setSavePath(savePath)
+      item.once("done", (_doneEvent, state) => {
+        if (state === "completed") {
+          logger.info(`Download finished: ${savePath}`)
+          if (Notification.isSupported()) {
+            new Notification({ title: "Return App download finished", body: fileName, silent: true }).show()
+          }
+        } else {
+          logger.warn(`Download did not complete (${state}): ${fileName}`)
+        }
+      })
+    } catch (err) {
+      logger.warn("Could not handle the in-window download.", err)
+    }
+  })
+
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
@@ -255,6 +343,11 @@ function createMainWindow(target: EngineTarget, startupError?: string): void {
       spellcheck: false,
     },
   })
+
+  // The main window owns every supplier browser view: marketplace work is
+  // embedded here through WebContentsView, never a separate window.
+  registerSupplierViewHost()
+  mainWindow.on("resize", () => layoutSupplierViews())
 
   mainWindow.once("ready-to-show", () => {
     if (!startHidden) mainWindow?.show()
@@ -367,7 +460,8 @@ function createMainWindow(target: EngineTarget, startupError?: string): void {
     })
   }
 
-  // The window is the engine's own dashboard. Anything else opens in the system browser.
+  // The window is the engine's own dashboard. Navigation away from the engine
+  // origin is blocked; popups are denied below (installers download in-app).
   mainWindow.webContents.on("will-navigate", (event, url) => {
     if (url.startsWith("data:")) return
     if (!isSameOrigin(url, origin)) {
@@ -382,9 +476,13 @@ function createMainWindow(target: EngineTarget, startupError?: string): void {
     showOfflinePage(errorDescription)
   })
 
+  // No system browser: popups are denied, and an installer link downloads the
+  // `.exe` into Downloads so the operator can run it themselves.
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith("http:") || url.startsWith("https:")) {
-      shell.openExternal(url)
+      void downloadUpdateAsset(url).catch((err) => {
+        logger.warn("The in-app update download failed.", err)
+      })
     }
     return { action: "deny" }
   })
@@ -426,7 +524,7 @@ function createMainWindow(target: EngineTarget, startupError?: string): void {
 // ---------------------------------------------------------------------------------------------------------------
 
 function createTray(): void {
-  const iconPath = iconFor("ico")
+  const iconPath = iconFor()
   let trayIcon: NativeImage
   if (fs.existsSync(iconPath)) {
     trayIcon = nativeImage.createFromPath(iconPath)
@@ -627,11 +725,9 @@ function scheduleLocalEngineRetry(): void {
 /**
  * Start the app hidden at login, so a reboot does not stop the bot.
  *
- * Electron's setLoginItemSettings() is implemented on Windows (registry) and
- * macOS (login items) only. On Linux it is a silent no-op, so the XDG autostart
- * entry has to be written by hand; without it a packaged Linux install never
- * comes back after a reboot and the 24/7 promise is broken. The entry is
- * idempotent, so rewriting it on every launch is harmless.
+ * Windows-only desktop: Electron's setLoginItemSettings() writes the Windows
+ * registry entry. The installer also registers the ReturnAppClaimBot scheduled
+ * task, which relaunches the bot after a crash.
  */
 function registerAutoStart(): void {
   if (!app.isPackaged) return
@@ -652,33 +748,11 @@ function registerAutoStart(): void {
     return
   }
 
-  if (process.platform !== "linux") {
-    app.setLoginItemSettings({ openAtLogin: true, args: ["--hidden"] })
+  if (process.platform !== "win32") {
+    logger.warn("Start-at-login is only supported on Windows in this build.")
     return
   }
-
-  try {
-    // For an AppImage, process.execPath points inside the temporary mount, so
-    // APPIMAGE (the real file) is the path that survives a reboot.
-    const launchTarget = process.env.APPIMAGE || process.execPath
-    const configHome = process.env.XDG_CONFIG_HOME || path.join(app.getPath("home"), ".config")
-    const autostartDir = path.join(configHome, "autostart")
-    fs.mkdirSync(autostartDir, { recursive: true })
-    const entry = [
-      "[Desktop Entry]",
-      "Type=Application",
-      "Name=Return App",
-      "Comment=Marketplace claims bot",
-      `Exec="${launchTarget}" --hidden`,
-      "X-GNOME-Autostart-enabled=true",
-      "Terminal=false",
-      "",
-    ].join("\n")
-    fs.writeFileSync(path.join(autostartDir, "return-app.desktop"), entry, "utf8")
-    logger.info(`Registered the Linux autostart entry at ${path.join(autostartDir, "return-app.desktop")}.`)
-  } catch (err) {
-    logger.warn("Could not write the Linux autostart entry. The bot will not start at login.", err)
-  }
+  app.setLoginItemSettings({ openAtLogin: true, args: ["--hidden"] })
 }
 
 app.whenReady().then(async () => {
@@ -720,9 +794,7 @@ app.on("before-quit", () => {
 })
 
 app.on("window-all-closed", () => {
-  // Windows + Linux: keep the 24/7 bot in the tray after the window closes.
-  // macOS: standard behaviour — stay active until the user quits explicitly.
-  if (process.platform === "darwin") return
+  // Windows-only: keep the 24/7 bot in the tray after the window closes.
   if (isQuitting) {
     app.quit()
   }

@@ -32,14 +32,10 @@ Agents starting new work should read [AGENTS.md](../AGENTS.md) and [notes/agent-
 | `npm run sync:oms -- --list` | Lists the OMSGuru channels without writing to the database. |
 | `npm run sync:oms` | Syncs channel listings and master SKUs from OMSGuru, and runs the nightly listing-to-product-master bridge. Flags: `--channel <id>` for one channel, `--skip-skus` to skip the SKU list, `--skip-master-bridge` to skip master bridge. |
 | `npm run sync:vms` | Syncs product catalog images from read-only VMS database into `product_master.image_url`. |
-| `npm run desktop` | Launches the cross-platform Electron desktop app in local development (Windows, Linux, macOS). |
+| `npm run desktop` | Launches the Windows Electron desktop app in local development. |
 | `npm run desktop:build` | Bundles `desktop/main.ts` into CommonJS (`desktop/dist/main.cjs`) using esbuild. |
-| `npm run desktop:pack` | Builds an unpacked directory of the Electron app in `dist-electron/win-unpacked` for rapid testing. |
-| `npm run desktop:pack:linux` | Same unpacked build for Linux (`dist-electron/linux-unpacked`). |
-| `npm run desktop:dist` | Packages the machine-wide Windows NSIS installer (`Return.App.Setup.<version>.exe`) into `dist-electron/` with `perMachine: true`. Runs the custom steps in `build/installer.nsh` (browser check, `ReturnAppClaimBot` scheduled task). The installer output is local and is not committed. |
-| `npm run desktop:dist:linux` | Packages Linux AppImage + `.deb` (`Return.App.Setup.<version>.AppImage/.deb`). |
-| `npm run desktop:dist:mac` | Packages macOS DMG + ZIP. |
-| `npm run desktop:dist:all` | All OS installers (used by CI per-runner instead). |
+| `npm run desktop:pack` | Builds the Windows unpacked directory of the Electron app in `dist-electron/win-unpacked` for rapid testing. |
+| `npm run desktop:dist` | Packages the machine-wide Windows NSIS installer (`Return.App.Setup.<version>.exe`) into `dist-electron/` with `perMachine: true`. Runs the custom steps in `build/installer.nsh` (`ReturnAppClaimBot` scheduled task; no system browser is required). The installer output is local and is not committed. |
 | `npm run build:desktop` | Runs the complete distributable desktop build, including the Electron bundle and versioned NSIS installer. |
 | `npm run bot` | Runs the claim-bot dashboard in this terminal. The warehouse app is `npm run desktop`, which opens the same bot after sign-in and keeps it in the tray. |
 | `npm run oms:orders` | Looks up OMSGuru order details for the uploaded return rows. Flags: `--sample` (20 returns, and only the field names of the first response is printed), `--limit <n>`, `--marketplace <name>`, `--refresh` (fetch again when a snapshot exists), `--delay <ms>` (default 1500), `--csv`. Run by hand. |
