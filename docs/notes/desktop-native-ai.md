@@ -107,6 +107,36 @@ Branch: `feature/desktop-native-ai`. Status: implemented, typechecked, built, te
   disable), `portal-hold.test.ts` (hold/close on the adapter surface),
   `decideFollowUpAssist` cases in `ai-assistant.test.ts`.
 
+## Milestone 3 (branch `feature/desktop-native-ai-3`)
+
+- **Authoritative memory approval in Postgres.** New `operator_tasks` table
+  (`server/schema-ai-tasks.sql`, registered in `SCHEMA_FILES`) plus
+  `server/ai-memory-store.ts` (list/create/transition/correct procedures with
+  signature normalization, transition table
+  pending→approved→disabled→pending) and `server/ai-memory-routes.ts`: admin
+  routes to inspect/approve/disable/correct procedures, agent sync route
+  returning only `approved`+`disabled` rows scoped to the agent's accounts
+  (pending never leaves the server), and operator-task routes (create/list/
+  resolve with history, 404s outside scope, double-resolve rejected).
+  Mounted from `mountClaimAutomationRoutes`.
+- **Worker sync-down + task creation.** Local `ai-memory.json` is now a
+  stale-TTL mirror (6h via `isCacheStale`/`markSynced`/`syncedAt`): the engine
+  pulls approved+disabled procedures, drops local disabled ones, and matches
+  approved ones before any AI call. Filing failures now file a
+  `pending_approval` operator task (tracking failures, missing evidence,
+  expired sessions) instead of only logging.
+- Verification: typecheck 0 errors x3, build + desktop:build exit 0,
+  `npm test` 641 tests: 601 pass, 0 fail, 40 skipped (37 need
+  `TEST_DATABASE_URL`, 3 POSIX-only). New tests: `ai-memory-store.test.ts`
+  (SQL shape, transitions, normalization), `operator-tasks.test.ts` (scope,
+  double-resolve, history), TTL cases in `ai-memory-cache.test.ts` — 21/21.
+  The task test caught a real `$1` placeholder collision in the scope check
+  (fixed before merge).
+- Still not verified: dedicated DB tests locally (CI runs them), installer
+  run, live panels, AI provider call, CPU/RAM. `checkClaimStatus()` per
+  marketplace still `not_supported`. Task-center and report-analysis UI are
+  later milestones.
+
 ## Operator knobs (names only, see `.env.example`, `deploy/engine/.env.example`)
 
 `BROWSER_ADAPTER`, `FOLLOWUP_NIGHTLY_ONLY`, `AI_ASSIST_ENABLED`,

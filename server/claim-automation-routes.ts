@@ -25,6 +25,7 @@ import {
   updateJobProgress,
 } from "./claim-automation-service.js"
 import { createClaim, getClaim } from "./claims-service.js"
+import { mountAiMemoryRoutes } from "./ai-memory-routes.js"
 import {
   leaseNextDueFollowUp,
   listFollowUps,
@@ -600,4 +601,6 @@ export function mountClaimAutomationRoutes(app: Express, requireUser: RequestHan
       sendError(res, error, next)
     }
   })
+
+  mountAiMemoryRoutes(app, requireUser)
 }

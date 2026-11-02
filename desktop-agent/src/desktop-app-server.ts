@@ -19,7 +19,9 @@ import { checkForUpdates } from "./update-check.js"
 import { followUpExecutionBundle } from "./follow-up-bundle.js"
 import { describeBrowserAdapter, openSupplierBrowser } from "./browser-adapter.js"
 import { aiUsageSnapshot, buildDiagnosticPrompt, decideFollowUpAssist, loadAiAssistConfig, providerFromConfig, requestAiProposal, validateAiProposal, type AssistanceContext } from "./ai-assistant.js"
-import { findApprovedProcedure, loadLocalMemory, pruneLocalEvents, recordLocalEvent, saveLocalMemory } from "./ai-memory-cache.js"
+import { findApprovedProcedure, isCacheStale, loadLocalMemory, markSynced, pruneLocalEvents, recordLocalEvent, saveLocalMemory, upsertCachedProcedure } from "./ai-memory-cache.js"
+import type { CachedProcedure } from "./ai-memory-cache.js"
+import type { OperatorTaskKind } from "./agent-client.js"
 import { normalizeErrorSignature } from "../../server/ai-memory.js"
 import { buildAiMemoryPayload, disableLocalProcedure } from "./ai-memory-panel.js"
 import { nightlyFollowUpOnly, nightlyWindowStatus, shouldSkipFollowUpCycle } from "./follow-up-window.js"
@@ -202,6 +204,7 @@ async function pollAndProcessJob(manual = false): Promise<boolean> {
         keepBrowserOpen = true
         holdPortalBrowser(browserRunner)
         await browserRunner.showForManualStep?.()
+        await client.createOperatorTask({ claimId: bundle.claimId, marketplace: bundle.marketplace, kind: "pending_approval", title: `${bundle.marketplace}: manual approval needed for claim #${bundle.claimId}`, note: "Filing paused for an operator action." })
         markPanelResult(panelKey, "manual_action", result.manualActionReason || "Manual action required on portal.")
         await client.updateProgress(jobHeader.jobId, {
           stage: "manual_intervention_required",
@@ -280,6 +283,23 @@ const ASSIST_SYSTEM_PROMPT =
  * reported to the server and never executes a marketplace action. Best-effort: any
  * failure is logged and the worker moves on.
  */
+/**
+ * Worker-side hooks for the assistance pass: approved-procedure sync from the
+ * server (null when the sync fails, so the local cache is kept) and operator-task
+ * filing scoped to the leased claim. Both degrade silently; reporting already happened.
+ */
+function assistClientHooks(client: AgentBackendClient, claimId: number, marketplace: string) {
+  return {
+    refreshProcedures: async (): Promise<CachedProcedure[] | null> => {
+      const rows = await client.getApprovedProcedures()
+      if (!rows) return null
+      const valid = rows.filter((r) => r.status === "approved" || r.status === "disabled")
+      return valid.map((r) => ({ id: String(r.id), marketplace: String(r.marketplace || ""), errorSignature: String(r.errorSignature || ""), title: String(r.title || ""), steps: (Array.isArray(r.steps) ? r.steps : []).map(String), status: r.status as "approved" | "disabled", updatedAt: String(r.updatedAt || new Date().toISOString()) }))
+    },
+    fileTask: (kind: OperatorTaskKind, title: string, note: string) => client.createOperatorTask({ claimId, marketplace, kind, title, note }),
+  }
+}
+
 async function runFollowUpAssist(input: {
   followUpId: number
   claimId: number
@@ -290,6 +310,8 @@ async function runFollowUpAssist(input: {
   statusText: string
   normalizedStatus: string
   statusChanged: boolean
+  refreshProcedures: () => Promise<CachedProcedure[] | null>
+  fileTask: (kind: OperatorTaskKind, title: string, note: string) => Promise<number | null>
 }): Promise<void> {
   try {
     const step = "follow-up-check"
@@ -298,7 +320,19 @@ async function runFollowUpAssist(input: {
         ? normalizeErrorSignature(`ticket status ${input.normalizedStatus || input.statusText} ${input.marketplace}`)
         : normalizeErrorSignature(`${input.marketplace} follow-up ${input.outcome} ${input.note}`.slice(0, 200))
     const dir = agentDataDir()
-    const memory = pruneLocalEvents(loadLocalMemory(dir), Date.now())
+    let memory = pruneLocalEvents(loadLocalMemory(dir), Date.now())
+    if (isCacheStale(memory, Date.now()) || memory.procedures.length === 0) {
+      try {
+        const fresh = await input.refreshProcedures()
+        if (fresh) {
+          for (const p of fresh) memory = upsertCachedProcedure(memory, p)
+          memory = markSynced(memory, Date.now())
+          saveLocalMemory(dir, memory)
+        }
+      } catch (syncError) {
+        logger.warn(`Follow-up #${input.followUpId}: memory sync skipped (${syncError instanceof Error ? syncError.message : syncError}).`)
+      }
+    }
     const hit = findApprovedProcedure(memory, input.marketplace, signature)
     const assistConfig = loadAiAssistConfig()
     const provider = providerFromConfig(assistConfig)
@@ -333,7 +367,9 @@ async function runFollowUpAssist(input: {
     }
     logger.info(`Follow-up #${input.followUpId}: needs operator review (${input.outcome}).`)
     saveLocalMemory(dir, recordLocalEvent(memory, { at: stamp, claimId: input.claimId, marketplace: input.marketplace, step, outcome: "human_review", note: input.outcome.slice(0, 200) }))
-    lastFollowUpResult = `${input.marketplace}: needs operator review`
+    const kind: OperatorTaskKind = input.outcome === "login_required" ? "expired_session" : input.outcome === "status_read" ? "operator_action" : "tracking_failure"
+    const taskId = await input.fileTask(kind, `${input.marketplace}: ${input.outcome} needs review`, input.note.slice(0, 500))
+    lastFollowUpResult = taskId ? `${input.marketplace}: needs operator review (task #${taskId})` : `${input.marketplace}: needs operator review`
   } catch (err) {
     logger.warn(`Follow-up #${input.followUpId}: assistance pass skipped (${err instanceof Error ? err.message : err}).`)
   }
@@ -372,7 +408,7 @@ async function pollAndProcessFollowUp(): Promise<boolean> {
       logger.warn(`Follow-up #${followUp.followUpId}: ${note}`)
       await client.reportFollowUp(followUp.followUpId, { outcome: "login_required", note })
       lastFollowUpResult = `${followUp.marketplace}: waiting for panel sign-in`
-      await runFollowUpAssist({ followUpId: followUp.followUpId, claimId: followUp.claimId, marketplace: followUp.marketplace, marketplaceClaimId: followUp.marketplaceClaimId, outcome: "login_required", note, statusText: "", normalizedStatus: "", statusChanged: false })
+      await runFollowUpAssist({ followUpId: followUp.followUpId, claimId: followUp.claimId, marketplace: followUp.marketplace, marketplaceClaimId: followUp.marketplaceClaimId, ...assistClientHooks(client, followUp.claimId, followUp.marketplace), outcome: "login_required", note, statusText: "", normalizedStatus: "", statusChanged: false })
       return true
     }
 
@@ -433,7 +469,7 @@ async function pollAndProcessFollowUp(): Promise<boolean> {
             screenshotPath: result.screenshotPath,
           })
           lastFollowUpResult = `${followUp.marketplace}: ticket state not found`
-          await runFollowUpAssist({ followUpId: followUp.followUpId, claimId: followUp.claimId, marketplace: followUp.marketplace, marketplaceClaimId: followUp.marketplaceClaimId, outcome: "not_found", note: "ticket state not found on panel", statusText: "", normalizedStatus: "", statusChanged: false })
+          await runFollowUpAssist({ followUpId: followUp.followUpId, claimId: followUp.claimId, marketplace: followUp.marketplace, marketplaceClaimId: followUp.marketplaceClaimId, ...assistClientHooks(client, followUp.claimId, followUp.marketplace), outcome: "not_found", note: "ticket state not found on panel", statusText: "", normalizedStatus: "", statusChanged: false })
         } else {
           const followUpReport = await client.reportFollowUp(followUp.followUpId, {
             outcome: "status_read",
@@ -443,7 +479,7 @@ async function pollAndProcessFollowUp(): Promise<boolean> {
             screenshotPath: result.screenshotPath,
           })
           lastFollowUpResult = `${followUp.marketplace}: ${statusText}`
-          await runFollowUpAssist({ followUpId: followUp.followUpId, claimId: followUp.claimId, marketplace: followUp.marketplace, marketplaceClaimId: followUp.marketplaceClaimId, outcome: "status_read", note: result.note || "", statusText, normalizedStatus: result.normalizedStatus || "", statusChanged: followUpReport.statusChanged })
+          await runFollowUpAssist({ followUpId: followUp.followUpId, claimId: followUp.claimId, marketplace: followUp.marketplace, marketplaceClaimId: followUp.marketplaceClaimId, ...assistClientHooks(client, followUp.claimId, followUp.marketplace), outcome: "status_read", note: result.note || "", statusText, normalizedStatus: result.normalizedStatus || "", statusChanged: followUpReport.statusChanged })
         }
       }
     } finally {
@@ -458,7 +494,7 @@ async function pollAndProcessFollowUp(): Promise<boolean> {
     if (leased) {
       await client
         .reportFollowUp(leased.followUpId, { outcome: "error", note: message.slice(0, 400) })
-      await runFollowUpAssist({ followUpId: leased.followUpId, claimId: leased.claimId, marketplace: leased.marketplace, marketplaceClaimId: leased.marketplaceClaimId, outcome: "error", note: message.slice(0, 200), statusText: "", normalizedStatus: "", statusChanged: false })
+      await runFollowUpAssist({ followUpId: leased.followUpId, claimId: leased.claimId, marketplace: leased.marketplace, marketplaceClaimId: leased.marketplaceClaimId, ...assistClientHooks(client, leased.claimId, leased.marketplace), outcome: "error", note: message.slice(0, 200), statusText: "", normalizedStatus: "", statusChanged: false })
         .catch(() => undefined)
     }
     return false
