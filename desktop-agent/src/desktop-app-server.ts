@@ -27,6 +27,8 @@ import type { OperatorTaskKind } from "./agent-client.js"
 import { normalizeErrorSignature } from "../../server/ai-memory.js"
 import { buildAiMemoryPayload, disableLocalProcedure } from "./ai-memory-panel.js"
 import { nightlyFollowUpOnly, nightlyWindowStatus, shouldSkipFollowUpCycle } from "./follow-up-window.js"
+import { runRoutedAssist } from "./ai-center-assist.js"
+import { handleAiCenterRoute } from "./ai-center-routes.js"
 
 /**
  * The engine owns exactly one worker loop. The Electron shell embeds this
@@ -352,7 +354,36 @@ async function runFollowUpAssist(input: {
       lastFollowUpResult = `${input.marketplace}: approved recovery available`
       return
     }
-    if (decision.action === "ai-needed" && provider) {
+    // AI Center routing first: the operator's own provider keys with cost-aware
+    // routing and budget guard. The legacy authenticated gateway stays below as
+    // an optional fallback, and human review remains the final fallback.
+    if (decision.action === "ai-needed") {
+      const routed = await runRoutedAssist({
+        dir, task: "worker_diagnosis", agentFunction: "follow-up-check",
+        ctx: { marketplace: input.marketplace, claimId: input.claimId, knownTicketId: input.marketplaceClaimId, step, errorSignature: signature },
+        note: input.note, claimId: input.claimId, marketplace: input.marketplace,
+        escalate: false,
+        fileTask: input.fileTask,
+        reportToServer: async (row) => {
+          await client.reportAgentRun(row).catch(() => undefined)
+        },
+      })
+      if (routed.handled) {
+        if (routed.outcome === "ai_proposal") {
+          logger.info(`Follow-up #${input.followUpId}: AI draft ready for operator review (not sent).`)
+          saveLocalMemory(dir, recordLocalEvent(memory, { at: stamp, claimId: input.claimId, marketplace: input.marketplace, step, outcome: "ai_proposal", note: routed.summary.slice(0, 200) }))
+        } else {
+          saveLocalMemory(dir, recordLocalEvent(memory, { at: stamp, claimId: input.claimId, marketplace: input.marketplace, step, outcome: "human_review", note: routed.summary.slice(0, 200) }))
+        }
+        lastFollowUpResult = routed.summary
+        return
+      }
+      if (!provider) {
+        logger.info(`Follow-up #${input.followUpId}: no AI provider configured; needs operator review (${input.outcome}).`)
+        saveLocalMemory(dir, recordLocalEvent(memory, { at: stamp, claimId: input.claimId, marketplace: input.marketplace, step, outcome: "human_review", note: input.outcome.slice(0, 200) }))
+        lastFollowUpResult = `${input.marketplace}: needs operator review`
+        return
+      }
       const ctx: AssistanceContext = { marketplace: input.marketplace, claimId: input.claimId, knownTicketId: input.marketplaceClaimId, step, errorSignature: signature }
       const text = await requestAiProposal(provider, { prompt: buildDiagnosticPrompt(ctx, input.note), system: ASSIST_SYSTEM_PROMPT, maxTokens: 400 }, assistConfig.maxCallsPerJob)
       const proposal = text ? { kind: "draft_response", summary: text, ticketRef: input.marketplaceClaimId } : null
@@ -925,6 +956,355 @@ function getDashboardHtml(): string {
       <div id="ai-usage-line" style="font-size: 11px; color: var(--muted); margin-top: 10px;"></div>
       <div id="aimemory-message" style="font-size: 12px; margin-top: 6px;"></div>
     </section>
+
+    <section class="panel" id="ai-center" style="padding: 16px 18px;">
+      <div class="panel-title" style="margin-bottom: 4px;">AI Center <span id="aicenter-status" style="font-size: 11px; font-weight: normal; color: var(--muted);"></span></div>
+      <p style="color: var(--muted); font-size: 12px; line-height: 1.5; margin-bottom: 12px;">Your own provider keys, model routing, agent activity, and usage costs. Keys are encrypted with the OS credential store on this PC, never shown again, and never sent anywhere except the provider API. The claim worker stays deterministic: memory first, then a low-cost model, then human review.</p>
+      <div style="display: flex; gap: 6px; margin-bottom: 12px; flex-wrap: wrap;">
+        <button class="btn btn-secondary" type="button" id="aic-tabbtn-providers" style="font-size: 11px; padding: 4px 10px;" onclick="aiCenterTab('providers')">Providers</button>
+        <button class="btn btn-secondary" type="button" id="aic-tabbtn-routing" style="font-size: 11px; padding: 4px 10px;" onclick="aiCenterTab('routing')">Routing</button>
+        <button class="btn btn-secondary" type="button" id="aic-tabbtn-agents" style="font-size: 11px; padding: 4px 10px;" onclick="aiCenterTab('agents')">Agents</button>
+        <button class="btn btn-secondary" type="button" id="aic-tabbtn-usage" style="font-size: 11px; padding: 4px 10px;" onclick="aiCenterTab('usage')">Usage &amp; Costs</button>
+        <button class="btn btn-secondary" type="button" id="aic-tabbtn-memory" style="font-size: 11px; padding: 4px 10px;" onclick="aiCenterTab('memory')">Learning &amp; Memory</button>
+      </div>
+      <div id="aic-tab-providers">
+        <div class="table-container" style="max-height: 320px;">
+          <table>
+            <thead>
+              <tr>
+                <th>Provider</th>
+                <th>Key</th>
+                <th>Default model</th>
+                <th>Last success</th>
+                <th>Last error</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="aic-providers-body">
+              <tr><td colspan="6" style="text-align: center; padding: 20px; color: var(--muted);">Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div id="aic-key-editor" style="display: none; margin-top: 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px;">
+          <div style="font-size: 12px; font-weight: 600; margin-bottom: 8px;" id="aic-key-title">Save API key</div>
+          <input id="aic-key-input" type="password" autocomplete="off" placeholder="Paste key — it is encrypted on save and never shown again" style="width: 100%; max-width: 460px; font-size: 12px; padding: 6px 8px; margin-bottom: 8px;" />
+          <div style="display: flex; gap: 6px; flex-wrap: wrap; align-items: center;">
+            <button class="btn" type="button" style="font-size: 11px; padding: 4px 10px;" onclick="saveAiKey()">Save key</button>
+            <button class="btn btn-secondary" type="button" style="font-size: 11px; padding: 4px 10px;" onclick="testAiConnection()">Test connection</button>
+            <button class="btn btn-secondary" type="button" style="font-size: 11px; padding: 4px 10px;" onclick="closeAiKeyEditor()">Cancel</button>
+            <span id="aic-key-message" style="font-size: 11px;"></span>
+          </div>
+          <div style="font-size: 11px; color: var(--muted); margin-top: 8px;">Test connection makes one genuine low-cost model request (a few tokens). Manual model IDs are allowed; discovery lists what the provider reports.</div>
+          <div style="display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; align-items: center;">
+            <select id="aic-model-select" style="font-size: 11px; padding: 4px 6px; max-width: 280px;"></select>
+            <input id="aic-manual-model" type="text" placeholder="Or type a model ID" style="font-size: 11px; padding: 4px 6px; max-width: 220px;" />
+            <button class="btn btn-secondary" type="button" style="font-size: 11px; padding: 4px 10px;" onclick="refreshAiModels()">Discover models</button>
+            <button class="btn btn-secondary" type="button" style="font-size: 11px; padding: 4px 10px;" onclick="saveAiPrefs()">Save model</button>
+          </div>
+        </div>
+      </div>
+      <div id="aic-tab-routing" style="display: none;">
+        <div class="table-container" style="max-height: 320px;">
+          <table>
+            <thead>
+              <tr>
+                <th>Task</th>
+                <th>Mode</th>
+                <th>Primary</th>
+                <th>Fallback</th>
+                <th>Tokens</th>
+                <th>Timeout</th>
+              </tr>
+            </thead>
+            <tbody id="aic-routing-body">
+              <tr><td colspan="6" style="text-align: center; padding: 20px; color: var(--muted);">Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div style="display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; align-items: center; font-size: 12px;">
+          <label>Monthly budget (USD, empty = none) <input id="aic-budget" type="text" inputmode="decimal" style="font-size: 11px; padding: 4px 6px; width: 90px;" /></label>
+          <button class="btn" type="button" style="font-size: 11px; padding: 4px 10px;" onclick="saveAiRouting()">Save routing</button>
+          <span id="aic-routing-message" style="font-size: 11px;"></span>
+        </div>
+        <div style="font-size: 11px; color: var(--muted); margin-top: 6px;">Automatic mode picks the cheapest healthy provider per task and escalates only inside your budget. Manual mode pins a primary and optional fallback. Reasoning options are sent only to models that advertise support.</div>
+      </div>
+      <div id="aic-tab-agents" style="display: none;">
+        <div class="table-container" style="max-height: 320px;">
+          <table>
+            <thead>
+              <tr>
+                <th>Started</th>
+                <th>Claim</th>
+                <th>Function</th>
+                <th>Provider / model</th>
+                <th>Stage</th>
+                <th>Result</th>
+                <th>Approval</th>
+              </tr>
+            </thead>
+            <tbody id="aic-activity-body">
+              <tr><td colspan="7" style="text-align: center; padding: 20px; color: var(--muted);">Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div style="font-size: 11px; color: var(--muted); margin-top: 6px;">Read-only ledger of real worker executions. Nothing here is active unless the worker actually ran it; interrupted rows mark an application restart.</div>
+      </div>
+      <div id="aic-tab-usage" style="display: none;">
+        <div id="aic-usage-summary" style="font-size: 12px; margin-bottom: 10px; line-height: 1.7;"></div>
+        <div style="display: flex; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; align-items: center; font-size: 12px;">
+          <label>From <input id="aic-usage-from" type="text" placeholder="YYYY-MM-DD" style="font-size: 11px; padding: 4px 6px; width: 100px;" /></label>
+          <label>To <input id="aic-usage-to" type="text" placeholder="YYYY-MM-DD" style="font-size: 11px; padding: 4px 6px; width: 100px;" /></label>
+          <button class="btn btn-secondary" type="button" style="font-size: 11px; padding: 4px 10px;" onclick="loadAiUsage()">Filter</button>
+          <span style="font-size: 11px; color: var(--muted);">Costs are estimates from provider-reported tokens and public pricing; the provider bill is authoritative. Unknown means no public pricing was confirmed.</span>
+        </div>
+        <div class="table-container" style="max-height: 280px;">
+          <table>
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Provider</th>
+                <th>Model</th>
+                <th>Task</th>
+                <th>Tokens in/out</th>
+                <th>Est. USD</th>
+                <th>Latency</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="aic-usage-body">
+              <tr><td colspan="8" style="text-align: center; padding: 20px; color: var(--muted);">Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div id="aic-tab-memory" style="display: none;">
+        <div id="aic-memory-line" style="font-size: 12px; line-height: 1.7;">Loading…</div>
+        <div style="font-size: 11px; color: var(--muted); margin-top: 6px;">Authoritative approvals live in PostgreSQL and follow pending to approved; this PC mirrors approved and disabled procedures only. See the Approved AI memory panel below for the procedure list and local kill-switch.</div>
+      </div>
+      <div id="aicenter-message" style="font-size: 12px; margin-top: 8px;"></div>
+    </section>
+    <script>
+    var aicProviders = [];
+    var aicCatalog = null;
+    var aicRouting = null;
+    var aicEditProvider = null;
+    function aiCenterTab(name) {
+      var tabs = ['providers', 'routing', 'agents', 'usage', 'memory'];
+      for (var i = 0; i < tabs.length; i++) {
+        document.getElementById('aic-tab-' + tabs[i]).style.display = tabs[i] === name ? '' : 'none';
+      }
+      if (name === 'usage') loadAiUsage();
+      if (name === 'agents') loadAiActivity();
+      if (name === 'memory') loadAiMemoryLine();
+    }
+    function aicEsc(s) {
+      return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+    function aicFmtTime(iso) {
+      if (!iso) return '—';
+      try { return new Date(iso).toLocaleString('en-IN', { hour12: false }); } catch (e) { return String(iso); }
+    }
+    async function loadAiCenter() {
+      try {
+        var res = await fetch('/api/v1/ai-center/providers');
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        var data = await res.json();
+        aicProviders = data.providers || [];
+        var withKey = aicProviders.filter(function (p) { return p.hasKey; }).length;
+        document.getElementById('aicenter-status').textContent = '(' + withKey + ' of ' + aicProviders.length + ' providers configured)';
+        renderAiProviders();
+        var rres = await fetch('/api/v1/ai-center/routing');
+        if (rres.ok) {
+          var rdata = await rres.json();
+          aicRouting = rdata.routing;
+          renderAiRouting();
+        }
+        loadAiActivity();
+        loadAiUsage();
+        loadAiMemoryLine();
+      } catch (e) {
+        document.getElementById('aicenter-status').textContent = '(unavailable)';
+        document.getElementById('aic-providers-body').innerHTML = '<tr><td colspan="6" style="text-align:center;padding:20px;color:#fbbf24;">AI Center could not be read.</td></tr>';
+      }
+    }
+    function renderAiProviders() {
+      var body = document.getElementById('aic-providers-body');
+      body.innerHTML = aicProviders.map(function (p) {
+        var keyLabel = p.hasKey ? 'Saved (encrypted)' : 'No key';
+        var lastErr = p.lastError ? (aicEsc(p.lastErrorCategory || 'error') + ': ' + aicEsc(p.lastError).slice(0, 80)) : '—';
+        return '<tr><td>' + aicEsc(p.name) + '</td><td>' + keyLabel + '</td><td>' + aicEsc(p.defaultModel || '—') + '</td><td>' + aicFmtTime(p.lastSuccessAt) + '</td><td>' + lastErr + '</td>' +
+          '<td style="white-space:nowrap;"><button class="btn btn-secondary" type="button" style="font-size:11px;padding:2px 8px;" onclick="openAiKeyEditor(\\'' + p.id + '\\')">Key</button> ' +
+          '<button class="btn btn-secondary" type="button" style="font-size:11px;padding:2px 8px;" onclick="quickTestAiConnection(\\'' + p.id + '\\')">Test</button>' +
+          (p.hasKey ? ' <button class="btn btn-secondary" type="button" style="font-size:11px;padding:2px 8px;" onclick="removeAiKey(\\'' + p.id + '\\')">Remove</button>' : '') + '</td></tr>';
+      }).join('');
+    }
+    function openAiKeyEditor(id) {
+      aicEditProvider = id;
+      var p = null;
+      for (var i = 0; i < aicProviders.length; i++) if (aicProviders[i].id === id) p = aicProviders[i];
+      document.getElementById('aic-key-title').textContent = 'API key for ' + (p ? p.name : id) + (p && p.hasKey ? ' (replace)' : '');
+      document.getElementById('aic-key-input').value = '';
+      document.getElementById('aic-key-message').textContent = '';
+      document.getElementById('aic-key-editor').style.display = '';
+      refreshAiModels();
+      document.getElementById('aic-key-input').focus();
+    }
+    function closeAiKeyEditor() {
+      document.getElementById('aic-key-editor').style.display = 'none';
+      document.getElementById('aic-key-input').value = '';
+      aicEditProvider = null;
+    }
+    async function saveAiKey() {
+      var input = document.getElementById('aic-key-input');
+      var msg = document.getElementById('aic-key-message');
+      var key = input.value;
+      input.value = '';
+      if (!key) { msg.textContent = 'Paste a key first.'; return; }
+      msg.textContent = 'Saving…';
+      try {
+        var res = await fetch('/api/v1/ai-center/providers/' + aicEditProvider + '/key', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: key })
+        });
+        var data = await res.json().catch(function () { return {}; });
+        if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+        msg.textContent = data.encrypted ? 'Saved (OS-encrypted).' : 'Saved.';
+        loadAiCenter();
+      } catch (e) { msg.textContent = 'Save failed: ' + e.message; }
+    }
+    async function removeAiKey(id) {
+      if (!window.confirm('Remove the stored key for this provider?')) return;
+      await fetch('/api/v1/ai-center/providers/' + id + '/key', { method: 'DELETE' });
+      loadAiCenter();
+    }
+    async function quickTestAiConnection(id) {
+      openAiKeyEditor(id);
+      await testAiConnection();
+    }
+    async function testAiConnection() {
+      var msg = document.getElementById('aic-key-message');
+      var model = document.getElementById('aic-manual-model').value.trim() || document.getElementById('aic-model-select').value;
+      msg.textContent = 'Testing with a real low-cost request…';
+      try {
+        var res = await fetch('/api/v1/ai-center/providers/' + aicEditProvider + '/test', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: model })
+        });
+        var data = await res.json().catch(function () { return {}; });
+        if (!res.ok) throw new Error((data.category ? data.category + ': ' : '') + (data.error || ('HTTP ' + res.status)));
+        msg.textContent = 'Connection OK (' + data.latencyMs + ' ms).';
+        loadAiCenter();
+      } catch (e) { msg.textContent = 'Test failed: ' + e.message; }
+    }
+    async function refreshAiModels() {
+      var sel = document.getElementById('aic-model-select');
+      sel.innerHTML = '<option>Loading…</option>';
+      try {
+        var res = await fetch('/api/v1/ai-center/providers/' + aicEditProvider + '/models');
+        var data = await res.json();
+        var models = data.models || [];
+        sel.innerHTML = models.map(function (m) { return '<option value="' + aicEsc(m) + '">' + aicEsc(m) + '</option>'; }).join('');
+      } catch (e) { sel.innerHTML = '<option>Discovery failed</option>'; }
+    }
+    async function saveAiPrefs() {
+      var msg = document.getElementById('aic-key-message');
+      var manual = document.getElementById('aic-manual-model').value.trim();
+      var model = manual || document.getElementById('aic-model-select').value;
+      if (!model) { msg.textContent = 'Pick or type a model first.'; return; }
+      var res = await fetch('/api/v1/ai-center/providers/' + aicEditProvider + '/prefs', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ defaultModel: model })
+      });
+      msg.textContent = res.ok ? 'Default model saved: ' + model : 'Save failed (HTTP ' + res.status + ').';
+      document.getElementById('aic-manual-model').value = '';
+      loadAiCenter();
+    }
+    function renderAiRouting() {
+      if (!aicRouting) return;
+      var body = document.getElementById('aic-routing-body');
+      var tasks = aicRouting.tasks || {};
+      body.innerHTML = Object.keys(tasks).map(function (t) {
+        var r = tasks[t];
+        var fb = r.fallback ? (aicEsc(r.fallback.provider) + ' / ' + aicEsc(r.fallback.model)) : '—';
+        return '<tr><td>' + aicEsc(t) + '</td><td>' + aicEsc(r.mode) + '</td><td>' + aicEsc(r.primary.provider) + ' / ' + aicEsc(r.primary.model) + '</td><td>' + fb + '</td><td>' + r.maxTokens + '</td><td>' + (r.timeoutMs / 1000) + 's</td></tr>';
+      }).join('');
+      document.getElementById('aic-budget').value = aicRouting.monthlyBudgetUsd == null ? '' : aicRouting.monthlyBudgetUsd;
+    }
+    async function saveAiRouting() {
+      var msg = document.getElementById('aic-routing-message');
+      if (!aicRouting) { msg.textContent = 'Routing not loaded yet.'; return; }
+      var raw = document.getElementById('aic-budget').value.trim();
+      var routing = JSON.parse(JSON.stringify(aicRouting));
+      routing.monthlyBudgetUsd = raw === '' ? null : Number(raw);
+      msg.textContent = 'Saving…';
+      try {
+        var res = await fetch('/api/v1/ai-center/routing', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ routing: routing })
+        });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        msg.textContent = 'Routing saved.';
+        loadAiCenter();
+      } catch (e) { msg.textContent = 'Save failed: ' + e.message; }
+    }
+    async function loadAiActivity() {
+      var body = document.getElementById('aic-activity-body');
+      try {
+        var res = await fetch('/api/v1/ai-center/activity');
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        var data = await res.json();
+        var rows = data.activity || [];
+        if (rows.length === 0) { body.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:20px;color:var(--muted);">No agent executions yet. The worker records here only when it actually runs AI assistance.</td></tr>'; return; }
+        body.innerHTML = rows.map(function (a) {
+          var pm = (a.provider ? aicEsc(a.provider) + ' / ' : '') + aicEsc(a.model || 'memory');
+          var mm = a.memoryHit ? 'memory' : 'model';
+          return '<tr><td>' + aicFmtTime(a.at) + '</td><td>' + aicEsc(a.marketplace) + ' #' + a.claimId + '</td><td>' + aicEsc(a.agentFunction) + '</td><td>' + pm + '</td><td>' + aicEsc(a.stage) + ' (' + mm + (a.fallback ? ', fallback' : '') + ')' + (a.errorCategory ? ' [' + aicEsc(a.errorCategory) + ']' : '') + '</td><td>' + aicEsc(String(a.result || '').slice(0, 120)) + '</td><td>' + aicEsc(a.approval) + '</td></tr>';
+        }).join('');
+      } catch (e) { body.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:20px;color:#fbbf24;">Activity could not be read.</td></tr>'; }
+    }
+    async function loadAiUsage() {
+      var body = document.getElementById('aic-usage-body');
+      var sum = document.getElementById('aic-usage-summary');
+      try {
+        var q = '';
+        var from = document.getElementById('aic-usage-from').value.trim();
+        var to = document.getElementById('aic-usage-to').value.trim();
+        if (from) q += (q ? '&' : '?') + 'from=' + encodeURIComponent(from);
+        if (to) q += (q ? '&' : '?') + 'to=' + encodeURIComponent(to);
+        var res = await fetch('/api/v1/ai-center/usage' + q);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        var data = await res.json();
+        var s = data.summary || {};
+        var cost = (s.estimatedUsd != null && s.estimatedUsd !== 0) ? ('$' + s.estimatedUsd) : 'Unknown';
+        sum.innerHTML = 'Requests <b>' + s.total + '</b> (ok ' + s.successful + ' / failed ' + s.failed + ') · in ' + s.inputTokens + ' / out ' + s.outputTokens + ' tokens' +
+          (s.cachedTokens ? ' (cached ' + s.cachedTokens + ')' : '') + (s.reasoningTokens ? ' (reasoning ' + s.reasoningTokens + ')' : '') +
+          ' · est. cost <b>' + cost + '</b>' + (s.unknownPricing ? ' (' + s.unknownPricing + ' without pricing)' : '') +
+          ' · avg latency ' + (s.avgLatencyMs == null ? '—' : s.avgLatencyMs + ' ms');
+        var rows = data.records || [];
+        if (rows.length === 0) { body.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:20px;color:var(--muted);">No usage records in this range.</td></tr>'; return; }
+        body.innerHTML = rows.map(function (r) {
+          var tok = (r.inputTokens == null ? '?' : r.inputTokens) + ' / ' + (r.outputTokens == null ? '?' : r.outputTokens);
+          var usd = r.estimatedUsd == null ? 'Unknown' : ('$' + r.estimatedUsd);
+          var st = r.ok ? 'ok' : ('failed [' + aicEsc(r.errorCategory || 'error') + ']');
+          return '<tr><td>' + aicFmtTime(r.at) + '</td><td>' + aicEsc(r.provider) + '</td><td>' + aicEsc(r.model) + '</td><td>' + aicEsc(r.task) + '</td><td>' + tok + '</td><td>' + usd + '</td><td>' + r.latencyMs + ' ms</td><td>' + st + '</td></tr>';
+        }).join('');
+      } catch (e) {
+        body.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:20px;color:#fbbf24;">Usage could not be read.</td></tr>';
+        sum.textContent = '';
+      }
+    }
+    async function loadAiMemoryLine() {
+      var el = document.getElementById('aic-memory-line');
+      try {
+        var res = await fetch('/api/v1/ai-memory');
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        var data = await res.json();
+        var procs = data.procedures || [];
+        var approved = procs.filter(function (p) { return p.status === 'approved'; }).length;
+        var disabled = procs.filter(function (p) { return p.status === 'disabled'; }).length;
+        var events = data.events || [];
+        el.innerHTML = 'Local mirror: <b>' + approved + '</b> approved, <b>' + disabled + '</b> disabled · ' + events.length + ' recent events · AI assistance ' + (data.assistEnabled ? 'on' : 'off') +
+          '. Approvals stay pending until an operator approves them in PostgreSQL.'
+      } catch (e) { el.textContent = 'Memory status unavailable.'; }
+    }
+    </script>
+
 
     <!-- KPI Overview -->
     <div class="kpi-grid">
@@ -1858,6 +2238,7 @@ function getDashboardHtml(): string {
     loadPanels();
     loadFollowUps();
     loadAiMemory();
+    loadAiCenter();
     connectSse();
     setInterval(loadStatus, 2000);
     setInterval(loadJobs, 10000);
@@ -1865,6 +2246,7 @@ function getDashboardHtml(): string {
     setInterval(loadPortalLogins, 30000);
     setInterval(loadFollowUps, 60000);
     setInterval(loadAiMemory, 60000);
+    setInterval(loadAiCenter, 60000);
   </script>
 </body>
 </html>`
@@ -1911,6 +2293,12 @@ function readJson(req: http.IncomingMessage): Promise<Record<string, unknown>> {
 async function beginClaimWork(): Promise<void> {
   operatorSignedIn = true
   await client.register()
+  try {
+    const { recoverInterruptedActivity } = await import("./ai-center-store.js")
+    const interrupted = recoverInterruptedActivity(agentDataDir())
+    if (interrupted > 0) logger.info(`AI Center: marked ${interrupted} unfinished task(s) as interrupted after restart.`)
+  } catch {
+  }
   startScheduler()
 }
 
@@ -2223,6 +2611,11 @@ export function startDesktopAppServer(bind: EngineBind = resolveEngineBind()): P
         res.writeHead(200, { "Content-Type": "application/json" })
         res.end(JSON.stringify(result))
         return
+      }
+
+      if (url.pathname.startsWith("/api/v1/ai-center")) {
+        const handled = await handleAiCenterRoute(req, res, url, { operatorSignedIn, dir: agentDataDir(), sendJson, readJson })
+        if (handled) return
       }
 
       if (url.pathname === "/api/v1/ai-memory" && req.method === "GET") {

@@ -13,6 +13,13 @@ import {
   listProcedures,
   transitionProcedure,
 } from "./ai-memory-store.js"
+import {
+  listAgentRuns,
+  listProviderUsage,
+  recordAgentRun,
+  recordProcedureOutcome,
+  recordProviderUsage,
+} from "./ai-center-store.js"
 import { createTask, listTasks, resolveTask } from "./operator-tasks.js"
 
 /**
@@ -150,6 +157,88 @@ export function mountAiMemoryRoutes(app: Express, requireUser: RequestHandler): 
       const { scope } = await agentScope(req)
       const tasks = await listTasks(getPool(), scope, { status: text(req.query.status) || undefined })
       res.json({ tasks })
+    } catch (error) {
+      sendError(res, error, next)
+    }
+  })
+
+  app.get("/api/admin/ai-center/usage", requireUser, requireAdmin, async (req, res, next) => {
+    try {
+      const usage = await listProviderUsage(getPool(), {
+        provider: text(req.query.provider) || undefined,
+        from: text(req.query.from) || undefined,
+        to: text(req.query.to) || undefined,
+      })
+      res.json({ usage })
+    } catch (error) {
+      sendError(res, error, next)
+    }
+  })
+
+  app.get("/api/admin/ai-center/agent-runs", requireUser, requireAdmin, async (req, res, next) => {
+    try {
+      const runs = await listAgentRuns(getPool(), Number(req.query.limit) || 100)
+      res.json({ runs })
+    } catch (error) {
+      sendError(res, error, next)
+    }
+  })
+
+  // Verified execution feedback: success/failure only adjusts confidence on
+  // approved rows; status transitions still go through the validated approve /
+  // disable / requeue path above. Never flips pending → approved.
+  app.post("/api/admin/ai-memory/procedures/:id/outcome", requireUser, requireAdmin, async (req, res, next) => {
+    try {
+      const body = (req.body ?? {}) as Record<string, unknown>
+      await recordProcedureOutcome(getPool(), Number(req.params.id), body.success === true)
+      res.json({ ok: true })
+    } catch (error) {
+      sendError(res, error, next)
+    }
+  })
+
+  app.post("/api/automation/ai-center/usage", async (req, res, next) => {
+    try {
+      await agentScope(req)
+      const body = (req.body ?? {}) as Record<string, unknown>
+      await recordProviderUsage(getPool(), {
+        provider: text(body.provider),
+        model: text(body.model),
+        task: text(body.task),
+        ok: body.ok === true,
+        errorCategory: text(body.errorCategory),
+        inputTokens: Number(body.inputTokens) || 0,
+        outputTokens: Number(body.outputTokens) || 0,
+        cachedTokens: Number(body.cachedTokens) || 0,
+        reasoningTokens: Number(body.reasoningTokens) || 0,
+        latencyMs: Number(body.latencyMs) || 0,
+        estimatedUsd: body.estimatedUsd == null ? null : Number(body.estimatedUsd),
+        pricingProvenance: text(body.pricingProvenance),
+      })
+      res.status(201).json({ ok: true })
+    } catch (error) {
+      sendError(res, error, next)
+    }
+  })
+
+  app.post("/api/automation/ai-center/agent-runs", async (req, res, next) => {
+    try {
+      await agentScope(req)
+      const body = (req.body ?? {}) as Record<string, unknown>
+      await recordAgentRun(getPool(), {
+        claimId: positiveId(body.claimId) || 0,
+        marketplace: text(body.marketplace),
+        agentFunction: text(body.agentFunction),
+        provider: text(body.provider),
+        model: text(body.model),
+        stage: text(body.stage),
+        memoryHit: body.memoryHit === true,
+        result: text(body.result),
+        errorCategory: text(body.errorCategory),
+        fallback: body.fallback === true,
+        approval: text(body.approval),
+      })
+      res.status(201).json({ ok: true })
     } catch (error) {
       sendError(res, error, next)
     }
