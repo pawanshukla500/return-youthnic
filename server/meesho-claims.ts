@@ -315,7 +315,11 @@ export async function prepareMeeshoClaim(
   missingAmount: number
 }> {
   const draft = await getMeeshoClaimDraft(db, scope, scanId)
-  const normalizedCode = (issueCode in MEESHO_ISSUES)
+  const rawCode = String(issueCode || "").trim()
+  if (rawCode && !(rawCode in MEESHO_ISSUES)) {
+    throw new ServiceError(400, `Unknown Meesho issue code "${rawCode}". Pick a verified category; the claim will not be filed as a different issue.`)
+  }
+  const normalizedCode = (rawCode in MEESHO_ISSUES)
     ? (issueCode as MeeshoIssueCode)
     : (draft.issueOptions[0]?.code ?? "wrong_return")
   const packetState = normalizeMeeshoPacketState(overrides?.packetState ?? "Unknown")

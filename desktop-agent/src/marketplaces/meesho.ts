@@ -120,7 +120,7 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
     const ticketsBefore = await this.readRecentTicketIds(15000)
     logger.info(`Meesho shows ${ticketsBefore.length} recent tickets before this claim.`)
 
-    logger.info("Selecting issue category: `${issueLabel}`...")
+    logger.info(`Selecting issue category: ${issueLabel}...`)
     let openedIssue = false
     const issueOpen = async () => {
       const href = await this.browser.evaluate<string>(`window.location.href`)
