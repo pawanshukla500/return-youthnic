@@ -897,6 +897,11 @@ td > small { margin-top: 2px; display: block; color: #949c99; font-size: 8px; }
   align-items: center;
   gap: 8px;
 }
+.queue-banner.paused {
+  background: #fef2f2;
+  border-color: #fecaca;
+  color: #991b1b;
+}
 .queue-banner strong { font-weight: 700; }
 .queue-banner small { color: #b45309; margin-left: auto; font-size: 11px; }
 .empty-scan { min-height:350px; display:flex; flex-direction:column; justify-content:center; align-items:center; text-align:center; }

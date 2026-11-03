@@ -887,10 +887,22 @@ export function ScanReturns() {
     setSaving(true)
     const flight = (async () => {
       try {
-        const result = await api<ScanReceipt>("/api/scan/complete", {
-          method: "POST",
-          body: JSON.stringify(bodyFor(target, normalLines(target), key, scanned, "")),
-        })
+        let result: ScanReceipt | null = null
+        for (let attempt = 0; attempt < 2; attempt++) {
+          try {
+            result = await api<ScanReceipt>("/api/scan/complete", {
+              method: "POST",
+              body: JSON.stringify(bodyFor(target, normalLines(target), key, scanned, "")),
+            })
+            break
+          } catch (postErr) {
+            if (handleAlreadyReceived(postErr, scanned, target)) return
+            const isTransient = !(postErr instanceof ApiError) || postErr.status >= 500
+            if (!isTransient || attempt >= 1) throw postErr
+            await new Promise((resolve) => setTimeout(resolve, 600))
+          }
+        }
+        if (!result) return
         benchRef.current = { key, corrected: false }
         applyReceipt(result, false)
         showSaved(result, target)
@@ -1538,10 +1550,13 @@ export function ScanReturns() {
             <LiveSyncBadge compact />
           </div>
           {scanQueue.length > 0 && (
-            <div className="queue-banner" style={{ margin: "12px 24px 0" }}>
+            <div className={`queue-banner${scannerState === "SAVE_ERROR" ? " paused" : ""}`} style={{ margin: "12px 24px 0" }}>
               <Icon name="box" size={16} />
               <span>
-                <strong>Buffer Queue ({scanQueue.length}):</strong> Processing will continue automatically. Next: {scanQueue.join(", ")}
+                <strong>Buffer Queue ({scanQueue.length}):</strong>{" "}
+                {scannerState === "SAVE_ERROR"
+                  ? `Paused on error — press Enter / tap "Retry Save" or "Cancel" to proceed with: ${scanQueue.join(", ")}`
+                  : `Processing will continue automatically. Next: ${scanQueue.join(", ")}`}
               </span>
             </div>
           )}

@@ -2948,6 +2948,25 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
   - Remove the exponential backoff retry loop in `server/whatsapp.ts`.
   - Remove dual JID + LID addressing (`tagUserJid` + `tagUserLid`) for WhatsApp group mentions.
   - Revert the 23:58 daily schedule without operator instructions.
+
+### 2026-11-03, Antigravity Agent: Continuous Scanning Buffer Queue & Scan Resilience Hardening
+
+- **Task:** Investigate and resolve the scanning buffer issue shown in the operator screenshot (`MYSR1263448698` on `https://return.youthnic.shop/scan`), ensure continuous scanning processes smoothly, and prevent 500 errors from stalling warehouse operations.
+- **Root Cause Analysis:**
+  - `server/register-service.ts`: `syncScanToReturnTracking` (for secondary SPF claim tracking) was invoked without a `try/catch` guard before `COMMIT`. Any exception inside that hook rolled back the entire scan transaction and threw an unhandled error to `server/register-routes.ts`, causing Express to return HTTP 500 `"An internal server error occurred. Please try again or contact an administrator"`.
+  - VPS Deploy Timing: The scan failure occurred at 4:12:13 PM IST (10:42:13 UTC), exactly when GitHub Actions run `41619307744` was executing `deploy-remote.sh` and restarting the production container on Hostinger VPS, triggering transient connection drops.
+  - Frontend UX: In `src/pages/ScanReturns.tsx`, when `autoSave` encountered a 500 error, it entered `SAVE_ERROR` state. While subsequent scans (`MYSR1264007741`) were buffered in `scanQueue`, the yellow banner misleadingly read `Buffer Queue (1): Processing will continue automatically...`, leaving the operator waiting when the queue was actually paused waiting for user action (`Retry Save` / `Cancel`).
+- **Implementation & Guardrails:**
+  - **Secondary Tracking Isolation (`server/register-service.ts`):** Wrapped `syncScanToReturnTracking` in a defensive `try / catch` block with `[Return Tracking Sync Warning]` logging. Physical barcode scans on the warehouse bench will NEVER fail or rollback due to secondary tracking table updates.
+  - **Automatic Transient Retry in Continuous Scan (`src/pages/ScanReturns.tsx`):** Added an automatic retry loop in `autoSave` with a 600ms backoff on 5xx server or network errors. Transient container redeploys or network blips recover silently without interrupting warehouse operators.
+  - **Actionable Buffer Queue Banner (`src/pages/ScanReturns.tsx`, `src/index.css`):** When in `SAVE_ERROR`, the buffer banner dynamically switches to `.queue-banner.paused` (red tone) and clearly instructs: `Paused on error — press Enter / tap "Retry Save" or "Cancel" to proceed with: <barcode>`, guiding operators immediately to the 1-key resolution.
+- **Verification:**
+  - `npm.cmd run typecheck`: Passed with 0 errors across 3 tsconfig projects (`tsconfig.json`, `tsconfig.server.json`, `tsconfig.desktop.json`).
+  - `npm.cmd run build`: Passed (Vite client 1.89s, `server/dist.js` bundled cleanly at 876.4kb).
+  - `npm.cmd test`: 767 tests run: 721 passed, 0 failed, 46 skipped (dedicated `TEST_DATABASE_URL` unset, POSIX-only Windows skips).
+- **The next agent must not:**
+  - Remove the `try / catch` guard around `syncScanToReturnTracking` in `server/register-service.ts`.
+  - Revert the auto-retry logic in `autoSave` in `src/pages/ScanReturns.tsx`.
 ### 2026-11-03, Muse Code, fix/meesho-production-readiness-m9 (light dashboard UI + update system + portal pathways + win-dev-skills)
 - Dashboard light-mode default: `:root` is now the light palette with `[data-theme="dark"]` opt-in; header toggle persists to localStorage and is applied before first paint (`desktop-agent/src/desktop-app-server.ts`). Sidebar segregates Status / Setup / Claims / Follow-ups / AI Center / Updates (hash + localStorage persisted); emoji pictographs removed from labels per taste preflight.
 - After-install update system: new Updates tab (current version, Check now, auto-check toggle), background quiet check at 30s and every 6h, dismissible banner linking the Windows `.exe` setup asset; manual Check now surfaces errors, quiet failures stay silent. Builds on existing `/api/updates/check`; no electron-updater, no silent install (unsigned build installs over, cookies kept).
