@@ -133,3 +133,14 @@ A saved login never authorizes submission on either path:
   save retry, paused queue banner, non-fatal tracking sync). Those files are
   untouched by this branch; their uncommitted changes were left exactly as found
   and are not part of any M9 commit.
+
+## Phase 4b — installer rebuild with light UI + sidebar (2026-11-03)
+
+- Rebuilt from this worktree after the merge of `origin/main` (`c7aa22d`).
+- `npm run desktop:dist` produced `dist-electron/Return.App.Setup.1.2.0.exe`
+  (120,274,417 bytes, app version 1.2.0, unsigned — SmartScreen will warn).
+- New UI confirmed inside the packed asar (`showSideTab` present): light-mode
+  default, sidebar tabs, Updates tab with background check + banner.
+- Operator step: install over 1.2.0 (cookies kept), verify light UI + sidebar
+  tabs + Updates tab, report GUI observations.
+
