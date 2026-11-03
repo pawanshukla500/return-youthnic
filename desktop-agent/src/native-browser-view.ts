@@ -155,6 +155,13 @@ export function layoutSupplierViews(): void {
   const bounds = supplierViewBounds()
   for (const entry of managedSupplierViews.values()) {
     if (!entry.visible) continue
+    for (const popup of entry.popups) {
+      try {
+        popup.setBounds(bounds)
+      } catch {
+        // A destroyed popup is unregistered on close; ignore the race here.
+      }
+    }
     try {
       entry.view.setBounds(bounds)
     } catch {
@@ -370,9 +377,11 @@ class NativeSupplierBrowser implements SupplierBrowserApi {
   private async savePortalDownload(item: Electron.CrossProcessExports.DownloadItem): Promise<void> {
     const fileName = item.getFilename() || `portal-download-${Date.now()}`
     const { default: nodePath } = await import("node:path")
-    const { default: fsp } = await import("node:fs/promises")
+    const { default: fs } = await import("node:fs")
     const downloadsDir = this.electron.app.getPath("downloads")
-    await fsp.mkdir(downloadsDir, { recursive: true })
+    // Synchronous on purpose: setSavePath below must run before will-download
+    // returns, so this metadata call stays on the main thread.
+    fs.mkdirSync(downloadsDir, { recursive: true })
     const savePath = nodePath.join(downloadsDir, fileName)
     item.setSavePath(savePath)
     await new Promise<void>((resolve) => {

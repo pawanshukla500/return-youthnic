@@ -147,3 +147,22 @@ AI usage preservation test in `ai-assistant.test.ts`.
 Still operator-gated / not run: live Meesho discovery and filing, low-spec packaged-app
 performance measurements, installed-app smoke test. Clean-room NSIS + full suite re-run
 before commit/PR.
+
+## CodeAnt review round (PR #49, commit 7a0d9f3) — 7 findings, 6 fixed
+
+- Kept server `settled/credited → approved` semantics: the M7 follow-up test pins
+  `Refund settled` → `approved`, so the desktop `paid` hint stays subordinate to the
+  server normalization (no change; replied on the PR).
+- Cleanup keeps referenced screenshots: `cleanClaimEvidenceFiles(claimId, keepBasenames)`
+  deletes everything except the job's submission/prepare shots; both engine call sites
+  pass them. The 24h prune still reclaims them. Covered by agent-cleanup.test.ts.
+- Cost honesty: `honestCost()` returns Unknown (never $0.00) when the provider reports
+  no token counts; used by both the assist path and Test Connection. Unit-tested.
+- Popup views re-fit in `layoutSupplierViews()` alongside the main view.
+- Portal-download dir setup reverted to synchronous `mkdirSync`: `setSavePath` must run
+  inside `will-download`; the async deferral risked the default location. The F9 async
+  screenshot/evidence writes stay.
+- `complete`/`approve` guard selects take `FOR UPDATE OF j`; approve also 409s on
+  mid-flight stages (`downloading_media`, `opening_portal`, `filling_form`) so an
+  operator cannot arm a second filing path under a running worker. Locking and the
+  mid-flight 409 are pinned in claim-idempotency-m8.test.ts.

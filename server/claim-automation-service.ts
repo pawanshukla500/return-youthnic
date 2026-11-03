@@ -1130,7 +1130,8 @@ export async function completeJobSubmission(
       `SELECT j.claim_id, j.stage, j.marketplace_claim_id, c.marketplace_id, c.status AS claim_status
        FROM claim_automation_jobs j
        JOIN claims c ON c.id = j.claim_id
-       WHERE j.id = $1 AND ${scopeCondition}`,
+       WHERE j.id = $1 AND ${scopeCondition}
+       FOR UPDATE OF j`,
       params,
     )
     if (!res.rows[0]) throw new ServiceError(404, "Job not found.")
@@ -1255,14 +1256,17 @@ export async function approveJobForSubmission(
       `SELECT j.id, j.claim_id, j.stage, c.status AS claim_status, c.marketplace_id
        FROM claim_automation_jobs j
        JOIN claims c ON c.id = j.claim_id
-       WHERE j.id = $1 AND ${scopeCondition}`,
+       WHERE j.id = $1 AND ${scopeCondition}
+       FOR UPDATE OF j`,
       scopeParams,
     )
     if (!res.rows[0]) throw new ServiceError(404, "Automation job not found.")
     const jobStage = String(res.rows[0].stage || "")
     const claimStatus = String(res.rows[0].claim_status || "")
-    // Approval arms a submission: never approve finished, in-flight, ruled-out or already-recorded work.
-    if (["completed", "submitting", "failed", "not_eligible"].includes(jobStage)) {
+    // Approval arms a submission: never approve finished, mid-flight, ruled-out or already-recorded work.
+    // A worker actively preparing or submitting this job keeps its lease; approving
+    // underneath it would arm a second filing path, so the operator waits or cancels first.
+    if (["completed", "submitting", "failed", "not_eligible", "downloading_media", "opening_portal", "filling_form"].includes(jobStage)) {
       throw new ServiceError(409, `Job in stage ${jobStage} cannot be approved for submission.`)
     }
     if (!["waiting_for_approval", "ready_for_claim", "processing", "manual_action_required", "failed"].includes(claimStatus)) {

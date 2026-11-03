@@ -215,8 +215,9 @@ async function pollAndProcessJob(manual = false): Promise<boolean> {
         })
         submissionOutcomeUnknown = false
         markPanelResult(panelKey, "completed", `Filed · ref ${result.marketplaceClaimId}`)
-        // Clean up local downloaded evidence files so they don't occupy disk space
-        await client.cleanClaimEvidenceFiles(bundle.claimId)
+        // Clean up local downloaded evidence files so they don't occupy disk space, keeping the
+        // submission screenshot the job references for operator inspection.
+        await client.cleanClaimEvidenceFiles(bundle.claimId, result.screenshotPath ? [result.screenshotPath] : [])
       } else if (result.stage === "manual_intervention_required") {
         keepBrowserOpen = true
         holdPortalBrowser(browserRunner)
@@ -238,7 +239,7 @@ async function pollAndProcessJob(manual = false): Promise<boolean> {
           screenshotPath: result.screenshotPath,
           manualActionReason: result.manualActionReason,
         })
-        await client.cleanClaimEvidenceFiles(bundle.claimId)
+        await client.cleanClaimEvidenceFiles(bundle.claimId, result.screenshotPath ? [result.screenshotPath] : [])
       }
     } finally {
       if (!keepBrowserOpen) await supplierBrowser.close()

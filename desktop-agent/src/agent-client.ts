@@ -430,11 +430,23 @@ export class AgentBackendClient {
     }
   }
 
-  async cleanClaimEvidenceFiles(claimId: number): Promise<void> {
+  /**
+   * Remove downloaded evidence after the job settles, but keep screenshots the
+   * job references (submission/prepare shots operators inspect). They live inside
+   * the claim dir, so the 24h evidence prune still reclaims them.
+   */
+  async cleanClaimEvidenceFiles(claimId: number, keepBasenames: string[] = []): Promise<void> {
     const claimDir = path.join(this.config.workDir, `claim-${claimId}`)
+    const keep = new Set(keepBasenames.map((name) => path.basename(name)).filter(Boolean))
     try {
-      await fs.promises.rm(claimDir, { recursive: true, force: true })
-      logger.info(`[Cleanup] Deleted local temporary evidence directory for claim #${claimId}`)
+      const entries = await fs.promises.readdir(claimDir).catch(() => [] as string[])
+      await Promise.all(
+        entries
+          .filter((entry) => !keep.has(entry))
+          .map((entry) => fs.promises.rm(path.join(claimDir, entry), { recursive: true, force: true })),
+      )
+      if (keep.size) logger.info(`[Cleanup] Kept ${keep.size} referenced screenshot(s) for claim #${claimId}`)
+      else logger.info(`[Cleanup] Deleted local temporary evidence directory for claim #${claimId}`)
     } catch (err) {
       logger.warn(`[Cleanup] Failed to delete temporary claim directory ${claimDir}:`, err)
     }

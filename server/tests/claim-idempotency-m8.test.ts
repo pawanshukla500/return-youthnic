@@ -58,6 +58,7 @@ test("complete: same-ticket replay on a completed job returns the marketplace wi
   })
   const marketplaceId = await completeJobSubmission(pool, 42, { marketplaceClaimId: "SYN-T1" }, scope)
   assert.equal(marketplaceId, 3)
+  assert.ok(queries.some((q) => q.sql.includes("FOR UPDATE OF j")), "concurrent completions serialize on the job row")
   assert.ok(!queries.some((q) => q.sql.includes("UPDATE claim_automation_jobs")), "replay must not rewrite the job")
 })
 
@@ -113,6 +114,16 @@ test("retry: a job whose claim already has an outcome cannot be retried", async 
     return { rows: [] }
   })
   assert.equal(await serviceErrorCode(retryAutomationJob(pool, actor, scope, 42)), 409)
+})
+
+test("approve: a worker mid-flight blocks approval until it settles", async () => {
+  const { pool } = fakePool((sql) => {
+    if (sql.includes("FROM claim_automation_jobs j")) {
+      return { rows: [{ id: 42, claim_id: 5, stage: "downloading_media", claim_status: "ready_for_claim", marketplace_id: 3 }] }
+    }
+    return { rows: [] }
+  })
+  assert.equal(await serviceErrorCode(approveJobForSubmission(pool, actor, scope, 42)), 409)
 })
 
 // F2: approval arms a submission, so finished work and recorded outcomes are out of scope.

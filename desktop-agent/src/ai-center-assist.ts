@@ -19,6 +19,7 @@ import {
   estimateCost,
   generateWithRetries,
   testConnection,
+  type CostEstimate,
   type ProviderId,
   type TokenUsage,
 } from "./ai-providers.js"
@@ -90,6 +91,14 @@ function usageRecordFields(usage: TokenUsage | undefined) {
   }
 }
 
+/** Cost from real tokens only; a provider that reports no counts is Unknown, never $0.00. */
+export function honestCost(provider: ProviderId, model: string, usage: TokenUsage | undefined): CostEstimate {
+  if (!Number.isFinite(usage?.inputTokens) && !Number.isFinite(usage?.outputTokens)) {
+    return { estimatedUsd: null, provenance: "Unknown — provider reported no token counts" }
+  }
+  return estimateCost(provider, model, usage ?? {})
+}
+
 export async function runRoutedAssist(input: RoutedAssistInput): Promise<RoutedAssistResult> {
   const startedAt = new Date().toISOString()
   const activityId = newActivityId()
@@ -146,7 +155,7 @@ export async function runRoutedAssist(input: RoutedAssistInput): Promise<RoutedA
         const proposal = answered && answered.text ? { kind: "draft_response", summary: answered.text, ticketRef: input.ctx.knownTicketId } : null
         if (proposal && validateAiProposal(proposal, input.ctx)) {
           recordProviderSuccess(input.dir, candidate.provider)
-          const cost = estimateCost(candidate.provider, candidate.model, usage ?? {})
+          const cost = honestCost(candidate.provider, candidate.model, usage)
           recordUsage(input.dir, {
             at: new Date().toISOString(), provider: candidate.provider, model: candidate.model, task: input.task,
             ok: true, errorCategory: null, ...usageRecordFields(usage),
@@ -203,11 +212,11 @@ export async function testProviderConnection(dir: string, provider: ProviderId, 
   try {
     const res = await testConnection({ provider, apiKey, model: model || prefs.defaultModel, baseUrl: prefs.baseUrlOverride || undefined })
     recordProviderSuccess(dir, provider)
-    const provenCost = estimateCost(provider, res.model, res.usage)
+    const cost = honestCost(provider, res.model, res.usage)
     recordUsage(dir, {
       at: new Date().toISOString(), provider, model: res.model, task: "connection_test",
       ok: true, errorCategory: null, ...usageRecordFields(res.usage),
-      latencyMs: res.latencyMs, estimatedUsd: provenCost.estimatedUsd, pricingProvenance: provenCost.provenance,
+      latencyMs: res.latencyMs, estimatedUsd: cost.estimatedUsd, pricingProvenance: cost.provenance,
     })
     return { ok: true, latencyMs: res.latencyMs, usage: res.usage }
   } catch (err) {
