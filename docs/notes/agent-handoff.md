@@ -2938,11 +2938,13 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
   - **Delivery Confirmation:** Message ID `3EB00D653B1DDAAFB0EE77` confirmed. Database updated: `whatsapp_sent = true`, `whatsapp_sent_at = '2026-11-03T09:46:19.951Z'`, `whatsapp_message_id = '3EB00D653B1DDAAFB0EE77'`.
   - **OCI Server 24/7 Self-Healing Watchdog:** Installed `/home/ubuntu/gowa/watchdog.sh` on OCI host `130.210.46.82` with cron schedule `*/2 * * * *` (every 2 minutes). Automatically tests Caddy and GOWA status; if disconnected, triggers `/app/reconnect`; if unresponsive, auto-restarts the `gowa` container and Caddy with full audit logging in `/home/ubuntu/gowa/watchdog.log`.
   - **Data Integrity & Retry Guarantees:** 3-attempt exponential backoff retry loop (`1.5s`, `3.0s`, `4.5s`) for HTTP 5xx/429/socket timeouts; defensive filter in `buildOmsguruCsv` eliminating any zero or negative quantities; scheduler catch-up for delayed dispatches.
+  - **Schedule Update (11:58 PM IST):** Updated daily scheduled runtime across PostgreSQL (`app_system_settings.omsguru_config`), server scheduler defaults (`server/omsguru-daily.ts`), and UI indicators (`src/OmsguruDailyReport.tsx`) to `23:58` IST (`11:58 PM`). The nightly workflow sequence guarantees: (1) daily aggregation and CSV generation, (2) supervisor email dispatch with CSV attached, and (3) immediate subsequent dispatch to the WhatsApp group without fail.
 - **Verification:**
   - `npm.cmd run typecheck`: Passed with 0 errors across 3 tsconfig projects (`tsconfig.json`, `tsconfig.server.json`, `tsconfig.desktop.json`).
-  - `npm.cmd run build`: Passed (Vite client 1.62s, `server/dist.js` bundled cleanly at 871.4kb).
+  - `npm.cmd run build`: Passed (Vite client 2.11s, `server/dist.js` bundled cleanly at 871.5kb).
   - `npm.cmd test`: 723 tests run: 683 passed, 0 failed, 40 skipped (37 local `TEST_DATABASE_URL` unset, 3 POSIX-only Windows skips).
 - **The next agent must not:**
   - Remove the 2-minute watchdog cron on the OCI server (`130.210.46.82`).
   - Remove the exponential backoff retry loop in `server/whatsapp.ts`.
   - Remove dual JID + LID addressing (`tagUserJid` + `tagUserLid`) for WhatsApp group mentions.
+  - Revert the 23:58 daily schedule without operator instructions.

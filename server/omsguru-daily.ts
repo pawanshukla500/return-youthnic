@@ -29,7 +29,7 @@ export type UnmappedScannedItem = {
 
 export type OmsguruConfig = {
   dailyEnabled: boolean
-  dailyTime: string // "23:00" (11:00 PM IST)
+  dailyTime: string // "23:58" (11:58 PM IST)
   dropshipWarehouseId: string // "6688"
   retentionDays: number // 180
   storageFolder: string // "inventory-update-file"
@@ -38,7 +38,7 @@ export type OmsguruConfig = {
 
 export const DEFAULT_OMSGURU_CONFIG: OmsguruConfig = {
   dailyEnabled: true,
-  dailyTime: "23:00",
+  dailyTime: "23:58",
   dropshipWarehouseId: "6688",
   retentionDays: 180,
   storageFolder: "inventory-update-file",
@@ -267,10 +267,10 @@ export async function getOmsguruConfig(db: pg.Pool): Promise<OmsguruConfig> {
       const stored = result.rows[0].setting_value as Partial<OmsguruConfig>
       let dailyTime = normalizeDailyTime(stored.dailyTime || "") || DEFAULT_OMSGURU_CONFIG.dailyTime
       // Migrate from old 19:45 (7:45 PM) schedule to 23:00 (11:00 PM IST)
-      if (stored.dailyTime === "19:45") {
-        dailyTime = "23:00"
+      if (stored.dailyTime === "19:45" || stored.dailyTime === "23:00" || stored.dailyTime === "23:56") {
+        dailyTime = "23:58"
         db.query(
-          "UPDATE app_system_settings SET setting_value = jsonb_set(setting_value, '{dailyTime}', '\"23:00\"') WHERE setting_key = 'omsguru_config'",
+          "UPDATE app_system_settings SET setting_value = jsonb_set(setting_value, '{dailyTime}', '\"23:58\"') WHERE setting_key = 'omsguru_config'",
         ).catch(() => {})
       }
       return {

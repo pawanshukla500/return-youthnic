@@ -429,7 +429,7 @@ export function OmsguruDailyReport() {
               </span>
             )}
             <span className="omsguru-badge-schedule">
-              🕒 Scheduled Daily: {summary?.scheduledTime || "23:00"} IST
+              🕒 Scheduled Daily: {summary?.scheduledTime || "23:58"} IST
             </span>
           </div>
 
@@ -437,7 +437,7 @@ export function OmsguruDailyReport() {
           <p className="omsguru-subtitle">
             Combines all good return scans across marketplaces (Myntra, Flipkart, Meesho, Amazon, Ajio, Shopify),
             aggregates total received quantities per Master Product SKU (excluding damaged/issue units), archives the
-            file to Firebase Storage, and dispatches the OMSGuru bulk update CSV at 11:00 PM IST.
+            file to Firebase Storage, and dispatches the OMSGuru bulk update CSV at 11:58 PM IST.
           </p>
         </div>
 
@@ -567,7 +567,7 @@ export function OmsguruDailyReport() {
             <span>Scheduled Auto-Dispatch</span>
             <span className="omsguru-kpi-dot amber">●</span>
           </div>
-          <div className="omsguru-kpi-value">{summary?.scheduledTime || "23:00"} IST</div>
+          <div className="omsguru-kpi-value">{summary?.scheduledTime || "23:58"} IST</div>
           <div className="omsguru-kpi-sub">
             {summary?.scheduledEnabled ? "Active daily runner" : "Schedule disabled"}
           </div>
@@ -1062,7 +1062,7 @@ export function OmsguruDailyReport() {
                   required
                 />
                 <small style={{ color: "var(--muted)", fontSize: "11px" }}>
-                  23:00 is 11:00 PM IST. Supervisors receive the email. Admins are copied. You can change this time here or in Admin → System.
+                  23:58 is 11:58 PM IST. Supervisors receive the email, followed immediately by the WhatsApp group dispatch. You can change this time here or in Admin → System.
                 </small>
               </div>
 
