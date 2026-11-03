@@ -589,10 +589,14 @@ export async function pollNextAutomationJob(
        WHERE j.stage IN ('queued', 'approved')
          AND LOWER(m.name) = 'meesho'
          AND j.attempts < j.max_attempts
-         -- Evidence-ready gate (M7): a job becomes leasable only after all required evidence is
-         -- verified (claim leaves pending_evidence). Jobs for incomplete claims stay safely pending
-         -- and become eligible automatically when addClaimMedia flips the claim to ready_for_claim.
-         AND c.status <> 'pending_evidence'
+         -- Filing eligibility allowlist (M8): only claims that are ready to file, being
+         -- processed, or explicitly re-opened may lease. Pending states (pending_evidence,
+         -- waiting_for_approval), recorded outcomes (submitted, under_review, approved, rejected,
+         -- reconciled, paid) and operator-held states (failed, manual_action_required) never
+         -- lease directly; they re-enter only through retry/approve/manual-resolve. Jobs for
+         -- incomplete claims stay safely pending and become eligible automatically when
+         -- addClaimMedia flips the claim to ready_for_claim.
+         AND c.status IN ('ready_for_claim', 'processing', 'reclaim', 'escalated')
          AND ${scopeCondition}
        ORDER BY j.created_at ASC
        LIMIT 1
@@ -658,6 +662,8 @@ export async function getJobExecutionBundle(
   jobId: number
   claimId: number
   stage: string
+  /** Live claim lifecycle status, so the engine can revalidate before it clicks Submit. */
+  claimStatus: string
   marketplace: string
   accountName: string
   portalUrl: string
@@ -692,7 +698,7 @@ export async function getJobExecutionBundle(
   }>
 }> {
   const res = await db.query(
-    `SELECT j.id AS job_id, j.claim_id, j.stage, j.browser_mode,
+    `SELECT j.id AS job_id, j.claim_id, j.stage, c.status AS claim_status, j.browser_mode,
             m.name AS marketplace,
             mc.account_name, mc.portal_url, mc.username_encrypted, mc.password_encrypted,
             mc.auth_state, mc.automation_mode, mc.require_approval_before_submit,
@@ -733,6 +739,7 @@ export async function getJobExecutionBundle(
     jobId: Number(row.job_id),
     claimId: Number(row.claim_id),
     stage: String(row.stage),
+    claimStatus: String(row.claim_status || ""),
     marketplace: String(row.marketplace),
     accountName: String(row.account_name || row.marketplace),
     portalUrl: String(row.portal_url || ""),
@@ -975,10 +982,15 @@ export async function syncClaimTicketToRegister(
          WHERE id = $1`,
         [ticketId, safeCode, status],
       )
+      // History keeps both codes: the replaced ticket stays auditable instead of silently dropping out.
+      const replaceReason =
+        ticketCode !== oldCode
+          ? `Ticket replaced ${oldCode} with ${safeCode}`
+          : `Ticket status ${oldStatus} to ${status}`
       await dbOrClient.query(
         `INSERT INTO claim_ticket_history (claim_ticket_id, from_status, to_status, reason, changed_by)
          VALUES ($1, $2, $3, $4, $5)`,
-        [ticketId, oldStatus, status, `Ticket updated to ${safeCode}`, actorId],
+        [ticketId, oldStatus, status, replaceReason, actorId],
       )
     }
   } else {
@@ -1106,7 +1118,8 @@ export async function completeJobSubmission(
   },
   scope?: AccountScope,
 ): Promise<number> {
-  if (!data.marketplaceClaimId.trim()) throw new ServiceError(400, "Marketplace Claim Reference ID is required.")
+  const ticket = String(data.marketplaceClaimId || "").trim()
+  if (!ticket) throw new ServiceError(400, "Marketplace Claim Reference ID is required.")
   const client = await db.connect()
   try {
     await client.query("BEGIN")
@@ -1114,21 +1127,51 @@ export async function completeJobSubmission(
     const params: unknown[] = [jobId]
     const scopeCondition = scope ? accountCondition(scope, "c.marketplace_id", params) : "TRUE"
     const res = await client.query(
-      `SELECT j.claim_id, c.marketplace_id
+      `SELECT j.claim_id, j.stage, j.marketplace_claim_id, c.marketplace_id, c.status AS claim_status
        FROM claim_automation_jobs j
        JOIN claims c ON c.id = j.claim_id
-       WHERE j.id = $1 AND ${scopeCondition}`,
+       WHERE j.id = $1 AND ${scopeCondition}
+       FOR UPDATE OF j`,
       params,
     )
     if (!res.rows[0]) throw new ServiceError(404, "Job not found.")
     const claimId = Number(res.rows[0].claim_id)
     const marketplaceId = Number(res.rows[0].marketplace_id)
+    const jobStage = String(res.rows[0].stage || "")
+    const priorTicket = String(res.rows[0].marketplace_claim_id || "")
+    const claimStatus = String(res.rows[0].claim_status || "")
+    // Idempotent replay: the same ticket recorded twice (network retry) changes nothing.
+    if (jobStage === "completed") {
+      if (priorTicket === ticket) {
+        await client.query("ROLLBACK")
+        return marketplaceId
+      }
+      throw new ServiceError(409, `Job already completed with ticket ${priorTicket}. A different ticket cannot overwrite it; verify on the portal and use manual-resolve.`)
+    }
+    if (jobStage === "not_eligible") throw new ServiceError(409, "Job was ruled not eligible. A marketplace ticket cannot be recorded for it.")
+    if (["submitted", "under_review", "approved", "rejected", "reconciled", "paid"].includes(claimStatus)) {
+      throw new ServiceError(409, `Claim already has recorded outcome ${claimStatus}. Record corrections through manual-resolve.`)
+    }
 
+    const otherCompleted = await client.query(
+      `SELECT id FROM claim_automation_jobs WHERE claim_id = $1 AND id <> $2 AND stage = 'completed' AND marketplace_claim_id <> $3 LIMIT 1`,
+      [claimId, jobId, ticket],
+    )
+    if (otherCompleted.rows[0]) throw new ServiceError(409, "Claim already completed with a different ticket. A second ticket cannot overwrite it.")
+    const sameCompleted = await client.query(
+      `SELECT id FROM claim_automation_jobs WHERE claim_id = $1 AND id <> $2 AND stage = 'completed' AND marketplace_claim_id = $3 LIMIT 1`,
+      [claimId, jobId, ticket],
+    )
+    if (sameCompleted.rows[0]) {
+      await client.query("ROLLBACK")
+      return marketplaceId
+    }
+    // The ticket is recorded exactly once per job from here on.
     const completedLog = JSON.stringify([
       {
         timestamp: new Date().toISOString(),
         level: "info",
-        message: `Claim successfully submitted on marketplace. Ref ID: ${data.marketplaceClaimId}`,
+        message: `Claim successfully submitted on marketplace. Ref ID: ${ticket}`,
       },
     ])
 
@@ -1142,18 +1185,18 @@ export async function completeJobSubmission(
            updated_at = now(),
            logs = logs || $4::jsonb
        WHERE id = $1`,
-      [jobId, data.marketplaceClaimId, data.screenshotPath || null, completedLog],
+      [jobId, ticket, data.screenshotPath || null, completedLog],
     )
 
     // Start tracking the ticket. The desktop re-opens the supplier portal on a cadence and reads the ticket
     // status until it reaches a final state (server/claim-follow-up-service.ts). One row per claim: re-filing
     // resets the timer instead of adding a second follow-up.
-    await createFollowUpForJob(client, jobId, data.marketplaceClaimId)
+    await createFollowUpForJob(client, jobId, ticket)
 
     await client.query(
       `INSERT INTO claim_status_history (claim_id, from_status, to_status, reason, changed_by)
        SELECT id, status, 'submitted', $2, NULL FROM claims WHERE id = $1 AND status <> 'submitted'`,
-      [claimId, `Submitted by desktop automation. Marketplace Claim Ref: ${data.marketplaceClaimId}`],
+      [claimId, `Submitted by desktop automation. Marketplace Claim Ref: ${ticket}`],
     )
     await client.query(
       `UPDATE claims
@@ -1161,12 +1204,12 @@ export async function completeJobSubmission(
            remarks = COALESCE(remarks, '') || '\nMarketplace Claim ID: ' || $2,
            updated_at = now()
        WHERE id = $1`,
-      [claimId, data.marketplaceClaimId],
+      [claimId, ticket],
     )
     await client.query(
       `INSERT INTO register_audit_log (actor_user_id, action, entity_type, entity_id, details)
        VALUES (NULL, 'claim.automation_completed', 'claim', $1, $2::jsonb)`,
-      [String(claimId), JSON.stringify({ jobId, marketplaceClaimId: data.marketplaceClaimId })],
+      [String(claimId), JSON.stringify({ jobId, marketplaceClaimId: ticket })],
     )
 
     // Sync ticket ID and Raised status into return register
@@ -1178,12 +1221,12 @@ export async function completeJobSubmission(
     if (claimRow.rows[0]?.receipt_scan_id) {
       await syncClaimTicketToRegister(client, {
         receiptScanId: Number(claimRow.rows[0].receipt_scan_id),
-        ticketCode: data.marketplaceClaimId,
+        ticketCode: ticket,
         status: "Raised",
         actorId: null,
         issueCategoryCode: claimRow.rows[0].marketplace_issue_code || undefined,
         issueCategoryLabel: claimRow.rows[0].marketplace_issue_label || claimRow.rows[0].claim_reason || "Marketplace Claim",
-        notes: `Claim ticket filed on marketplace: ${data.marketplaceClaimId}`,
+        notes: `Claim ticket filed on marketplace: ${ticket}`,
       })
     }
 
@@ -1210,13 +1253,25 @@ export async function approveJobForSubmission(
     const scopeParams: unknown[] = [jobId]
     const scopeCondition = accountCondition(scope, "c.marketplace_id", scopeParams)
     const res = await client.query(
-      `SELECT j.id, j.claim_id, c.marketplace_id
+      `SELECT j.id, j.claim_id, j.stage, c.status AS claim_status, c.marketplace_id
        FROM claim_automation_jobs j
        JOIN claims c ON c.id = j.claim_id
-       WHERE j.id = $1 AND ${scopeCondition}`,
+       WHERE j.id = $1 AND ${scopeCondition}
+       FOR UPDATE OF j`,
       scopeParams,
     )
     if (!res.rows[0]) throw new ServiceError(404, "Automation job not found.")
+    const jobStage = String(res.rows[0].stage || "")
+    const claimStatus = String(res.rows[0].claim_status || "")
+    // Approval arms a submission: never approve finished, mid-flight, ruled-out or already-recorded work.
+    // A worker actively preparing or submitting this job keeps its lease; approving
+    // underneath it would arm a second filing path, so the operator waits or cancels first.
+    if (["completed", "submitting", "failed", "not_eligible", "downloading_media", "opening_portal", "filling_form"].includes(jobStage)) {
+      throw new ServiceError(409, `Job in stage ${jobStage} cannot be approved for submission.`)
+    }
+    if (!["waiting_for_approval", "ready_for_claim", "processing", "manual_action_required", "failed"].includes(claimStatus)) {
+      throw new ServiceError(409, `Claim in status ${claimStatus} cannot be approved for submission.`)
+    }
 
     const log = JSON.stringify([
       {
@@ -1272,26 +1327,78 @@ export async function retryAutomationJob(
     },
   ])
 
-  const params: unknown[] = [jobId, log]
-  const scopeCondition = accountCondition(scope, "c.marketplace_id", params)
-  const result = await db.query(
-    `UPDATE claim_automation_jobs j
-     SET stage = 'queued',
-         attempts = 0,
-         manual_action_reason = '',
-         lease_expires_at = NULL,
-         last_error = '',
-         updated_at = now(),
-         logs = logs || $2::jsonb
-     FROM claims c
-     WHERE j.id = $1 AND c.id = j.claim_id AND ${scopeCondition}
-     RETURNING j.id, c.marketplace_id`,
-    params,
-  )
-  if (!result.rows[0]) throw new ServiceError(404, "Automation job not found.")
-  return Number(result.rows[0].marketplace_id)
-}
+  const client = await db.connect()
+  try {
+    await client.query("BEGIN")
 
+    const guardParams: unknown[] = [jobId]
+    const guardScope = accountCondition(scope, "c.marketplace_id", guardParams)
+    const current = await client.query(
+      `SELECT j.id, j.claim_id, j.stage, c.status AS claim_status, c.marketplace_id
+       FROM claim_automation_jobs j
+       JOIN claims c ON c.id = j.claim_id
+       WHERE j.id = $1 AND ${guardScope}
+       FOR UPDATE OF j`,
+      guardParams,
+    )
+    if (!current.rows[0]) {
+      await client.query("ROLLBACK")
+      throw new ServiceError(404, "Automation job not found.")
+    }
+    const jobStage = String(current.rows[0].stage || "")
+    const claimId = Number(current.rows[0].claim_id)
+    const claimStatus = String(current.rows[0].claim_status || "")
+    // A finished or mid-flight submission must never be re-armed by retry.
+    if (jobStage === "completed" || jobStage === "submitting") {
+      throw new ServiceError(409, `Job in stage ${jobStage} cannot be retried; file a new claim or use manual-resolve.`)
+    }
+    // A recorded claim outcome must never be re-filed by retry.
+    if (["submitted", "under_review", "approved", "reconciled", "paid"].includes(claimStatus)) {
+      throw new ServiceError(409, `Claim already has recorded outcome ${claimStatus}; retry would re-file it.`)
+    }
+    // Re-arm operator-held claims so the re-queued job can actually lease.
+    if (["manual_action_required", "failed", "rejected"].includes(claimStatus)) {
+      await client.query(
+        `UPDATE claims SET status = 'ready_for_claim', updated_at = now() WHERE id = $1`,
+        [claimId],
+      )
+      await client.query(
+        `INSERT INTO claim_status_history (claim_id, from_status, to_status, reason, changed_by)
+         VALUES ($1, $2, 'ready_for_claim', 'Job retried by operator', $3)`,
+        [claimId, claimStatus, actor.id],
+      )
+    }
+
+    const params: unknown[] = [jobId, log]
+    const scopeCondition = accountCondition(scope, "c.marketplace_id", params)
+    const result = await client.query(
+      `UPDATE claim_automation_jobs j
+       SET stage = 'queued',
+           attempts = 0,
+           agent_id = NULL,
+           manual_action_reason = '',
+           lease_expires_at = NULL,
+           last_error = '',
+           updated_at = now(),
+           logs = logs || $2::jsonb
+       FROM claims c
+       WHERE j.id = $1 AND c.id = j.claim_id AND ${scopeCondition}
+       RETURNING j.id, c.marketplace_id`,
+      params,
+    )
+    if (!result.rows[0]) {
+      await client.query("ROLLBACK")
+      throw new ServiceError(404, "Automation job not found.")
+    }
+    await client.query("COMMIT")
+    return Number(result.rows[0].marketplace_id)
+  } catch (err) {
+    await client.query("ROLLBACK")
+    throw err
+  } finally {
+    client.release()
+  }
+}
 export async function listAutomationJobs(
   db: pg.Pool,
   scope: AccountScope,

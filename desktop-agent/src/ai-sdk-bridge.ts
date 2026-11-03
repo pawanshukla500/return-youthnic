@@ -62,6 +62,8 @@ export async function generateTextViaSdk(input: SdkGenerateInput): Promise<SdkGe
     usage: {
       inputTokens: typeof result.usage?.inputTokens === "number" ? result.usage.inputTokens : undefined,
       outputTokens: typeof result.usage?.outputTokens === "number" ? result.usage.outputTokens : undefined,
+      reasoningTokens: typeof result.usage?.reasoningTokens === "number" ? result.usage.reasoningTokens : undefined,
+      cachedTokens: typeof result.usage?.cachedInputTokens === "number" ? result.usage.cachedInputTokens : undefined,
     },
   }
 }

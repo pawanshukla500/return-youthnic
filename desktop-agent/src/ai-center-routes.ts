@@ -148,7 +148,7 @@ export async function handleAiCenterRoute(
       }
       const result = await testProviderConnection(dir, provider, model)
       body.model = ""
-      if (result.ok) ctx.sendJson(res, 200, { ok: true, latencyMs: result.latencyMs })
+      if (result.ok) ctx.sendJson(res, 200, { ok: true, latencyMs: result.latencyMs, usage: result.usage })
       else ctx.sendJson(res, 400, { ok: false, category: result.category, error: result.message })
       return true
     }

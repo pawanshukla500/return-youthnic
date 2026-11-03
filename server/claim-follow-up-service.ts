@@ -375,10 +375,13 @@ export async function recordFollowUpResult(
     if (!row) throw new ServiceError(404, "Follow-up not found or not leased by this agent.")
 
     const statusText = String(input.statusText || "").trim()
-    const normalizedStatus =
-      input.outcome === "status_read"
-        ? String(input.normalizedStatus || "").trim() || normalizeFollowUpStatus(statusText)
-        : ""
+    // Server-side text is authoritative: a client hint is accepted only when it agrees with
+    // the server normalization, so a bare "Resolved"/"Closed" portal row can never approve a
+    // claim or mark it paid without payment evidence.
+    const serverNormalized =
+      input.outcome === "status_read" ? normalizeFollowUpStatus(statusText) : ""
+    const hinted = String(input.normalizedStatus || "").trim()
+    const normalizedStatus = hinted && hinted === serverNormalized ? hinted : serverNormalized
     const marketplace = String(row.marketplace || "")
 
     const decision = decideFollowUpStep({

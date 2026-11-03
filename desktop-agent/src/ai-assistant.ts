@@ -28,9 +28,11 @@ export type AiGenerateInput = {
   maxTokens?: number
 }
 
+import type { TokenUsage } from "./ai-providers.js"
+
 export type AiGenerateResult = {
   text: string
-  usage?: { inputTokens?: number; outputTokens?: number }
+  usage?: TokenUsage
 }
 
 /** Structurally compatible with `generateText` from Vercel AI SDK Core. */
@@ -63,15 +65,16 @@ export function loadAiAssistConfig(env: NodeJS.ProcessEnv = process.env): AiAssi
   }
 }
 
-/** Metadata-only ledger: counts and latencies, never prompt/response text. */
+/** Metadata-only ledger: counts, latencies, and the last provider-reported usage; never prompt/response text. */
 export type AiUsageSnapshot = {
   calls: number
   failures: number
   lastLatencyMs: number | null
   lastModel: string
+  lastUsage: TokenUsage | null
 }
 
-const usageLedger: AiUsageSnapshot = { calls: 0, failures: 0, lastLatencyMs: null, lastModel: "" }
+const usageLedger: AiUsageSnapshot = { calls: 0, failures: 0, lastLatencyMs: null, lastModel: "", lastUsage: null }
 
 export function aiUsageSnapshot(): AiUsageSnapshot {
   return { ...usageLedger }
@@ -82,6 +85,7 @@ export function resetAiUsageForTests(): void {
   usageLedger.failures = 0
   usageLedger.lastLatencyMs = null
   usageLedger.lastModel = ""
+  usageLedger.lastUsage = null
 }
 
 /**
@@ -104,6 +108,7 @@ export class GatewayProvider implements AiProvider {
     const started = Date.now()
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), this.timeoutMs)
+    let delivered: TokenUsage | undefined
     try {
       const res = await fetch(`${this.gatewayUrl}/v1/generate-text`, {
         method: "POST",
@@ -122,12 +127,14 @@ export class GatewayProvider implements AiProvider {
       if (!res.ok) throw new Error(`AI gateway answered HTTP ${res.status}.`)
       const data = (await res.json()) as { text?: unknown; usage?: AiGenerateResult["usage"] }
       if (typeof data.text !== "string" || !data.text.trim()) throw new Error("AI gateway returned no text.")
+      delivered = data.usage
       return { text: data.text.slice(0, 8000), usage: data.usage }
     } finally {
       clearTimeout(timer)
       usageLedger.calls += 1
       usageLedger.lastLatencyMs = Date.now() - started
       usageLedger.lastModel = this.modelName
+      if (delivered) usageLedger.lastUsage = { ...delivered }
     }
   }
 }
@@ -186,19 +193,24 @@ export function validateAiProposal(proposal: AiProposal, ctx: AssistanceContext)
 /**
  * Ask the provider with bounded retries. Never throws: exhaustion returns null
  * so the caller degrades to human review. Counts every attempt in the ledger.
+ * The returned usage is the provider-reported token counts (never null-filled
+ * by this layer); callers record it instead of dropping it.
  */
 export async function requestAiProposal(
   provider: AiProvider | null,
   input: AiGenerateInput,
   maxAttempts: number,
-): Promise<string | null> {
+): Promise<{ text: string; usage?: TokenUsage } | null> {
   if (!provider) return null
   const attempts = Math.max(1, Math.min(3, Math.floor(maxAttempts) || 1))
   let lastError = ""
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
       const result = await provider.generateText(input)
-      if (result.text && result.text.trim()) return result.text
+      if (result.text && result.text.trim()) {
+        if (result.usage) usageLedger.lastUsage = { ...result.usage }
+        return { text: result.text, usage: result.usage }
+      }
       lastError = "empty response"
     } catch (err) {
       lastError = err instanceof Error ? err.message : "AI call failed"

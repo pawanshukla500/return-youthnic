@@ -121,7 +121,7 @@ test("a recovery on retry returns the text", async () => {
       return { text: "SYN-Try the secondary selector." }
     },
   }
-  assert.equal(await requestAiProposal(flaky, { prompt: "SYN-Hello" }, 2), "SYN-Try the secondary selector.")
+  assert.equal((await requestAiProposal(flaky, { prompt: "SYN-Hello" }, 2))?.text, "SYN-Try the secondary selector.")
 })
 
 test("diagnostic prompts carry context, never credentials", () => {
@@ -164,4 +164,17 @@ test("without memory the worker uses AI only when enabled", () => {
     decideFollowUpAssist({ outcome: "status_read", statusChanged: true, memoryHit: null, aiEnabled: false }).action,
     "human-review",
   )
+})
+
+test("proposals keep provider-reported usage in the result and ledger", async () => {
+  resetAiUsageForTests()
+  const provider: AiProvider = {
+    generateText: async () => ({
+      text: "SYN-Draft.",
+      usage: { inputTokens: 11, outputTokens: 7, cachedTokens: 3, reasoningTokens: 2 },
+    }),
+  }
+  const answered = await requestAiProposal(provider, { prompt: "SYN-Hello" }, 1)
+  assert.deepEqual(answered?.usage, { inputTokens: 11, outputTokens: 7, cachedTokens: 3, reasoningTokens: 2 })
+  assert.deepEqual(aiUsageSnapshot().lastUsage, { inputTokens: 11, outputTokens: 7, cachedTokens: 3, reasoningTokens: 2 })
 })

@@ -7,7 +7,7 @@ import assert from "node:assert/strict"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { runRoutedAssist, testProviderConnection } from "./src/ai-center-assist.ts"
+import { honestCost, runRoutedAssist, testProviderConnection } from "./src/ai-center-assist.ts"
 import { decideFollowUpAssist } from "./src/ai-assistant.ts"
 import { saveRoutingConfig, loadRoutingConfig, readActivity } from "./src/ai-center-store.ts"
 
@@ -73,4 +73,18 @@ test("Scenario A/D/F/G: memory-first order preserved in decider", () => {
   const unsupported = decideFollowUpAssist({ outcome: "not_supported", statusChanged: false, memoryHit: null, aiEnabled: true })
   assert.equal(unsupported.action, "no-action")
   assert.equal(memHit.action, "memory-hit")
+})
+
+test("R5: missing token counts stay Unknown, never $0.00", () => {
+  assert.deepEqual(honestCost("openai", "SYN-model", undefined), {
+    estimatedUsd: null,
+    provenance: "Unknown — provider reported no token counts",
+  })
+  assert.deepEqual(honestCost("openai", "SYN-model", {}), {
+    estimatedUsd: null,
+    provenance: "Unknown — provider reported no token counts",
+  })
+  const priced = honestCost("openai", "gpt-4o-mini", { inputTokens: 1000, outputTokens: 500 })
+  assert.equal(typeof priced.estimatedUsd, "number")
+  assert.match(priced.provenance, /provider-reported tokens/)
 })

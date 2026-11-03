@@ -18,6 +18,7 @@ import { clearPanelHold, getPanelStatuses, markPanelBusy, markPanelResult, panel
 import { localEncryptionAvailable } from "./local-secrets.js"
 import { checkForUpdates } from "./update-check.js"
 import { followUpExecutionBundle } from "./follow-up-bundle.js"
+import { isSafeToSubmitBundle } from "./submit-guard.js"
 import { describeBrowserAdapter, openSupplierBrowser, resolveBrowserAdapterKind } from "./browser-adapter.js"
 import { profileDirFor, readSessionSavedAt, supplierSessionDir } from "./supplier-session.js"
 import { aiUsageSnapshot, buildDiagnosticPrompt, decideFollowUpAssist, loadAiAssistConfig, providerFromConfig, requestAiProposal, validateAiProposal, type AssistanceContext } from "./ai-assistant.js"
@@ -185,6 +186,18 @@ async function pollAndProcessJob(manual = false): Promise<boolean> {
 
       const sessionSaved = Boolean(readSessionSavedAt(supplierSessionDir(config.userDataDir, bundle.marketplace, resolveBrowserAdapterKind())))
       const action = jobHeader.stage === "submitting" || sessionSaved ? "submit" : "prepare"
+      if (action === "submit") {
+        // F4: minutes passed since the lease while evidence downloaded. Re-read the
+        // job and claim before the portal is touched; a retry, a second filing, or
+        // a recorded claim outcome stops this run instead of filing a duplicate.
+        const fresh = await client.getExecutionBundle(jobHeader.jobId)
+        const gate = isSafeToSubmitBundle(fresh?.stage, fresh?.claimStatus)
+        if (!gate.ok) {
+          logger.warn(`Pre-submit revalidation stopped Job #${jobHeader.jobId}: ${gate.reason}`)
+          markPanelResult(panelKey, "manual_action", gate.reason)
+          return false
+        }
+      }
       const result = await engine.execute(action)
 
       if (result.stage === "prepared") {
@@ -202,8 +215,9 @@ async function pollAndProcessJob(manual = false): Promise<boolean> {
         })
         submissionOutcomeUnknown = false
         markPanelResult(panelKey, "completed", `Filed · ref ${result.marketplaceClaimId}`)
-        // Clean up local downloaded evidence files so they don't occupy disk space
-        await client.cleanClaimEvidenceFiles(bundle.claimId)
+        // Clean up local downloaded evidence files so they don't occupy disk space, keeping the
+        // submission screenshot the job references for operator inspection.
+        await client.cleanClaimEvidenceFiles(bundle.claimId, result.screenshotPath ? [result.screenshotPath] : [])
       } else if (result.stage === "manual_intervention_required") {
         keepBrowserOpen = true
         holdPortalBrowser(browserRunner)
@@ -225,7 +239,7 @@ async function pollAndProcessJob(manual = false): Promise<boolean> {
           screenshotPath: result.screenshotPath,
           manualActionReason: result.manualActionReason,
         })
-        await client.cleanClaimEvidenceFiles(bundle.claimId)
+        await client.cleanClaimEvidenceFiles(bundle.claimId, result.screenshotPath ? [result.screenshotPath] : [])
       }
     } finally {
       if (!keepBrowserOpen) await supplierBrowser.close()
@@ -385,8 +399,8 @@ async function runFollowUpAssist(input: {
         return
       }
       const ctx: AssistanceContext = { marketplace: input.marketplace, claimId: input.claimId, knownTicketId: input.marketplaceClaimId, step, errorSignature: signature }
-      const text = await requestAiProposal(provider, { prompt: buildDiagnosticPrompt(ctx, input.note), system: ASSIST_SYSTEM_PROMPT, maxTokens: 400 }, assistConfig.maxCallsPerJob)
-      const proposal = text ? { kind: "draft_response", summary: text, ticketRef: input.marketplaceClaimId } : null
+      const answered = await requestAiProposal(provider, { prompt: buildDiagnosticPrompt(ctx, input.note), system: ASSIST_SYSTEM_PROMPT, maxTokens: 400 }, assistConfig.maxCallsPerJob)
+      const proposal = answered && answered.text ? { kind: "draft_response", summary: answered.text, ticketRef: input.marketplaceClaimId } : null
       if (proposal && validateAiProposal(proposal, ctx)) {
         logger.info(`Follow-up #${input.followUpId}: AI draft ready for operator review (not sent).`)
         saveLocalMemory(dir, recordLocalEvent(memory, { at: stamp, claimId: input.claimId, marketplace: input.marketplace, step, outcome: "ai_proposal", note: proposal.summary.slice(0, 200) }))
@@ -788,6 +802,14 @@ function getDashboardHtml(): string {
     .portal-row { display: grid; grid-template-columns: 140px 1fr 1fr auto; gap: 10px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--line); }
     .portal-row input { width: 100%; }
     @media (max-width: 900px) { .portal-row { grid-template-columns: 1fr; } }
+    #browser-workspace { display: none; }
+    body.supplier-browser-open { overflow: hidden; }
+    body.supplier-browser-open #browser-workspace {
+      display: flex; position: fixed; left: 10px; right: 10px; bottom: 10px; z-index: 1;
+      border: 1px dashed #34d399; border-radius: 8px;
+      align-items: center; justify-content: center; text-align: center;
+      color: #6ee7b7; font-size: 12px; pointer-events: none;
+    }
   </style>
 </head>
 <body>
@@ -903,6 +925,7 @@ function getDashboardHtml(): string {
         <button class="btn btn-secondary" type="button" style="font-size: 11px; padding: 2px 8px;" onclick="hideSupplierBrowser()">Hide supplier browser</button>
       </div>
       <div id="portal-browser-message" style="margin-top: 6px; font-size: 12px; color: #fca5a5;"></div>
+      <div id="browser-workspace">Supplier browser is shown in this area. The controls above stay available — use Hide supplier browser to return to the dashboard.</div>
     </section>
 
     <section class="panel" id="panel-queue" style="padding: 16px 18px;">
@@ -2128,9 +2151,29 @@ function getDashboardHtml(): string {
       }
     }
 
+    // F10: the native supplier view shares the window with the dashboard. The
+    // shell fits the view to this placeholder rect; null restores full-window.
+    function reportBrowserWorkspace() {
+      try {
+        const bridge = window.desktopApp && window.desktopApp.setBrowserWorkspaceRect;
+        if (typeof bridge !== 'function') return;
+        if (!document.body.classList.contains('supplier-browser-open')) { bridge(null); return; }
+        const row = document.getElementById('supplier-browser-row');
+        const el = document.getElementById('browser-workspace');
+        if (!el) { bridge(null); return; }
+        const top = row ? Math.round(row.getBoundingClientRect().bottom + 8) : 120;
+        el.style.top = top + 'px';
+        const r = el.getBoundingClientRect();
+        if (r.width < 50 || r.height < 50) return;
+        bridge({ x: Math.round(r.left), y: Math.round(r.top), width: Math.round(r.width), height: Math.round(r.height) });
+      } catch { /* the dashboard must never break on IPC */ }
+    }
+
     async function loadSupplierBrowser() {
       const row = document.getElementById('supplier-browser-row');
       const status = document.getElementById('supplier-browser-status');
+      document.body.classList.remove('supplier-browser-open');
+      reportBrowserWorkspace();
       try {
         const res = await fetch('/api/portal-browser');
         if (!res.ok) { row.style.display = 'none'; return; }
@@ -2142,6 +2185,8 @@ function getDashboardHtml(): string {
         status.textContent = visible.length > 0
           ? 'Supplier browser: ' + visible.map((v) => v.panelKey).join(', ') + ' (inside this window)'
           : 'Supplier browser: hidden (sessions kept)';
+        document.body.classList.toggle('supplier-browser-open', visible.length > 0);
+        reportBrowserWorkspace();
       } catch { row.style.display = 'none'; }
     }
 
@@ -2239,6 +2284,8 @@ function getDashboardHtml(): string {
     loadFollowUps();
     loadAiMemory();
     loadAiCenter();
+    loadSupplierBrowser();
+    window.addEventListener('resize', reportBrowserWorkspace);
     connectSse();
     setInterval(loadStatus, 2000);
     setInterval(loadJobs, 10000);
