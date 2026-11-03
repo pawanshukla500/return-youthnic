@@ -670,7 +670,7 @@ Append new entries at the end. Do not edit earlier entries, except to correct a 
   - Windows Desktop Bot (`desktop-agent/build.ts`, `desktop-agent/dist/TaskFlowClaimAgent.exe`):
     - Ensured platform-aware Node SEA single executable build (`npm run build:agent`) generates standalone `TaskFlowClaimAgent.exe`.
   - Documentation:
-    - Created comprehensive [`docs/MEESHO_CLAIM_AUTOMATION.md`](docs/MEESHO_CLAIM_AUTOMATION.md) documenting architecture, field mappings, mobile capture, Firebase setup, Ticket ID sync, and desktop bot automation.
+    - Created comprehensive [`MEESHO_CLAIM_AUTOMATION.md`](../MEESHO_CLAIM_AUTOMATION.md) documenting architecture, field mappings, mobile capture, Firebase setup, Ticket ID sync, and desktop bot automation.
 - Ran:
   - `npm.cmd run typecheck`: Passed (0 errors).
   - `npm.cmd run build`: Passed (Vite production bundle in 1.97s, server dist in 26ms).
@@ -1707,6 +1707,7 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
 |- **Free-text stage columns.** Automation job `stage`, follow-up `stage` and return-tracking `claim_eligibility_status` are unconstrained text; valid values live only in code and docs.|
 |- **Native attach verification is fail-open.** `setFileInputFiles` logs and continues to `prepared` when a browser upload box cannot be verified; only the zero-evidence case is fail-closed. See M8 §8 finding (still open).|
 |- **A dead path.** The editable ticket cell in `src/returns-table.tsx` is used by no page. Its default save does nothing. Wire it or remove it before use.
+- **Stale code comment (recorded, not fixed — documentation-only task).** `server/claims-service.ts` header says "All transitions are allowed and audited"; the `CLAIM_TRANSITIONS` map next to it enforces with 409. Code wins; fix the comment in a code pass.
 - **An unused list.** `MARKETPLACES` in `src/marketplaces.ts` is no longer used for account lists.
 - **Stale comments.** These are in the code, and they were not edited on 2026-10-10:
   - `server/schema-register.sql` and `server/admin-config.ts` say `VERIFIED_TRACKING_LINKS`. The code's name is `LINK_RULES`.
