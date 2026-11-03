@@ -1178,14 +1178,18 @@ export async function recordScan(
       flyerId,
       flyerState,
     })
-    await syncScanToReturnTracking(
-      client,
-      scanId,
-      storedTracking,
-      String(shipment.order_number),
-      actor.id,
-      hasIssue ? "issue" : "clear",
-    )
+    try {
+      await syncScanToReturnTracking(
+        client,
+        scanId,
+        storedTracking,
+        String(shipment.order_number),
+        actor.id,
+        hasIssue ? "issue" : "clear",
+      )
+    } catch (trackingErr) {
+      console.error("[Return Tracking Sync Warning] Non-fatal tracking sync error:", trackingErr)
+    }
     await client.query("COMMIT")
     open = false
     return loadReceipt(db, scanId, false, scope)
