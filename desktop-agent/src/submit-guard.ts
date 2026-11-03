@@ -1,5 +1,5 @@
 /**
- * Pre-submit revalidation for the desktop claim worker (M8 F4).
+ * Pre-submit revalidation for the desktop claim worker (M8 F4, hardened in M9).
  *
  * Minutes can pass between the queue lease (evidence download, browser work)
  * and the moment the engine would click Submit on the supplier portal. In that
@@ -11,6 +11,10 @@
  * Fail-closed: unknown stages or statuses abort. The server re-checks the same
  * conditions atomically in completeJobSubmission; this gate exists so a stale
  * run never files a real portal ticket that the server would then have to 409.
+ *
+ * M9: a saved supplier login (or any local cookie/marker state) never counts
+ * as submission authorization. When the account requires approval, only the
+ * backend-issued `submitting` lease authorizes the portal click.
  */
 
 export const SUBMIT_BLOCKED_JOB_STAGES: ReadonlySet<string> = new Set([
@@ -42,10 +46,24 @@ export const SUBMITTABLE_CLAIM_STATUSES: ReadonlySet<string> = new Set([
 export function isSafeToSubmitBundle(
   stage: string | null | undefined,
   claimStatus: string | null | undefined,
+  /**
+   * True (default) when the account requires explicit approval: only the
+   * backend-issued `submitting` lease authorizes the portal click. False for
+   * auto-submit accounts, where the credential flag is the standing
+   * authorization and the gate checks only freshness and recorded outcomes.
+   * A saved supplier login never satisfies either path.
+   */
+  approvalRequired: boolean = true,
 ): { ok: true } | { ok: false; reason: string } {
   const jobStage = String(stage || "").trim()
   const claim = String(claimStatus || "").trim()
   if (!jobStage) return { ok: false, reason: "Job no longer exists on the server; the run stops before touching the portal." }
+  if (approvalRequired && jobStage !== "submitting") {
+    return {
+      ok: false,
+      reason: `Job is in stage ${jobStage}, not the authorized submitting state; approval is required before the portal is touched.`,
+    }
+  }
   if (SUBMIT_BLOCKED_JOB_STAGES.has(jobStage)) {
     return {
       ok: false,

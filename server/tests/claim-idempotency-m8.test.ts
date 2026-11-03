@@ -200,6 +200,93 @@ test("follow-up: a resolved-portal hint never approves the claim", async () => {
   )
 })
 
+// M9: a saved supplier login never authorizes submission. The completion
+// endpoint verifies lease ownership, lease liveness and the account's
+// submission authorization atomically; only the backend-issued submitting
+// lease may record a ticket on an approval-required account.
+function leaseRow(overrides: Record<string, unknown> = {}) {
+  return {
+    claim_id: 5,
+    stage: "queued",
+    marketplace_claim_id: "",
+    agent_id: 9,
+    lease_expires_at: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+    approval_required: true,
+    marketplace_id: 3,
+    claim_status: "processing",
+    ...overrides,
+  }
+}
+
+function leaseFakePool(row: Record<string, unknown>) {
+  return fakePool((sql) => {
+    if (sql.trimStart().startsWith("SELECT") && sql.includes("FROM claim_automation_jobs j")) {
+      return { rows: [row] }
+    }
+    return { rows: [] }
+  })
+}
+
+test("complete: approval-required job outside the submitting state cannot record a ticket", async () => {
+  const { pool, queries } = leaseFakePool(leaseRow({ stage: "queued" }))
+  const code = await serviceErrorCode(completeJobSubmission(pool, 42, { marketplaceClaimId: "SYN-T3" }, scope, { agentId: 9 }))
+  assert.equal(code, 409)
+  assert.ok(!queries.some((q) => q.sql.includes("UPDATE claim_automation_jobs")), "unauthorized submit must not rewrite the job")
+})
+
+test("complete: an expired lease cannot record a ticket even in the submitting state", async () => {
+  const { pool, queries } = leaseFakePool(
+    leaseRow({ stage: "submitting", lease_expires_at: new Date(Date.now() - 60 * 1000).toISOString() }),
+  )
+  const code = await serviceErrorCode(completeJobSubmission(pool, 42, { marketplaceClaimId: "SYN-T3" }, scope, { agentId: 9 }))
+  assert.equal(code, 409)
+  assert.ok(!queries.some((q) => q.sql.includes("UPDATE claim_automation_jobs")), "expired lease must not rewrite the job")
+})
+
+test("complete: a worker that does not hold the lease cannot record a ticket", async () => {
+  const { pool, queries } = leaseFakePool(leaseRow({ stage: "submitting" }))
+  const code = await serviceErrorCode(completeJobSubmission(pool, 42, { marketplaceClaimId: "SYN-T3" }, scope, { agentId: 77 }))
+  assert.equal(code, 404)
+  assert.ok(!queries.some((q) => q.sql.includes("UPDATE claim_automation_jobs")), "a non-holder must not rewrite the job")
+})
+
+test("complete: an auto-submit account records a ticket from a live lease without the submitting state", async () => {
+  const { pool, queries } = leaseFakePool(leaseRow({ stage: "downloading_media", approval_required: false }))
+  const marketplaceId = await completeJobSubmission(pool, 42, { marketplaceClaimId: "SYN-T3" }, scope, { agentId: 9 })
+  assert.equal(marketplaceId, 3)
+  const completions = queries.filter((q) => q.sql.includes("UPDATE claim_automation_jobs") && q.sql.includes("SET stage = 'completed'"))
+  assert.equal(completions.length, 1, "exactly one completion write")
+})
+
+test("complete: the authorized submitting lease records a ticket exactly once", async () => {
+  const { pool, queries } = leaseFakePool(leaseRow({ stage: "submitting" }))
+  const marketplaceId = await completeJobSubmission(pool, 42, { marketplaceClaimId: "SYN-T3" }, scope, { agentId: 9 })
+  assert.equal(marketplaceId, 3)
+  const completions = queries.filter((q) => q.sql.includes("UPDATE claim_automation_jobs") && q.sql.includes("SET stage = 'completed'"))
+  assert.equal(completions.length, 1, "exactly one completion write")
+})
+
+test("complete: operator manual-resolve stays separate and needs no worker lease", async () => {
+  const { pool, queries } = leaseFakePool(leaseRow({ stage: "manual_intervention_required", agent_id: null, lease_expires_at: null }))
+  const marketplaceId = await completeJobSubmission(pool, 42, { marketplaceClaimId: "SYN-T9" }, scope, { operatorOverride: true })
+  assert.equal(marketplaceId, 3)
+  const completions = queries.filter((q) => q.sql.includes("UPDATE claim_automation_jobs") && q.sql.includes("SET stage = 'completed'"))
+  assert.equal(completions.length, 1, "operator resolution completes the job")
+})
+
+// M9: two desktop workers racing for the same job serialize on the lease row.
+test("lease: acquisition serializes competing workers on the locked job row", async () => {
+  const { pool, queries } = fakePool((sql) => {
+    if (sql.includes("FROM claim_automation_agents")) return { rows: [{ id: 9 }] }
+    return { rows: [] }
+  })
+  await pollNextAutomationJob(pool, "SYN-agent", scope)
+  const lease = queries.filter((q) => q.sql.includes("FOR UPDATE") && q.sql.includes("claim_automation_jobs"))
+  assert.ok(lease.length > 0, "expected a lease select")
+  const sql = lease.map((q) => q.sql).join("\n")
+  assert.ok(sql.includes("SKIP LOCKED"), "competing workers must skip a row locked by the other worker")
+})
+
 // F6: replacing a ticket keeps the replaced code in history.
 test("register sync: ticket replacement history keeps the replaced code", async () => {
   const { poolClient, queries } = fakePool((sql) => {

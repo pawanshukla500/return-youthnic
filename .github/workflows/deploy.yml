@@ -86,6 +86,7 @@ jobs:
           SHOPIFY_DATABASE_URL: ${{ secrets.SHOPIFY_DATABASE_URL || '' }}
           SHOPIFY_SSL_CA: ${{ secrets.SHOPIFY_SSL_CA || '' }}
           SESSION_SECRET: ${{ secrets.SESSION_SECRET || '' }}
+          AUTOMATION_SECRET_KEY: ${{ secrets.AUTOMATION_SECRET_KEY || '' }}
           CORS_ORIGIN: ${{ vars.CORS_ORIGIN || 'https://return.youthnic.shop' }}
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY || '' }}
           RESEND_FROM_EMAIL: ${{ secrets.RESEND_FROM_EMAIL || vars.RESEND_FROM_EMAIL || 'return.scan@youthnic.shop' }}
@@ -109,6 +110,7 @@ jobs:
           SHOPIFY_DATABASE_URL=${SHOPIFY_DATABASE_URL}
           SHOPIFY_SSL_CA_FILE=certs/shopify-ca.pem
           SESSION_SECRET=${SESSION_SECRET}
+          AUTOMATION_SECRET_KEY=${AUTOMATION_SECRET_KEY}
           CORS_ORIGIN=${CORS_ORIGIN}
           RESEND_API_KEY=${RESEND_API_KEY}
           RESEND_FROM_EMAIL=${RESEND_FROM_EMAIL}

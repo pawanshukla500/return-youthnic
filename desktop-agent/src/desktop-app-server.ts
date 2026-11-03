@@ -157,10 +157,17 @@ async function pollAndProcessJob(manual = false): Promise<boolean> {
       return false
     }
 
-    await client.updateProgress(jobHeader.jobId, {
-      stage: "downloading_media",
-      logMessage: "Agent downloading evidence photos and unboxing videos from cloud storage...",
-    })
+    // M9: a run holding the submitting lease must keep that stage. Reporting
+    // downloading_media here would overwrite the backend's submission
+    // authorization with a prepare-stage value (and the F4 gate plus the
+    // completion endpoint both require the submitting stage to be intact).
+    // The lease itself still expires on its own 15-minute clock.
+    if (jobHeader.stage !== "submitting") {
+      await client.updateProgress(jobHeader.jobId, {
+        stage: "downloading_media",
+        logMessage: "Agent downloading evidence photos and unboxing videos from cloud storage...",
+      })
+    }
 
     const evidenceFilesMap = await client.downloadEvidenceFiles(bundle.claimId, bundle.evidenceFiles)
     logger.info(`Downloaded ${evidenceFilesMap.size} evidence files for Claim #${bundle.claimId}.`)
@@ -184,14 +191,20 @@ async function pollAndProcessJob(manual = false): Promise<boolean> {
         path.join(config.workDir, `claim-${bundle.claimId}`),
       )
 
-      const sessionSaved = Boolean(readSessionSavedAt(supplierSessionDir(config.userDataDir, bundle.marketplace, resolveBrowserAdapterKind())))
-      const action = jobHeader.stage === "submitting" || sessionSaved ? "submit" : "prepare"
-      if (action === "submit") {
+      // M9: a saved supplier login NEVER authorizes submission. Only the
+      // backend-issued `submitting` lease (granted when an approved job is
+      // leased) selects the submit path; cookie state is not consulted.
+      const action = jobHeader.stage === "submitting" ? "submit" : "prepare"
+      // Prepare runs on auto-submit accounts fall through to portal submission
+      // inside the engine, so they get the same revalidation (without the
+      // submitting-stage requirement, which only the approval path satisfies).
+      if (action === "submit" || bundle.requireApprovalBeforeSubmit === false) {
         // F4: minutes passed since the lease while evidence downloaded. Re-read the
-        // job and claim before the portal is touched; a retry, a second filing, or
-        // a recorded claim outcome stops this run instead of filing a duplicate.
+        // job and claim before the portal is touched; a retry, a second filing,
+        // a missing approval, or a recorded claim outcome stops this run instead
+        // of filing a duplicate.
         const fresh = await client.getExecutionBundle(jobHeader.jobId)
-        const gate = isSafeToSubmitBundle(fresh?.stage, fresh?.claimStatus)
+        const gate = isSafeToSubmitBundle(fresh?.stage, fresh?.claimStatus, bundle.requireApprovalBeforeSubmit)
         if (!gate.ok) {
           logger.warn(`Pre-submit revalidation stopped Job #${jobHeader.jobId}: ${gate.reason}`)
           markPanelResult(panelKey, "manual_action", gate.reason)
@@ -702,7 +715,24 @@ function getDashboardHtml(): string {
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <style>
-    :root {
+    :root, [data-theme="light"] {
+      --bg: #edf1ee;
+      --card-bg: #ffffff;
+      --card-border: #d9e2dd;
+      --card-hover: #f2f7f4;
+      --primary: #059669;
+      --primary-dark: #047857;
+      --primary-light: rgba(5, 150, 105, 0.12);
+      --text: #10201a;
+      --muted: #5c7169;
+      --line: #d9e2dd;
+      --border: #d9e2dd;
+      --danger: #dc2626;
+      --warning: #d97706;
+      --blue: #2563eb;
+      --purple: #7c3aed;
+    }
+    [data-theme="dark"] {
       --bg: #0b1311;
       --card-bg: #111e1b;
       --card-border: #1a2f2a;
@@ -810,12 +840,70 @@ function getDashboardHtml(): string {
       align-items: center; justify-content: center; text-align: center;
       color: #6ee7b7; font-size: 12px; pointer-events: none;
     }
+    /* Light-theme surface overrides (hardcoded dark surfaces + inline JS colors). */
+    [data-theme="light"] header { background: #ffffff; }
+    [data-theme="light"] .panel-header { background: #f2f7f4; }
+    [data-theme="light"] .panel-title { color: #10201a; }
+    [data-theme="light"] th { background: #f2f7f4; }
+    [data-theme="light"] tr:hover td { background: rgba(5, 150, 105, 0.06); }
+    [data-theme="light"] .tabs { background: #e6ece9; }
+    [data-theme="light"] .tab.active { background: #ffffff; box-shadow: inset 0 0 0 1px var(--line); color: var(--text); }
+    [data-theme="light"] .btn-secondary { background: #e9f1ed; color: #065f46; }
+    [data-theme="light"] .btn-secondary:hover { background: #dce8e2; }
+    [data-theme="light"] .btn-primary { color: #ffffff; }
+    [data-theme="light"] .backend-select, [data-theme="light"] .form-control { background: #ffffff; }
+    [data-theme="light"] .login-gate { background: #edf1ee; }
+    [data-theme="light"] .login-card { background: #ffffff; }
+    [data-theme="light"] .stage-queued { color: #b45309; }
+    [data-theme="light"] .stage-downloading, [data-theme="light"] .stage-submitting,
+    [data-theme="light"] .stage-opening_portal, [data-theme="light"] .stage-filling_form { color: #1d4ed8; }
+    [data-theme="light"] .stage-completed { color: #047857; }
+    [data-theme="light"] .stage-prepared { color: #6d28d9; }
+    [data-theme="light"] .stage-manual, [data-theme="light"] .stage-failed { color: #b91c1c; }
+    [data-theme="light"] #countdown, [data-theme="light"] #portal-status,
+    [data-theme="light"] #supplier-browser-status, [data-theme="light"] #portal-browser-message,
+    [data-theme="light"] #update-result, [data-theme="light"] #updates-current,
+    [data-theme="light"] #updates-checked-line, [data-theme="light"] #ping-result,
+    [data-theme="light"] #aimemory-message, [data-theme="light"] #aicenter-message { color: #047857 !important; }
+    [data-theme="light"] #portal-message, [data-theme="light"] #login-error,
+    [data-theme="light"] #gate-result { color: #b91c1c !important; }
+
+    /* App shell: sidebar + segregated content. */
+    main { display: block; padding: 0; }
+    .app-shell { display: flex; align-items: flex-start; }
+    .sidebar { width: 198px; flex-shrink: 0; position: sticky; top: 118px; background: var(--card-bg);
+      border: 1px solid var(--card-border); border-radius: 12px; padding: 10px; margin: 20px 0 20px 24px;
+      display: flex; flex-direction: column; gap: 2px; }
+    .side-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted);
+      font-weight: 700; padding: 6px 10px 4px; }
+    .side-btn { text-align: left; background: transparent; border: none; border-radius: 8px; padding: 8px 10px;
+      font-size: 13px; font-weight: 600; color: var(--muted); cursor: pointer; }
+    .side-btn:hover { background: var(--card-hover); color: var(--text); }
+    .side-btn.active { background: var(--primary-light); color: var(--primary-dark); }
+    [data-theme="dark"] .side-btn.active { color: var(--primary); }
+    .side-content { flex: 1; min-width: 0; display: grid; gap: 20px; padding: 20px 24px 20px 16px; align-content: start; }
+    .update-banner { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between;
+      background: var(--primary-light); border-bottom: 1px solid var(--primary);
+      color: var(--text); font-size: 12px; font-weight: 600; padding: 8px 24px; }
+    .update-banner a { color: var(--primary-dark); font-weight: 800; }
+    [data-theme="dark"] .update-banner a { color: var(--primary); }
+    @media (max-width: 900px) {
+      .app-shell { flex-direction: column; }
+      .sidebar { position: static; width: auto; margin: 12px 12px 0; flex-direction: row; overflow-x: auto; align-items: center; }
+      .side-title { display: none; }
+      .side-btn { white-space: nowrap; }
+      .side-content { padding: 12px; }
+    }
   </style>
+<script>
+try { var __t = localStorage.getItem('ra-theme'); document.documentElement.setAttribute('data-theme', __t === 'dark' ? 'dark' : 'light'); }
+catch (e) { document.documentElement.setAttribute('data-theme', 'light'); }
+</script>
 </head>
 <body>
   <header inert>
     <div class="brand">
-      <div class="brand-icon">🤖</div>
+      <div class="brand-icon">R</div>
       <div>
         <div class="brand-title">Return App · 24/7 Claim Bot</div>
         <div class="brand-subtitle">Files marketplace claims while this app is running. Scanning stays on the warehouse web and phone.</div>
@@ -827,6 +915,7 @@ function getDashboardHtml(): string {
         <span class="pulse-dot"></span>
         <span id="agent-status-text">Waiting for sign-in</span>
       </div>
+      <button class="btn btn-secondary" id="theme-btn" type="button" onclick="toggleTheme()" title="Switch between light and dark">Theme</button>
       <button class="btn btn-secondary" id="sign-out-btn" type="button" onclick="signOut()" title="Stops the 24/7 claim bot until someone signs in again" hidden>Sign out</button>
     </div>
   </header>
@@ -855,6 +944,14 @@ function getDashboardHtml(): string {
     </form>
   </div>
 
+  <div id="update-banner" class="update-banner" hidden>
+    <span id="update-banner-text"></span>
+    <span style="display:flex;gap:8px;align-items:center;">
+      <a id="update-banner-link" href="#" target="_blank" rel="noopener">Download update</a>
+      <button class="btn btn-secondary" type="button" style="font-size:11px;padding:2px 8px;" onclick="dismissUpdateBanner()">Later</button>
+    </span>
+  </div>
+
   <div class="top-toolbar" inert>
     <div class="backend-picker">
       <strong>Backend Server:</strong>
@@ -875,6 +972,17 @@ function getDashboardHtml(): string {
   </div>
 
   <main inert>
+  <div class="app-shell">
+    <aside class="sidebar" id="sidebar">
+      <div class="side-title">Claim bot</div>
+      <button class="side-btn" type="button" data-side="status" onclick="showSideTab('status')">Status</button>
+      <button class="side-btn" type="button" data-side="setup" onclick="showSideTab('setup')">Setup</button>
+      <button class="side-btn" type="button" data-side="claims" onclick="showSideTab('claims')">Claims</button>
+      <button class="side-btn" type="button" data-side="follow-ups" onclick="showSideTab('follow-ups')">Follow-ups</button>
+      <button class="side-btn" type="button" data-side="ai" onclick="showSideTab('ai')">AI Center</button>
+      <button class="side-btn" type="button" data-side="updates" onclick="showSideTab('updates')">Updates</button>
+    </aside>
+    <div class="side-content">
     <section class="panel" id="overall-status" style="padding: 16px 18px;">
       <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;">
         <div style="display:flex;align-items:center;gap:12px;">
@@ -894,8 +1002,7 @@ function getDashboardHtml(): string {
       <div id="onboarding-steps" style="display: grid; gap: 8px;"></div>
       <div style="display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 12px; font-size: 12px; color: var(--muted);">
         <span id="security-line">Checking credential storage…</span>
-        <button class="btn btn-secondary" type="button" onclick="checkUpdates()">Check for updates</button>
-        <span id="update-result"></span>
+        <span style="color: var(--muted);">App updates moved to the Updates tab.</span>
       </div>
     </section>
 
@@ -926,6 +1033,18 @@ function getDashboardHtml(): string {
       </div>
       <div id="portal-browser-message" style="margin-top: 6px; font-size: 12px; color: #fca5a5;"></div>
       <div id="browser-workspace">Supplier browser is shown in this area. The controls above stay available — use Hide supplier browser to return to the dashboard.</div>
+    </section>
+
+    <section class="panel" id="updates" style="padding: 16px 18px;">
+      <div class="panel-title" style="margin-bottom: 4px;">App updates</div>
+      <p style="color: var(--muted); font-size: 12px; line-height: 1.5; margin-bottom: 12px;">This app checks for a newer release after install and while it runs. When one is found you get a banner here with a download link; install it over this version, supplier cookies are kept.</p>
+      <div style="display: flex; flex-wrap: wrap; gap: 10px; align-items: center; font-size: 12px;">
+        <span id="updates-current" style="color: var(--muted);">This app: checking…</span>
+        <button class="btn btn-secondary" type="button" onclick="checkUpdates()">Check now</button>
+        <label style="display: inline-flex; gap: 6px; align-items: center; color: var(--muted);"><input id="updates-auto" type="checkbox" checked onchange="toggleAutoUpdates()" /> Check automatically</label>
+      </div>
+      <div id="update-result" style="margin-top: 8px; font-size: 12px;"></div>
+      <div id="updates-checked-line" style="margin-top: 4px; font-size: 11px; color: var(--muted);"></div>
     </section>
 
     <section class="panel" id="panel-queue" style="padding: 16px 18px;">
@@ -1330,41 +1449,41 @@ function getDashboardHtml(): string {
 
 
     <!-- KPI Overview -->
-    <div class="kpi-grid">
+    <div class="kpi-grid" id="kpi-overview">
       <div class="kpi-card">
         <div class="kpi-label">Total Claims Tracked</div>
         <div class="kpi-val" id="kpi-total">0</div>
         <div class="kpi-sub">Across all marketplace channels</div>
       </div>
       <div class="kpi-card">
-        <div class="kpi-label" style="color: #6ee7b7;">✓ Done (Completed)</div>
+        <div class="kpi-label">Done (Completed)</div>
         <div class="kpi-val" style="color: #10b981;" id="kpi-completed">0</div>
         <div class="kpi-sub">Filed with official ticket ID</div>
       </div>
       <div class="kpi-card">
-        <div class="kpi-label" style="color: #fbbf24;">⏳ Queued (Waiting)</div>
+        <div class="kpi-label">Queued (Waiting)</div>
         <div class="kpi-val" style="color: #f59e0b;" id="kpi-queued">0</div>
         <div class="kpi-sub">Ready for 24/7 bot pickup</div>
       </div>
       <div class="kpi-card">
-        <div class="kpi-label" style="color: #93c5fd;">⚡ In Progress</div>
+        <div class="kpi-label">In Progress</div>
         <div class="kpi-val" style="color: #3b82f6;" id="kpi-inprogress">0</div>
         <div class="kpi-sub" id="active-task-label">Idle / Polling</div>
       </div>
       <div class="kpi-card">
-        <div class="kpi-label" style="color: #fca5a5;">⚠️ Action Required</div>
+        <div class="kpi-label">Action Required</div>
         <div class="kpi-val" style="color: #ef4444;" id="kpi-failed">0</div>
         <div class="kpi-sub">OTP, CAPTCHA, or Portal Review</div>
       </div>
     </div>
 
     <!-- Main Content: Claims Table & Live Logs -->
-    <div class="content-split">
+    <div class="content-split" id="claims-pipeline">
       <!-- Claims Table Panel -->
       <div class="panel">
         <div class="panel-header">
           <div class="panel-title">
-            <span>📋 Claims Queue Pipeline</span>
+            <span>Claims Queue Pipeline</span>
             <span style="font-size: 11px; font-weight: normal; color: var(--muted); margin-left: 6px;">(Live synchronization)</span>
           </div>
           <div style="display: flex; gap: 8px;">
@@ -1407,7 +1526,7 @@ function getDashboardHtml(): string {
       <div class="panel">
         <div class="panel-header">
           <div class="panel-title">
-            <span>💻 24/7 Bot Activity & Automation Log</span>
+            <span>24/7 Bot Activity &amp; Automation Log</span>
           </div>
           <button class="btn btn-secondary" style="font-size: 11px; padding: 2px 8px;" onclick="clearLogs()">Clear</button>
         </div>
@@ -1419,6 +1538,8 @@ function getDashboardHtml(): string {
         </div>
       </div>
     </div>
+    </div>
+  </div>
   </main>
 
   <script>
@@ -2073,32 +2194,129 @@ function getDashboardHtml(): string {
       }
     }
 
+    function updateDownloadPick(list) {
+      const wantExt = '.exe';
+      return (list.find((d) => (d.name || '').toLowerCase().endsWith(wantExt)) || list[0]) || null;
+    }
+    function renderUpdateState(data) {
+      const out = document.getElementById('update-result');
+      const cur = document.getElementById('updates-current');
+      if (cur) cur.textContent = 'This app: ' + (data.currentVersion || '?');
+      const line = document.getElementById('updates-checked-line');
+      if (line) line.textContent = 'Last checked: ' + new Date().toLocaleString('en-IN', { hour12: false });
+      if (!data.updateAvailable) {
+        out.textContent = 'Up to date (this app: ' + (data.currentVersion || '?') + ').';
+        hideUpdateBanner();
+        return;
+      }
+      const best = updateDownloadPick(data.downloads || []);
+      out.innerHTML = 'Update available: ' + data.latestTag +
+        (best ? ' — <a href="' + best.url + '" target="_blank" rel="noopener" style="color:var(--primary);font-weight:700;">Download ' + best.name + '</a>' : '') +
+        ' (install it over this version; supplier cookies are kept).';
+      showUpdateBanner(data.latestTag, best);
+    }
+    function showUpdateBanner(tag, best) {
+      try {
+        if (localStorage.getItem('ra-update-dismissed') === String(tag)) return;
+      } catch {}
+      const bar = document.getElementById('update-banner');
+      const txt = document.getElementById('update-banner-text');
+      const link = document.getElementById('update-banner-link');
+      if (!bar || !txt || !link) return;
+      txt.textContent = 'Update available: ' + tag + ' — install it over this version; supplier cookies are kept.';
+      if (best) { link.href = best.url; link.textContent = 'Download ' + (best.name || tag); link.style.display = ''; }
+      else link.style.display = 'none';
+      bar.hidden = false;
+    }
+    function hideUpdateBanner() {
+      const bar = document.getElementById('update-banner');
+      if (bar) bar.hidden = true;
+    }
+    function dismissUpdateBanner() {
+      try {
+        const txt = document.getElementById('update-banner-text').textContent || '';
+        const m = txt.match(/Update available: (\\S+)/);
+        if (m) localStorage.setItem('ra-update-dismissed', m[1]);
+      } catch {}
+      hideUpdateBanner();
+    }
+    function autoUpdatesOn() {
+      try { return localStorage.getItem('ra-auto-updates') !== '0'; } catch { return true; }
+    }
+    function toggleAutoUpdates() {
+      try { localStorage.setItem('ra-auto-updates', document.getElementById('updates-auto').checked ? '1' : '0'); } catch {}
+    }
+    async function fetchUpdateState() {
+      const res = await fetch('/api/updates/check');
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Update check needs sign-in.');
+      return data;
+    }
     async function checkUpdates() {
       const out = document.getElementById('update-result');
       out.textContent = 'Checking…';
       try {
-        const res = await fetch('/api/updates/check');
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          out.textContent = data.error || 'Update check needs sign-in.';
-          return;
-        }
-        if (!data.updateAvailable) {
-          out.textContent = 'Up to date (this app: ' + (data.currentVersion || '?') + ').';
-          return;
-        }
-        const list = data.downloads || [];
-        // Windows-only desktop: the NSIS .exe is the only setup asset.
-        const wantExt = '.exe';
-        const best = list.find((d) => (d.name || '').toLowerCase().endsWith(wantExt)) || list[0];
-        out.innerHTML = 'Update available: ' + data.latestTag +
-          (best ? ' — <a href="' + best.url + '" target="_blank" rel="noopener" style="color:#6ee7b7;font-weight:700;">Download ' + best.name + '</a>' : '') +
-          ' (install it over this version; supplier cookies are kept).';
+        renderUpdateState(await fetchUpdateState());
       } catch {
         out.textContent = 'Update check failed (offline?).';
       }
     }
-
+    async function checkUpdatesQuiet() {
+      if (!autoUpdatesOn()) return;
+      try {
+        renderUpdateState(await fetchUpdateState());
+      } catch {
+        /* silent: manual Check now surfaces errors */
+      }
+    }
+    function bootUpdateChecker() {
+      try {
+        const box = document.getElementById('updates-auto');
+        if (box) box.checked = autoUpdatesOn();
+      } catch {}
+      paintThemeLabel();
+      setTimeout(checkUpdatesQuiet, 30000);
+      setInterval(checkUpdatesQuiet, 6 * 60 * 60 * 1000);
+    }
+    function toggleTheme() {
+      try {
+        const next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+        document.documentElement.setAttribute('data-theme', next);
+        localStorage.setItem('ra-theme', next);
+      } catch {}
+      paintThemeLabel();
+    }
+    function paintThemeLabel() {
+      const btn = document.getElementById('theme-btn');
+      if (btn) btn.textContent = document.documentElement.getAttribute('data-theme') === 'dark' ? 'Light' : 'Dark';
+    }
+    var SIDE_TABS = {
+      'status': ['overall-status', 'kpi-overview'],
+      'setup': ['onboarding', 'portal-setup'],
+      'claims': ['panel-queue', 'claims-pipeline'],
+      'follow-ups': ['follow-ups'],
+      'ai': ['ai-memory', 'ai-center'],
+      'updates': ['updates']
+    };
+    function sideTabFromHash() {
+      const h = (location.hash || '').replace(/^#\\/?/, '');
+      return SIDE_TABS[h] ? h : null;
+    }
+    function showSideTab(name, skipHash) {
+      if (!SIDE_TABS[name]) name = 'status';
+      Object.keys(SIDE_TABS).forEach(function (tab) {
+        const on = tab === name;
+        SIDE_TABS[tab].forEach(function (id) {
+          const el = document.getElementById(id);
+          if (el) el.style.display = on ? '' : 'none';
+        });
+      });
+      document.querySelectorAll('#sidebar .side-btn').forEach(function (btn) {
+        btn.classList.toggle('active', btn.getAttribute('data-side') === name);
+      });
+      try { localStorage.setItem('ra-side-tab', name); } catch {}
+      if (!skipHash) { try { history.replaceState(null, '', '#' + name); } catch {} }
+    }
     async function savePortal() {
       const message = document.getElementById('portal-message');
       message.style.color = '#a7f3d0';
@@ -2275,6 +2493,7 @@ function getDashboardHtml(): string {
     }
 
     // Initial load
+    showSideTab(sideTabFromHash() || (function () { try { return localStorage.getItem('ra-side-tab'); } catch (e) { return null; } })() || 'status', true);
     loadOperator();
     loadPortalLogins();
     loadSecurityLine();
@@ -2287,6 +2506,7 @@ function getDashboardHtml(): string {
     loadSupplierBrowser();
     window.addEventListener('resize', reportBrowserWorkspace);
     connectSse();
+    bootUpdateChecker();
     setInterval(loadStatus, 2000);
     setInterval(loadJobs, 10000);
     setInterval(loadPanels, 5000);

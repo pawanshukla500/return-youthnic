@@ -788,6 +788,12 @@ export async function updateJobProgress(
     screenshotPath?: string
     manualActionReason?: string
   },
+  /**
+   * M9: the desktop worker's agent id. When provided, the update is accepted
+   * only from the worker that currently holds a live lease on the job, so a
+   * stale worker cannot resurrect or redirect a job it no longer owns.
+   */
+  agentId?: number | null,
 ): Promise<number> {
   const allowedStages = new Set([
     "downloading_media",
@@ -800,11 +806,17 @@ export async function updateJobProgress(
     "failed",
   ])
   if (!allowedStages.has(data.stage)) throw new ServiceError(400, "Choose a valid automation job stage.")
+  // M9: the submitting state is entered only through the queue lease (an
+  // approved job leased for submission). No worker may self-authorize by
+  // reporting its way into submitting.
+  if (data.stage === "submitting") {
+    throw new ServiceError(409, "The submitting state is granted only by the queue lease; report progress for the leased stage instead.")
+  }
   const client = await db.connect()
   try {
     await client.query("BEGIN")
     const currentJob = await client.query(
-      `SELECT j.attempts, j.max_attempts, j.stage, c.marketplace_id
+      `SELECT j.attempts, j.max_attempts, j.stage, j.agent_id, j.lease_expires_at, c.marketplace_id
        FROM claim_automation_jobs j
        JOIN claims c ON c.id = j.claim_id
        WHERE j.id = $1
@@ -812,6 +824,15 @@ export async function updateJobProgress(
       [jobId],
     )
     if (!currentJob.rows[0]) throw new ServiceError(404, "Automation job not found.")
+    if (agentId != null) {
+      if (Number(currentJob.rows[0].agent_id) !== Number(agentId)) {
+        throw new ServiceError(404, "Automation job not found.")
+      }
+      const leaseExpiresAt = currentJob.rows[0].lease_expires_at
+      if (!leaseExpiresAt || new Date(String(leaseExpiresAt)).getTime() <= Date.now()) {
+        throw new ServiceError(409, "Submission lease expired; the job must be re-leased before progress is reported.")
+      }
+    }
     if (String(currentJob.rows[0].stage) === "completed") {
       throw new ServiceError(409, "Completed automation jobs cannot be changed.")
     }
@@ -1117,6 +1138,13 @@ export async function completeJobSubmission(
     notes?: string
   },
   scope?: AccountScope,
+  /**
+   * M9: agent submissions pass the worker's agent id so the endpoint verifies
+   * lease ownership, lease liveness and submission authorization atomically.
+   * Operator-approved manual resolution passes `operatorOverride: true` instead,
+   * keeping that path separate from normal automated submission.
+   */
+  opts?: { agentId?: number | null; operatorOverride?: boolean },
 ): Promise<number> {
   const ticket = String(data.marketplaceClaimId || "").trim()
   if (!ticket) throw new ServiceError(400, "Marketplace Claim Reference ID is required.")
@@ -1127,9 +1155,12 @@ export async function completeJobSubmission(
     const params: unknown[] = [jobId]
     const scopeCondition = scope ? accountCondition(scope, "c.marketplace_id", params) : "TRUE"
     const res = await client.query(
-      `SELECT j.claim_id, j.stage, j.marketplace_claim_id, c.marketplace_id, c.status AS claim_status
+      `SELECT j.claim_id, j.stage, j.marketplace_claim_id, j.agent_id, j.lease_expires_at,
+              COALESCE(mc.require_approval_before_submit, TRUE) AS approval_required,
+              c.marketplace_id, c.status AS claim_status
        FROM claim_automation_jobs j
        JOIN claims c ON c.id = j.claim_id
+       LEFT JOIN marketplace_credentials mc ON mc.id = j.marketplace_credential_id
        WHERE j.id = $1 AND ${scopeCondition}
        FOR UPDATE OF j`,
       params,
@@ -1165,6 +1196,22 @@ export async function completeJobSubmission(
     if (sameCompleted.rows[0]) {
       await client.query("ROLLBACK")
       return marketplaceId
+    }
+    // M9 submission authorization: only the worker that holds a live lease may
+    // record a ticket, and on approval-required accounts that lease must be the
+    // backend-issued submitting state. Operator-approved manual resolution
+    // carries its own Supervisor/Admin gate at the route and skips these checks.
+    if (!opts?.operatorOverride) {
+      if (opts?.agentId != null && Number(res.rows[0].agent_id) !== Number(opts.agentId)) {
+        throw new ServiceError(404, "Job not found.")
+      }
+      const leaseExpiresAt = res.rows[0].lease_expires_at
+      if (!leaseExpiresAt || new Date(String(leaseExpiresAt)).getTime() <= Date.now()) {
+        throw new ServiceError(409, "Submission lease expired; the job must be re-leased before a ticket is recorded.")
+      }
+      if (res.rows[0].approval_required && jobStage !== "submitting") {
+        throw new ServiceError(409, "This account requires approval: only a submitting job may record a marketplace ticket.")
+      }
     }
     // The ticket is recorded exactly once per job from here on.
     const completedLog = JSON.stringify([

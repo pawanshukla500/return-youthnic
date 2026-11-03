@@ -8,9 +8,20 @@ import {
   mapToReceiptIssueCategory,
   updateJobProgress,
 } from "../claim-automation-service.js"
+import { ServiceError } from "../register-service.js"
 import type pg from "pg"
 
 process.env.AUTOMATION_SECRET_KEY ||= "SYN-TEST-AUTOMATION-KEY-AT-LEAST-32-CHARS"
+
+function serviceErrorCode(promise: Promise<unknown>): Promise<number> {
+  return promise.then(
+    () => -1,
+    (err) => {
+      assert.ok(err instanceof ServiceError, `expected ServiceError, got ${String(err)}`)
+      return (err as ServiceError).status
+    },
+  )
+}
 
 function fakePool() {
   const queries: Array<{ sql: string; params: unknown[] }> = []
@@ -18,7 +29,18 @@ function fakePool() {
     query: async (sql: string, params: unknown[] = []) => {
       queries.push({ sql, params })
       if (sql.includes("SELECT j.attempts, j.max_attempts")) {
-        return { rows: [{ attempts: 1, max_attempts: 3, marketplace_id: 3 }], rowCount: 1 }
+        return {
+          rows: [
+            {
+              attempts: 1,
+              max_attempts: 3,
+              marketplace_id: 3,
+              agent_id: 9,
+              lease_expires_at: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+            },
+          ],
+          rowCount: 1,
+        }
       }
       return { rows: [], rowCount: 0 }
     },
@@ -243,12 +265,37 @@ test("job progress: not eligible clears a stale reference and sends the claim to
 
 test("job progress: other stages keep the marketplace reference", async () => {
   const { pool, queries } = fakePool()
-  await updateJobProgress(pool, 7, { stage: "submitting", logMessage: "SYN-submitting" })
+  await updateJobProgress(pool, 7, { stage: "filling_form", logMessage: "SYN-filling" })
 
   const jobUpdate = queries.find((q) => q.sql.includes("UPDATE claim_automation_jobs"))
   assert.ok(jobUpdate)
   assert.doesNotMatch(jobUpdate.sql, /marketplace_claim_id/)
   assert.equal(queries.some((q) => q.sql.includes("UPDATE claims")), false)
+})
+
+// M9: the submitting state is granted only by the queue lease. A worker must
+// never self-authorize by reporting its way into submitting.
+test("job progress: reporting the submitting stage is rejected", async () => {
+  const { pool, queries } = fakePool()
+  const code = await serviceErrorCode(updateJobProgress(pool, 7, { stage: "submitting", logMessage: "SYN-submitting" }))
+  assert.equal(code, 409)
+  assert.equal(queries.length, 0, "rejected self-authorization must not touch the database")
+})
+
+// M9: progress is accepted only from the worker holding a live lease.
+test("job progress: a worker without the lease cannot report progress", async () => {
+  const { pool, queries } = fakePool()
+  const code = await serviceErrorCode(
+    updateJobProgress(pool, 7, { stage: "filling_form", logMessage: "SYN-stale" }, 77),
+  )
+  assert.equal(code, 404)
+  assert.ok(!queries.some((q) => q.sql.includes("UPDATE claim_automation_jobs")), "rejected progress must not rewrite the job")
+})
+
+test("job progress: the lease holder reports progress while the lease is live", async () => {
+  const { pool, queries } = fakePool()
+  await updateJobProgress(pool, 7, { stage: "filling_form", logMessage: "SYN-holder" }, 9)
+  assert.ok(queries.some((q) => q.sql.includes("UPDATE claim_automation_jobs")), "the holder's progress must be recorded")
 })
 
 
