@@ -163,7 +163,7 @@ export function meeshoClaimDescription(
   // Default: wrong_return
   return (
     `Team,\n\n` +
-    `Please Note This Sub Order ID ${input.subOrderId} Has received Us the wrong please check attached all the prrof and video and and make sure we claim will be approved )\n\n` +
+    `Please Note This Sub Order ID ${input.subOrderId} Has received Us the wrong please check attached all the proof and video and make sure we claim will be approved\n\n` +
     `${reference}\n\n` +
     `Regards,\n` +
     `Return Team Tullipprints`

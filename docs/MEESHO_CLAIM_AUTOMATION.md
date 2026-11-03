@@ -45,7 +45,7 @@ All identifiers are derived directly from the loaded marketplace return reports 
 | :--- | :--- | :--- |
 | **Sub Order Number** | `expected_return_items.display_order_item_id` / `order_line_id` / `receipt_scan_items.order_item_id` | **Order Item ID**. Pre-filled automatically. Has quick copy button. |
 | **AWB Number** | `expected_returns.tracking_id` / `receipt_scans.scanned_tracking` | **Tracking ID**. Pre-filled automatically. Has barcode scan fallback. |
-| **State of the packet** | Locked to `'Tampered'` | Meesho claims must always select **Tampered**. Permanently selected. |
+| **State of the packet** | Operator-observed condition (`Intact` / `Tampered` / `Unknown`) | The operator records the actual shipment condition in the app. `Unknown` blocks automatic submission and routes the claim to operator review; the bot never assumes `Tampered`. |
 | **Packet ID** | `receipt_scans.flyer_id` | **Meesho Flyer ID**. Pre-filled if scanned during return. Manual edit & barcode scan allowed. If no flyer was scanned, defaults to `"NA"`. |
 | **Product SKU Details** | `skus.code`, `product_master`, catalog thumbnail image | Removed Good / Bad counters (as opening a claim implies bad quantity by default). Displays catalog photo, SKU, Master SKU, and badge `Bad Qty: 1 (Issue Claim)`. |
 
@@ -59,11 +59,11 @@ When the issue is selected, the description is pre-filled automatically with the
 ```text
 Team,
 
-Please Note This Sub Order ID <subOrderId> Has received Us the wrong please check attached all the prrof and video and and make sure we claim will be approved )
+Please Note This Sub Order ID <subOrderId> Has received Us the wrong please check attached all the proof and video and make sure we claim will be approved
 
 Sub Order ID: <subOrderId>
 AWB Number: <awb>
-State of the packet: Tampered
+State of the packet: <Intact | Tampered | Unknown — Unknown blocks auto-submit>
 Packet ID: <packetId>
 
 Regards,
@@ -78,7 +78,7 @@ Please Note This Sub Order ID <subOrderId> has arrived with missing item/s: <sub
 
 Sub Order ID: <subOrderId>
 AWB Number: <awb>
-State of the packet: Tampered
+State of the packet: <Intact | Tampered | Unknown — Unknown blocks auto-submit>
 Packet ID: <packetId>
 Claim Amount: Rs. <missingAmount>
 
@@ -181,7 +181,7 @@ The installed app has no console, so every bot message is also appended to a dai
      - Updates stage to `manual_intervention_required` with notification to warehouse supervisor.
      - Leaves browser open for human supervisor to solve challenge.
 5. **Form Submission & Ticket Extraction**:
-   - Types `subOrderId`, sets packet state to `Tampered`, fills `packetId`.
+   - Types `subOrderId`, selects the verified parcel condition (`Intact`/`Tampered`; anything else stops for review), fills `packetId`.
    - Attaches received product photos, reverse waybill photo, and 480p SD unpacking video.
    - Puts auto-generated description.
    - Clicks `Submit Claim`.
