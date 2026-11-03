@@ -1,0 +1,1730 @@
+{
+  "version": "1.0.0",
+  "project": {
+    "name": "Return App (VB Exports)",
+    "languages": [
+      "TypeScript",
+      "Kotlin",
+      "React (TSX)",
+      "SQL",
+      "CSS"
+    ],
+    "frameworks": [
+      "Express 4",
+      "React 19",
+      "Vite",
+      "PostgreSQL",
+      "Electron",
+      "Android CameraX",
+      "ML Kit",
+      "Playwright",
+      "WorkManager"
+    ],
+    "description": "High-throughput marketplace return reconciliation system, warehouse inward scanning, dispute claim automation bot, and operational inventory tracker for VB Exports.",
+    "analyzedAt": "2026-11-02T09:55:35.746Z",
+    "gitCommitHash": "7074635ff1537c6eb43de20c18eded8bcfcd4024"
+  },
+  "nodes": [
+    {
+      "id": "file:server/index.ts",
+      "type": "file",
+      "name": "server/index.ts",
+      "filePath": "server/index.ts",
+      "summary": "Main HTTP listener, Express router setup, middleware registration, authentication gates, static assets serving, and subrouter mounts.",
+      "complexity": "complex",
+      "tags": [
+        "server",
+        "express",
+        "entry-point",
+        "routing"
+      ],
+      "fileCategory": "code"
+    },
+    {
+      "id": "file:server/access.ts",
+      "type": "file",
+      "name": "server/access.ts",
+      "filePath": "server/access.ts",
+      "summary": "Multi-tenant role-based access control (RBAC), user session scoping, account parameter binding, and invariant enforcement.",
+      "complexity": "moderate",
+      "tags": [
+        "auth",
+        "security",
+        "rbac",
+        "multi-tenant"
+      ],
+      "fileCategory": "code"
+    },
+    {
+      "id": "file:server/auth.ts",
+      "type": "file",
+      "name": "server/auth.ts",
+      "filePath": "server/auth.ts",
+      "summary": "Password hashing via bcrypt, user authentication, session creation and token verification.",
+      "complexity": "moderate",
+      "tags": [
+        "auth",
+        "session",
+        "security"
+      ],
+      "fileCategory": "code"
+    },
+    {
+      "id": "file:server/http.ts",
+      "type": "file",
+      "name": "server/http.ts",
+      "filePath": "server/http.ts",
+      "summary": "HTTP middleware helpers for requiring authentication, verifying Admin role, extracting bearer tokens, and standardized error responses.",
+      "complexity": "simple",
+      "tags": [
+        "http",
+        "middleware",
+        "express"
+      ],
+      "fileCategory": "code"
+    },
+    {
+      "id": "file:server/db.ts",
+      "type": "file",
+      "name": "server/db.ts",
+      "filePath": "server/db.ts",
+      "summary": "PostgreSQL connection pool management, strict TLS certificate verification, transaction helpers, and schema migration runner.",
+      "complexity": "moderate",
+      "tags": [
+        "database",
+        "postgres",
+        "pool",
+        "tls"
+      ],
+      "fileCategory": "code"
+    },
+    {
+      "id": "file:server/register-routes.ts",
+      "type": "file",
+      "name": "server/register-routes.ts",
+      "filePath": "server/register-routes.ts",
+      "summary": "Handles /api/scan/lookup, /api/scan/complete, /api/register queries, /api/register/export, and ticket status changes.",
+      "complexity": "complex",
+      "tags": [
+        "api",
+        "scanning",
+        "register",
+        "tickets"
+      ],
+      "fileCategory": "code"
+    },
+    {
+      "id": "file:server/upload-routes.ts",
+      "type": "file",
+      "name": "server/upload-routes.ts",
+      "filePath": "server/upload-routes.ts",
+      "summary": "Endpoints for return file staging, spreadsheet preview, schema validation, and multi-tenant batch activation.",
+      "complexity": "complex",
+      "tags": [
+        "api",
+        "upload",
+        "sheets",
+        "activation"
+      ],
+      "fileCategory": "code"
+    },
+    {
+      "id": "file:server/claims-routes.ts",
+      "type": "file",
+      "name": "server/claims-routes.ts",
+      "filePath": "server/claims-routes.ts",
+      "summary": "Endpoints for claim lifecycle management, /api/claims/unified-create, media evidence management, and claims statistics.",
+      "complexity": "complex",
+      "tags": [
+        "api",
+        "claims",
+        "evidence",
+        "disputes"
+      ],
+      "fileCategory": "code"
+    },
+    {
+      "id": "file:server/claim-automation-routes.ts",
+      "type": "file",
+      "name": "server/claim-automation-routes.ts",
+      "filePath": "server/claim-automation-routes.ts",
+      "summary": "Endpoints interfacing with desktop automation engines: job leasing, heartbeat ping, result submission, and supplier credentials.",
+      "complexity": "complex",
+      "tags": [
+        "api",
+        "automation",
+        "engine",
+        "worker-queue"
+      ],
+      "fileCategory": "code"
+    },
+    {
+      "id": "file:server/iron-routes.ts",
+      "type": "file",
+      "name": "server/iron-routes.ts",
+      "filePath": "server/iron-routes.ts",
+      "summary": "Endpoints for tracking ironed garment transfers: /api/iron/send, /api/iron/receive, batch creation, and live WebSocket broadcasts.",
+      "complexity": "moderate",
+      "tags": [
+        "api",
+        "iron",
+        "logistics",
+        "warehouse"
+      ],
+      "fileCategory": "code"
+    },
+    {
+      "id": "file:server/product-master-routes.ts",
+      "type": "file",
+      "name": "server/product-master-routes.ts",
+      "filePath": "server/product-master-routes.ts",
+      "summary": "Endpoints for bulk product master imports: staged import initialization, batch chunk processing, progress tracking, and validation.",
+      "complexity": "complex",
+      "tags": [
+        "api",
+        "product-master",
+        "catalog",
+        "batch"
+      ],
+      "fileCategory": "code"
+    },
+    {
+      "id": "file:server/omsguru-routes.ts",
+      "type": "file",
+      "name": "server/omsguru-routes.ts",
+      "filePath": "server/omsguru-routes.ts",
+      "summary": "OMSGuru inventory synchronization endpoints, daily stock updates, and Firebase Storage evidence media attachments.",
+      "complexity": "moderate",
+      "tags": [
+        "api",
+        "omsguru",
+        "inventory",
+        "sync"
+      ],
+      "fileCategory": "code"
+    },
+    {
+      "id": "file:server/shopify/routes.ts",
+      "type": "file",
+      "name": "server/shopify/routes.ts",
+      "filePath": "server/shopify/routes.ts",
+      "summary": "Endpoints for Shopify order synchronization, RTO return ingestion, and order status updates.",
+      "complexity": "moderate",
+      "tags": [
+        "api",
+        "shopify",
+        "ecommerce",
+        "rto"
+      ],
+      "fileCategory": "code"
+    },
+    {
+      "id": "file:server/payment/routes.ts",
+      "type": "file",
+      "name": "server/payment/routes.ts",
+      "filePath": "server/payment/routes.ts",
+      "summary": "Endpoints for payment reconciliation, settlement report imports, and sales amount mapping.",
+      "complexity": "moderate",
+      "tags": [
+        "api",
+        "payment",
+        "finance",
+        "settlement"
+      ],
+      "fileCategory": "code"
+    },
+    {
+      "id": "file:server/return-reasons-routes.ts",
+      "type": "file",
+      "name": "server/return-reasons-routes.ts",
+      "filePath": "server/return-reasons-routes.ts",
+      "summary": "Endpoints for canonical return reason mapping, customer remark normalization, and sizing intelligence analytics.",
+      "complexity": "moderate",
+      "tags": [
+        "api",
+        "return-reasons",
+        "analytics",
+        "sizing"
+      ],
+      "fileCategory": "code"
+    },
+    {
+      "id": "file:server/return-tracking-routes.ts",
+      "type": "file",
+      "name": "server/return-tracking-routes.ts",
+      "filePath": "server/return-tracking-routes.ts",
+      "summary": "Endpoints for tracking monthly return batches, SPF policy aging, courier tracking history, and claim reconciliation.",
+      "complexity": "complex",
+      "tags": [
+        "api",
+        "return-tracking",
+        "courier",
+        "aging"
+      ],
+      "fileCategory": "code"
+    },
+    {
+      "id": "file:server/register-service.ts",
+      "type": "file",
+      "name": "server/register-service.ts",
+      "filePath": "server/register-service.ts",
+      "summary": "Database service for recording scans with transactional integrity, duplicate detection, advisory locks, and lookup matching.",
+      "complexity": "complex",
+      "tags": [
+        "service",
+        "register",
+        "transactions",
+        "advisory-locks"
+      ],
+      "fileCategory": "code"
+    },
+    {
+      "id": "file:server/register-rules.ts",
+      "type": "file",
+      "name": "server/register-rules.ts",
+      "filePath": "server/register-rules.ts",
+      "summary": "Pure business logic functions for scan validation, AWB lookup decision matrix, ticket status transitions, and column formatting.",
+      "complexity": "moderate",
+      "tags": [
+        "rules",
+        "pure-functions",
+        "validation",
+        "decisions"
+      ],
+      "fileCategory": "code"
+    },
+    {
+      "id": "file:server/claims-service.ts",
+      "type": "file",
+      "name": "server/claims-service.ts",
+      "filePath": "server/claims-service.ts",
+      "summary": "Core claims management service handling claim templates, evidence storage, automated status calculation, and unified creation.",
+      "complexity": "complex",
+      "tags": [
+        "service",
+        "claims",
+        "evidence",
+        "templates"
+      ],
+      "fileCategory": "code"
+    },
+    {
+      "id": "file:server/claim-automation-service.ts",
+      "type": "file",
+      "name": "server/claim-automation-service.ts",
+      "filePath": "server/claim-automation-service.ts",
+      "summary": "Service queue orchestrator for dispatching automated claim filing jobs to desktop bots, managing leases and recording outcomes.",
+      "complexity": "complex",
+      "tags": [
+        "service",
+        "queue",
+        "automation",
+        "worker"
+      ],
+      "fileCategory": "code"
+    },
+    {
+      "id": "file:server/claim-follow-up-service.ts",
+      "type": "file",
+      "name": "server/claim-follow-up-service.ts",
+      "filePath": "server/claim-follow-up-service.ts",
+      "summary": "Service managing scheduled marketplace ticket status checks, tracking follow-up intervals, and syncing approval/rejection state.",
+      "complexity": "complex",
+      "tags": [
+        "service",
+        "follow-up",
+        "marketplace-sync",
+        "tickets"
+      ],
+      "fileCategory": "code"
+    },
+    {
+      "id": "file:server/iron.ts",
+      "type": "file",
+      "name": "server/iron.ts",
+      "filePath": "server/iron.ts",
+      "summary": "Service logic for Iron Send operations, batch reconciliation, item-level receipt logging, and live WebSocket broadcast triggers.",
+      "complexity": "moderate",
+      "tags": [
+        "service",
+        "iron",
+        "warehouse",
+        "websocket"
+      ],
+      "fileCategory": "code"
+    },
+    {
+      "id": "file:server/upload-policy.ts",
+      "type": "file",
+      "name": "server/upload-policy.ts",
+      "filePath": "server/upload-policy.ts",
+      "summary": "Pure upload activation policy: scannable row criteria, duplicate suppression, tracking ID validation, and blocker detection.",
+      "complexity": "moderate",
+      "tags": [
+        "policy",
+        "upload",
+        "validation"
+      ],
+      "fileCategory": "code"
+    },
+    {
+      "id": "file:server/lookup-import.ts",
+      "type": "file",
+      "name": "server/lookup-import.ts",
+      "filePath": "server/lookup-import.ts",
+      "summary": "Handles atomic activation of marketplace lookup datasets, SKU resolution against product master, and historical data versioning.",
+      "complexity": "complex",
+      "tags": [
+        "import",
+        "lookup",
+        "versioning",
+        "product-master"
+      ],
+      "fileCategory": "code"
+    },
+    {
+      "id": "file:server/product-master.ts",
+      "type": "file",
+      "name": "server/product-master.ts",
+      "filePath": "server/product-master.ts",
+      "summary": "Batched staged import processor for the master catalog (120k+ rows) with transaction-bounded batches and cancellation support.",
+      "complexity": "complex",
+      "tags": [
+        "product-master",
+        "catalog",
+        "batch-processing"
+      ],
+      "fileCategory": "code"
+    },
+    {
+      "id": "file:server/oms/master-bridge.ts",
+      "type": "file",
+      "name": "server/oms/master-bridge.ts",
+      "filePath": "server/oms/master-bridge.ts",
+      "summary": "Bridge linking OMSGuru multi-channel listings to the local product master, resolving unmapped SKUs and caching product images.",
+      "complexity": "complex",
+      "tags": [
+        "omsguru",
+        "bridge",
+        "skus",
+        "catalog-images"
+      ],
+      "fileCategory": "code"
+    },
+    {
+      "id": "file:server/oms/client.ts",
+      "type": "file",
+      "name": "server/oms/client.ts",
+      "filePath": "server/oms/client.ts",
+      "summary": "HTTP API client for communicating with OMSGuru cloud endpoints (orders, invoices, SKUs, inventory sync).",
+      "complexity": "moderate",
+      "tags": [
+        "omsguru",
+        "http-client",
+        "integration"
+      ],
+      "fileCategory": "code"
+    },
+    {
+      "id": "file:server/live.ts",
+      "type": "file",
+      "name": "server/live.ts",
+      "filePath": "server/live.ts",
+      "summary": "WebSocket broadcast engine (/api/live) delivering real-time scan events, iron updates, and claim status signals to connected clients.",
+      "complexity": "moderate",
+      "tags": [
+        "websocket",
+        "realtime",
+        "live-sync"
+      ],
+      "fileCategory": "code"
+    },
+    {
+      "id": "file:server/mobile-release.ts",
+      "type": "file",
+      "name": "server/mobile-release.ts",
+      "filePath": "server/mobile-release.ts",
+      "summary": "Serves Android APK release manifest (/api/app/latest) and binary download stream with sha256 checksum verification.",
+      "complexity": "simple",
+      "tags": [
+        "mobile",
+        "apk-update",
+        "release"
+      ],
+      "fileCategory": "code"
+    },
+    {
+      "id": "table:server/schema.sql:receipt_scans",
+      "type": "table",
+      "name": "receipt_scans",
+      "filePath": "server/schema.sql",
+      "summary": "Permanent scanned return record: stores AWB, marketplace account, received timestamp, operator ID, and immutable shipment snapshot.",
+      "complexity": "moderate",
+      "tags": [
+        "table",
+        "scans",
+        "ledger"
+      ],
+      "fileCategory": "code"
+    },
+    {
+      "id": "table:server/schema.sql:receipt_scan_items",
+      "type": "table",
+      "name": "receipt_scan_items",
+      "filePath": "server/schema-import.sql",
+      "summary": "Item-level breakdown for verified return scans, capturing SKU, quantity, verification status, and condition.",
+      "complexity": "moderate",
+      "tags": [
+        "table",
+        "scan-items",
+        "inventory"
+      ],
+      "fileCategory": "code"
+    },
+    {
+      "id": "table:server/schema.sql:receipt_scan_issues",
+      "type": "table",
+      "name": "receipt_scan_issues",
+      "filePath": "server/schema-import.sql",
+      "summary": "Physical defect and discrepancy logs associated with scans (e.g. wrong item, used garment, missing tag, damaged box).",
+      "complexity": "moderate",
+      "tags": [
+        "table",
+        "scan-issues",
+        "defects"
+      ],
+      "fileCategory": "code"
+    },
+    {
+      "id": "table:server/schema.sql:claim_tickets",
+      "type": "table",
+      "name": "claim_tickets",
+      "filePath": "server/schema.sql",
+      "summary": "Legacy dispute ticket tracking record linked directly to return receipt scans.",
+      "complexity": "moderate",
+      "tags": [
+        "table",
+        "tickets",
+        "disputes"
+      ],
+      "fileCategory": "code"
+    },
+    {
+      "id": "table:server/schema-claims.sql:claims",
+      "type": "table",
+      "name": "claims",
+      "filePath": "server/schema-claims.sql",
+      "summary": "Unified claims record: stores marketplace claim ID, status lifecycle, total claim amount in INR, and filing metadata.",
+      "complexity": "complex",
+      "tags": [
+        "table",
+        "claims",
+        "disputes",
+        "lifecycle"
+      ],
+      "fileCategory": "code"
+    },
+    {
+      "id": "table:server/schema-claims.sql:claim_media",
+      "type": "table",
+      "name": "claim_media",
+      "filePath": "server/schema-claims.sql",
+      "summary": "Multimedia evidence vault for claims: images, unboxing video clips, MIME types, and storage paths.",
+      "complexity": "moderate",
+      "tags": [
+        "table",
+        "evidence",
+        "media",
+        "video"
+      ],
+      "fileCategory": "code"
+    },
+    {
+      "id": "table:server/schema-claim-automation.sql:claim_automation_jobs",
+      "type": "table",
+      "name": "claim_automation_jobs",
+      "filePath": "server/schema-claim-automation.sql",
+      "summary": "Job queue table leased by desktop automation bots to automatically file claims in supplier panels.",
+      "complexity": "complex",
+      "tags": [
+        "table",
+        "automation-jobs",
+        "worker-queue"
+      ],
+      "fileCategory": "code"
+    },
+    {
+      "id": "table:server/schema-claim-automation.sql:claim_automation_follow_ups",
+      "type": "table",
+      "name": "claim_automation_follow_ups",
+      "filePath": "server/schema-claim-automation.sql",
+      "summary": "Periodic follow-up schedule table: tracks 48-hour checking cycle for active claims until settled.",
+      "complexity": "moderate",
+      "tags": [
+        "table",
+        "follow-ups",
+        "automation"
+      ],
+      "fileCategory": "code"
+    },
+    {
+      "id": "table:server/schema-iron.sql:iron_send_records",
+      "type": "table",
+      "name": "iron_send_records",
+      "filePath": "server/schema-iron.sql",
+      "summary": "Log of returned garments dispatched to the ironing department: SKU, batch ID, sender, and count.",
+      "complexity": "moderate",
+      "tags": [
+        "table",
+        "iron",
+        "warehouse"
+      ],
+      "fileCategory": "code"
+    },
+    {
+      "id": "table:server/schema-import.sql:product_master",
+      "type": "table",
+      "name": "product_master",
+      "filePath": "server/schema-import.sql",
+      "summary": "Canonical master product catalog: stores style codes, SKUs, brand identifiers, and pricing.",
+      "complexity": "complex",
+      "tags": [
+        "table",
+        "product-master",
+        "catalog"
+      ],
+      "fileCategory": "code"
+    },
+    {
+      "id": "file:src/App.tsx",
+      "type": "file",
+      "name": "src/App.tsx",
+      "filePath": "src/App.tsx",
+      "summary": "Root React application component managing user session, workspace tabs, navigation, and WebSocket live updates.",
+      "complexity": "complex",
+      "tags": [
+        "ui",
+        "react",
+        "routing",
+        "state"
+      ],
+      "fileCategory": "code"
+    },
+    {
+      "id": "file:src/shell.tsx",
+      "type": "file",
+      "name": "src/shell.tsx",
+      "filePath": "src/shell.tsx",
+      "summary": "Application shell layout: navigation bar, user profile header, account selector chip, and system status indicator.",
+      "complexity": "moderate",
+      "tags": [
+        "ui",
+        "layout",
+        "navigation",
+        "shell"
+      ],
+      "fileCategory": "code"
+    },
+    {
+      "id": "file:src/api.ts",
+      "type": "file",
+      "name": "src/api.ts",
+      "filePath": "src/api.ts",
+      "summary": "Typed HTTP client wrapper for all backend /api endpoints with automatic bearer token attachment and error interception.",
+      "complexity": "complex",
+      "tags": [
+        "ui",
+        "api-client",
+        "http",
+        "types"
+      ],
+      "fileCategory": "code"
+    },
+    {
+      "id": "file:src/date-field.tsx",
+      "type": "file",
+      "name": "src/date-field.tsx",
+      "filePath": "src/date-field.tsx",
+      "summary": "Shared enterprise date filter component: displays DD/MM/YYYY regardless of PC locale while binding ISO yyyy-mm-dd to API.",
+      "complexity": "simple",
+      "tags": [
+        "ui",
+        "component",
+        "date-field",
+        "standard"
+      ],
+      "fileCategory": "code"
+    },
+    {
+      "id": "file:src/pages/Dashboard.tsx",
+      "type": "file",
+      "name": "src/pages/Dashboard.tsx",
+      "filePath": "src/pages/Dashboard.tsx",
+      "summary": "Executive KPI dashboard: daily return metrics, claims pipeline summary, channel breakdown charts, and headline alerts.",
+      "complexity": "complex",
+      "tags": [
+        "ui",
+        "page",
+        "dashboard",
+        "analytics"
+      ],
+      "fileCategory": "code"
+    },
+    {
+      "id": "file:src/pages/ScanReturns.tsx",
+      "type": "file",
+      "name": "src/pages/ScanReturns.tsx",
+      "filePath": "src/pages/ScanReturns.tsx",
+      "summary": "Warehouse return workstation scanning interface: barcode input, camera viewfinder, instant SKU match, and defect tagging.",
+      "complexity": "complex",
+      "tags": [
+        "ui",
+        "page",
+        "scanning",
+        "workstation"
+      ],
+      "fileCategory": "code"
+    },
+    {
+      "id": "file:src/pages/Reports.tsx",
+      "type": "file",
+      "name": "src/pages/Reports.tsx",
+      "filePath": "src/pages/Reports.tsx",
+      "summary": "Comprehensive scan register view: 43-column unified data grid, server-side date range filtering, and CSV/Excel export.",
+      "complexity": "complex",
+      "tags": [
+        "ui",
+        "page",
+        "register",
+        "export",
+        "grid"
+      ],
+      "fileCategory": "code"
+    },
+    {
+      "id": "file:src/pages/Claims.tsx",
+      "type": "file",
+      "name": "src/pages/Claims.tsx",
+      "filePath": "src/pages/Claims.tsx",
+      "summary": "Claims management dashboard: aggregate ₹ totals, lifecycle status filters, and 2-column detail modal with video streaming lightbox.",
+      "complexity": "complex",
+      "tags": [
+        "ui",
+        "page",
+        "claims",
+        "evidence-modal",
+        "video"
+      ],
+      "fileCategory": "code"
+    },
+    {
+      "id": "file:src/pages/IronTracking.tsx",
+      "type": "file",
+      "name": "src/pages/IronTracking.tsx",
+      "filePath": "src/pages/IronTracking.tsx",
+      "summary": "Operational tracking interface for garment ironing workflows: batch creation, dispatch logs, and live receiving check-ins.",
+      "complexity": "moderate",
+      "tags": [
+        "ui",
+        "page",
+        "iron",
+        "tracking"
+      ],
+      "fileCategory": "code"
+    },
+    {
+      "id": "file:src/pages/Uploads.tsx",
+      "type": "file",
+      "name": "src/pages/Uploads.tsx",
+      "filePath": "src/pages/Uploads.tsx",
+      "summary": "Marketplace return report upload interface: file drag-and-drop, staged preview inspection, blocker review, and activation.",
+      "complexity": "complex",
+      "tags": [
+        "ui",
+        "page",
+        "uploads",
+        "preview"
+      ],
+      "fileCategory": "code"
+    },
+    {
+      "id": "file:src/pages/ReturnTracking.tsx",
+      "type": "file",
+      "name": "src/pages/ReturnTracking.tsx",
+      "filePath": "src/pages/ReturnTracking.tsx",
+      "summary": "Courier return delivery & aging tracker: SPF claim aging countdown, courier transit reconciliation, and delivery disputes.",
+      "complexity": "complex",
+      "tags": [
+        "ui",
+        "page",
+        "courier-tracking",
+        "spf-aging"
+      ],
+      "fileCategory": "code"
+    },
+    {
+      "id": "file:src/pages/Admin.tsx",
+      "type": "file",
+      "name": "src/pages/Admin.tsx",
+      "filePath": "src/pages/Admin.tsx",
+      "summary": "Administrator control console: user account provisioning, role assignments, marketplace channel scoping, and session revocation.",
+      "complexity": "moderate",
+      "tags": [
+        "ui",
+        "page",
+        "admin",
+        "users",
+        "rbac"
+      ],
+      "fileCategory": "code"
+    },
+    {
+      "id": "file:desktop/main.ts",
+      "type": "file",
+      "name": "desktop/main.ts",
+      "filePath": "desktop/main.ts",
+      "summary": "Electron shell main process: manages application window lifecycle, crash restarts, tray icon, and connects to engine server.",
+      "complexity": "moderate",
+      "tags": [
+        "desktop",
+        "electron",
+        "shell"
+      ],
+      "fileCategory": "code"
+    },
+    {
+      "id": "file:desktop-agent/src/desktop-app-server.ts",
+      "type": "file",
+      "name": "desktop-agent/src/desktop-app-server.ts",
+      "filePath": "desktop-agent/src/desktop-app-server.ts",
+      "summary": "Standalone automation engine: owns the single claim filing worker loop and follow-up loop across Windows, Linux, and headless server.",
+      "complexity": "complex",
+      "tags": [
+        "desktop-agent",
+        "engine",
+        "worker-loop",
+        "automation"
+      ],
+      "fileCategory": "code"
+    },
+    {
+      "id": "file:desktop-agent/src/marketplaces/meesho.ts",
+      "type": "file",
+      "name": "desktop-agent/src/marketplaces/meesho.ts",
+      "filePath": "desktop-agent/src/marketplaces/meesho.ts",
+      "summary": "Fully autonomous Playwright bot for Meesho supplier panel: logs in, navigates return dispute forms, uploads video/photos, and files tickets.",
+      "complexity": "complex",
+      "tags": [
+        "bot",
+        "meesho",
+        "playwright",
+        "claim-filing"
+      ],
+      "fileCategory": "code"
+    },
+    {
+      "id": "file:desktop-agent/src/marketplaces/myntra.ts",
+      "type": "file",
+      "name": "desktop-agent/src/marketplaces/myntra.ts",
+      "filePath": "desktop-agent/src/marketplaces/myntra.ts",
+      "summary": "Assisted claim automation bot for Myntra partner portal.",
+      "complexity": "moderate",
+      "tags": [
+        "bot",
+        "myntra",
+        "automation"
+      ],
+      "fileCategory": "code"
+    },
+    {
+      "id": "file:desktop-agent/src/marketplaces/flipkart.ts",
+      "type": "file",
+      "name": "desktop-agent/src/marketplaces/flipkart.ts",
+      "filePath": "desktop-agent/src/marketplaces/flipkart.ts",
+      "summary": "Assisted claim automation bot for Flipkart seller dashboard (SPF claims).",
+      "complexity": "moderate",
+      "tags": [
+        "bot",
+        "flipkart",
+        "spf"
+      ],
+      "fileCategory": "code"
+    },
+    {
+      "id": "file:desktop-agent/src/marketplaces/amazon.ts",
+      "type": "file",
+      "name": "desktop-agent/src/marketplaces/amazon.ts",
+      "filePath": "desktop-agent/src/marketplaces/amazon.ts",
+      "summary": "Assisted claim automation bot for Amazon Seller Central SAFE-T claims.",
+      "complexity": "moderate",
+      "tags": [
+        "bot",
+        "amazon",
+        "safet"
+      ],
+      "fileCategory": "code"
+    },
+    {
+      "id": "file:desktop-agent/src/marketplaces/ajio.ts",
+      "type": "file",
+      "name": "desktop-agent/src/marketplaces/ajio.ts",
+      "filePath": "desktop-agent/src/marketplaces/ajio.ts",
+      "summary": "Assisted claim automation bot for Ajio supplier portal.",
+      "complexity": "moderate",
+      "tags": [
+        "bot",
+        "ajio",
+        "supplier"
+      ],
+      "fileCategory": "code"
+    },
+    {
+      "id": "file:desktop-agent/src/poll-guard.ts",
+      "type": "file",
+      "name": "desktop-agent/src/poll-guard.ts",
+      "filePath": "desktop-agent/src/poll-guard.ts",
+      "summary": "Concurrency guard ensuring the claim filing loop and the ticket follow-up loop never collide in the same browser profile.",
+      "complexity": "simple",
+      "tags": [
+        "concurrency",
+        "lock",
+        "guard"
+      ],
+      "fileCategory": "code"
+    },
+    {
+      "id": "file:desktop-agent/src/crash-guard.ts",
+      "type": "file",
+      "name": "desktop-agent/src/crash-guard.ts",
+      "filePath": "desktop-agent/src/crash-guard.ts",
+      "summary": "Process isolation and crash guard: traps uncaught exceptions, cleans up orphaned Chromium trees, and signals supervisor.",
+      "complexity": "moderate",
+      "tags": [
+        "resilience",
+        "crash-guard",
+        "process-isolation"
+      ],
+      "fileCategory": "code"
+    },
+    {
+      "id": "file:android/app/src/main/java/shop/youthnic/returnscan/ReturnScanApp.kt",
+      "type": "file",
+      "name": "ReturnScanApp.kt",
+      "filePath": "android/app/src/main/java/shop/youthnic/returnscan/ReturnScanApp.kt",
+      "summary": "Android Application class initializing crash logging, network TLS config, notification channels, and update check workers.",
+      "complexity": "moderate",
+      "tags": [
+        "android",
+        "application",
+        "kotlin"
+      ],
+      "fileCategory": "code"
+    },
+    {
+      "id": "file:android/app/src/main/java/shop/youthnic/returnscan/ui/ScannerActivity.kt",
+      "type": "file",
+      "name": "ScannerActivity.kt",
+      "filePath": "android/app/src/main/java/shop/youthnic/returnscan/ui/ScannerActivity.kt",
+      "summary": "High-speed warehouse barcode scanning activity using CameraX and ML Kit: audio beeps, instant lookup, and duplicate warnings.",
+      "complexity": "complex",
+      "tags": [
+        "android",
+        "camerax",
+        "barcode",
+        "mlkit"
+      ],
+      "fileCategory": "code"
+    },
+    {
+      "id": "file:android/app/src/main/java/shop/youthnic/returnscan/ui/ClaimCaptureActivity.kt",
+      "type": "file",
+      "name": "ClaimCaptureActivity.kt",
+      "filePath": "android/app/src/main/java/shop/youthnic/returnscan/ui/ClaimCaptureActivity.kt",
+      "summary": "Evidence capture activity: guides operator through capturing outer box photo, shipping label AWB, damaged SKU item, and video.",
+      "complexity": "complex",
+      "tags": [
+        "android",
+        "evidence",
+        "camera",
+        "photos"
+      ],
+      "fileCategory": "code"
+    },
+    {
+      "id": "file:android/app/src/main/java/shop/youthnic/returnscan/ui/ClaimVideoCaptureActivity.kt",
+      "type": "file",
+      "name": "ClaimVideoCaptureActivity.kt",
+      "filePath": "android/app/src/main/java/shop/youthnic/returnscan/ui/ClaimVideoCaptureActivity.kt",
+      "summary": "Continuous unboxing video recording activity in 480p SD with live recording timer, file compression, and hardware orientation lock.",
+      "complexity": "complex",
+      "tags": [
+        "android",
+        "video",
+        "camerax-video",
+        "evidence"
+      ],
+      "fileCategory": "code"
+    },
+    {
+      "id": "file:android/app/src/main/java/shop/youthnic/returnscan/claim/ClaimEvidenceUploadWorker.kt",
+      "type": "file",
+      "name": "ClaimEvidenceUploadWorker.kt",
+      "filePath": "android/app/src/main/java/shop/youthnic/returnscan/claim/ClaimEvidenceUploadWorker.kt",
+      "summary": "Android Jetpack WorkManager background worker ensuring reliable chunked upload of photo and video evidence even on spotty warehouse Wi-Fi.",
+      "complexity": "complex",
+      "tags": [
+        "android",
+        "workmanager",
+        "upload",
+        "offline-resilience"
+      ],
+      "fileCategory": "code"
+    },
+    {
+      "id": "file:android/app/src/main/java/shop/youthnic/returnscan/update/AppUpdater.kt",
+      "type": "file",
+      "name": "AppUpdater.kt",
+      "filePath": "android/app/src/main/java/shop/youthnic/returnscan/update/AppUpdater.kt",
+      "summary": "Automated in-app updater: polls /api/app/latest, compares versionCode, streams APK download with progress dialog, and triggers install.",
+      "complexity": "moderate",
+      "tags": [
+        "android",
+        "in-app-update",
+        "apk"
+      ],
+      "fileCategory": "code"
+    },
+    {
+      "id": "file:android/app/src/main/java/shop/youthnic/returnscan/data/ApiClient.kt",
+      "type": "file",
+      "name": "ApiClient.kt",
+      "filePath": "android/app/src/main/java/shop/youthnic/returnscan/data/ApiClient.kt",
+      "summary": "OkHttp and Retrofit HTTP interface communicating with Express backend endpoints (/api/scan/lookup, /api/claims/unified-create).",
+      "complexity": "moderate",
+      "tags": [
+        "android",
+        "retrofit",
+        "okhttp",
+        "networking"
+      ],
+      "fileCategory": "code"
+    }
+  ],
+  "edges": [
+    {
+      "id": "e1",
+      "source": "file:server/index.ts",
+      "target": "file:server/access.ts",
+      "type": "imports",
+      "weight": 0.8
+    },
+    {
+      "id": "e2",
+      "source": "file:server/index.ts",
+      "target": "file:server/auth.ts",
+      "type": "imports",
+      "weight": 0.8
+    },
+    {
+      "id": "e3",
+      "source": "file:server/index.ts",
+      "target": "file:server/http.ts",
+      "type": "imports",
+      "weight": 0.8
+    },
+    {
+      "id": "e4",
+      "source": "file:server/index.ts",
+      "target": "file:server/db.ts",
+      "type": "calls",
+      "weight": 0.9
+    },
+    {
+      "id": "e5",
+      "source": "file:server/index.ts",
+      "target": "file:server/register-routes.ts",
+      "type": "routes",
+      "weight": 0.9
+    },
+    {
+      "id": "e6",
+      "source": "file:server/index.ts",
+      "target": "file:server/upload-routes.ts",
+      "type": "routes",
+      "weight": 0.9
+    },
+    {
+      "id": "e7",
+      "source": "file:server/index.ts",
+      "target": "file:server/claims-routes.ts",
+      "type": "routes",
+      "weight": 0.9
+    },
+    {
+      "id": "e8",
+      "source": "file:server/index.ts",
+      "target": "file:server/claim-automation-routes.ts",
+      "type": "routes",
+      "weight": 0.9
+    },
+    {
+      "id": "e9",
+      "source": "file:server/index.ts",
+      "target": "file:server/iron-routes.ts",
+      "type": "routes",
+      "weight": 0.9
+    },
+    {
+      "id": "e10",
+      "source": "file:server/index.ts",
+      "target": "file:server/product-master-routes.ts",
+      "type": "routes",
+      "weight": 0.9
+    },
+    {
+      "id": "e11",
+      "source": "file:server/index.ts",
+      "target": "file:server/omsguru-routes.ts",
+      "type": "routes",
+      "weight": 0.8
+    },
+    {
+      "id": "e12",
+      "source": "file:server/index.ts",
+      "target": "file:server/shopify/routes.ts",
+      "type": "routes",
+      "weight": 0.8
+    },
+    {
+      "id": "e13",
+      "source": "file:server/index.ts",
+      "target": "file:server/payment/routes.ts",
+      "type": "routes",
+      "weight": 0.8
+    },
+    {
+      "id": "e14",
+      "source": "file:server/index.ts",
+      "target": "file:server/return-reasons-routes.ts",
+      "type": "routes",
+      "weight": 0.8
+    },
+    {
+      "id": "e15",
+      "source": "file:server/index.ts",
+      "target": "file:server/return-tracking-routes.ts",
+      "type": "routes",
+      "weight": 0.8
+    },
+    {
+      "id": "e16",
+      "source": "file:server/index.ts",
+      "target": "file:server/mobile-release.ts",
+      "type": "calls",
+      "weight": 0.7
+    },
+    {
+      "id": "e20",
+      "source": "file:server/register-routes.ts",
+      "target": "file:server/register-service.ts",
+      "type": "calls",
+      "weight": 0.9
+    },
+    {
+      "id": "e21",
+      "source": "file:server/register-service.ts",
+      "target": "file:server/register-rules.ts",
+      "type": "calls",
+      "weight": 0.9
+    },
+    {
+      "id": "e22",
+      "source": "file:server/register-service.ts",
+      "target": "file:server/db.ts",
+      "type": "calls",
+      "weight": 0.9
+    },
+    {
+      "id": "e23",
+      "source": "file:server/register-service.ts",
+      "target": "table:server/schema.sql:receipt_scans",
+      "type": "writes_to",
+      "weight": 0.9
+    },
+    {
+      "id": "e24",
+      "source": "file:server/register-service.ts",
+      "target": "table:server/schema.sql:receipt_scan_items",
+      "type": "writes_to",
+      "weight": 0.9
+    },
+    {
+      "id": "e25",
+      "source": "file:server/register-service.ts",
+      "target": "table:server/schema.sql:receipt_scan_issues",
+      "type": "writes_to",
+      "weight": 0.9
+    },
+    {
+      "id": "e26",
+      "source": "file:server/register-service.ts",
+      "target": "file:server/live.ts",
+      "type": "publishes",
+      "weight": 0.8
+    },
+    {
+      "id": "e30",
+      "source": "file:server/upload-routes.ts",
+      "target": "file:server/upload-policy.ts",
+      "type": "calls",
+      "weight": 0.9
+    },
+    {
+      "id": "e31",
+      "source": "file:server/upload-routes.ts",
+      "target": "file:server/lookup-import.ts",
+      "type": "calls",
+      "weight": 0.9
+    },
+    {
+      "id": "e32",
+      "source": "file:server/lookup-import.ts",
+      "target": "file:server/db.ts",
+      "type": "calls",
+      "weight": 0.9
+    },
+    {
+      "id": "e33",
+      "source": "file:server/lookup-import.ts",
+      "target": "table:server/schema-import.sql:product_master",
+      "type": "reads_from",
+      "weight": 0.8
+    },
+    {
+      "id": "e40",
+      "source": "file:server/claims-routes.ts",
+      "target": "file:server/claims-service.ts",
+      "type": "calls",
+      "weight": 0.9
+    },
+    {
+      "id": "e41",
+      "source": "file:server/claims-service.ts",
+      "target": "table:server/schema-claims.sql:claims",
+      "type": "writes_to",
+      "weight": 0.9
+    },
+    {
+      "id": "e42",
+      "source": "file:server/claims-service.ts",
+      "target": "table:server/schema-claims.sql:claim_media",
+      "type": "writes_to",
+      "weight": 0.9
+    },
+    {
+      "id": "e43",
+      "source": "file:server/claim-automation-routes.ts",
+      "target": "file:server/claim-automation-service.ts",
+      "type": "calls",
+      "weight": 0.9
+    },
+    {
+      "id": "e44",
+      "source": "file:server/claim-automation-service.ts",
+      "target": "table:server/schema-claim-automation.sql:claim_automation_jobs",
+      "type": "writes_to",
+      "weight": 0.9
+    },
+    {
+      "id": "e45",
+      "source": "file:server/claim-automation-routes.ts",
+      "target": "file:server/claim-follow-up-service.ts",
+      "type": "calls",
+      "weight": 0.9
+    },
+    {
+      "id": "e46",
+      "source": "file:server/claim-follow-up-service.ts",
+      "target": "table:server/schema-claim-automation.sql:claim_automation_follow_ups",
+      "type": "writes_to",
+      "weight": 0.9
+    },
+    {
+      "id": "e50",
+      "source": "file:server/iron-routes.ts",
+      "target": "file:server/iron.ts",
+      "type": "calls",
+      "weight": 0.9
+    },
+    {
+      "id": "e51",
+      "source": "file:server/iron.ts",
+      "target": "table:server/schema-iron.sql:iron_send_records",
+      "type": "writes_to",
+      "weight": 0.9
+    },
+    {
+      "id": "e52",
+      "source": "file:server/iron.ts",
+      "target": "file:server/live.ts",
+      "type": "publishes",
+      "weight": 0.8
+    },
+    {
+      "id": "e60",
+      "source": "file:server/product-master-routes.ts",
+      "target": "file:server/product-master.ts",
+      "type": "calls",
+      "weight": 0.9
+    },
+    {
+      "id": "e61",
+      "source": "file:server/product-master.ts",
+      "target": "table:server/schema-import.sql:product_master",
+      "type": "writes_to",
+      "weight": 0.9
+    },
+    {
+      "id": "e62",
+      "source": "file:server/oms/master-bridge.ts",
+      "target": "file:server/oms/client.ts",
+      "type": "calls",
+      "weight": 0.9
+    },
+    {
+      "id": "e63",
+      "source": "file:server/oms/master-bridge.ts",
+      "target": "table:server/schema-import.sql:product_master",
+      "type": "writes_to",
+      "weight": 0.8
+    },
+    {
+      "id": "e70",
+      "source": "file:src/App.tsx",
+      "target": "file:src/shell.tsx",
+      "type": "contains",
+      "weight": 1
+    },
+    {
+      "id": "e71",
+      "source": "file:src/App.tsx",
+      "target": "file:src/api.ts",
+      "type": "calls",
+      "weight": 0.9
+    },
+    {
+      "id": "e72",
+      "source": "file:src/App.tsx",
+      "target": "file:src/pages/Dashboard.tsx",
+      "type": "contains",
+      "weight": 0.9
+    },
+    {
+      "id": "e73",
+      "source": "file:src/App.tsx",
+      "target": "file:src/pages/ScanReturns.tsx",
+      "type": "contains",
+      "weight": 0.9
+    },
+    {
+      "id": "e74",
+      "source": "file:src/App.tsx",
+      "target": "file:src/pages/Reports.tsx",
+      "type": "contains",
+      "weight": 0.9
+    },
+    {
+      "id": "e75",
+      "source": "file:src/App.tsx",
+      "target": "file:src/pages/Claims.tsx",
+      "type": "contains",
+      "weight": 0.9
+    },
+    {
+      "id": "e76",
+      "source": "file:src/App.tsx",
+      "target": "file:src/pages/IronTracking.tsx",
+      "type": "contains",
+      "weight": 0.9
+    },
+    {
+      "id": "e77",
+      "source": "file:src/App.tsx",
+      "target": "file:src/pages/Uploads.tsx",
+      "type": "contains",
+      "weight": 0.9
+    },
+    {
+      "id": "e78",
+      "source": "file:src/App.tsx",
+      "target": "file:src/pages/ReturnTracking.tsx",
+      "type": "contains",
+      "weight": 0.9
+    },
+    {
+      "id": "e79",
+      "source": "file:src/App.tsx",
+      "target": "file:src/pages/Admin.tsx",
+      "type": "contains",
+      "weight": 0.9
+    },
+    {
+      "id": "e80",
+      "source": "file:src/pages/Reports.tsx",
+      "target": "file:src/date-field.tsx",
+      "type": "contains",
+      "weight": 0.8
+    },
+    {
+      "id": "e81",
+      "source": "file:src/pages/ReturnTracking.tsx",
+      "target": "file:src/date-field.tsx",
+      "type": "contains",
+      "weight": 0.8
+    },
+    {
+      "id": "e82",
+      "source": "file:src/pages/Claims.tsx",
+      "target": "file:src/date-field.tsx",
+      "type": "contains",
+      "weight": 0.8
+    },
+    {
+      "id": "e83",
+      "source": "file:src/api.ts",
+      "target": "file:server/index.ts",
+      "type": "calls",
+      "weight": 0.9
+    },
+    {
+      "id": "e90",
+      "source": "file:desktop/main.ts",
+      "target": "file:desktop-agent/src/desktop-app-server.ts",
+      "type": "calls",
+      "weight": 0.9
+    },
+    {
+      "id": "e91",
+      "source": "file:desktop-agent/src/desktop-app-server.ts",
+      "target": "file:desktop-agent/src/poll-guard.ts",
+      "type": "calls",
+      "weight": 0.8
+    },
+    {
+      "id": "e92",
+      "source": "file:desktop-agent/src/desktop-app-server.ts",
+      "target": "file:desktop-agent/src/crash-guard.ts",
+      "type": "calls",
+      "weight": 0.8
+    },
+    {
+      "id": "e93",
+      "source": "file:desktop-agent/src/desktop-app-server.ts",
+      "target": "file:desktop-agent/src/marketplaces/meesho.ts",
+      "type": "calls",
+      "weight": 0.9
+    },
+    {
+      "id": "e94",
+      "source": "file:desktop-agent/src/desktop-app-server.ts",
+      "target": "file:desktop-agent/src/marketplaces/myntra.ts",
+      "type": "calls",
+      "weight": 0.8
+    },
+    {
+      "id": "e95",
+      "source": "file:desktop-agent/src/desktop-app-server.ts",
+      "target": "file:desktop-agent/src/marketplaces/flipkart.ts",
+      "type": "calls",
+      "weight": 0.8
+    },
+    {
+      "id": "e96",
+      "source": "file:desktop-agent/src/desktop-app-server.ts",
+      "target": "file:desktop-agent/src/marketplaces/amazon.ts",
+      "type": "calls",
+      "weight": 0.8
+    },
+    {
+      "id": "e97",
+      "source": "file:desktop-agent/src/desktop-app-server.ts",
+      "target": "file:desktop-agent/src/marketplaces/ajio.ts",
+      "type": "calls",
+      "weight": 0.8
+    },
+    {
+      "id": "e98",
+      "source": "file:desktop-agent/src/desktop-app-server.ts",
+      "target": "file:server/claim-automation-routes.ts",
+      "type": "calls",
+      "weight": 0.9
+    },
+    {
+      "id": "e100",
+      "source": "file:android/app/src/main/java/shop/youthnic/returnscan/ReturnScanApp.kt",
+      "target": "file:android/app/src/main/java/shop/youthnic/returnscan/ui/ScannerActivity.kt",
+      "type": "contains",
+      "weight": 0.9
+    },
+    {
+      "id": "e101",
+      "source": "file:android/app/src/main/java/shop/youthnic/returnscan/ui/ScannerActivity.kt",
+      "target": "file:android/app/src/main/java/shop/youthnic/returnscan/ui/ClaimCaptureActivity.kt",
+      "type": "calls",
+      "weight": 0.9
+    },
+    {
+      "id": "e102",
+      "source": "file:android/app/src/main/java/shop/youthnic/returnscan/ui/ClaimCaptureActivity.kt",
+      "target": "file:android/app/src/main/java/shop/youthnic/returnscan/ui/ClaimVideoCaptureActivity.kt",
+      "type": "calls",
+      "weight": 0.9
+    },
+    {
+      "id": "e103",
+      "source": "file:android/app/src/main/java/shop/youthnic/returnscan/ui/ClaimCaptureActivity.kt",
+      "target": "file:android/app/src/main/java/shop/youthnic/returnscan/claim/ClaimEvidenceUploadWorker.kt",
+      "type": "calls",
+      "weight": 0.9
+    },
+    {
+      "id": "e104",
+      "source": "file:android/app/src/main/java/shop/youthnic/returnscan/claim/ClaimEvidenceUploadWorker.kt",
+      "target": "file:android/app/src/main/java/shop/youthnic/returnscan/data/ApiClient.kt",
+      "type": "calls",
+      "weight": 0.9
+    },
+    {
+      "id": "e105",
+      "source": "file:android/app/src/main/java/shop/youthnic/returnscan/ui/ScannerActivity.kt",
+      "target": "file:android/app/src/main/java/shop/youthnic/returnscan/data/ApiClient.kt",
+      "type": "calls",
+      "weight": 0.9
+    },
+    {
+      "id": "e106",
+      "source": "file:android/app/src/main/java/shop/youthnic/returnscan/ReturnScanApp.kt",
+      "target": "file:android/app/src/main/java/shop/youthnic/returnscan/update/AppUpdater.kt",
+      "type": "calls",
+      "weight": 0.8
+    },
+    {
+      "id": "e107",
+      "source": "file:android/app/src/main/java/shop/youthnic/returnscan/update/AppUpdater.kt",
+      "target": "file:server/mobile-release.ts",
+      "type": "calls",
+      "weight": 0.9
+    },
+    {
+      "id": "e108",
+      "source": "file:android/app/src/main/java/shop/youthnic/returnscan/data/ApiClient.kt",
+      "target": "file:server/register-routes.ts",
+      "type": "calls",
+      "weight": 0.9
+    },
+    {
+      "id": "e109",
+      "source": "file:android/app/src/main/java/shop/youthnic/returnscan/data/ApiClient.kt",
+      "target": "file:server/claims-routes.ts",
+      "type": "calls",
+      "weight": 0.9
+    }
+  ],
+  "layers": [
+    {
+      "id": "layer:api",
+      "name": "API & Server Routing Layer",
+      "description": "Express HTTP API routers, authentication gates, RBAC scoping, and WebSocket event channels.",
+      "nodeIds": [
+        "file:server/index.ts",
+        "file:server/access.ts",
+        "file:server/auth.ts",
+        "file:server/http.ts",
+        "file:server/register-routes.ts",
+        "file:server/upload-routes.ts",
+        "file:server/claims-routes.ts",
+        "file:server/claim-automation-routes.ts",
+        "file:server/iron-routes.ts",
+        "file:server/product-master-routes.ts",
+        "file:server/omsguru-routes.ts",
+        "file:server/shopify/routes.ts",
+        "file:server/payment/routes.ts",
+        "file:server/return-reasons-routes.ts",
+        "file:server/return-tracking-routes.ts",
+        "file:server/live.ts",
+        "file:server/mobile-release.ts"
+      ]
+    },
+    {
+      "id": "layer:service",
+      "name": "Business Logic & Service Layer",
+      "description": "Transactional domain services, scan and upload activation rules, claims management, and OMSGuru catalog bridging.",
+      "nodeIds": [
+        "file:server/register-service.ts",
+        "file:server/register-rules.ts",
+        "file:server/claims-service.ts",
+        "file:server/claim-automation-service.ts",
+        "file:server/claim-follow-up-service.ts",
+        "file:server/iron.ts",
+        "file:server/upload-policy.ts",
+        "file:server/lookup-import.ts",
+        "file:server/product-master.ts",
+        "file:server/oms/master-bridge.ts",
+        "file:server/oms/client.ts"
+      ]
+    },
+    {
+      "id": "layer:database",
+      "name": "Persistence & Database Layer",
+      "description": "PostgreSQL connection pool, strict TLS certificate verification, and transactional schema tables.",
+      "nodeIds": [
+        "file:server/db.ts",
+        "table:server/schema.sql:receipt_scans",
+        "table:server/schema.sql:receipt_scan_items",
+        "table:server/schema.sql:receipt_scan_issues",
+        "table:server/schema.sql:claim_tickets",
+        "table:server/schema-claims.sql:claims",
+        "table:server/schema-claims.sql:claim_media",
+        "table:server/schema-claim-automation.sql:claim_automation_jobs",
+        "table:server/schema-claim-automation.sql:claim_automation_follow_ups",
+        "table:server/schema-iron.sql:iron_send_records",
+        "table:server/schema-import.sql:product_master"
+      ]
+    },
+    {
+      "id": "layer:ui",
+      "name": "Frontend React SPA Layer",
+      "description": "React 19 single-page console built with Vite: dashboard, workstation scanning, register export, and claims tracking.",
+      "nodeIds": [
+        "file:src/App.tsx",
+        "file:src/shell.tsx",
+        "file:src/api.ts",
+        "file:src/date-field.tsx",
+        "file:src/pages/Dashboard.tsx",
+        "file:src/pages/ScanReturns.tsx",
+        "file:src/pages/Reports.tsx",
+        "file:src/pages/Claims.tsx",
+        "file:src/pages/IronTracking.tsx",
+        "file:src/pages/Uploads.tsx",
+        "file:src/pages/ReturnTracking.tsx",
+        "file:src/pages/Admin.tsx"
+      ]
+    },
+    {
+      "id": "layer:desktop",
+      "name": "Desktop Bot & Automation Engine",
+      "description": "Electron shell and standalone 24/7 automation engine operating supplier panel Playwright filing bots.",
+      "nodeIds": [
+        "file:desktop/main.ts",
+        "file:desktop-agent/src/desktop-app-server.ts",
+        "file:desktop-agent/src/marketplaces/meesho.ts",
+        "file:desktop-agent/src/marketplaces/myntra.ts",
+        "file:desktop-agent/src/marketplaces/flipkart.ts",
+        "file:desktop-agent/src/marketplaces/amazon.ts",
+        "file:desktop-agent/src/marketplaces/ajio.ts",
+        "file:desktop-agent/src/poll-guard.ts",
+        "file:desktop-agent/src/crash-guard.ts"
+      ]
+    },
+    {
+      "id": "layer:mobile",
+      "name": "Mobile Warehouse Client Layer (Android)",
+      "description": "Native Kotlin warehouse scanner app: CameraX barcode scanning, unboxing video evidence capture, and automated updates.",
+      "nodeIds": [
+        "file:android/app/src/main/java/shop/youthnic/returnscan/ReturnScanApp.kt",
+        "file:android/app/src/main/java/shop/youthnic/returnscan/ui/ScannerActivity.kt",
+        "file:android/app/src/main/java/shop/youthnic/returnscan/ui/ClaimCaptureActivity.kt",
+        "file:android/app/src/main/java/shop/youthnic/returnscan/ui/ClaimVideoCaptureActivity.kt",
+        "file:android/app/src/main/java/shop/youthnic/returnscan/claim/ClaimEvidenceUploadWorker.kt",
+        "file:android/app/src/main/java/shop/youthnic/returnscan/update/AppUpdater.kt",
+        "file:android/app/src/main/java/shop/youthnic/returnscan/data/ApiClient.kt"
+      ]
+    }
+  ],
+  "tour": [
+    {
+      "order": 1,
+      "title": "Return App Architecture & Core Entry Point",
+      "description": "The system provides an enterprise returns reconciliation engine for VB Exports. The server entry in server/index.ts bootstraps Express 4, manages TLS connection pooling to PostgreSQL, mounts subrouters, and streams real-time updates.",
+      "nodeIds": [
+        "file:server/index.ts",
+        "file:src/App.tsx",
+        "file:server/db.ts"
+      ]
+    },
+    {
+      "order": 2,
+      "title": "Multi-Tenant Security & Scope Invariant",
+      "description": "Every query touching account data strictly enforces the signed-in user's account scope via server/access.ts. Admin-only endpoints require the Admin role, and passwords are encrypted with bcrypt.",
+      "nodeIds": [
+        "file:server/access.ts",
+        "file:server/auth.ts",
+        "file:server/http.ts"
+      ]
+    },
+    {
+      "order": 3,
+      "title": "Inward Return Scanning & Verification Engine",
+      "description": "When packages arrive physically at the warehouse, barcodes are scanned either via the React console (src/pages/ScanReturns.tsx) or the native Android client (ScannerActivity.kt). Lookup occurs via server/register-service.ts with atomic deduplication locks.",
+      "nodeIds": [
+        "file:server/register-routes.ts",
+        "file:server/register-service.ts",
+        "file:src/pages/ScanReturns.tsx",
+        "table:server/schema.sql:receipt_scans"
+      ]
+    },
+    {
+      "order": 4,
+      "title": "Marketplace Return Uploads & Staged Activation",
+      "description": "Marketplace reports (Meesho, Flipkart, Myntra, Amazon, Ajio) are parsed and staged for 15 minutes in memory. Only validated, scannable rows activate into lookup groups under an advisory lock without overwriting historical scan snapshots.",
+      "nodeIds": [
+        "file:server/upload-routes.ts",
+        "file:server/upload-policy.ts",
+        "file:server/lookup-import.ts",
+        "file:src/pages/Uploads.tsx"
+      ]
+    },
+    {
+      "order": 5,
+      "title": "Claims Management & Evidence Media Vault",
+      "description": "Disputed returns (damaged, missing, wrong items) trigger claims. Photo and 480p unboxing video evidence is uploaded, streamed via HTML5 video lightbox, and tracked with real-time INR totals in src/pages/Claims.tsx.",
+      "nodeIds": [
+        "file:server/claims-routes.ts",
+        "file:server/claims-service.ts",
+        "table:server/schema-claims.sql:claims",
+        "table:server/schema-claims.sql:claim_media"
+      ]
+    },
+    {
+      "order": 6,
+      "title": "Desktop Automation Engine & Supplier Panel Bots",
+      "description": "The desktop automation engine (desktop-agent/src/desktop-app-server.ts) leases claim jobs and runs headless Chromium bots (such as Meesho) to automatically upload evidence and file dispute tickets without operator manual entry.",
+      "nodeIds": [
+        "file:desktop-agent/src/desktop-app-server.ts",
+        "file:desktop-agent/src/marketplaces/meesho.ts",
+        "file:desktop-agent/src/poll-guard.ts"
+      ]
+    },
+    {
+      "order": 7,
+      "title": "Iron Send & Operations Tracking",
+      "description": "Operational garment handling is tracked in src/pages/IronTracking.tsx and server/iron.ts. Returns sent for pressing are batched and checked in by the Inward Team with live WebSocket updates.",
+      "nodeIds": [
+        "file:server/iron-routes.ts",
+        "file:server/iron.ts",
+        "table:server/schema-iron.sql:iron_send_records",
+        "file:src/pages/IronTracking.tsx"
+      ]
+    },
+    {
+      "order": 8,
+      "title": "OMSGuru Master Catalog & Channel Bridge",
+      "description": "The bridge in server/oms/master-bridge.ts reconciles active channel listings against the 120k+ product master table, backfilling catalog images and resolving unmapped marketplace SKUs.",
+      "nodeIds": [
+        "file:server/oms/master-bridge.ts",
+        "file:server/product-master.ts",
+        "table:server/schema-import.sql:product_master"
+      ]
+    }
+  ]
+}

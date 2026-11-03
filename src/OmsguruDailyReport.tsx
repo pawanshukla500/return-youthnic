@@ -24,6 +24,10 @@ export type OmsguruDailyUpdateItem = {
   emailSentAt: string | null
   emailRecipients: string[]
   emailCc: string[]
+  whatsappSent?: boolean
+  whatsappSentAt?: string | null
+  whatsappMessageId?: string | null
+  whatsappError?: string | null
   generatedBy: number | null
   createdAt: string
 }
@@ -108,6 +112,23 @@ export function OmsguruDailyReport() {
   // Action states
   const [generating, setGenerating] = useState(false)
   const [sendingId, setSendingId] = useState<number | null>(null)
+  const [sendingWaId, setSendingWaId] = useState<number | null>(null)
+  const [waConfig, setWaConfig] = useState<{
+    enabled: boolean
+    apiUrl: string
+    groupJid: string
+    tagUserJid: string
+    tagUserLid: string
+    tagUserName: string
+  } | null>(null)
+  const [waStatus, setWaStatus] = useState<{
+    connected: boolean
+    loggedIn: boolean
+    jid?: string
+    deviceId?: string
+    error?: string
+  } | null>(null)
+  const [testingWa, setTestingWa] = useState(false)
 
   const loadUnmappedCheck = async () => {
     try {
@@ -153,7 +174,26 @@ export function OmsguruDailyReport() {
 
   const loadConfig = async () => {
     try {
-      const res = await api<{ config: OmsguruConfig }>("/api/omsguru/config")
+      const res = await api<{
+        config: OmsguruConfig
+        whatsappConfig?: {
+          enabled: boolean
+          apiUrl: string
+          groupJid: string
+          tagUserJid: string
+          tagUserLid: string
+          tagUserName: string
+        }
+        whatsappStatus?: {
+          connected: boolean
+          loggedIn: boolean
+          jid?: string
+          deviceId?: string
+          error?: string
+        }
+      }>("/api/omsguru/config")
+      if (res.whatsappConfig) setWaConfig(res.whatsappConfig)
+      if (res.whatsappStatus) setWaStatus(res.whatsappStatus)
       setConfig(res.config)
       setCcInput((res.config.ccEmails || []).join(", "))
     } catch {
@@ -268,6 +308,53 @@ export function OmsguruDailyReport() {
     }
   }
 
+  const handleSendWhatsApp = async (id: number) => {
+    setSendingWaId(id)
+    setActionNotice("Dispatching update CSV to WhatsApp Inventory Management group...")
+    try {
+      const res = await api<{ ok: boolean; result: { sent: boolean; messageId?: string; error?: string } }>(
+        `/api/omsguru/daily/${id}/send-whatsapp`,
+        { method: "POST" },
+      )
+      if (res.ok) {
+        setActionNotice("Update CSV successfully sent to WhatsApp group!")
+      } else {
+        setError(`WhatsApp dispatch failed: ${res.result?.error || "Unknown error"}`)
+      }
+      await loadData(true)
+    } catch (err: any) {
+      setError(`Failed to send WhatsApp message: ${err.message}`)
+    } finally {
+      setSendingWaId(null)
+      setTimeout(() => setActionNotice(null), 5000)
+    }
+  }
+
+  const handleSendTestWhatsApp = async () => {
+    setTestingWa(true)
+    try {
+      const res = await api<{ ok: boolean; result: any }>(
+        "/api/omsguru/whatsapp/send-test",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            message: `🔔 Return App WhatsApp Test Ping\nTimestamp: ${new Date().toISOString()}\nTarget: Inventory Management Group`,
+          }),
+        },
+      )
+      if (res.ok) {
+        setActionNotice("Test message sent to WhatsApp group!")
+      } else {
+        setError(`WhatsApp test ping failed: ${res.result?.error || "Unknown error"}`)
+      }
+    } catch (err: any) {
+      setError(`WhatsApp test ping failed: ${err.message}`)
+    } finally {
+      setTestingWa(false)
+      setTimeout(() => setActionNotice(null), 5000)
+    }
+  }
+
   const handleSaveConfig = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!config) return
@@ -286,6 +373,12 @@ export function OmsguruDailyReport() {
         }),
       })
       setConfig(res.config)
+      if (waConfig) {
+        await api("/api/omsguru/whatsapp/config", {
+          method: "POST",
+          body: JSON.stringify(waConfig),
+        }).catch(() => {})
+      }
       setShowSettingsModal(false)
       setActionNotice("OMSGuru automation settings updated successfully.")
       setTimeout(() => setActionNotice(null), 4000)
@@ -323,6 +416,16 @@ export function OmsguruDailyReport() {
             ) : (
               <span className="omsguru-badge-offline" title="Firebase credentials missing in environment">
                 ○ Firebase Storage Offline
+              </span>
+            )}
+            
+            {waStatus?.connected ? (
+              <span className="omsguru-badge-firebase" style={{ background: "#ecfdf5", color: "#065f46", border: "1px solid #a7f3d0" }} title={`Connected as ${waStatus.jid || "WA Bot"}`}>
+                ● WhatsApp Gateway Online
+              </span>
+            ) : (
+              <span className="omsguru-badge-offline" title={waStatus?.error || "WhatsApp gateway offline"}>
+                ○ WhatsApp Gateway Offline
               </span>
             )}
             <span className="omsguru-badge-schedule">
@@ -554,6 +657,7 @@ export function OmsguruDailyReport() {
                 <th style={{ textAlign: "right" }}>Good Units</th>
                 <th>Dropship ID</th>
                 <th>Email Dispatch</th>
+                <th>WhatsApp Dispatch</th>
                 <th>Firebase Storage Archive</th>
                 <th style={{ textAlign: "right" }}>Actions</th>
               </tr>
@@ -583,6 +687,25 @@ export function OmsguruDailyReport() {
                       </span>
                     ) : (
                       <span className="badge badge-warning">Pending Send</span>
+                    )}
+                  </td>
+                  <td>
+                    {item.whatsappSent ? (
+                      <span
+                        className="badge badge-success"
+                        title={`Sent at ${item.whatsappSentAt || ""}${item.whatsappMessageId ? ` (ID: ${item.whatsappMessageId})` : ""}`}
+                      >
+                        ✓ WA Sent
+                      </span>
+                    ) : item.whatsappError ? (
+                      <span
+                        className="badge badge-danger"
+                        title={`Failed: ${item.whatsappError}`}
+                      >
+                        ⚠ WA Failed
+                      </span>
+                    ) : (
+                      <span className="badge badge-warning">Pending WA</span>
                     )}
                   </td>
                   <td>
@@ -629,6 +752,16 @@ export function OmsguruDailyReport() {
                         title={item.emailSent ? "Resend update email with CSV attachment" : "Send update email with CSV attachment"}
                       >
                         {sendingId === item.id ? "Sending..." : item.emailSent ? "Resend" : "Email"}
+                      </button>
+
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-sm"
+                        onClick={() => handleSendWhatsApp(item.id)}
+                        disabled={sendingWaId === item.id}
+                        title={item.whatsappSent ? "Resend update CSV to WhatsApp group" : "Send update CSV to WhatsApp group"}
+                      >
+                        {sendingWaId === item.id ? "Sending WA..." : item.whatsappSent ? "Resend WA" : "WhatsApp"}
                       </button>
                     </div>
                   </td>
@@ -760,6 +893,8 @@ export function OmsguruDailyReport() {
                 <div>InventoryAction: <strong>ADD</strong></div>
                 <div>QtyIncludesBlocked: <em>(blank)</em></div>
                 <div>RackSpace: <em>(DEFAULT)</em></div>
+                <div>Email Status: <strong>{selectedUpdate.update.emailSent ? "✓ Sent" : "Pending"}</strong></div>
+                <div>WhatsApp Status: <strong>{selectedUpdate.update.whatsappSent ? "✓ Sent" : (selectedUpdate.update.whatsappError ? `⚠ ${selectedUpdate.update.whatsappError}` : "Pending")}</strong></div>
                 <div>Notes: <code>{selectedUpdate.update.requestId}</code></div>
               </div>
             </div>
@@ -975,6 +1110,51 @@ export function OmsguruDailyReport() {
                 </label>
               </div>
 
+              
+              <div style={{ marginTop: "18px", paddingTop: "14px", borderTop: "1px solid var(--line)" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
+                  <span style={{ fontSize: "14px", fontWeight: 700, color: "var(--ink)" }}>WhatsApp Enterprise Gateway</span>
+                  {waStatus?.connected ? (
+                    <span className="badge badge-success">● WA Gateway Online</span>
+                  ) : (
+                    <span className="badge badge-warning">○ WA Disconnected</span>
+                  )}
+                </div>
+
+                <div className="form-group" style={{ marginBottom: "14px" }}>
+                  <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontSize: "13px", fontWeight: 600 }}>
+                    <input
+                      type="checkbox"
+                      checked={waConfig?.enabled ?? true}
+                      onChange={(e) => setWaConfig(waConfig ? { ...waConfig, enabled: e.target.checked } : null)}
+                    />
+                    <span>Enable automated WhatsApp group dispatch (CSV file & tagged brief)</span>
+                  </label>
+                </div>
+
+                <div style={{ gridTemplateColumns: "1fr 1fr", display: "grid", gap: "10px", fontSize: "12px", background: "#f8fafc", padding: "10px", borderRadius: "6px", marginBottom: "14px" }}>
+                  <div>
+                    <span style={{ color: "var(--muted)" }}>Target Group:</span>
+                    <div style={{ fontWeight: 600, wordBreak: "break-all" }}>{waConfig?.groupJid || "Inventory Management (919825149497-1631941133@g.us)"}</div>
+                  </div>
+                  <div>
+                    <span style={{ color: "var(--muted)" }}>Tagged Team Member:</span>
+                    <div style={{ fontWeight: 600 }}>{waConfig?.tagUserName || "Pandit Vishal Tiwari"} (@{waConfig?.tagUserJid?.replace(/@.*$/, "") || "916306361624"})</div>
+                  </div>
+                </div>
+
+                <div style={{ marginBottom: "14px" }}>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    onClick={handleSendTestWhatsApp}
+                    disabled={testingWa}
+                  >
+                    {testingWa ? "Sending Test Ping..." : "Send Test Ping to WhatsApp Group"}
+                  </button>
+                </div>
+              </div>
+
               <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px" }}>
                 <button type="button" className="btn btn-secondary" onClick={() => setShowSettingsModal(false)}>
                   Cancel
@@ -1118,3 +1298,4 @@ export function OmsguruDailyReport() {
     </div>
   )
 }
+

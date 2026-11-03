@@ -49,12 +49,25 @@ export function getPaymentConnectionSettings(): PaymentDbConnectionSettings {
   const caFromEnv = (process.env.PAYMENT_SSL_CA || process.env.PAYMENT_DATABASE_SSL_CA || "").trim()
   let ca: string | undefined = caFromEnv || undefined
   if (!ca) {
-    const caPath = (process.env.PAYMENT_SSL_CA_FILE || "").trim() || path.join(root, "certs", "payment-ca.pem")
-    if (fs.existsSync(caPath)) {
-      try {
-        ca = fs.readFileSync(caPath, "utf8")
-      } catch {
-        // ignore read errors, fallback to system CAs
+    const candidatePaths = [
+      (process.env.PAYMENT_SSL_CA_FILE || "").trim(),
+      path.join(process.cwd(), "certs", "payment-ca.pem"),
+      path.join(root, "certs", "payment-ca.pem"),
+      path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "certs", "payment-ca.pem"),
+      path.resolve(path.dirname(fileURLToPath(import.meta.url)), "certs", "payment-ca.pem"),
+    ].filter(Boolean)
+
+    for (const caPath of candidatePaths) {
+      if (fs.existsSync(caPath)) {
+        try {
+          const content = fs.readFileSync(caPath, "utf8").trim()
+          if (content) {
+            ca = content
+            break
+          }
+        } catch {
+          // ignore
+        }
       }
     }
   }

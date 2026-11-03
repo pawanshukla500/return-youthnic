@@ -1,0 +1,16 @@
+# Understand-Anything ignore configuration
+node_modules/
+dist/
+build/
+.git/
+.vscode/
+.gemini/
+.understand-anything/
+*.log
+*.sqlite
+*.tar.gz
+*.tgz
+tmp/
+coverage/
+android/app/build/
+android/.gradle/

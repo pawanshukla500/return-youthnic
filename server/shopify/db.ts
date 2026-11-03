@@ -43,12 +43,25 @@ export function getShopifyConnectionSettings(): ShopifyDbConnectionSettings {
   const caFromEnv = (process.env.SHOPIFY_SSL_CA || process.env.SHOPIFY_DATABASE_SSL_CA || "").trim()
   let ca: string | undefined = caFromEnv || undefined
   if (!ca) {
-    const caPath = (process.env.SHOPIFY_SSL_CA_FILE || "").trim() || path.join(root, "certs", "shopify-ca.pem")
-    if (fs.existsSync(caPath)) {
-      try {
-        ca = fs.readFileSync(caPath, "utf8")
-      } catch {
-        // ignore
+    const candidatePaths = [
+      (process.env.SHOPIFY_SSL_CA_FILE || "").trim(),
+      path.join(process.cwd(), "certs", "shopify-ca.pem"),
+      path.join(root, "certs", "shopify-ca.pem"),
+      path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "certs", "shopify-ca.pem"),
+      path.resolve(path.dirname(fileURLToPath(import.meta.url)), "certs", "shopify-ca.pem"),
+    ].filter(Boolean)
+
+    for (const caPath of candidatePaths) {
+      if (fs.existsSync(caPath)) {
+        try {
+          const content = fs.readFileSync(caPath, "utf8").trim()
+          if (content) {
+            ca = content
+            break
+          }
+        } catch {
+          // ignore
+        }
       }
     }
   }

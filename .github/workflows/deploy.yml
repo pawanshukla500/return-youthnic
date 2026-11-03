@@ -107,6 +107,7 @@ jobs:
           DATABASE_URL=${DATABASE_URL}
           DATABASE_SSL_CA_FILE=certs/db-ca.pem
           SHOPIFY_DATABASE_URL=${SHOPIFY_DATABASE_URL}
+          SHOPIFY_SSL_CA_FILE=certs/shopify-ca.pem
           SESSION_SECRET=${SESSION_SECRET}
           CORS_ORIGIN=${CORS_ORIGIN}
           RESEND_API_KEY=${RESEND_API_KEY}
@@ -117,7 +118,9 @@ jobs:
           OMSGURU_TOKEN=${OMSGURU_TOKEN}
           OMSGURU_API_TOKEN=${OMSGURU_API_TOKEN}
           PAYMENT_DATABASE_URL=${PAYMENT_DATABASE_URL}
+          PAYMENT_SSL_CA_FILE=certs/payment-ca.pem
           VMS_DATABASE_URL=${VMS_DATABASE_URL}
+          VMS_SSL_CA_FILE=certs/vms-ca.pem
           EOF
 
           mkdir -p /tmp/certs

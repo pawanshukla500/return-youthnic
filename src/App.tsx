@@ -10,6 +10,7 @@ import { Claims } from "./pages/Claims"
 import { Dashboard } from "./pages/Dashboard"
 import { Login } from "./pages/Login"
 import { Reports } from "./pages/Reports"
+import { ReturnTracking } from "./pages/ReturnTracking"
 import { IronTracking } from "./pages/IronTracking"
 import { ScanReturns } from "./pages/ScanReturns"
 import { Uploads } from "./pages/Uploads"
@@ -19,6 +20,7 @@ const PAGE_TITLES: Record<Page, string> = {
   dashboard: "Overview · Return Operations",
   scan: "Scan Returns · Return Operations",
   reports: "Return Register · Return Operations",
+  tracking: "Return Tracking · Return Operations",
   iron: "Iron Tracking · Return Operations",
   claims: "Claims · Return Operations",
   uploads: "Data Uploads · Return Operations",
@@ -165,6 +167,7 @@ export default function App() {
           {page === "dashboard" && <Dashboard />}
           {page === "scan" && <ScanReturns />}
           {page === "reports" && <Reports />}
+          {page === "tracking" && <ReturnTracking />}
           {page === "iron" && <IronTracking />}
           {page === "claims" && <Claims />}
           {page === "uploads" && <Uploads />}

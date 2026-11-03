@@ -12,6 +12,7 @@ import type pg from "pg"
 import { istDay } from "./dates.js"
 import { formatCount, formatDay, formatScanTime, headerDateLabel, percentOf } from "./format.js"
 import { syncIronRecordsForScan } from "./iron.js"
+import { syncScanToReturnTracking } from "./return-tracking.js"
 import { masterSkusForListings } from "./lookup-import.js"
 import {
   ALL_ACCOUNTS,
@@ -1177,6 +1178,14 @@ export async function recordScan(
       flyerId,
       flyerState,
     })
+    await syncScanToReturnTracking(
+      client,
+      scanId,
+      storedTracking,
+      String(shipment.order_number),
+      actor.id,
+      hasIssue ? "issue" : "clear",
+    )
     await client.query("COMMIT")
     open = false
     return loadReceipt(db, scanId, false, scope)

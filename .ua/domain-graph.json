@@ -1,0 +1,390 @@
+{
+  "version": "1.0.0",
+  "project": {
+    "name": "Return App (VB Exports)",
+    "languages": [
+      "TypeScript",
+      "Kotlin",
+      "React (TSX)",
+      "SQL",
+      "CSS"
+    ],
+    "frameworks": [
+      "Express 4",
+      "React 19",
+      "Vite",
+      "PostgreSQL",
+      "Electron",
+      "Android CameraX",
+      "ML Kit",
+      "Playwright",
+      "WorkManager"
+    ],
+    "description": "High-throughput marketplace return reconciliation system, warehouse inward scanning, dispute claim automation bot, and operational inventory tracker for VB Exports.",
+    "analyzedAt": "2026-11-02T09:55:35.746Z",
+    "gitCommitHash": "7074635ff1537c6eb43de20c18eded8bcfcd4024"
+  },
+  "nodes": [
+    {
+      "id": "domain:inward-scanning",
+      "type": "domain",
+      "name": "Inward Scanning & Verification",
+      "label": "Inward Scanning & Verification",
+      "summary": "Physical warehouse receiving, barcode detection, AWB deduplication, item condition grading, and scan register recording.",
+      "tags": [
+        "core-domain",
+        "warehouse",
+        "scanning",
+        "verification"
+      ],
+      "domainMeta": {
+        "entities": [
+          "AWB",
+          "ScanReceipt",
+          "ScanItem",
+          "ScanIssue",
+          "ReturnPackage"
+        ],
+        "businessRules": [
+          "A duplicate AWB already received in an account cannot be scanned again without explicit supervisor warning",
+          "Physical scan keeps an immutable snapshot of all matched lines at scan time",
+          "Scans must be bound to the signed-in operator's assigned account scope"
+        ],
+        "entryPoint": "file:server/register-routes.ts",
+        "entryType": "api"
+      }
+    },
+    {
+      "id": "domain:claims-automation",
+      "type": "domain",
+      "name": "Claims Dispute Automation",
+      "label": "Claims Dispute Automation",
+      "summary": "Creation of dispute claims, unboxing video/photo evidence capture, supplier panel bot filing, and 48h ticket follow-up reconciliation.",
+      "tags": [
+        "core-domain",
+        "claims",
+        "disputes",
+        "automation"
+      ],
+      "domainMeta": {
+        "entities": [
+          "Claim",
+          "ClaimEvidence",
+          "AutomationJob",
+          "FollowUpSchedule",
+          "SupplierTicket"
+        ],
+        "businessRules": [
+          "Claims require unboxing video evidence and photo documentation before submission",
+          "Desktop agent bot files tickets across isolated browser sessions with strict crash guards",
+          "Follow-up checks occur every 48 hours until claim is approved, rejected, or reconciled"
+        ],
+        "entryPoint": "file:server/claims-routes.ts",
+        "entryType": "api"
+      }
+    },
+    {
+      "id": "domain:marketplace-reconciliation",
+      "type": "domain",
+      "name": "Marketplace Return Reconciliation",
+      "label": "Marketplace Return Reconciliation",
+      "summary": "Multi-channel return report upload, header mapping, staged validation preview, and atomic lookup dataset activation.",
+      "tags": [
+        "core-domain",
+        "marketplace",
+        "uploads",
+        "reconciliation"
+      ],
+      "domainMeta": {
+        "entities": [
+          "UploadBatch",
+          "LookupGroup",
+          "MarketplaceReport",
+          "CourierRecord"
+        ],
+        "businessRules": [
+          "Superseded lookup rows are archived, never deleted",
+          "Only scannable rows activate into lookup groups; non-scannable remain in upload history",
+          "Upload previews expire from staging memory after 15 minutes"
+        ],
+        "entryPoint": "file:server/upload-routes.ts",
+        "entryType": "api"
+      }
+    },
+    {
+      "id": "domain:iron-operations",
+      "type": "domain",
+      "name": "Ironing Operations & Logistics",
+      "label": "Ironing Operations & Logistics",
+      "summary": "Warehouse internal logistics tracking garments dispatched to and received from the ironing department.",
+      "tags": [
+        "domain",
+        "iron",
+        "logistics",
+        "warehouse-ops"
+      ],
+      "domainMeta": {
+        "entities": [
+          "IronBatch",
+          "IronSendRecord",
+          "IronReceiveEvent"
+        ],
+        "businessRules": [
+          "Only Inward Team or Admin role can record ironed units received",
+          "Real-time sync broadcast over WebSocket /api/live with fallback polling"
+        ],
+        "entryPoint": "file:server/iron-routes.ts",
+        "entryType": "api"
+      }
+    },
+    {
+      "id": "domain:catalog-bridge",
+      "type": "domain",
+      "name": "OMSGuru Master Catalog Bridge",
+      "label": "OMSGuru Master Catalog Bridge",
+      "summary": "Nightly synchronization bridging active channel listings with the 120k+ product master catalog and caching image assets.",
+      "tags": [
+        "domain",
+        "omsguru",
+        "catalog",
+        "master-bridge"
+      ],
+      "domainMeta": {
+        "entities": [
+          "ProductMaster",
+          "OMSListing",
+          "OMSSku",
+          "CatalogImage"
+        ],
+        "businessRules": [
+          "Product master batched import processes up to 500 rows per transaction with pause/retry",
+          "Listing-to-master bridge maps active SKUs and backfills catalog thumbnails"
+        ],
+        "entryPoint": "file:server/oms/master-bridge.ts",
+        "entryType": "service"
+      }
+    },
+    {
+      "id": "flow:scan-return-package",
+      "type": "flow",
+      "name": "Scan & Verify Return Package",
+      "label": "Scan & Verify Return Package",
+      "summary": "End-to-end flow of an incoming parcel from barcode scan to permanent register insertion.",
+      "tags": [
+        "flow",
+        "inward-scanning"
+      ]
+    },
+    {
+      "id": "flow:file-marketplace-claim",
+      "type": "flow",
+      "name": "File Automated Marketplace Claim",
+      "label": "File Automated Marketplace Claim",
+      "summary": "Flow from claim ticket creation to automated desktop bot filing and status tracking.",
+      "tags": [
+        "flow",
+        "claims-automation"
+      ]
+    },
+    {
+      "id": "flow:upload-report-activation",
+      "type": "flow",
+      "name": "Upload Return Report & Activate",
+      "label": "Upload Return Report & Activate",
+      "summary": "Staged ingestion, error validation, preview review, and database activation of marketplace report.",
+      "tags": [
+        "flow",
+        "marketplace-reconciliation"
+      ]
+    },
+    {
+      "id": "step:scan-return-package:barcode-input",
+      "type": "step",
+      "name": "Barcode Input or Camera Scan",
+      "label": "Barcode Input or Camera Scan",
+      "summary": "Operator scans AWB tracking number via Android CameraX scanner or desktop barcode scanner.",
+      "tags": [
+        "step"
+      ]
+    },
+    {
+      "id": "step:scan-return-package:lookup-validation",
+      "type": "step",
+      "name": "Active Lookup & Duplicate Check",
+      "label": "Active Lookup & Duplicate Check",
+      "summary": "System queries active lookup tables and prior scan ledger to verify authenticity and duplicate status.",
+      "tags": [
+        "step"
+      ]
+    },
+    {
+      "id": "step:scan-return-package:condition-inspection",
+      "type": "step",
+      "name": "Garment Condition & Defect Tagging",
+      "label": "Garment Condition & Defect Tagging",
+      "summary": "Operator inspects garment, verifies expected SKU, notes any defects, and attaches issue codes.",
+      "tags": [
+        "step"
+      ]
+    },
+    {
+      "id": "step:scan-return-package:commit-record",
+      "type": "step",
+      "name": "Commit to Register & Broadcast",
+      "label": "Commit to Register & Broadcast",
+      "summary": "Atomic PostgreSQL transaction writes scan row, items, issues, and broadcasts live event via WebSocket.",
+      "tags": [
+        "step"
+      ]
+    },
+    {
+      "id": "step:file-marketplace-claim:capture-evidence",
+      "type": "step",
+      "name": "Capture Photo & Unboxing Video",
+      "label": "Capture Photo & Unboxing Video",
+      "summary": "Operator records 480p unboxing video and captures shipping label + defective item photos.",
+      "tags": [
+        "step"
+      ]
+    },
+    {
+      "id": "step:file-marketplace-claim:create-claim-job",
+      "type": "step",
+      "name": "Unified Claim Creation & Queue Job",
+      "label": "Unified Claim Creation & Queue Job",
+      "summary": "System creates claim record and enqueues claim_automation_jobs row for desktop bot lease.",
+      "tags": [
+        "step"
+      ]
+    },
+    {
+      "id": "step:file-marketplace-claim:bot-execution",
+      "type": "step",
+      "name": "Desktop Bot Panel Filing",
+      "label": "Desktop Bot Panel Filing",
+      "summary": "Desktop engine leases job, launches supplier panel browser session, fills form, uploads media, and submits dispute.",
+      "tags": [
+        "step"
+      ]
+    },
+    {
+      "id": "step:file-marketplace-claim:follow-up-sync",
+      "type": "step",
+      "name": "48-Hour Ticket Status Check",
+      "label": "48-Hour Ticket Status Check",
+      "summary": "Engine re-checks ticket ID every 2 days until approved or reimbursed, updating claims ledger.",
+      "tags": [
+        "step"
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "id": "de1",
+      "source": "domain:inward-scanning",
+      "target": "flow:scan-return-package",
+      "type": "contains_flow",
+      "weight": 1
+    },
+    {
+      "id": "de2",
+      "source": "domain:claims-automation",
+      "target": "flow:file-marketplace-claim",
+      "type": "contains_flow",
+      "weight": 1
+    },
+    {
+      "id": "de3",
+      "source": "domain:marketplace-reconciliation",
+      "target": "flow:upload-report-activation",
+      "type": "contains_flow",
+      "weight": 1
+    },
+    {
+      "id": "de4",
+      "source": "domain:inward-scanning",
+      "target": "domain:claims-automation",
+      "type": "cross_domain",
+      "weight": 0.8
+    },
+    {
+      "id": "de5",
+      "source": "domain:inward-scanning",
+      "target": "domain:iron-operations",
+      "type": "cross_domain",
+      "weight": 0.8
+    },
+    {
+      "id": "de6",
+      "source": "domain:marketplace-reconciliation",
+      "target": "domain:inward-scanning",
+      "type": "cross_domain",
+      "weight": 0.9
+    },
+    {
+      "id": "de7",
+      "source": "domain:catalog-bridge",
+      "target": "domain:inward-scanning",
+      "type": "cross_domain",
+      "weight": 0.7
+    },
+    {
+      "id": "de10",
+      "source": "flow:scan-return-package",
+      "target": "step:scan-return-package:barcode-input",
+      "type": "flow_step",
+      "weight": 0.1
+    },
+    {
+      "id": "de11",
+      "source": "flow:scan-return-package",
+      "target": "step:scan-return-package:lookup-validation",
+      "type": "flow_step",
+      "weight": 0.2
+    },
+    {
+      "id": "de12",
+      "source": "flow:scan-return-package",
+      "target": "step:scan-return-package:condition-inspection",
+      "type": "flow_step",
+      "weight": 0.3
+    },
+    {
+      "id": "de13",
+      "source": "flow:scan-return-package",
+      "target": "step:scan-return-package:commit-record",
+      "type": "flow_step",
+      "weight": 0.4
+    },
+    {
+      "id": "de20",
+      "source": "flow:file-marketplace-claim",
+      "target": "step:file-marketplace-claim:capture-evidence",
+      "type": "flow_step",
+      "weight": 0.1
+    },
+    {
+      "id": "de21",
+      "source": "flow:file-marketplace-claim",
+      "target": "step:file-marketplace-claim:create-claim-job",
+      "type": "flow_step",
+      "weight": 0.2
+    },
+    {
+      "id": "de22",
+      "source": "flow:file-marketplace-claim",
+      "target": "step:file-marketplace-claim:bot-execution",
+      "type": "flow_step",
+      "weight": 0.3
+    },
+    {
+      "id": "de23",
+      "source": "flow:file-marketplace-claim",
+      "target": "step:file-marketplace-claim:follow-up-sync",
+      "type": "flow_step",
+      "weight": 0.4
+    }
+  ],
+  "layers": [],
+  "tour": []
+}

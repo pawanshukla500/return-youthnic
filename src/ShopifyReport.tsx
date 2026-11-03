@@ -214,7 +214,7 @@ export function ShopifyReport() {
 
         <div className="shopify-actions-area">
           <div className="shopify-sync-status">
-            <span className="shopify-pulse-dot" />
+            <span className={`shopify-pulse-dot ${status?.connected ? "online" : "offline"}`} />
             <span>
               {status?.connected ? "Connected" : "Disconnected"} · Last synced:{" "}
               <strong>{status?.lastSyncedLabel || metrics?.lastSyncedLabel || "Just now"}</strong>
