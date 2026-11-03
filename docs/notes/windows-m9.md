@@ -114,3 +114,8 @@ A saved login never authorizes submission on either path:
   `claim-authorization-db.test.ts` runs green on CI as well as locally.
 - Required checks green: Build Desktop Setup (windows-latest) pass,
   Verify Web & API pass. CodeAnt review still in progress; no human reviews yet.
+- Live worktree note: another party is editing the scan-save path in parallel
+  (`src/pages/ScanReturns.tsx`, `src/index.css`, `server/register-service.ts` —
+  save retry, paused queue banner, non-fatal tracking sync). Those files are
+  untouched by this branch; their uncommitted changes were left exactly as found
+  and are not part of any M9 commit.
