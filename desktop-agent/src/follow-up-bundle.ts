@@ -33,6 +33,8 @@ export function followUpExecutionBundle(input: {
       orderNumber: "",
       subOrderId: "",
       trackingId: "",
+      packetState: "",
+      marketplaceIssueCode: "",
       packetId: "",
       sku: "",
       customerName: "",

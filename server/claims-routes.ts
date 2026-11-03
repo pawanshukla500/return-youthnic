@@ -201,6 +201,7 @@ export function mountClaimsRoutes(app: Express, requireUser: RequestHandler): vo
         remarks: text(body.remarks),
         claimTemplateId: positiveId(body.claimTemplateId),
         marketplaceIssueCode: text(body.marketplaceIssueCode),
+        packetState: text(body.packetState),
       })
       publishChange({ kind: "claim.updated", marketplaceId: result.marketplaceId, actorId: actorOf(req).id })
       res.status(201).json({ claim: result })

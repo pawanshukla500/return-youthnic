@@ -5,7 +5,6 @@ import { ServiceError, type Actor } from "./register-service.js"
 import { createFollowUpForJob } from "./claim-follow-up-service.js"
 import { listClaimTemplates } from "./claims-service.js"
 import {
-  MEESHO_PACKET_STATE,
   MEESHO_TAT_DAYS,
   MEESHO_ISSUES,
   type MeeshoIssueCode,
@@ -1739,7 +1738,7 @@ export async function lookupReturnForClaim(
     orderId,
     trackingNumber,
     awb: trackingNumber,
-    packetState: MEESHO_PACKET_STATE,
+    packetState: "Unknown",
     packetId,
     detectedIssueCode: normalizedDetected || (row.detected_issue_code ? String(row.detected_issue_code) : null),
     customerName: String(row.customer_name || "Customer"),
