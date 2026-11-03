@@ -114,6 +114,17 @@ A saved login never authorizes submission on either path:
   `claim-authorization-db.test.ts` runs green on CI as well as locally.
 - Required checks green: Build Desktop Setup (windows-latest) pass,
   Verify Web & API pass. CodeAnt review still in progress; no human reviews yet.
+## Phase 4 — installer build (2026-11-03)
+
+- Built from an isolated worktree of this branch @ `77eb21b` with a clean
+  `npm ci` (only the Electron runtime binary was copied from the main
+  worktree because the script allow-list blocked its postinstall download;
+  versions match: electron 44.8.0, esbuild 0.28.2).
+- `npm run desktop:dist` produced `dist-electron/Return.App.Setup.1.2.0.exe`
+  (120,272,081 bytes, app version 1.2.0, unsigned — SmartScreen will warn).
+- Install + GUI test still needs the operator (run the EXE, sign in, claim
+  queue, supplier browser, Start/Pause/Resume, Poll Now, approvals, AI Center,
+  tray, restart). Sanitized screenshots/logs to follow.
 - Live worktree note: another party is editing the scan-save path in parallel
   (`src/pages/ScanReturns.tsx`, `src/index.css`, `server/register-service.ts` —
   save retry, paused queue banner, non-fatal tracking sync). Those files are
