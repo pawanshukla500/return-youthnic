@@ -63,3 +63,27 @@ A saved login never authorizes submission on either path:
 - Unrelated anomaly (not caused by this branch): during editing, 7 worktree
   files briefly showed as deleted outside any tool write; restored from HEAD
   (`git checkout --`) and re-verified. No content was lost.
+
+## Phase 10 — security review, code-only part (2026-11-03, this branch)
+
+- No secrets in the M9 surface: the new guard, desktop, service and route
+  code paths log only stages, claim statuses and static reason strings.
+  No password, API key or token is printed, logged or committed.
+- Electron app window (`desktop/main.ts`): `nodeIntegration: false`,
+  `contextIsolation: true`, `webSecurity: true`, preload-only bridge.
+  The preload (`desktop/preload.cjs`) exposes only status/toggle/notify/
+  browser-rect — no arbitrary execution, no secret access. The OS-level
+  `sandbox: true` flag is not set on the app window (renderer relies on the
+  settings above); changing it needs operator-tested GUI verification.
+- Supplier-browser Chromium sandbox (AGENTS.md rule 13) is untouched by this
+  branch; the automation still loads only the operator's supplier panel.
+- Local secrets (`desktop-agent/src/local-secrets.ts`): DPAPI via
+  `safeStorage` when available, explicit documented plaintext fallback —
+  unchanged, no weakening.
+- Credential flow unchanged: supplier passwords stay AES-256-GCM encrypted
+  in Postgres and are decrypted only inside `getJobExecutionBundle`.
+- Retry still cannot re-arm `submitting`/finished/recorded-outcome work;
+  manual-resolve is unchanged apart from carrying the operator override.
+- No schema change in this branch (additive-only rule holds vacuously).
+- Not verifiable without the operator: installed-app sandbox behavior,
+  screenshot/log redaction on a real run, recovery after interrupted work.
