@@ -44,6 +44,23 @@ A saved login never authorizes submission on either path:
 - `npm run typecheck` — 0 errors (all three projects).
 - `npm run build` — exit 0 (`dist/` client + `server/dist.js` 877.9 kB).
 - Focused: `claim-idempotency-m8`, `claim-automation`, `submit-guard` — 43/43 pass.
+- Full `npm test` without a database — 721 pass, 0 fail, 40 skipped (37 need
+  `TEST_DATABASE_URL`, 3 POSIX-only).
+- Full `npm test` with `TEST_DATABASE_URL` pointed at the dedicated `return_test`
+  database on the provisioned test PostgreSQL 17.2 server — **764 pass, 0 fail,
+  3 skipped** (only the POSIX-only secret-permission checks; every DB-gated
+  check ran, including the 6 new authorization checks below).
+- New `server/tests/claim-authorization-db.test.ts` (6 checks, real database):
+  saved-login lease cannot record a ticket (409, nothing written); approve →
+  lease as submitting → complete records the ticket once, starts exactly one
+  follow-up, same-ticket replay idempotent, different ticket rejected;
+  two racing workers — second gets nothing; expired lease cannot complete and
+  the next poll parks the job as manual_intervention_required; auto-submit
+  account completes from a live prepare lease; retry cannot re-arm submitting.
+
+- `npm run typecheck` — 0 errors (all three projects).
+- `npm run build` — exit 0 (`dist/` client + `server/dist.js` 877.9 kB).
+- Focused: `claim-idempotency-m8`, `claim-automation`, `submit-guard` — 43/43 pass.
 - Full `npm test` — 721 pass, 0 fail, 40 skipped (37 need `TEST_DATABASE_URL`,
   3 POSIX-only; same baseline as PR #49, no new skips).
 - New tests: guard blocks non-submitting stages on approval accounts;
