@@ -125,6 +125,9 @@ A saved login never authorizes submission on either path:
 - Install + GUI test still needs the operator (run the EXE, sign in, claim
   queue, supplier browser, Start/Pause/Resume, Poll Now, approvals, AI Center,
   tray, restart). Sanitized screenshots/logs to follow.
+- Re-verified 2026-11-03: CI green on the latest push (`77cc57d`) — Build
+  Desktop Setup pass, Verify Web & API pass (full 767-test suite on CI's
+  throwaway Postgres). PR stays do-not-merge until live phases 4–9.
 - Live worktree note: another party is editing the scan-save path in parallel
   (`src/pages/ScanReturns.tsx`, `src/index.css`, `server/register-service.ts` —
   save retry, paused queue banner, non-fatal tracking sync). Those files are
