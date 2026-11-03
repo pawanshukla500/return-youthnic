@@ -27,7 +27,7 @@ It does not replace [CLAUDE.md](../../CLAUDE.md), which holds the business and t
 
 ## Current state
 
-Status words used here: **Written** means the code exists and was read back. **Tested** means an automated check exists. **Verified** means the check was run and its output was read. On 2026-10-17 the local typecheck, build and test suite finished with 432 tests: 395 pass, 0 fail, 37 skipped because `TEST_DATABASE_URL` was not set.
+Status words used here: **Written** means the code exists and was read back. **Tested** means an automated check exists. **Verified** means the check was run and its output was read. On 2026-11-03 the local typecheck (3 projects), build and full suite finished with 767 tests: 721 pass, 0 fail, 46 skipped (43 need `TEST_DATABASE_URL`, 3 POSIX-only). CI runs the same suite with its own throwaway Postgres and reports 767 pass, 0 fail, 0 skipped.
 
 ## Start here (2026-10-17)
 
@@ -42,19 +42,19 @@ Read this before the session log. The log below is history. This section is the 
 - **Multi return & Iron Send.** Multi-item/multi-order return verification supports Iron Send seamlessly across Web and Mobile app. Distinct theme colors apply to each issue category (Clear = Emerald, Iron Send = Vibrant Blue, Damaged = Crimson Red, Wrong Product = Amber, Missing = Rose, SKU Change = Purple, Size Change = Teal, Other = Slate).
 - **Register.** Filters are three rows. Empty dates say "Any day". Details opens a two-column record sheet.
 - **Mobile Android Client.** Production release `v1.0.58` (`versionCode: 10058`), in `android/app`, built with CameraX continuous scanning, camera permission onboarding dialog, photo & 480p SD unboxing video evidence capture, visual progress dialogs, instant form reset ("Start Again with Zero"), unified claim creation (`POST /api/claims/unified-create`), and automated in-app updates (`AppUpdater.kt`) synchronized via GitHub Actions (`.github/workflows/return-scan-apk.yml`). The server picks the newest `v1.0.*` GitHub release itself (`server/mobile-release.ts`), so a desktop release holding the "Latest" badge can never feed a phone an installer.
-- **Native Windows Desktop Application & 24/7 Automation Worker.** Published release `desktop-v1.1.0.10` builds a machine-wide `Return.App.Setup.1.1.0.exe`. Admin/Supervisor enrollment issues a per-PC API key and preserves the enrolling user's account scope. Only Meesho jobs are leased automatically. Expired pre-submit work has bounded retries; an uncertain submission requires manual reconciliation instead of automatic resubmission. Evidence streams to `.part` files and is verified by byte count and SHA-256. Packaged installs auto-start hidden in the tray.
+- **Native Windows Desktop Application & 24/7 Automation Worker.** Published release `desktop-v1.2.0.82` builds a machine-wide `Return.App.Setup.1.2.0.exe` (unsigned — SmartScreen warns). Admin/Supervisor enrollment issues a per-PC API key and preserves the enrolling user's account scope. Only Meesho jobs are leased automatically. Expired pre-submit work has bounded retries; an uncertain submission requires manual reconciliation instead of automatic resubmission. Evidence streams to `.part` files and is verified by byte count and SHA-256. Packaged installs auto-start hidden in the tray.
 - **Engine separated from the desktop shell (branch `destop-app`, 2026-10-21).** The automation engine (`desktop-agent/src/desktop-app-server.ts`) owns the **only** worker loop; `desktop/main.ts` is a thin window/tray client with no loop of its own. Three modes: Windows desktop, Linux desktop, and headless Linux server (`deploy/engine/`: Dockerfile, compose, systemd). A non-loopback bind requires `ENGINE_TOKEN` or the engine refuses to start (`desktop-agent/src/engine-config.ts`). `AGENT_DATA_DIR` relocates all engine state. Setting `RETURN_ENGINE_URL` + `ENGINE_TOKEN` makes the desktop app a client of a remote engine. Guides: [LINUX-SERVER.md](../LINUX-SERVER.md), [architecture-decision.md](architecture-decision.md). `npm run typecheck` now also covers `desktop` and `desktop-agent` via `tsconfig.desktop.json`.
-- **Claim tracking and ticket follow-ups (branch `destop-app`, 2026-10-22).** Filing a claim creates a `claim_automation_follow_ups` row (`server/claim-follow-up-service.ts`, called from `completeJobSubmission`'s transaction). The engine's **second loop** (its own timer, `FOLLOWUP_INTERVAL_MS`, 30 min default) leases the next due ticket, opens that panel's saved session, calls the marketplace's `checkClaimStatus()`, and reports the result; the server reschedules +48 h or stops. Terminal rules: `approved`/`rejected`/`paid`/`reconciled`/`closed`/`resolved` stop it; three failed checks stop it; a missing reader stops it; an expired sign-in keeps it active without spending a check. The two engine loops can never drive the same supplier profile at once (`followUpInFlight` in `poll-guard.ts`). The dashboard has one **All panels green / Action required** headline plus per-panel chips and a Ticket follow-ups table with the marketplace's own ticket ID. **No marketplace implements `checkClaimStatus()` yet** — the base class answers `{ supported: false }`, so every panel's follow-ups stop with "not implemented" instead of a guessed state. Guides: [DESKTOP-APP.md](../DESKTOP-APP.md) §§3–4, [API.md](../API.md).
+- **Claim tracking and ticket follow-ups (branch `destop-app`, 2026-10-22).** Filing a claim creates a `claim_automation_follow_ups` row (`server/claim-follow-up-service.ts`, called from `completeJobSubmission`'s transaction). The engine's **second loop** (its own timer, `FOLLOWUP_INTERVAL_MS`, 30 min default) leases the next due ticket, opens that panel's saved session, calls the marketplace's `checkClaimStatus()`, and reports the result; the server reschedules +48 h or stops. Terminal rules: `approved`/`rejected`/`paid`/`reconciled`/`closed`/`resolved` stop it; three failed checks stop it; a missing reader stops it; an expired sign-in keeps it active without spending a check. The two engine loops can never drive the same supplier profile at once (`followUpInFlight` in `poll-guard.ts`). The dashboard has one **All panels green / Action required** headline plus per-panel chips and a Ticket follow-ups table with the marketplace's own ticket ID. **Meesho implements `checkClaimStatus()`** (`desktop-agent/src/marketplaces/meesho.ts:537`, DOM ticket-table reader, fixture-tested; live-portal verification still pending). All other panels use the base class `{ supported: false }`, so their follow-ups stop with "not implemented" instead of a guessed state. Guides: [DESKTOP-APP.md](../DESKTOP-APP.md) §§3–4, [API.md](../API.md).
 - **Release retention.** Each release workflow keeps only the newest two releases of its own family (`v1.0.*` Android, `desktop-v*` Windows; current + previous for rollback) and never deletes the other family's tags. Desktop releases are created with `--latest=false` so the "Latest" badge stays on the Android APK.
 - **Date display.** Every console date filter uses the shared `DateField` (`src/date-field.tsx`): DD/MM/YYYY display regardless of OS locale, native calendar picker on click, ISO `yyyy-mm-dd` value to the API. Never add a raw `<input type="date">` to a page.
 - **Iron Send.** Iron Send is an operational category (`is_operational`), not a return issue: an Iron-only scan is `clear` / `Clear`, never a claim, never in issue figures, never in the OMSGuru file. Each line sent for ironing opens an `iron_send_records` row; the Inward Team (role `Inward`, or Admin) records units that come back on the **Iron tracking** page (`/iron`).
 - **Live sync.** WebSocket `/api/live` plus a 3.5 s (web) / 4 s (Android) poll of `/api/sync/state` as the fallback. The cursor is the newest audit id. Clients reload through the normal scoped routes.
-- **Database tests run.** 432 tests total. 395 pass, 0 fail, 37 skipped locally when `TEST_DATABASE_URL` is unset. The current uncommitted change has not run remotely in CI yet.
+- **Database tests run.** 767 tests total, 721 pass, 0 fail, 46 skipped locally when `TEST_DATABASE_URL` is unset (43 DB-gated + 3 POSIX-only). CI runs all 767 green against its throwaway Postgres. Only 4 files gate on `TEST_DATABASE_URL`: `register-db`, `access-db`, `iron-db`, `claim-authorization-db`.
 - **Not done.** `CLAUDE.md` is missing from the folder.
 
 | Area | Status | Tests | Notes |
 |---|---|---|---|
-| Sign-in and sessions | Written (existing) | None specific | Sessions never expire. See [known risks](#known-risks-and-gaps). |
+| Sign-in and sessions | Written | `access.test.ts`, `auth-persistent.test.ts` | Sessions have absolute+idle expiry with sliding renewal; device tokens are SHA-256 hashed server-side with revoke/list. See `server/auth.ts`. |
 | Account access: scope on every data route, Admin on configuration | Written 2026-10-10 | `access.test.ts` (pure), `access-db.test.ts` (database) | Whether an assigned user may scan, not only view, is a decision for the user. |
 | Lookup: found, duplicate, choose, not found | Written | `register-db.test.ts`, `access-db.test.ts` | A named account outside scope returns 403. |
 | Scan save: replay, lock, rules, snapshot | Written | `register-db.test.ts`, `access-db.test.ts`, `register-rules.test.ts` | The screen sends `scannedTracking` as of 2026-10-10. |
@@ -68,16 +68,32 @@ Read this before the session log. The log below is history. This section is the 
 | Admin: logistics partners, courier names, tracking hosts | Written 2026-10-11 | `marketplace-rules.test.ts` (name match) | The screen shows the brand mark and courier names. Tracking hosts are not on the screen. A tracking link does not name the partner. Prefix aliases: `delhiveryexpress` and `delhiversurface` are Delhivery. |
 | Overview and claims figures, scoped | Written 2026-10-10 | `access-db.test.ts` (headline) | Type on the overview is larger as of 2026-10-11. Figure definitions are proposals until the user confirms them. |
 | Claims lifecycle, evidence, reconciliation and Meesho desktop filing | Verified locally 2026-10-17 | `claims.test.ts`, `claim-automation.test.ts` | Full lifecycle and financial fields, scoped CSV/XLSX export, live updates, authenticated Server PC leases, and Meesho-only automation. PostgreSQL-backed checks remain skipped locally. |
+| Submission authorization (M9, merged as PR #50) | Written + DB-tested | `submit-guard.test.ts`, `claim-authorization-db.test.ts` (6 checks), `claim-evidence-gate.test.ts` | A saved supplier login never authorizes submit: desktop acts only on the `submitting` lease; backend verifies lease holder, liveness and the submitting stage atomically; `manual-resolve` is a separate Supervisor/Admin override. |
 | Marketplace parsers: Flipkart, Meesho, Amazon and Ajio (headers confirmed by sample); Myntra EJ (not confirmed) | Verified 2026-10-10 | `import.test.ts`, `marketplace-rules.test.ts` | Amazon and Ajio were parsed read-only from the real files; no upload was activated. |
 | Identifier number rules (Excel precision) | Verified 2026-10-10 | `spreadsheet-numbers.test.ts`, `scanner-list.test.ts` | Real Amazon and Meesho files were read-only diagnosed; numeric/scientific lookup values remain pending or malformed, never guessed. |
-| OMSGuru sync: listings, SKUs, invoices, orders | Written from the spec | `oms.test.ts`, `oms-orders.test.ts` | Not run against the live API. Not scheduled. |
-| Schema: four files, additive, runs twice | Written | `access-db.test.ts`, `register-db.test.ts` (schema applied twice) | Applied on the configured PostgreSQL database; dedicated database checks are not run. |
+| OMSGuru sync: listings, SKUs, invoices, orders | Written | `oms.test.ts`, `oms-orders.test.ts`, `omsguru-daily.test.ts` | `server/index.ts` schedules reports/oms/payment every 60 s and shopify every 5 min. Live bridge runs need fresh `OMSGuru_CLIENT_ID`/`OMSGURU_API_TOKEN` (401 observed 2026-11-03). |
+| Schema: nineteen files, additive, runs in one transaction, never bumped | Written | `access-db.test.ts`, `register-db.test.ts` (schema applied twice), `ai-center-store.test.ts` (additive-migration guards) | `server/db.ts` `SCHEMA_FILES` applies 19 files every start; `assertSchemaFilesSafe` refuses DROP/TRUNCATE/DELETE. `SCHEMA_VERSION` stays 1 by design. |
 | Database TLS rules | Verified 2026-10-11 | `database-ssl.test.ts` | The pure checks passed in `npm test` (certificate check stays on, `sslmode=no-verify` is refused). Do not weaken them. |
 | Front end: Scan, Uploads, Register, Admin, shell; Overview, Claims, Login | Written | None (no UI test runner) | Addresses are in `src/routes.ts`. Catalog images go through `/api/catalog-image`. A multi return (more than one piece) opens a 2 second popup. |
+| Light-mode dashboard + sidebar + update system (M9, in installed 1.2.0) | Operator-UAT pass 2026-11-03 | `operator-login-flow.test.ts` (inline-script compile) | Light default, dark toggle, 6 sidebar tabs (Status/Setup/Claims/Follow-ups/AI Center/Updates), Updates tab with Check now + auto-check + dismissible banner. See `docs/notes/m9-uat.md` (T1–T5 all pass). |
+| Marketplace credential encryption | Written | `claim-automation.test.ts` | `AUTOMATION_SECRET_KEY` (≥32 chars) encrypts portal passwords (AES-256-GCM). `deploy.yml` passes it to production; when the repo secret is unset the server stays fail-closed with 503. |
 | Documentation | Updated 2026-10-13 from the code and from checks run on 2026-10-13 | Read against the source | `CLAUDE.md` is missing. Do not invent it. |
 | Agency role files | Written 2026-10-11 | File count and `name:` lines read after download | 33 files in `.claude/agents/`. The 13 added on 2026-10-11 are installed and not in use. |
-| Android Mobile Client | Written & Active 2026-10-14 | `mobile-app.test.ts`, Android unit tests | Kotlin client in `android/app`, release v1.0.58 (version code 10058), CameraX scanning, in-app updater, Iron Send in multi-order checks, category-specific vibrant colors, dynamic frequency-based chip positioning, persistent warehouse release keystore |
+| Android Mobile Client | Written & Active | `mobile-app.test.ts`, Android unit tests | Kotlin client in `android/app`, latest tag `v1.0.63` (server fallback manifest still pins 1.0.58/10058), CameraX scanning, in-app updater, Iron Send in multi-order checks, category-specific vibrant colors, dynamic frequency-based chip positioning |
 | Return Reason & Sizing Intelligence | Verified 2026-10-13 | `return-reasons.test.ts` (10 tests) | Canonical categorization (105 marketplace reasons across 5 sheets), Seller Fault vs Sizing vs Remorse distinction, garment sizing defect digest, weekly Resend email digest, and web UI dashboard tab in Register. |
+
+### Milestones PR41–PR50 (all merged to main)
+
+| PR | Branch focus | Delivered |
+|---|---|---|
+| #41–#43 | `feature/desktop-native-ai{,-2,-3}` | Desktop native-AI milestones M1–M3 (see `desktop-native-ai.md`) |
+| #44 | `fix/desktop-login-browser-ui` | Desktop operator login + native browser UI |
+| #45 | `docs/session-log-pr44-merge` | Session-log merge record |
+| #46 | `fix/windows-native-desktop-m5` | Windows-only desktop, in-window supplier browser |
+| #47 | `feature/windows-ai-center-m6` | AI Center: 6 providers, routing, usage ledger, approved memory |
+| #48 | `feature/meesho-claims-e2e-m7` | Meesho E2E: evidence gate, parcel condition, issue map, ticket reader |
+| #49 | `feature/windows-claim-performance-m8` | Submission idempotency + guards (base for M9) |
+| #50 | `fix/meesho-production-readiness-m9` | Submission-authorization fix, real-DB tests, light UI + sidebar + Updates tab, `AUTOMATION_SECRET_KEY` deploy wiring |
 
 ## Not built
 
@@ -88,9 +104,9 @@ These are not in the code. Each one is stated on the screen or in the docs, wher
 - User creation in the Admin screen, and an account assignment screen. Users come from `npm run user:create`.
 - A change-password screen.
 - Ticket status transition rules. Any allowed status can move to any other, and every move is recorded.
-- The daily OMSGuru schedule (Windows Task Scheduler or a `.bat`), the scan-data archive job, and a screen for OMS listings and master SKUs.
+- The daily OMSGuru schedule as an OS task (in-process schedulers exist in `server/index.ts`: reports/oms/payment every 60 s, shopify every 5 min), the scan-data archive job, and a screen for OMS listings and master SKUs.
 - Return lifecycle pulls from `return_details`.
-- Upload of the unboxing video, and its link to the return.
+- Automated tests for the installed NSIS app and the installed-app upgrade path (installer builds are verified as artifacts only; `update-check.test.ts` uses fake fetch).
 - Automated marketplace filing for Myntra, Flipkart, Amazon and Ajio. Only Meesho is automated; other marketplaces remain manual.
 - Automated tests for the UI. There is no UI test runner.
 - (Kotlin mobile client is built: see `android/app`, features CameraX ML Kit scanning, SHA-256 integrity verification, and in-app auto updater).
@@ -1663,11 +1679,11 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
 
 ### Security
 
-- **Sessions never expire.** `requireUser` checks that the session row exists, not its age. A session lasts until sign-out.
-- **No rate limit or lockout on sign-in.** There is no rate-limit package.
-- **CORS allows any origin.** The `cors` defaults are in use.
+|- **Sessions (resolved 2026-11).** Device sessions now carry absolute and idle expiry with sliding renewal (`server/auth.ts`); the old never-expire risk no longer applies.|
+|- **Sign-in rate limiting (resolved 2026-11).** Login and IP rate limiters exist (`server/index.ts`); the old no-limit risk no longer applies.|
+|- **CORS (resolved 2026-11).** Origins are allowlisted (`ALLOWED_ORIGIN`) with CSRF referer/origin checks; the old allow-any risk no longer applies.|
 - **`GET /api/health` is unauthenticated** and returns the database name.
-- **HTTP 500 responses return the server's error message.** An unexpected error can show database or connection detail to the browser.
+|- **HTTP 500 detail.** Production masks unexpected error detail; development may still surface it. Treat any raw database text in a response as a bug.|
 - **The password hash is loaded on every request.** It is not sent to the browser, but it is needless exposure. Load it only at sign-in.
 - **Ticket status changes need no role.** Anyone with access to the account can change a ticket's status, to any status, and every change is recorded.
 - **Roles are free text.** `npm run user:create` does not check the role. A misspelling such as `Administrator` gives no administrator rights, and the script reports nothing.
@@ -1684,13 +1700,19 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
 
 ### Code and documents
 
-- **A dead path.** The editable ticket cell in `src/returns-table.tsx` is used by no page. Its default save does nothing. Wire it or remove it before use.
+|- **Committed Android debug keystore.** `android/app/release.keystore` is in VCS with default passwords (`android/app/build.gradle`). Decide: keep for warehouse side-loads or move signing to CI secrets. Recorded, not changed (documentation-only task).|
+|- **`return-tracking.test.ts` is not wired.** The file exists but is absent from the `npm test` script, so it never runs. Wire it or delete it.|
+|- **Payment reconciliation is one-way.** `syncPaymentAmounts` fills sales amounts on scan/expected items; nothing writes `claims.approved_amount`/`paid_amount` — only manual PATCH status does.|
+|- **SPF claim path bypasses `createClaim`.** `fileSpfClaimFromTracking` inserts `pending_evidence` claims with no template, status-history or audit row and throws plain `Error` (500).|
+|- **Free-text stage columns.** Automation job `stage`, follow-up `stage` and return-tracking `claim_eligibility_status` are unconstrained text; valid values live only in code and docs.|
+|- **Native attach verification is fail-open.** `setFileInputFiles` logs and continues to `prepared` when a browser upload box cannot be verified; only the zero-evidence case is fail-closed. See M8 §8 finding (still open).|
+|- **A dead path.** The editable ticket cell in `src/returns-table.tsx` is used by no page. Its default save does nothing. Wire it or remove it before use.
 - **An unused list.** `MARKETPLACES` in `src/marketplaces.ts` is no longer used for account lists.
 - **Stale comments.** These are in the code, and they were not edited on 2026-10-10:
   - `server/schema-register.sql` and `server/admin-config.ts` say `VERIFIED_TRACKING_LINKS`. The code's name is `LINK_RULES`.
   - A comment in `server/sheets.ts` refers to `applyProductMaster` in `server/index.ts`. No such function exists.
   - A comment in `server/scripts/create-user.ts` says the app checks no role yet, so every user can reach every page. Both parts are out of date. The Admin page is restricted, and the admin routes check the role.
-- **`SESSION_SECRET` in `.env.example` is unused.** Remove it, so no one believes it does something.
+|- **`SESSION_SECRET` is absent and unused (verified 2026-11).** `.env.example` (106 lines) contains no `SESSION_SECRET`, and no code under `server/`, `src/`, `desktop-agent/` or `desktop/` reads it. The remaining `SESSION_SECRET` claims in `docs/CONFIGURATION.md` and `docs/ARCHITECTURE.md` are stale — remove those doc rows, not an env var.|
 - **`server/seed.ts` is empty** and should be deleted.
 - **The UI has not been exercised in a browser,** and the OMSGuru client has not been run against the live API.
 - **The dedicated database tests have not been run.** The local typecheck, build and non-database tests pass; the database checks need `TEST_DATABASE_URL`.

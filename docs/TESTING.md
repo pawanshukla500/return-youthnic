@@ -1,4 +1,4 @@
-<!-- Updated 2026-10-20 from package.json. 40 files, 463 tests. -->
+<!-- Updated 2026-11-03 from package.json test order. 77 files wired (+1 exists but unwired), 767 tests. -->
 # Testing
 
 ## Framework and setup
@@ -51,22 +51,59 @@ The `test` script in `package.json` lists the files by name, in this order:
 28. `server/tests/flyer.test.ts`
 29. `server/tests/claims.test.ts`
 30. `server/tests/claim-automation.test.ts`
-31. `server/tests/vms-catalog.test.ts`
-32. `server/tests/oms-master-bridge.test.ts`
-33. `server/tests/product-master-batch.test.ts`
-34. `server/tests/unmapped-candidates.test.ts`
-35. `server/tests/format-unmapped.test.ts`
-36. `desktop-agent/portal-login.test.ts`
-37. `desktop-agent/panel-queue.test.ts`
-38. `desktop-agent/local-secrets.test.ts`
-39. `desktop-agent/update-check.test.ts`
-40. `src/register-view.test.ts`
+31. `server/tests/claim-idempotency-m8.test.ts`
+32. `server/tests/claim-authorization-db.test.ts` (needs a test database)
+33. `server/tests/claim-evidence-gate.test.ts`
+34. `server/tests/meesho-claim-issues.test.ts`
+35. `server/tests/claim-follow-up.test.ts`
+36. `server/tests/nightly-window.test.ts`
+37. `server/tests/ai-memory.test.ts`
+38. `server/tests/vms-catalog.test.ts`
+39. `server/tests/oms-master-bridge.test.ts`
+40. `server/tests/product-master-batch.test.ts`
+41. `server/tests/unmapped-candidates.test.ts`
+42. `server/tests/format-unmapped.test.ts`
+43. `desktop-agent/portal-login.test.ts`
+44. `desktop-agent/panel-queue.test.ts`
+45. `desktop-agent/local-secrets.test.ts`
+46. `desktop-agent/update-check.test.ts`
+47. `desktop-agent/engine-config.test.ts`
+48. `desktop-agent/crash-guard.test.ts`
+49. `desktop-agent/paths.test.ts`
+50. `desktop-agent/poll-guard.test.ts`
+51. `desktop-agent/agent-cleanup.test.ts`
+52. `desktop-agent/submit-guard.test.ts`
+53. `desktop-agent/browser-flags.test.ts`
+54. `desktop-agent/follow-up-bundle.test.ts`
+55. `desktop-agent/follow-up-window.test.ts`
+56. `desktop-agent/meesho-issues.test.ts`
+57. `desktop-agent/browser-adapter.test.ts`
+58. `desktop-agent/ai-assistant.test.ts`
+59. `desktop-agent/ai-memory-cache.test.ts`
+60. `desktop-agent/ai-memory-panel.test.ts`
+61. `desktop-agent/ai-providers.test.ts`
+62. `desktop-agent/ai-center.test.ts`
+63. `desktop-agent/ai-center-ui.test.ts`
+64. `desktop-agent/ai-center-assist.test.ts`
+65. `desktop-agent/ai-providers-live.test.ts`
+66. `server/tests/ai-center-store.test.ts`
+67. `desktop-agent/portal-hold.test.ts`
+68. `desktop-agent/supplier-session.test.ts`
+69. `desktop-agent/supplier-view-manager.test.ts`
+70. `desktop-agent/portal-browser.test.ts`
+71. `desktop-agent/operator-login-flow.test.ts`
+72. `server/tests/ai-memory-store.test.ts`
+73. `server/tests/operator-tasks.test.ts`
+74. `desktop-agent/config.test.ts`
+75. `desktop-agent/html-escape.test.ts`
+76. `server/tests/whatsapp.test.ts`
+77. `src/register-view.test.ts`
 
 There is no watch mode and no separate unit, integration or end-to-end script.
 
 ## Database checks
 
-Three files check PostgreSQL behaviour: `register-db.test.ts`, `access-db.test.ts`, and `iron-db.test.ts`. They run only when `TEST_DATABASE_URL` is set, in the same terminal, before `npm test`:
+Four files check PostgreSQL behaviour: `register-db.test.ts`, `access-db.test.ts`, `iron-db.test.ts` and `claim-authorization-db.test.ts`. (`server/tests/return-tracking.test.ts` exists but is NOT in the `npm test` script, so it never runs.) They run only when `TEST_DATABASE_URL` is set, in the same terminal, before `npm test`:
 
 ```bash
 $env:TEST_DATABASE_URL = "<a test database URL; its database name must contain 'test'>"
@@ -81,6 +118,8 @@ The files refuse any database whose name does not contain `test` (a case-insensi
 **Reading the output.** Without `TEST_DATABASE_URL`, the database checks are reported as **skipped**, with the reason in the output. A skipped check has not passed. A report that says the suite passed, but lists these checks as skipped, has not verified the database behaviour. Say so in the report.
 
 ## What the tests cover
+
+> Per-file declaration counts below are the 2026-10-20 snapshot; the wired file list above is current as of 2026-11-03.
 
 | File | Declarations | Needs a database | Covers |
 |---|---|---|---|
@@ -151,3 +190,8 @@ The test suite runs 463 tests with 0 failures:
 - Locally: 426 tests pass without a test database (37 database tests report skipped).
 - In CI: 463 tests pass (100% pass, 0 fail, 0 skipped) against the `postgres:16` container.
 
+
+## Not covered by the suite
+
+- The NSIS installer and the installed app (no test executes either; `update-check.test.ts` only asserts tag logic and asset choice with fake fetch; SmartScreen/code-signing untested). Operator UAT for the installed build lives in `docs/notes/m9-uat.md`.
+- Live portals, devices and keys: no Meesho filing or ticket read, no nightly follow-up read, no phone camera/scan, no Firebase round trip, no live provider inference (`ai-providers-live.test.ts` reports NOT EXECUTED without keys by design).

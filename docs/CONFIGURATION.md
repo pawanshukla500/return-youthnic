@@ -1,4 +1,4 @@
-<!-- Updated 2026-10-10. Every name and default was checked against the source. Not run. -->
+<!-- Updated 2026-11-03. Every name verified against the source (`process.env` reads). Not run. -->
 # Configuration
 
 The API and most command-line jobs read their settings from environment variables. They load a `.env` file from the project root with `dotenv`. The browser app reads no environment variables. The Vite dev server reads `.env` for one value, the `PORT` used by its `/api` proxy.
@@ -16,10 +16,17 @@ Copy `.env.example` to `.env` to start. `.env` is listed in `.gitignore`, so it 
 | `OMSGURU_CLIENT_ID` | **Required** for OMSGuru commands | none | `server/oms/client.ts` | Sent in the `Oms-Cid` header. Not in `.env.example`. |
 | `OMSGURU_BASE_URL` | Optional | `https://client.omsguru.com` | `server/oms/client.ts` | Overrides the OMSGuru host. The trailing slashes are removed. |
 | `NEW_USER_PASSWORD` | **Required** for `npm run user:create` | none | `server/scripts/create-user.ts` | The password for the user being created. Set it in the terminal for that command only. It is never printed and never saved to a file. |
-| `TEST_DATABASE_URL` | Optional, for `npm test` only | none | `server/tests/register-db.test.ts`, `server/tests/access-db.test.ts` | A dedicated test database. Its name must contain `test`. Without it the database checks are skipped. Never point it at the production database. |
-| `SESSION_SECRET` | Not used | none | nothing | Appears in `.env.example`. No code reads it. Sessions are random tokens stored in the database. Remove it from the example to avoid confusion. |
+| `AUTOMATION_SECRET_KEY` | **Required** to save marketplace portal passwords | none | `server/claim-automation-service.ts` | At least 32 characters. AES-256-GCM key for `marketplace_credentials`. When unset the server stays fail-closed (HTTP 503 on save). Shipped to production via the `AUTOMATION_SECRET_KEY` repo secret (`deploy.yml`). Rotating it orphans previously saved passwords (re-save them). |
+| `CORS_ORIGIN` | Optional | production shop + local dev | `server/index.ts` | Extra allowed browser origin for the API. |
+| `RESEND_API_KEY` | **Required** for email digests | none | `server/email-reports.ts` | Resend API key for weekly report emails. |
+| `RESEND_FROM_EMAIL` | Optional | `return.scan@youthnic.shop` | `server/email-reports.ts` | Sender address for report emails. |
+| `BRANDFETCH_CLIENT_ID` | Optional | none | `server/index.ts` | Enables server-side marketplace brand icons; lettermark fallback without it. |
+| `FIREBASE_SERVICE_ACCOUNT_JSON` | **Required** for evidence archive | none, or `certs/firebase-service-account.json`, or `FIREBASE_SERVICE_ACCOUNT_FILE` | `server/firebase-storage.ts` | Service-account JSON for Google Cloud Storage evidence. Without it uploads answer 503 and media stays local-only. |
+| `FIREBASE_STORAGE_BUCKET` | Optional | `return-scan-app.firebasestorage.app` | `server/firebase-storage.ts` | Overrides the evidence bucket. |
+| `TEST_DATABASE_URL` | Optional, for `npm test` only | none | `server/tests/register-db.test.ts`, `server/tests/access-db.test.ts`, `server/tests/iron-db.test.ts`, `server/tests/claim-authorization-db.test.ts` | A dedicated test database. Its name must contain `test`. Without it the database checks are skipped. Never point it at the production database. |
+| `SESSION_SECRET` | Not used | none | nothing | Absent from `.env.example` and read by no code. Kept in this table only so nobody re-adds it. |
 
-`.env.example` holds `DATABASE_URL` (empty), `PORT=3001`, `SESSION_SECRET` (unused), and two commented lines: `DATABASE_SSL_CA_FILE` and `TEST_DATABASE_URL`. It does not hold the OMSGuru variables.
+`.env.example` holds active `NODE_ENV`, `PORT`, `DATABASE_URL`, `SHOPIFY_DATABASE_URL`, `PAYMENT_DATABASE_URL`, `VMS_DATABASE_URL`, plus commented template lines (`CORS_ORIGIN`, SSL CA paths, `TEST_DATABASE_URL`, `AUTOMATION_SECRET_KEY`, OMSGuru, Resend, Brandfetch, Firebase, `BROWSER_ADAPTER`, follow-up and AI gateway settings). `SESSION_SECRET` is not present. Full key list verified 2026-11-03.E_URL`. It does not hold the OMSGuru variables.
 
 If the OMSGuru token or client ID is missing, the OMSGuru commands stop with the message `OMSGURU_API_TOKEN and OMSGURU_CLIENT_ID are not set in .env` before any request is sent.
 
