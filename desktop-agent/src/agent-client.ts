@@ -306,6 +306,43 @@ export class AgentBackendClient {
     }
   }
 
+  /** Report one AI agent execution (advisory ledger). Scoped server-side; never throws. */
+  async reportAgentRun(row: {
+    claimId: number; marketplace: string; agentFunction: string; provider: string; model: string;
+    stage: string; memoryHit: boolean; result: string; errorCategory: string; fallback: boolean; approval: string;
+  }): Promise<void> {
+    try {
+      const url = `${this.config.backendUrl}/api/automation/ai-center/agent-runs`
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Agent-UUID": this.config.agentUuid, "X-Agent-Key": this.apiKey },
+        body: JSON.stringify(row),
+      })
+      if (!res.ok) logger.error(`Agent-run report failed (${res.status}). Local activity ledger kept.`)
+    } catch (err) {
+      logger.error("Agent-run report failed; local activity ledger kept:", err)
+    }
+  }
+
+  /** Report one provider usage record (token counts, estimate + provenance). Never throws. */
+  async reportUsage(row: {
+    provider: string; model: string; task: string; ok: boolean; errorCategory: string;
+    inputTokens: number; outputTokens: number; cachedTokens: number; reasoningTokens: number;
+    latencyMs: number; estimatedUsd: number | null; pricingProvenance: string;
+  }): Promise<void> {
+    try {
+      const url = `${this.config.backendUrl}/api/automation/ai-center/usage`
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Agent-UUID": this.config.agentUuid, "X-Agent-Key": this.apiKey },
+        body: JSON.stringify(row),
+      })
+      if (!res.ok) logger.error(`Usage report failed (${res.status}). Local usage ledger kept.`)
+    } catch (err) {
+      logger.error("Usage report failed; local usage ledger kept:", err)
+    }
+  }
+
   async getExecutionBundle(jobId: number): Promise<JobExecutionBundle | null> {
     try {
       const url = `${this.config.backendUrl}/api/automation/jobs/${jobId}/bundle`
