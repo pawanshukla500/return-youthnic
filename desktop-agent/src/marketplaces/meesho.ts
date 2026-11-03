@@ -1,12 +1,86 @@
 import path from "node:path"
-import { BaseMarketplaceAutomation, type MarketplaceAutomationResult } from "./base-automation.js"
+import { BaseMarketplaceAutomation, type ClaimStatusCheckResult, type MarketplaceAutomationResult } from "./base-automation.js"
 import { completePortalLogin } from "../portal-login.js"
 import { logger } from "../logger.js"
+
+/**
+ * Portal issue labels behind the Meesho "Raise a Ticket" categories.
+ * Authority is server/meesho-claims.ts MEESHO_ISSUES. The desktop never invents
+ * a label: an unmapped claim issue code stops for human review instead of
+ * silently substituting a wrong-return claim.
+ */
+export const MEESHO_PORTAL_ISSUE_LABELS: Record<string, string> = {
+  wrong_return: "I have received wrong return",
+  missing_items: "Item/s are missing in my return",
+  wrong_barcode_rto: "I have received a wrong barcoded package in RTO",
+  damaged_return: "I have received damaged return",
+  used_product: "I have received used product as return",
+}
+
+/** Portal category for a claim issue code, or null when no verified mapping exists. */
+export function resolveMeeshoIssueLabel(issueCode: string): string | null {
+  return MEESHO_PORTAL_ISSUE_LABELS[(issueCode || "").trim()] ?? null
+}
+
+/**
+ * Portal "State of the packet" choice for a verified shipment condition, or null
+ * when the condition is missing or unverified (Intact/Tampered only; never infer).
+ */
+export function resolveMeeshoPacketLabel(packetState: string): "Intact" | "Tampered" | null {
+  const norm = (packetState || "").trim().toLowerCase()
+  if (norm === "intact") return "Intact"
+  if (norm === "tampered") return "Tampered"
+  return null
+}
+
+/**
+ * Matches one row of the Meesho Support ticket table against a ticket reference.
+ * Pure: takes table rows as cell arrays so fixtures can test it without a browser.
+ * Returns the row's non-reference cells as the portal status text, plus a
+ * normalized hint only for unambiguous paid/rejected/approved wording. The server
+ * normalizes everything else; nothing is inferred when the row is absent.
+ */
+export function parseMeeshoTicketRow(
+  rows: string[][],
+  ticketId: string,
+): { statusText: string; normalizedStatus?: string } | null {
+  const wanted = (ticketId || "").trim()
+  if (!wanted) return null
+  for (const cells of rows) {
+    if (!cells.some((cell) => cell.includes(wanted))) continue
+    const statusText = cells.filter((cell) => !cell.includes(wanted)).join(" | ")
+    if (!statusText) return { statusText: wanted }
+    const lowered = statusText.toLowerCase()
+    let normalizedStatus: string | undefined
+    if (/paid|settled|credited/.test(lowered)) normalizedStatus = "paid"
+    else if (/reject|denied|declined|cancelled|canceled/.test(lowered)) normalizedStatus = "rejected"
+    else if (/approv|accept|resolv|completed/.test(lowered)) normalizedStatus = "approved"
+    return normalizedStatus ? { statusText, normalizedStatus } : { statusText }
+  }
+  return null
+}
 
 export class MeeshoAutomation extends BaseMarketplaceAutomation {
   readonly marketplaceName = "Meesho"
 
   async execute(action: "prepare" | "submit"): Promise<MarketplaceAutomationResult> {
+    // Fail fast: never substitute a wrong-return claim and never infer the parcel condition.
+    const issueLabel = resolveMeeshoIssueLabel(this.job.claim.marketplaceIssueCode)
+    if (!issueLabel) {
+      return {
+        success: false,
+        stage: "manual_intervention_required",
+        manualActionReason: `Claim issue "${this.job.claim.marketplaceIssueCode || "missing"}" has no verified Meesho portal category. An operator must pick the category by hand; the bot will not substitute a wrong-return claim.`,
+      }
+    }
+    const packetState = resolveMeeshoPacketLabel(this.job.claim.packetState)
+    if (!packetState) {
+      return {
+        success: false,
+        stage: "manual_intervention_required",
+        manualActionReason: `Parcel condition is "${this.job.claim.packetState || "unknown"}", not a verified Intact/Tampered observation. An operator must confirm the shipment condition before Meesho filing.`,
+      }
+    }
     const portalLoginUrl = this.job.portalUrl || "https://supplier.meesho.com/panel/v3/new/root/login"
     logger.info(`Starting Meesho claim automation for Job #${this.job.jobId} (Sub-Order: ${this.job.claim.subOrderId}, Action: ${action})...`)
 
@@ -46,7 +120,7 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
     const ticketsBefore = await this.readRecentTicketIds(15000)
     logger.info(`Meesho shows ${ticketsBefore.length} recent tickets before this claim.`)
 
-    logger.info("Selecting issue category: 'I have received wrong return'...")
+    logger.info(`Selecting issue category: ${issueLabel}...`)
     let openedIssue = false
     const issueOpen = async () => {
       const href = await this.browser.evaluate<string>(`window.location.href`)
@@ -57,9 +131,9 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
     }
     for (let attempt = 0; attempt < 6 && !openedIssue; attempt++) {
       if (attempt % 2 === 0) {
-        await this.browser.clickVisibleLabel("I have received wrong return")
+        await this.browser.clickVisibleLabel(issueLabel)
       } else {
-        const dom = await this.browser.clickLabelInDom("I have received wrong return")
+        const dom = await this.browser.clickLabelInDom(issueLabel)
         await this.delay(1500)
         if (dom.href && !(await issueOpen())) {
           await this.browser.navigate(dom.href)
@@ -71,7 +145,11 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
     }
     if (!openedIssue) {
       const href = await this.browser.evaluate<string>(`window.location.href`)
-      logger.warn(`The wrong-return issue page did not open (page: ${href}).`)
+      return {
+        success: false,
+        stage: "manual_intervention_required",
+        manualActionReason: `The Meesho issue page for "${issueLabel}" did not open (page: ${href}). An operator must navigate to the right category by hand.`,
+      }
     }
 
     logger.info("Clicking 'Raise a Ticket'...")
@@ -86,7 +164,11 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
       openedForm = await this.browser.evaluate<boolean>(`Boolean(document.querySelector('input[placeholder="Sub Order Number"]'))`)
     }
     if (!openedForm) {
-      logger.warn("The Raise a Ticket form did not open.")
+      return {
+        success: false,
+        stage: "manual_intervention_required",
+        manualActionReason: "The Meesho Raise a Ticket form did not open. An operator must open it in the browser window, then run this claim again.",
+      }
     }
 
     // Step 6: Fill the Claim Form
@@ -152,8 +234,7 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
       }
     }
 
-    // Packet condition: Meesho uses a listbox dropdown labelled "State of the packet". The server sends "Tampered".
-    const packetState = "Tampered"
+    // Packet condition: Meesho uses a listbox dropdown labelled "State of the packet". packetState is the verified claim condition (fail-fast above).
     let packetSelected = false
     for (let attempt = 0; attempt < 3 && !packetSelected; attempt++) {
       packetSelected = await this.browser.evaluate<boolean>(`
@@ -195,6 +276,16 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
 
     // Evidence Media Upload (Images & Video)
     const allFiles = Array.from(this.evidenceFilesMap.values()).flat()
+    if (!allFiles.length) {
+      const shot = path.join(this.workDir, `no-evidence-job-${this.job.jobId}.png`)
+      await this.browser.captureScreenshot(shot)
+      return {
+        success: false,
+        stage: "manual_intervention_required",
+        screenshotPath: shot,
+        manualActionReason: "No evidence files were downloaded for this claim. Nothing was filed on Meesho; re-run after the evidence syncs.",
+      }
+    }
     const imageFiles = allFiles.filter((f) => /\.(jpe?g|png|webp)$/i.test(f))
     const videoFiles = allFiles.filter((f) => /\.(mp4|webm|mov)$/i.test(f))
     const inputIds = await this.browser.evaluate<string[]>(`Array.from(document.querySelectorAll('input[type="file"]')).map((el) => el.id).filter(Boolean)`)
@@ -336,6 +427,14 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
       if (!extractedTicketId) await this.delay(1500)
     }
     const formStillOpen = await this.browser.evaluate<boolean>(`Boolean(document.querySelector('input[placeholder="Sub Order Number"]'))`)
+    if (formErrors.length && formStillOpen) {
+      return {
+        success: false,
+        stage: "manual_intervention_required",
+        screenshotPath: confScreenshot,
+        manualActionReason: `Meesho kept the claim form open with errors: ${formErrors.slice(0, 3).join(" | ").slice(0, 400)}`,
+      }
+    }
     if (!extractedTicketId && !formStillOpen && ticketsBefore.length) {
       await this.browser.navigate(supportUrl)
       await this.waitForContent()
@@ -385,6 +484,58 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
       await this.delay(1000)
     }
     return ""
+  }
+
+  /**
+   * Reads a filed ticket state from the Meesho Support ticket table.
+   * Live-portal verification is still pending: the reader is DOM-driven, returns
+   * the raw portal text, and infers nothing when the row is absent.
+   */
+  async checkClaimStatus(marketplaceClaimId: string): Promise<ClaimStatusCheckResult> {
+    const ticketId = (marketplaceClaimId || "").trim()
+    if (!ticketId) return { supported: true, statusText: "", note: "Empty marketplace ticket reference; nothing to read." }
+    try {
+      const panelUrl = await this.browser.evaluate<string>(`window.location.href`)
+      const slug = panelUrl.match(/\/(?:growth|experience)\/([^/]+)/)?.[1]
+        || this.job.portalUrl.match(/\/(?:growth|experience)\/([^/]+)/)?.[1]
+      if (!slug) {
+        return { supported: true, statusText: "", note: "Meesho panel address not found; open the supplier panel first." }
+      }
+      await this.browser.navigate(`https://supplier.meesho.com/panel/v3/new/experience/${slug}/support`)
+      await this.waitForContent()
+      let parsed = await this.readTicketRow(ticketId)
+      if (!parsed) {
+        const myTickets = await this.browser.evaluate<boolean>(`
+          (() => {
+            const target = Array.from(document.querySelectorAll('a, button')).find((el) => /my tickets/i.test(el.textContent || ''));
+            if (target && target.getBoundingClientRect().width > 0) { target.click(); return true; }
+            return false;
+          })()
+        `)
+        if (myTickets) {
+          await this.delay(2500)
+          parsed = await this.readTicketRow(ticketId)
+        }
+      }
+      const safeId = ticketId.replace(/[^0-9a-z]+/gi, "")
+      const shot = path.join(this.workDir, `ticket-status-${safeId}.png`)
+      await this.browser.captureScreenshot(shot)
+      if (!parsed) {
+        return { supported: true, statusText: "", screenshotPath: shot, note: `Ticket ${ticketId} was not found on the Meesho Support page.` }
+      }
+      return { supported: true, statusText: parsed.statusText, normalizedStatus: parsed.normalizedStatus, screenshotPath: shot, note: `Ticket ${ticketId} read from the Meesho Support page.` }
+    } catch (error) {
+      return { supported: true, statusText: "", note: `Ticket read failed: ${error instanceof Error ? error.message : String(error)}`.slice(0, 300) }
+    }
+  }
+
+  private async readTicketRow(ticketId: string): Promise<{ statusText: string; normalizedStatus?: string } | null> {
+    const rows = await this.browser.evaluate<string[][]>(`
+      Array.from(document.querySelectorAll("tr")).map((tr) =>
+        Array.from(tr.querySelectorAll('td, th')).map((cell) => (cell.textContent || '').trim()).filter(Boolean),
+      ).filter((cells) => cells.length > 1)
+    `)
+    return parseMeeshoTicketRow(rows || [], ticketId)
   }
 
   /** Reads the numeric ticket IDs in Meesho's "Recently raised tickets" table on the Support page. */

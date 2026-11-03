@@ -2,7 +2,17 @@ import type pg from "pg"
 import { accountCondition, type AccountScope } from "./access.js"
 import { ServiceError } from "./register-service.js"
 
-export const MEESHO_PACKET_STATE = "Tampered"
+export const MEESHO_PACKET_STATES = ["Intact", "Tampered", "Unknown"] as const
+export type MeeshoPacketState = (typeof MEESHO_PACKET_STATES)[number]
+/**
+ * Normalize an operator-supplied parcel condition. Anything missing or unrecognized
+ * means "Unknown" (requires review): automation must never infer Tampered.
+ */
+export function normalizeMeeshoPacketState(value: unknown): MeeshoPacketState {
+  const wanted = String(value ?? "").trim().toLowerCase()
+  const found = MEESHO_PACKET_STATES.find((state) => state.toLowerCase() === wanted)
+  return found ?? "Unknown"
+}
 export const MEESHO_TAT_DAYS = 7
 
 export const MEESHO_ISSUES = {
@@ -85,6 +95,7 @@ export function meeshoClaimDescription(
   input: {
     subOrderId: string
     awb: string
+    packetState?: string
     packetId?: string
     masterSku?: string
     productNames?: string[]
@@ -92,11 +103,12 @@ export function meeshoClaimDescription(
     missingAmount?: number
   },
 ): string {
+  const packetState = normalizeMeeshoPacketState(input.packetState ?? "Tampered")
   const packetId = input.packetId || "NA"
   const reference =
     `Sub Order ID: ${input.subOrderId}\n` +
     `AWB Number: ${input.awb}\n` +
-    `State of the packet: ${MEESHO_PACKET_STATE}\n` +
+    `State of the packet: ${packetState}\n` +
     `Packet ID: ${packetId}`
   const skuInfo = input.masterSku ? ` (${input.masterSku})` : ""
 
@@ -151,7 +163,7 @@ export function meeshoClaimDescription(
   // Default: wrong_return
   return (
     `Team,\n\n` +
-    `Please Note This Sub Order ID ${input.subOrderId} Has received Us the wrong please check attached all the prrof and video and and make sure we claim will be approved )\n\n` +
+    `Please Note This Sub Order ID ${input.subOrderId} Has received Us the wrong please check attached all the proof and video and make sure we claim will be approved\n\n` +
     `${reference}\n\n` +
     `Regards,\n` +
     `Return Team Tullipprints`
@@ -254,7 +266,7 @@ export async function getMeeshoClaimDraft(
     subOrderId: base.subOrderId,
     orderId: String(scan.order_id || ""),
     awb: base.awb,
-    packetState: MEESHO_PACKET_STATE,
+    packetState: "Unknown",
     packetId: base.packetId,
     flyerState: String(scan.flyer_state),
     returnType,
@@ -281,6 +293,7 @@ export async function prepareMeeshoClaim(
   scanId: number,
   issueCode: string,
   overrides?: {
+    packetState?: string
     packetId?: string
     customDescription?: string
     missingAmount?: number
@@ -302,15 +315,21 @@ export async function prepareMeeshoClaim(
   missingAmount: number
 }> {
   const draft = await getMeeshoClaimDraft(db, scope, scanId)
-  const normalizedCode = (issueCode in MEESHO_ISSUES)
+  const rawCode = String(issueCode || "").trim()
+  if (rawCode && !(rawCode in MEESHO_ISSUES)) {
+    throw new ServiceError(400, `Unknown Meesho issue code "${rawCode}". Pick a verified category; the claim will not be filed as a different issue.`)
+  }
+  const normalizedCode = (rawCode in MEESHO_ISSUES)
     ? (issueCode as MeeshoIssueCode)
     : (draft.issueOptions[0]?.code ?? "wrong_return")
+  const packetState = normalizeMeeshoPacketState(overrides?.packetState ?? "Unknown")
   const selected = draft.issueOptions.find((option) => option.code === normalizedCode) || {
     code: normalizedCode,
     label: MEESHO_ISSUES[normalizedCode] || "I have received wrong return",
     description: meeshoClaimDescription(normalizedCode, {
       subOrderId: overrides?.subOrderId || draft.subOrderId,
       awb: draft.awb,
+      packetState,
       packetId: overrides?.packetId || draft.packetId || "NA",
       missingItems: draft.missingItems,
       missingAmount: overrides?.missingAmount ?? draft.missingAmount,
@@ -339,7 +358,7 @@ export async function prepareMeeshoClaim(
     issueLabel: selected.label,
     subOrderId: overrides?.subOrderId || draft.subOrderId,
     awb: draft.awb,
-    packetState: draft.packetState,
+    packetState,
     packetId,
     returnType: draft.returnType,
     receivedDate: draft.receivedDate,

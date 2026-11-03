@@ -82,6 +82,8 @@ export type JobExecutionBundle = {
     subOrderId: string
     trackingId: string
     packetId: string
+    packetState: string
+    marketplaceIssueCode: string
     sku: string
     customerName: string
     totalPrice: number

@@ -905,6 +905,7 @@ export async function createClaim(
     remarks: string
     claimTemplateId?: number | null
     marketplaceIssueCode?: string
+    packetState?: string
     packetId?: string
     missingAmount?: number
     subOrderId?: string
@@ -950,6 +951,7 @@ export async function createClaim(
     let missingAmount = input.missingAmount || 0
     if (String(scan.marketplace || "").toLowerCase() === "meesho") {
       const prepared = await prepareMeeshoClaim(client, scope, input.receiptScanId, input.marketplaceIssueCode || "", {
+        packetState: input.packetState,
         packetId: input.packetId,
         customDescription: input.claimDescription,
         missingAmount: input.missingAmount,

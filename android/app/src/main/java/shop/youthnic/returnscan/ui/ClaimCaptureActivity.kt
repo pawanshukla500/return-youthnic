@@ -64,6 +64,14 @@ class ClaimCaptureActivity : AppCompatActivity() {
     )
     private var selectedIssueCode = "wrong_return"
     private var selectedIssueLabel = "I have received wrong return"
+    // Parcel condition options: operator-observed shipment state, never assumed.
+    // Unknown blocks automatic submission and routes the claim to operator review.
+    private val packetStates = listOf(
+        Pair("Intact", "Intact"),
+        Pair("Tampered", "Tampered"),
+        Pair("Unknown", "Unknown (requires review)")
+    )
+    private var selectedPacketState = "Unknown"
 
     // Captured evidence files keyed by fieldKey
     private data class CapturedFile(
@@ -269,13 +277,20 @@ class ClaimCaptureActivity : AppCompatActivity() {
             override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
 
-        // Setup fixed State of the Packet (always Tampered)
+        // State of the Packet: operator-observed condition, never assumed.
         binding.spinnerStateOfPacket.adapter = ArrayAdapter(
             this,
             android.R.layout.simple_spinner_dropdown_item,
-            listOf("Tampered")
+            packetStates.map { it.second }
         )
-        binding.spinnerStateOfPacket.setSelection(0)
+        binding.spinnerStateOfPacket.setSelection(2)
+        binding.spinnerStateOfPacket.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                selectedPacketState = packetStates.getOrNull(position)?.first ?: "Unknown"
+                updateDescriptionAndTitle(selectedIssueCode)
+            }
+            override fun onNothingSelected(parent: AdapterView<*>?) {}
+        }
 
         // Setup Issue Dropdown
         val issueLabels = meeshoIssues.map { it.second }
@@ -536,6 +551,8 @@ class ClaimCaptureActivity : AppCompatActivity() {
             .ifBlank { sessionManager.lastScannedFlyerId }
             .ifBlank { "NA" }
 
+        val packetState = selectedPacketState
+
         val item = data?.items?.firstOrNull()
         val masterSku = item?.masterSku?.ifBlank { item.sku }.orEmpty()
             .ifBlank { sessionManager.lastScannedMasterSku.ifBlank { sessionManager.lastScannedSku } }
@@ -560,7 +577,7 @@ class ClaimCaptureActivity : AppCompatActivity() {
                 "Please check attached all proof and video and make sure our claim will be approved.\n\n" +
                 "Sub Order ID: $subOrder\n" +
                 "AWB Number: $awb\n" +
-                "State of the packet: Tampered\n" +
+                "State of the packet: $packetState\n" +
                 "Packet ID: $packetId\n\n" +
                 "Regards,\n" +
                 "Return Team Tullipprints"
@@ -571,7 +588,7 @@ class ClaimCaptureActivity : AppCompatActivity() {
                 "Please Note This Sub Order ID $subOrder has received a wrong barcoded package in RTO instead of ordered item$itemStr. Outer package barcode label does not match our return manifest. Please check attached proof and video and make sure our claim will be approved.\n\n" +
                 "Sub Order ID: $subOrder\n" +
                 "AWB Number: $awb\n" +
-                "State of the packet: Tampered\n" +
+                "State of the packet: $packetState\n" +
                 "Packet ID: $packetId\n\n" +
                 "Regards,\n" +
                 "Return Team Tullipprints"
@@ -581,7 +598,7 @@ class ClaimCaptureActivity : AppCompatActivity() {
                 "Please Note This Sub Order ID $subOrder has received damaged return product. Product arrived in physically torn / damaged condition. Please check attached proof and video and make sure our claim will be approved.\n\n" +
                 "Sub Order ID: $subOrder\n" +
                 "AWB Number: $awb\n" +
-                "State of the packet: Tampered\n" +
+                "State of the packet: $packetState\n" +
                 "Packet ID: $packetId\n\n" +
                 "Regards,\n" +
                 "Return Team Tullipprints"
@@ -591,7 +608,7 @@ class ClaimCaptureActivity : AppCompatActivity() {
                 "Please Note This Sub Order ID $subOrder has received used/soiled product as return instead of fresh product. Please check attached proof and video and make sure our claim will be approved.\n\n" +
                 "Sub Order ID: $subOrder\n" +
                 "AWB Number: $awb\n" +
-                "State of the packet: Tampered\n" +
+                "State of the packet: $packetState\n" +
                 "Packet ID: $packetId\n\n" +
                 "Regards,\n" +
                 "Return Team Tullipprints"
@@ -601,7 +618,7 @@ class ClaimCaptureActivity : AppCompatActivity() {
                 "Please Note This Sub Order ID $subOrder Has received Us the wrong please check attached all the prrof and video and and make sure we claim will be approved )\n\n" +
                 "Sub Order ID: $subOrder\n" +
                 "AWB Number: $awb\n" +
-                "State of the packet: Tampered\n" +
+                "State of the packet: $packetState\n" +
                 "Packet ID: $packetId\n\n" +
                 "Regards,\n" +
                 "Return Team Tullipprints"
@@ -863,7 +880,7 @@ class ClaimCaptureActivity : AppCompatActivity() {
 
             binding.tvStep2IssueLabel.text = selectedIssueLabel
             binding.tvStep2SubOrderAwb.text = "Sub Order: $subOrder · AWB: $awb"
-            binding.tvStep2PacketInfo.text = "State: Tampered · Packet ID: $packetId"
+            binding.tvStep2PacketInfo.text = "State: $selectedPacketState · Packet ID: $packetId"
         }
     }
 
@@ -940,7 +957,7 @@ class ClaimCaptureActivity : AppCompatActivity() {
                 put("shippedDate", data.shippedDate ?: "")
                 put("sku", masterSku)
                 put("subOrderId", subOrder)
-                put("packetState", "Tampered")
+                put("packetState", selectedPacketState)
                 put("packetId", packetId)
                 put("awb", awb)
                 put("missingAmount", data.missingAmount)
@@ -1116,7 +1133,7 @@ class ClaimCaptureActivity : AppCompatActivity() {
     private fun showInfoDialog() {
         MaterialAlertDialogBuilder(this)
             .setTitle("Meesho Claim Guidelines")
-            .setMessage("For Meesho Support tickets:\n• State of the packet is always Tampered.\n• Turnaround time (TAT) is 7 calendar days inclusive.\n• Unpacking video must be recorded in 480p SD MP4 and under 25 MB.\n• Images of received product and reverse waybill are mandatory.")
+            .setMessage("For Meesho Support tickets:\n• Observe and select the actual State of the packet. Unknown blocks automatic submission and needs operator review.\n• Turnaround time (TAT) is 7 calendar days inclusive.\n• Unpacking video must be recorded in 480p SD MP4 and under 25 MB.\n• Images of received product and reverse waybill are mandatory.")
             .setPositiveButton("OK", null)
             .show()
     }

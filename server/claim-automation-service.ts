@@ -5,7 +5,6 @@ import { ServiceError, type Actor } from "./register-service.js"
 import { createFollowUpForJob } from "./claim-follow-up-service.js"
 import { listClaimTemplates } from "./claims-service.js"
 import {
-  MEESHO_PACKET_STATE,
   MEESHO_TAT_DAYS,
   MEESHO_ISSUES,
   type MeeshoIssueCode,
@@ -590,6 +589,10 @@ export async function pollNextAutomationJob(
        WHERE j.stage IN ('queued', 'approved')
          AND LOWER(m.name) = 'meesho'
          AND j.attempts < j.max_attempts
+         -- Evidence-ready gate (M7): a job becomes leasable only after all required evidence is
+         -- verified (claim leaves pending_evidence). Jobs for incomplete claims stay safely pending
+         -- and become eligible automatically when addClaimMedia flips the claim to ready_for_claim.
+         AND c.status <> 'pending_evidence'
          AND ${scopeCondition}
        ORDER BY j.created_at ASC
        LIMIT 1
@@ -669,6 +672,8 @@ export async function getJobExecutionBundle(
     sku: string
     customerName: string
     totalPrice: number
+    packetState: string
+    marketplaceIssueCode: string
     claimReason: string
     claimTitle: string
     claimDescription: string
@@ -693,7 +698,7 @@ export async function getJobExecutionBundle(
             mc.auth_state, mc.automation_mode, mc.require_approval_before_submit,
             c.claim_reason, c.claim_title, c.claim_description, c.claim_content, c.remarks,
             c.sub_order_id_snapshot, c.awb_snapshot, c.packet_id_snapshot, c.customer_name_snapshot,
-            c.total_price_snapshot, c.sku_snapshot,
+            c.total_price_snapshot, c.sku_snapshot, c.packet_state_snapshot, c.marketplace_issue_code,
             er.order_number, er.tracking_id
      FROM claim_automation_jobs j
      JOIN claims c ON c.id = j.claim_id
@@ -743,6 +748,8 @@ export async function getJobExecutionBundle(
       subOrderId: String(row.sub_order_id_snapshot || row.order_number),
       trackingId: String(row.awb_snapshot || row.tracking_id),
       packetId: String(row.packet_id_snapshot || ""),
+      packetState: String(row.packet_state_snapshot || ""),
+      marketplaceIssueCode: String(row.marketplace_issue_code || ""),
       sku: String(row.sku_snapshot || ""),
       customerName: String(row.customer_name_snapshot || ""),
       totalPrice: Number(row.total_price_snapshot || 0),
@@ -1731,7 +1738,7 @@ export async function lookupReturnForClaim(
     orderId,
     trackingNumber,
     awb: trackingNumber,
-    packetState: MEESHO_PACKET_STATE,
+    packetState: "Unknown",
     packetId,
     detectedIssueCode: normalizedDetected || (row.detected_issue_code ? String(row.detected_issue_code) : null),
     customerName: String(row.customer_name || "Customer"),

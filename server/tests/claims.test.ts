@@ -29,7 +29,7 @@ import {
   statusReasonError,
   templateNameError,
 } from "../claims-service.js"
-import { meeshoClaimDescription, meeshoClaimDueDate, MEESHO_PACKET_STATE } from "../meesho-claims.js"
+import { meeshoClaimDescription, meeshoClaimDueDate, normalizeMeeshoPacketState } from "../meesho-claims.js"
 
 test("the complete claim lifecycle statuses are defined in order", () => {
   assert.deepEqual([...CLAIM_STATUSES], [
@@ -182,7 +182,15 @@ test("max constants are sensible", () => {
 
 test("Meesho TAT is seven calendar days inclusive", () => {
   assert.equal(meeshoClaimDueDate("2026-01-01T06:30:00.000Z"), "2026-01-07")
-  assert.equal(MEESHO_PACKET_STATE, "Tampered")
+})
+
+test("packet state normalizes Intact/Tampered and falls back to Unknown", () => {
+  assert.equal(normalizeMeeshoPacketState("Tampered"), "Tampered")
+  assert.equal(normalizeMeeshoPacketState("intact"), "Intact")
+  assert.equal(normalizeMeeshoPacketState("  TAMPERED  "), "Tampered")
+  assert.equal(normalizeMeeshoPacketState(""), "Unknown")
+  assert.equal(normalizeMeeshoPacketState(undefined), "Unknown")
+  assert.equal(normalizeMeeshoPacketState("crushed"), "Unknown")
 })
 
 test("Meesho missing-item description includes the saved sub-issue and configured amount", () => {
@@ -224,6 +232,17 @@ test("Meesho wrong-barcode-rto description includes Sub Order ID, AWB, Tampered,
   assert.match(description, /SYN-AWB-88/)
   assert.match(description, /Tampered/)
   assert.match(description, /SYN-FLYER-88/)
+})
+
+test("Meesho description uses the explicit packet state instead of assuming Tampered", () => {
+  for (const state of ["Intact", "Tampered", "Unknown"]) {
+    const description = meeshoClaimDescription("wrong_return", {
+      subOrderId: "SYN-SUB-70",
+      awb: "SYN-AWB-70",
+      packetState: state,
+    })
+    assert.match(description, new RegExp(`State of the packet: ${state}`))
+  }
 })
 
 test("Meesho packet ID falls back to NA when omitted or empty", () => {

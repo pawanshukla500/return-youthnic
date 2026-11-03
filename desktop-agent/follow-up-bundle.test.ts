@@ -55,7 +55,7 @@ describe("ticket status reader contract", () => {
   // Until a marketplace implements checkClaimStatus(), the engine must say so
   // rather than guess a ticket state. The server stops the follow-up on that
   // answer, so a wrong "supported: true" would silently close live tickets.
-  for (const marketplace of ["Meesho", "Flipkart", "Amazon", "Myntra VB", "Myntra EJ", "Ajio"]) {
+  for (const marketplace of ["Flipkart", "Amazon", "Myntra VB", "Myntra EJ", "Ajio"]) {
     it(`${marketplace} does not advertise a status reader it has not built`, async () => {
       const engine = getAutomationEngine(
         marketplace,
@@ -69,4 +69,21 @@ describe("ticket status reader contract", () => {
       if (!result.supported) assert.match(result.reason, /not implemented/)
     })
   }
+
+  it("Meesho overrides checkClaimStatus with a real ticket reader", async () => {
+    const { MeeshoAutomation } = await import("./src/marketplaces/meesho.js")
+    const { BaseMarketplaceAutomation } = await import("./src/marketplaces/base-automation.js")
+    assert.notEqual(MeeshoAutomation.prototype.checkClaimStatus, BaseMarketplaceAutomation.prototype.checkClaimStatus, "Meesho must implement its own ticket reader")
+    const engine = getAutomationEngine(
+      "Meesho",
+      {} as never,
+      followUpExecutionBundle({ claimId: 1, marketplace: "Meesho", accountName: "SYN", portalUrl: "" }),
+      new Map(),
+      ".",
+    )
+    assert.ok(engine instanceof MeeshoAutomation)
+    const empty = await engine.checkClaimStatus("")
+    assert.equal(empty.supported, true)
+    assert.equal(empty.statusText, "")
+  })
 })
