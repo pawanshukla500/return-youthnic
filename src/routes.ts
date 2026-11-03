@@ -5,6 +5,7 @@ export const PAGE_PATH: Record<Page, string> = {
   dashboard: "/",
   scan: "/scan",
   reports: "/register",
+  tracking: "/tracking",
   iron: "/iron",
   claims: "/claims",
   uploads: "/uploads",

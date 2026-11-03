@@ -52,6 +52,7 @@ import { closePaymentPool, paymentDatabaseUrl } from "./payment/db.js"
 import { mountIronRoutes } from "./iron-routes.js"
 import { mountClaimsRoutes } from "./claims-routes.js"
 import { mountClaimAutomationRoutes } from "./claim-automation-routes.js"
+import { mountReturnTrackingRoutes } from "./return-tracking-routes.js"
 import { attachLiveServer, closeLiveServer } from "./live.js"
 import type { IncomingMessage } from "node:http"
 
@@ -478,6 +479,9 @@ mountClaimAutomationRoutes(app, requireUser)
 
 // Claims foundation: claim lifecycle, evidence media, templates live in claims-routes.ts.
 mountClaimsRoutes(app, requireUser)
+
+// Return tracking: monthly returns upload, SPF policy v5.1 aging, and claim reconciliation live in return-tracking-routes.ts.
+mountReturnTrackingRoutes(app, requireUser)
 
 // ---- Administrator pages. Every route here needs the Admin role. ----
 

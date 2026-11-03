@@ -16,6 +16,7 @@ import {
   isFirebaseConfigured,
 } from "./firebase-storage.js"
 import { autoResolveMissingListingSkus, recordUnmappedListingSkus } from "./product-master.js"
+import { sendOmsguruDailyToWhatsApp } from "./whatsapp.js"
 
 export type UnmappedScannedItem = {
   itemId: number
@@ -194,10 +195,49 @@ export type OmsguruDailyUpdateRecord = {
   emailSentAt: string | null
   emailRecipients: string[]
   emailCc: string[]
+  whatsappSent?: boolean
+  whatsappSentAt?: string | null
+  whatsappMessageId?: string | null
+  whatsappError?: string | null
   skuBreakdown: SkuUpdateItem[]
   generatedBy: number | null
   createdAt: string
 }
+export function mapRowToOmsguruRecord(row: any): OmsguruDailyUpdateRecord {
+  return {
+    id: Number(row.id),
+    requestId: String(row.request_id),
+    updateDate: String(row.update_date).slice(0, 10),
+    dropshipWarehouseId: String(row.dropship_warehouse_id),
+    totalSkus: Number(row.total_skus),
+    totalQty: Number(row.total_qty),
+    csvContent: String(row.csv_content || ""),
+    fileName: String(row.file_name),
+    storagePath: String(row.storage_path || ""),
+    storageUrl: String(row.storage_url || ""),
+    emailSent: Boolean(row.email_sent),
+    emailSentAt: row.email_sent_at ? new Date(row.email_sent_at).toISOString() : null,
+    emailRecipients: row.email_recipients || [],
+    emailCc: row.email_cc || [],
+    whatsappSent: Boolean(row.whatsapp_sent),
+    whatsappSentAt: row.whatsapp_sent_at ? new Date(row.whatsapp_sent_at).toISOString() : null,
+    whatsappMessageId: row.whatsapp_message_id ? String(row.whatsapp_message_id) : null,
+    whatsappError: row.whatsapp_error ? String(row.whatsapp_error) : null,
+    skuBreakdown: (row.sku_breakdown as SkuUpdateItem[]) || [],
+    generatedBy: row.generated_by ? Number(row.generated_by) : null,
+    createdAt: new Date(row.created_at).toISOString(),
+  }
+}
+
+export async function getOmsguruDailyUpdateById(
+  db: pg.Pool,
+  id: number,
+): Promise<OmsguruDailyUpdateRecord | null> {
+  const res = await db.query("SELECT * FROM omsguru_daily_inventory_updates WHERE id = $1", [id])
+  if (!res.rows[0]) return null
+  return mapRowToOmsguruRecord(res.rows[0])
+}
+
 
 const fmt = (n: number) => n.toLocaleString("en-IN")
 
@@ -408,12 +448,16 @@ export function buildOmsguruCsv(options: {
   const lines: string[] = [headers.join(",")]
 
   for (const item of options.skus) {
+    const qty = Math.floor(Number(item.qty))
+    const skuCode = (item.sku || "").trim()
+    if (!skuCode || qty <= 0) continue
+
     const row = [
       escapeCsv(options.warehouseId),
-      escapeCsv(item.sku),
+      escapeCsv(skuCode),
       "ADD",
       "", // QtyIncludesBlocked blank
-      escapeCsv(item.qty),
+      escapeCsv(qty),
       "", // RackSpace blank (defaults to DEFAULT rack)
       "", // Last Purchase Price blank
       escapeCsv(options.requestId),
@@ -978,17 +1022,34 @@ export async function runScheduledOmsguruUpdate(
       return { ran: false, details: `Not due yet (current IST: ${currentTime}, scheduled: ${config.dailyTime})` }
     }
 
-    // Check if update was already generated and emailed today
+    // Check if update was already generated, emailed, or sent to WhatsApp today
     const existing = await db.query(
-      "SELECT id, email_sent FROM omsguru_daily_inventory_updates WHERE update_date = $1",
+      "SELECT id, email_sent, whatsapp_sent FROM omsguru_daily_inventory_updates WHERE update_date = $1",
       [ist.dateStr],
     )
 
     let updateRecord: OmsguruDailyUpdateRecord
     if (existing.rows[0]) {
-      if (existing.rows[0].email_sent && !options.force) {
-        return { ran: false, details: `OMSGuru daily update already sent for ${ist.dateStr}` }
+      const emailSent = Boolean(existing.rows[0].email_sent)
+      const waSent = Boolean(existing.rows[0].whatsapp_sent)
+
+      // If both email and WhatsApp were sent already, skip unless force
+      if (emailSent && waSent && !options.force) {
+        return { ran: false, details: `OMSGuru daily update already emailed and sent to WhatsApp for ${ist.dateStr}` }
       }
+
+      // If email was already sent today but WhatsApp was pending, catch up WhatsApp immediately
+      if (emailSent && !waSent) {
+        const existingRecord = await getOmsguruDailyUpdateById(db, Number(existing.rows[0].id))
+        if (existingRecord) {
+          const catchUpResult = await sendOmsguruDailyToWhatsApp(db, existingRecord, { force: options.force })
+          return {
+            ran: true,
+            details: `WhatsApp follow-up dispatched for ${existingRecord.requestId} (sent: ${catchUpResult.sent})`,
+          }
+        }
+      }
+
       updateRecord = await generateOmsguruDailyUpdate(db, { targetDate: ist.dateStr })
     } else {
       updateRecord = await generateOmsguruDailyUpdate(db, { targetDate: ist.dateStr })
@@ -996,9 +1057,23 @@ export async function runScheduledOmsguruUpdate(
 
     // Send email
     const emailResult = await sendOmsguruDailyEmail(db, updateRecord.id, { force: options.force })
+
+    // Dispatch to WhatsApp group (Inventory Management) with CSV attachment & tagging Pandit Vishal Tiwari
+    let waResult: { sent: boolean; messageId?: string; error?: string } | null = null
+    try {
+      waResult = await sendOmsguruDailyToWhatsApp(db, updateRecord, { force: options.force })
+      if (waResult.sent) {
+        console.log(`[OMSGuru WhatsApp] Dispatched daily update to group. Message ID: ${waResult.messageId}`)
+      } else if (waResult.error) {
+        console.warn(`[OMSGuru WhatsApp] Dispatch skipped/failed: ${waResult.error}`)
+      }
+    } catch (waErr: any) {
+      console.error("[OMSGuru WhatsApp Error]", waErr?.message || waErr)
+    }
+
     return {
       ran: true,
-      details: `Generated and sent OMSGuru daily update (${updateRecord.requestId}) with ${updateRecord.totalQty} units across ${updateRecord.totalSkus} SKUs to ${emailResult.recipients.length} recipients`,
+      details: `Generated and sent OMSGuru daily update (${updateRecord.requestId}) with ${updateRecord.totalQty} units across ${updateRecord.totalSkus} SKUs to ${emailResult.recipients.length} recipients (WhatsApp: ${waResult?.sent ? "sent" : waResult?.error || "skipped"})`,
     }
   } catch (err: any) {
     console.error("[OMSGuru Scheduler Error]", err)

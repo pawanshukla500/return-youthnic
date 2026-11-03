@@ -1,6 +1,8 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { queryShopifyReadOnly } from "../shopify/db.js"
+import fs from "node:fs"
+import path from "node:path"
+import { queryShopifyReadOnly, getShopifyConnectionSettings } from "../shopify/db.js"
 import { getShopifyMetrics, exportShopifyCsv } from "../shopify/service.js"
 import { allowsAccount, scopeFor, NO_ACCESS_MESSAGE } from "../access.js"
 import { ServiceError } from "../register-service.js"
@@ -215,4 +217,21 @@ test("Shopify CSV Export: quotes fields and handles nulls gracefully", async () 
   assert.ok(csv.includes("SYN-DEL-123456"))
   assert.ok(csv.includes('"Delhi, North"')) // commas escaped with quotes
   assert.ok(csv.includes("Item defect; wrong size"))
+})
+
+test("Shopify Connection Settings: verifies TLS and resolves CA certificate across candidate locations", () => {
+  const origEnv = process.env.SHOPIFY_DATABASE_URL
+  try {
+    process.env.SHOPIFY_DATABASE_URL = "postgresql://user:pass@srv1845788.hstgr.cloud:5432/shopify_db"
+    const settings = getShopifyConnectionSettings()
+    assert.ok(settings.ssl !== false)
+    if (settings.ssl) {
+      assert.equal(settings.ssl.rejectUnauthorized, true)
+      if (fs.existsSync(path.join(process.cwd(), "certs", "shopify-ca.pem"))) {
+        assert.ok(typeof settings.ssl.ca === "string" && settings.ssl.ca.includes("BEGIN CERTIFICATE"))
+      }
+    }
+  } finally {
+    process.env.SHOPIFY_DATABASE_URL = origEnv
+  }
 })

@@ -346,12 +346,21 @@ CREATE TABLE IF NOT EXISTS omsguru_daily_inventory_updates (
   email_recipients text[] NOT NULL DEFAULT '{}',
   email_cc text[] NOT NULL DEFAULT '{}',
   sku_breakdown jsonb NOT NULL DEFAULT '[]'::jsonb,
+  whatsapp_sent boolean NOT NULL DEFAULT false,
+  whatsapp_sent_at timestamptz,
+  whatsapp_message_id text,
+  whatsapp_error text,
   generated_by integer REFERENCES users(id) ON DELETE SET NULL,
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE INDEX IF NOT EXISTS omsguru_daily_updates_date_idx ON omsguru_daily_inventory_updates (update_date DESC);
 CREATE INDEX IF NOT EXISTS omsguru_daily_updates_request_id_idx ON omsguru_daily_inventory_updates (request_id);
+
+ALTER TABLE omsguru_daily_inventory_updates ADD COLUMN IF NOT EXISTS whatsapp_sent boolean NOT NULL DEFAULT false;
+ALTER TABLE omsguru_daily_inventory_updates ADD COLUMN IF NOT EXISTS whatsapp_sent_at timestamptz;
+ALTER TABLE omsguru_daily_inventory_updates ADD COLUMN IF NOT EXISTS whatsapp_message_id text;
+ALTER TABLE omsguru_daily_inventory_updates ADD COLUMN IF NOT EXISTS whatsapp_error text;
 
 INSERT INTO app_system_settings (setting_key, setting_value)
 VALUES

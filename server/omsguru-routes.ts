@@ -16,10 +16,19 @@ import {
   calculateGoodReturnsForDay,
   pruneOldOmsguruFiles,
   normalizeDailyTime,
+  getOmsguruDailyUpdateById,
   type SkuUpdateItem,
 } from "./omsguru-daily.js"
 import { isFirebaseConfigured } from "./firebase-storage.js"
 import { getIstDateParts } from "./email-reports.js"
+import {
+  getWhatsAppConfig,
+  updateWhatsAppConfig,
+  checkWhatsAppConnection,
+  sendOmsguruDailyToWhatsApp,
+  sendWhatsAppTextMessage,
+  DEFAULT_WHATSAPP_CONFIG,
+} from "./whatsapp.js"
 
 type SessionRequest = Request & {
   user: {
@@ -39,9 +48,13 @@ export function mountOmsguruRoutes(
     try {
       const db = getPool()
       const config = await getOmsguruConfig(db)
+      const waConfig = await getWhatsAppConfig(db)
+      const waStatus = await checkWhatsAppConnection(waConfig)
       res.json({
         config,
         firebaseConfigured: isFirebaseConfigured(),
+        whatsappConfig: waConfig,
+        whatsappStatus: waStatus,
         currentTimeIst: getIstDateParts().timeStr,
         currentDateIst: getIstDateParts().dateStr,
       })
@@ -185,6 +198,10 @@ export function mountOmsguruRoutes(
           emailSentAt: r.email_sent_at ? new Date(r.email_sent_at).toISOString() : null,
           emailRecipients: r.email_recipients || [],
           emailCc: r.email_cc || [],
+          whatsappSent: Boolean(r.whatsapp_sent),
+          whatsappSentAt: r.whatsapp_sent_at ? new Date(r.whatsapp_sent_at).toISOString() : null,
+          whatsappMessageId: r.whatsapp_message_id ? String(r.whatsapp_message_id) : null,
+          whatsappError: r.whatsapp_error ? String(r.whatsapp_error) : null,
           generatedBy: r.generated_by ? Number(r.generated_by) : null,
           createdAt: new Date(r.created_at).toISOString(),
         })),
@@ -237,6 +254,10 @@ export function mountOmsguruRoutes(
           emailSentAt: r.email_sent_at ? new Date(r.email_sent_at).toISOString() : null,
           emailRecipients: r.email_recipients || [],
           emailCc: r.email_cc || [],
+          whatsappSent: Boolean(r.whatsapp_sent),
+          whatsappSentAt: r.whatsapp_sent_at ? new Date(r.whatsapp_sent_at).toISOString() : null,
+          whatsappMessageId: r.whatsapp_message_id ? String(r.whatsapp_message_id) : null,
+          whatsappError: r.whatsapp_error ? String(r.whatsapp_error) : null,
           skuBreakdown: (r.sku_breakdown as SkuUpdateItem[]) || [],
           generatedBy: r.generated_by ? Number(r.generated_by) : null,
           createdAt: new Date(r.created_at).toISOString(),
@@ -303,17 +324,29 @@ export function mountOmsguruRoutes(
         emailResult = await sendOmsguruDailyEmail(db, record.id, { force: true })
       }
 
+      // Send to WhatsApp group if requested
+      const sendWhatsAppNow = req.body?.sendWhatsApp !== undefined ? Boolean(req.body?.sendWhatsApp) : true
+      let whatsappResult = null
+      if (sendWhatsAppNow) {
+        try {
+          whatsappResult = await sendOmsguruDailyToWhatsApp(db, record, { force: true })
+        } catch (waErr: any) {
+          whatsappResult = { sent: false, error: waErr.message }
+        }
+      }
+
       res.status(201).json({
         ok: true,
         update: record,
         emailResult,
+        whatsappResult,
       })
     } catch (error) {
       next(error)
     }
   })
 
-  // POST /api/omsguru/daily/:id/send - Send or re-send update email via Resend
+  // POST /api/omsguru/daily/:id/send - Send or re-send update email via Resend & WhatsApp
   app.post("/api/omsguru/daily/:id/send", requireUser, async (req, res, next) => {
     try {
       const db = getPool()
@@ -323,7 +356,21 @@ export function mountOmsguruRoutes(
       }
 
       const result = await sendOmsguruDailyEmail(db, id, { force: true })
-      res.json({ ok: true, result })
+
+      // Dispatch to WhatsApp group immediately after email send
+      let whatsappResult = null
+      if (req.body?.sendWhatsApp !== false) {
+        const record = await getOmsguruDailyUpdateById(db, id)
+        if (record) {
+          try {
+            whatsappResult = await sendOmsguruDailyToWhatsApp(db, record, { force: true })
+          } catch (waErr: any) {
+            whatsappResult = { sent: false, error: waErr.message }
+          }
+        }
+      }
+
+      res.json({ ok: true, result, whatsappResult })
     } catch (error) {
       next(error)
     }
@@ -336,6 +383,97 @@ export function mountOmsguruRoutes(
       const config = await getOmsguruConfig(db)
       const pruned = await pruneOldOmsguruFiles(db, config.retentionDays)
       res.json({ ok: true, prunedCount: pruned, retentionDays: config.retentionDays })
+    } catch (error) {
+      next(error)
+    }
+  })
+
+  // POST /api/omsguru/daily/:id/send-whatsapp - Send update CSV & briefing to WhatsApp group
+  app.post("/api/omsguru/daily/:id/send-whatsapp", requireUser, async (req, res, next) => {
+    try {
+      const db = getPool()
+      const id = Number(req.params.id)
+      if (!Number.isInteger(id) || id <= 0) {
+        return res.status(400).json({ error: "Invalid update ID" })
+      }
+
+      const rowRes = await db.query(
+        "SELECT * FROM omsguru_daily_inventory_updates WHERE id = $1",
+        [id],
+      )
+      const r = rowRes.rows[0]
+      if (!r) {
+        return res.status(404).json({ error: "OMSGuru update record not found" })
+      }
+
+      const updateRecord = {
+        id: Number(r.id),
+        requestId: String(r.request_id),
+        updateDate: String(r.update_date).slice(0, 10),
+        dropshipWarehouseId: String(r.dropship_warehouse_id),
+        totalSkus: Number(r.total_skus),
+        totalQty: Number(r.total_qty),
+        csvContent: String(r.csv_content),
+        fileName: String(r.file_name),
+        storagePath: String(r.storage_path),
+        storageUrl: String(r.storage_url),
+        emailSent: Boolean(r.email_sent),
+        emailSentAt: r.email_sent_at ? new Date(r.email_sent_at).toISOString() : null,
+        emailRecipients: r.email_recipients || [],
+        emailCc: r.email_cc || [],
+        skuBreakdown: r.sku_breakdown || [],
+        generatedBy: r.generated_by ? Number(r.generated_by) : null,
+        createdAt: new Date(r.created_at).toISOString(),
+      }
+
+      const waResult = await sendOmsguruDailyToWhatsApp(db, updateRecord, { force: true })
+      res.json({ ok: waResult.sent, result: waResult })
+    } catch (error) {
+      next(error)
+    }
+  })
+
+  // GET /api/omsguru/whatsapp/status - Check live WhatsApp Gateway connectivity
+  app.get("/api/omsguru/whatsapp/status", requireUser, async (_req, res, next) => {
+    try {
+      const db = getPool()
+      const config = await getWhatsAppConfig(db)
+      const status = await checkWhatsAppConnection(config)
+      res.json({ config, status })
+    } catch (error) {
+      next(error)
+    }
+  })
+
+  // POST /api/omsguru/whatsapp/config - Update WhatsApp automation config (Admin only)
+  app.post("/api/omsguru/whatsapp/config", requireUser, requireAdmin, async (req, res, next) => {
+    try {
+      const db = getPool()
+      const actorUserId = (req as SessionRequest).user.id
+      const updated = await updateWhatsAppConfig(db, req.body || {}, actorUserId)
+      const status = await checkWhatsAppConnection(updated)
+      res.json({ ok: true, config: updated, status })
+    } catch (error) {
+      next(error)
+    }
+  })
+
+  // POST /api/omsguru/whatsapp/send-test - Send test message or ping to group (Admin only)
+  app.post("/api/omsguru/whatsapp/send-test", requireUser, requireAdmin, async (req, res, next) => {
+    try {
+      const db = getPool()
+      const config = await getWhatsAppConfig(db)
+      const targetPhone = req.body?.phone || config.groupJid
+      const message = req.body?.message || `🔔 Return App WhatsApp Gateway Connection Test\nTimestamp: ${new Date().toISOString()}\nTarget Group: ${config.groupJid}`
+      const mentions = req.body?.mentions || (config.tagUserJid ? [config.tagUserJid, config.tagUserLid] : [])
+
+      const result = await sendWhatsAppTextMessage({
+        phone: targetPhone,
+        message,
+        mentions,
+      }, config)
+
+      res.json({ ok: result.success, result })
     } catch (error) {
       next(error)
     }

@@ -1,4 +1,4 @@
-export type Page = "dashboard" | "scan" | "reports" | "iron" | "claims" | "uploads" | "admin"
+export type Page = "dashboard" | "scan" | "reports" | "tracking" | "iron" | "claims" | "uploads" | "admin"
 
 export type IconName =
   | "grid"
@@ -1002,5 +1002,80 @@ export type ClaimReturnLookup = {
     suggestedTitle: string
     suggestedContent: string
   }>
+}
+
+// ---- Return Tracking & SPF Policy v5.1 Aging (server/return-tracking.ts) ----
+export type ClaimEligibilityStatus =
+  | "transit"
+  | "eligible_rnr"
+  | "expiring_soon"
+  | "expired_unclaimed"
+  | "delayed_rts_eligible"
+  | "delayed_rts_expired"
+  | "delivered_normal"
+  | "claim_filed"
+  | "claim_approved"
+  | "claim_rejected"
+
+export type ReturnTrackingItem = {
+  id: number
+  marketplaceId: number
+  marketplaceName: string
+  sellerId: string
+  orderId: string
+  orderLineId: string
+  sellerOrderId: string
+  returnId: string
+  trackingId: string
+  forwardTrackingNumber: string
+  returnTrackingNumber: string
+  returnType: "Return" | "RTO"
+  portalStatus: string
+  portalSubStatus: string
+  returnReason: string
+  orderCreatedDate: string | null
+  returnCreatedDate: string | null
+  orderRtoDate: string | null
+  effectiveReturnDate: string
+  portalDeliveryDate: string | null
+  sku: string
+  myntraSkuCode: string
+  quantity: number
+  model: string
+  warehouseId: string
+  isPhysicallyReceived: boolean
+  physicalScanId: number | null
+  physicalScannedAt: string | null
+  physicalOutcome: string
+  claimEligibilityStatus: ClaimEligibilityStatus
+  claimFilingDeadline: string | null
+  claimId: number | null
+  claimTicketCode: string
+  ageDays: number
+  daysRemaining: number | null
+  isFalseDelivery: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+export type ReturnTrackingSummary = {
+  totalTracked: number
+  inTransit: number
+  eligibleRnr: number
+  expiringSoon: number
+  expiredUnclaimed: number
+  delayedRtsEligible: number
+  delayedRtsExpired: number
+  physicallyReceived: number
+  falseDeliveryDiscrepancies: number
+  claimsFiled: number
+}
+
+export type ReturnTrackingResponse = {
+  records: ReturnTrackingItem[]
+  total: number
+  page: number
+  limit: number
+  summary: ReturnTrackingSummary
 }
 

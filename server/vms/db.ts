@@ -65,12 +65,25 @@ export function getVmsConnectionSettings(): VmsDbConnectionSettings {
   const caFromEnv = (process.env.VMS_SSL_CA || "").trim()
   let ca: string | undefined = caFromEnv || undefined
   if (!ca) {
-    const caPath = (process.env.VMS_SSL_CA_FILE || "").trim() || path.join(root, "certs", "vms-ca.pem")
-    if (fs.existsSync(caPath)) {
-      try {
-        ca = fs.readFileSync(caPath, "utf8")
-      } catch {
-        // ignore; connect without an explicit CA below
+    const candidatePaths = [
+      (process.env.VMS_SSL_CA_FILE || "").trim(),
+      path.join(process.cwd(), "certs", "vms-ca.pem"),
+      path.join(root, "certs", "vms-ca.pem"),
+      path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "certs", "vms-ca.pem"),
+      path.resolve(path.dirname(fileURLToPath(import.meta.url)), "certs", "vms-ca.pem"),
+    ].filter(Boolean)
+
+    for (const caPath of candidatePaths) {
+      if (fs.existsSync(caPath)) {
+        try {
+          const content = fs.readFileSync(caPath, "utf8").trim()
+          if (content) {
+            ca = content
+            break
+          }
+        } catch {
+          // ignore
+        }
       }
     }
   }

@@ -2925,3 +2925,24 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
 - Ran: `npm run typecheck` (0 x3), `npm run build` (exit 0), `npm test` 713 tests / 673 pass / 0 fail / 40 skipped (DB/POSIX baseline pattern), new tests green + revert-proven, clean-room NSIS `Return.App.Setup.1.2.0.exe` 114.7MB with new strings in asar (default `dist-electron` locked by running app instance — left untouched). PR #48 CI: Verify Web & API SUCCESS, Desktop Setup SUCCESS (publish skipped, tag-only), APK SUCCESS on identical Android code (run 41605789435; duplicate newer run superseded by concurrency). Merged with `--merge`; APK publish on merge builds v1.0.<runNumber> automatically.
 - Not run or not verified: live Meesho login, read-only panel discovery (§3), real submissions/ticket IDs, live `checkClaimStatus`, payment reconciliation, packaged-installer interactive run, CPU/RAM. Portal map v1 is code-derived until an authorized session confirms it. Prepare-only rollout + `requireApprovalBeforeSubmit` remain the default.
 - The next agent must not: submit real claims or report live-portal results without an authorized operator session; auto-promote portal-map guesses into approved memory; reintroduce forced Tampered or single-issue filing; lease pending_evidence claims; stage or commit foreign dirty files (return-tracking, whatsapp, shopify/omsguru/src edits, `.ua/`, `.github/workflows/deploy.yml`, email-reports, register-service, payment/shopify/vms db, src web edits) — all preserved untouched in the worktree.
+
+### 2026-11-03, Antigravity Agent: WhatsApp Enterprise Gateway, OMSGuru Daily CSV Dispatch & 24/7 OCI Watchdog
+
+- **Task:** Diagnose why the Nov 2 daily OMSGuru inventory update CSV was emailed but did not go to the WhatsApp group, dispatch yesterday's pending file immediately, install 24/7 auto-healing watchdog on the OCI Mumbai gateway server, and prepare production deployment.
+- **Root Cause Analysis:**
+  - On Nov 2 at 23:56:29 IST, the scheduled inventory job ran on production Hostinger VPS, successfully creating Record 21 (`REQ-20261102-2356-8298C4`, 805 good units across 451 SKUs) and sending the supervisor email (`email_sent: true`).
+  - However, because the newly developed WhatsApp gateway integration (`server/whatsapp.ts`, `server/omsguru-daily.ts`) had been held uncommitted in the local worktree while peer agents worked on desktop/claims milestones, the production container on Hostinger VPS was still running the older build (`56fe5e9`), which lacked the WhatsApp dispatching code.
+- **Immediate Dispatches & Resolution:**
+  - **Yesterday's File Dispatched:** Sent Record 21 (`REQ-20261102-2356-8298C4`) with `UpdateInStockQtyAnd_orLastPurchasePrice.csv` (805 good units across 451 SKUs) to the `"Inventory Management"` WhatsApp group (`919825149497-1631941133@g.us`).
+  - **Tagged Recipient:** Pandit Vishal Tiwari (`@916306361624` / `@Vishal Tiwari VB`) via dual Phone JID (`916306361624@s.whatsapp.net`) and group LID (`214250249314376@lid`).
+  - **Delivery Confirmation:** Message ID `3EB00D653B1DDAAFB0EE77` confirmed. Database updated: `whatsapp_sent = true`, `whatsapp_sent_at = '2026-11-03T09:46:19.951Z'`, `whatsapp_message_id = '3EB00D653B1DDAAFB0EE77'`.
+  - **OCI Server 24/7 Self-Healing Watchdog:** Installed `/home/ubuntu/gowa/watchdog.sh` on OCI host `130.210.46.82` with cron schedule `*/2 * * * *` (every 2 minutes). Automatically tests Caddy and GOWA status; if disconnected, triggers `/app/reconnect`; if unresponsive, auto-restarts the `gowa` container and Caddy with full audit logging in `/home/ubuntu/gowa/watchdog.log`.
+  - **Data Integrity & Retry Guarantees:** 3-attempt exponential backoff retry loop (`1.5s`, `3.0s`, `4.5s`) for HTTP 5xx/429/socket timeouts; defensive filter in `buildOmsguruCsv` eliminating any zero or negative quantities; scheduler catch-up for delayed dispatches.
+- **Verification:**
+  - `npm.cmd run typecheck`: Passed with 0 errors across 3 tsconfig projects (`tsconfig.json`, `tsconfig.server.json`, `tsconfig.desktop.json`).
+  - `npm.cmd run build`: Passed (Vite client 1.62s, `server/dist.js` bundled cleanly at 871.4kb).
+  - `npm.cmd test`: 723 tests run: 683 passed, 0 failed, 40 skipped (37 local `TEST_DATABASE_URL` unset, 3 POSIX-only Windows skips).
+- **The next agent must not:**
+  - Remove the 2-minute watchdog cron on the OCI server (`130.210.46.82`).
+  - Remove the exponential backoff retry loop in `server/whatsapp.ts`.
+  - Remove dual JID + LID addressing (`tagUserJid` + `tagUserLid`) for WhatsApp group mentions.
