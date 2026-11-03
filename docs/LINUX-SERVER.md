@@ -14,8 +14,8 @@ browser mode and data directory change.
 
 | Mode | Where | Engine binding | Browser | Window |
 |---|---|---|---|---|
-| 1. Windows Desktop | Warehouse PC | `127.0.0.1:3005` (embedded) | system Edge/Chrome, visible | Electron shell |
-| 2. Linux Desktop | Workstation | `127.0.0.1:3005` (embedded) | system Chromium/Chrome, visible | Electron shell |
+| 1. Windows Desktop | Warehouse PC | `127.0.0.1:3005` (embedded) | bundled native WebContentsView, visible | Electron shell |
+| 2. Linux Desktop | Workstation | `127.0.0.1:3005` (embedded) | bundled native WebContentsView, visible | Electron shell |
 | 3. Linux Server | VPS / bare metal | `0.0.0.0:3005` + `ENGINE_TOKEN` | Chromium, headless | none |
 
 In every mode the **engine owns the worker loop**. The desktop shell is a client of it.
@@ -256,7 +256,7 @@ volumes. No code change is required.
 - Only the Meesho panel files claims automatically. Flipkart, Amazon, Myntra and Ajio run
   assisted and need a visible browser and an operator, so they are not useful in headless
   Mode 3 yet.
-- No marketplace implements the ticket status reader (`checkClaimStatus()`) yet. The
+- Only Meesho implements the ticket status reader (`checkClaimStatus()`, live verification pending). The
   follow-up framework runs end to end, but each panel currently answers "not implemented",
   so its follow-ups stop with that reason rather than reading a ticket.
 - No AI reply service is wired in. See `docs/notes/ai-provider-comparison.md`.

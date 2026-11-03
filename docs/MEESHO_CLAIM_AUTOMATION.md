@@ -11,7 +11,7 @@ This document explains the end-to-end architecture, field mappings, mobile captu
                                │               Android Warehouse Scanner                │
                                │  - CameraX / Zebra Barcode Scanner                     │
                                │  - Claim Details Capture Activity                      │
-                               │  - 720p HD MP4 Unboxing Video (<= 25MB)                │
+                               │  - 480p SD MP4 unboxing video (template ≤25 MB)        │
                                │  - WorkManager Background Evidence Sync                │
                                └───────────────────────────┬────────────────────────────┘
                                                            │
@@ -91,14 +91,14 @@ Return Team Tullipprints
 ## 4. Ticket ID Linkage with Return Register
 
 ### The Synchronizer: `syncClaimTicketToRegister()`
-Located in [`server/claim-automation-service.ts`](file:///d:/Return%20APP%20-%20New/server/claim-automation-service.ts).
+Located in [`server/claim-automation-service.ts`](../server/claim-automation-service.ts).
 
 1. **On Mobile Claim Creation (`POST /api/claims/unified-create`)**:
    - Creates a pending claim ticket with initial code `CLM-<claimId>`.
    - Links `receipt_scan_issues.claim_ticket_id` to `claim_tickets.id`.
    - Marks the return scan in the Return Register with status `Draft`.
 2. **On Desktop Automation Bot Submission (`completeJobSubmission`) / Manual Resolve**:
-   - The desktop bot extracts the actual Meesho Support Ticket / Claim Reference ID (e.g., `M-10928374`).
+   - The desktop bot extracts the actual Meesho Support Ticket / Claim Reference ID (e.g., `777535617152` — Meesho ticket IDs are 12-digit numbers, never `M-` prefixed).
    - Updates `claim_tickets.ticket_code = marketplaceClaimId` and `status = 'Raised'`.
    - Inserts audit entry in `claim_ticket_history`.
 3. **Visibility**:
@@ -142,6 +142,8 @@ Placed at `android/app/google-services.json`:
   ```
 
 ---
+
+> Android Firebase note: the app declares Firebase gradle deps and ships `google-services.json`, but the Android client never calls Firebase directly — evidence uploads go to the server media endpoint and the server archives to Cloud Storage. RTDB on the device is unused (only the desktop AI-assist path writes sync hints).
 
 ## 6. Desktop Claim Bot (installed app)
 

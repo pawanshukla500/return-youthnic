@@ -2,7 +2,7 @@
 
 The return scan register is the permanent record of every verified return. Marketplace report files are lookup data only: a file says which returns are expected, and a scan records what physically arrived. Nothing here creates a second application. The register is built on the existing tables, with additive changes in `server/schema-import.sql`, `server/schema-register.sql` and `server/schema-scan-history.sql`.
 
-Status: Fully implemented, compiled, and verified in production and CI with 406 passing tests against PostgreSQL 16. See [docs/notes/agent-handoff.md](notes/agent-handoff.md) for live database verification and operational notes.
+Status: Fully implemented, compiled, and verified in production and CI with 767 tests (721 pass, 0 fail locally; CI runs all 767 green against its throwaway Postgres). See [docs/notes/agent-handoff.md](notes/agent-handoff.md) for live database verification and operational notes.
 
 ## The register columns
 
@@ -225,7 +225,7 @@ Units not received must equal the units covered by missing-item issues. Issues o
 
 A ticket ID is a claim reference from the claims system. A scan that needs one records the ID and creates the ticket with status `Raised`. An ID that is already in the register cannot be reused.
 
-`PATCH /api/tickets/:id/status` changes the status. Rejecting a ticket needs a reason. Every change adds a row to `claim_ticket_history`, so the full history is kept. The status set is `Draft`, `Raised`, `Review`, `Approved` and `Rejected`. Any allowed status can move to any other, and every move is recorded. A ticket outside the user's accounts is reported as not found.
+`PATCH /api/tickets/:id/status` changes the status. Rejecting a ticket needs a reason. Every change adds a row to `claim_ticket_history`, so the full history is kept. The status set is `Draft`, `Raised`, `Review`, `Approved` and `Rejected`. Any allowed status can move to any other, and every move is recorded. This is the `claim_tickets` lifecycle, distinct from the 14-state `claims` lifecycle (`pending_evidence` through `manual_action_required`) enforced by `CLAIM_TRANSITIONS` in `server/claims-service.ts`. A ticket outside the user's accounts is reported as not found.
 
 ## Product SKU resolution
 

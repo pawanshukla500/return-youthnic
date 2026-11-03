@@ -13,9 +13,9 @@ Sign in with `POST /api/auth/login`. The response contains a `token`. Send it on
 Authorization: Bearer <token>
 ```
 
-The token is a random 32-byte value stored in the `sessions` table. `POST /api/auth/logout` deletes it. The check on each request reads the session row and the user row. It does **not** check the session's age, so a session does not expire on its own. See [agent-handoff.md](notes/agent-handoff.md#known-risks-and-gaps).
+Sessions are SHA-256-hashed device tokens sent as a Bearer [REDACTED] a cookie. They carry an absolute and an idle expiry with sliding renewal; sign-out and admin revoke end them server-side (`server/auth.ts`). Sign-in checks the password with bcrypt and is login- and IP-rate-limited (`server/rate-limit.ts`).
 
-There are no API keys.
+Operator sessions are separate from automation-agent keys: enrolled Server PCs call agent routes with `X-Agent-UUID` + `X-Agent-Key` headers (SHA-256, timing-safe compare, per-job ownership check). The key is returned once at Supervisor/Admin enrollment and never logged.
 
 ## Authorization
 
@@ -56,7 +56,7 @@ An upload larger than 25 MB returns HTTP 400 with `File is larger than 25 MB`.
 
 ## Rate limits and CORS
 
-No rate limiting is configured. No rate-limit package is in `package.json`. CORS is enabled with the defaults of the `cors` package, which allow any origin. The JSON body limit is 2 MB.
+Sign-in and mutating routes are login- and IP-rate-limited (`server/rate-limit.ts`). CORS uses an allowlist (`ALLOWED_ORIGINS`, defaulting to the production shop and local dev) with CSRF referer/origin checks. The JSON body limit is 2 MB.
 
 ## Endpoint index
 
@@ -113,7 +113,7 @@ No rate limiting is configured. No rate-limit package is in `package.json`. CORS
 | POST | `/api/claims/unified-create` | Yes | Unified mobile claim submission: creates claim, records scan, attaches media, and synchronizes Return Register ticket ID. |
 | POST | `/api/automation/agent/register` | Admin/Supervisor | Enrolls one Server PC and returns its API key once. |
 | POST | `/api/automation/agent/heartbeat` | Agent key | Reports online, busy, or offline state. |
-| GET | `/api/automation/agent/poll` | Agent key | Leases the oldest eligible Meesho job for this Server PC. |
+| GET | `/api/automation/agent/poll` | Agent key | Leases the oldest eligible Meesho job for this Server PC. Eligible claims are `ready_for_claim`, `processing`, `reclaim` or `escalated`; `submitting` is reached only through an approved lease (`FOR UPDATE SKIP LOCKED`). |
 | GET | `/api/automation/follow-ups/due` | Agent key | Leases the next due ticket follow-up for this Server PC. |
 | POST | `/api/automation/follow-ups/:id/result` | Agent key | Records one ticket check and reschedules or stops it. |
 | GET | `/api/automation/follow-ups` | Signed-in user | Ticket follow-ups for the dashboard, scoped to the account. |
@@ -123,6 +123,23 @@ No rate limiting is configured. No rate-limit package is in `package.json`. CORS
 | POST | `/api/admin/product-master/import/batch` | Admin | Commits up to 500 rows of staged product master per transaction with progress indicator. |
 | POST | `/api/admin/product-master/import/cancel` | Admin | Cancels and clears a staged product master import. |
 | POST | `/api/admin/product-master/import` | Admin | Replaces the whole product master from one file, for a chosen marketplace. Needs `confirm`. |
+| GET | `/api/automation/agent/jobs` | Agent key | Job list for the calling agent. |
+| GET | `/api/automation/jobs` | Yes | Automation jobs in the user's account scope (dashboard queue). |
+| POST | `/api/automation/jobs/:id/approve` | Supervisor/Admin | Approves a prepared job for submission (records the submitting authorization). |
+| POST | `/api/automation/jobs/:id/retry` | Supervisor/Admin | Re-queues a failed or parked job within its attempt budget. |
+| POST | `/api/automation/jobs/:id/manual-resolve` | Supervisor/Admin | Operator override path, separate from automatic submission. |
+| GET | `/api/automation/credentials` | Yes | Marketplace credentials for the user's accounts (usernames masked). |
+| GET | `/api/automation/portal-login-secret` | Admin | Decrypts one stored portal password for the setup flow. |
+| POST | `/api/admin/automation/credentials` | Admin | Creates or updates a marketplace credential (needs `AUTOMATION_SECRET_KEY`). |
+| GET | `/api/claims/return-lookup` | Yes | Finds returns eligible for a claim by AWB or order. |
+| GET | `/api/claims/export` | Yes | Scoped claim reconciliation rows as CSV/XLSX (same 50,000-row cap). |
+| GET | `/api/payment/status` | Yes | Payment sync status. |
+| GET | `/api/payment/runs` | Yes | Past payment sync runs. |
+| POST | `/api/payment/sync` | Admin | Syncs sales amounts onto scan/expected items (one-way; never writes claim payouts). |
+| GET | `/api/returns/tracking` | Yes | Return-tracking records for the user's accounts. |
+| GET | `/api/returns/tracking/summary` | Yes | Tracking summary figures. |
+| POST | `/api/returns/tracking/claim` | Yes | Files a claim from a tracking record (manual path: no template, history or audit row — see handoff risks). |
+| GET | `/api/returns/tracking/export` | Yes | Tracking rows as CSV/XLSX. |
 
 Removed: `GET /api/returns`, `GET /api/returns/export` and `PATCH /api/returns/:id/ticket`. Use `/api/register`, `/api/register/export` and `/api/tickets/:id/status`.
 
@@ -203,7 +220,7 @@ Claim management links immutably to a verified `receipt_scans` row and does not 
 - `POST /api/claims`: accepts `receiptScanId`, `claimReason`, `claimTitle`, `claimDescription`, `remarks`, and `claimTemplateId`. One claim per scan. Auto-falls back to the marketplace's default active template if template ID is mismatched.
 - `GET /api/claims/:id`: returns `{ claim, media, statusHistory }`. `claim` includes `totalPrice` (merchandise value), `trackingId`, `orderId`, `claimReason`, `status`, and linked `scan`. `media` contains uploaded photos and video entries.
 - `GET /api/claims/:id/media/:mediaId`: securely streams evidence files inline with MIME type (`image/jpeg`, `image/png`, `video/mp4`) and session/bearer authentication, allowing direct browser `<img>` rendering and `<video controls>` HTML5 streaming.
-- `POST /api/claims/unified-create`: mobile-first atomic submission endpoint. Accepts `expectedReturnId`, `receiptScanId`, `marketplaceId`, `trackingId`, `orderId`, `claimReason`, `claimTitle`, `claimDescription`, `claimTemplateId`, and `evidenceFiles` (array of `{ fieldKey, fileName, fileType, byteSize, storagePath, downloadUrl }`). Atomically creates the `receipt_scan`, `receipt_scan_items`, `receipt_scan_issues`, `claims` row, `claim_media` records, and calls `syncClaimTicketToRegister()` to link the ticket directly to the Return Register.
+- `POST /api/claims/unified-create`: mobile-first atomic submission endpoint. Accepts `expectedReturnId`, `receiptScanId`, `marketplaceId`, `trackingId`, `orderId`, `claimReason`, `claimTitle`, `claimDescription` and `claimTemplateId`. Atomically creates the `receipt_scan`, `receipt_scan_items`, `receipt_scan_issues` and `claims` rows, and calls `syncClaimTicketToRegister()` to link the ticket directly to the Return Register. Evidence files are NOT part of this body: each file is uploaded separately to `POST /api/claims/:id/media/upload`.
 - `GET /api/claims/queue`: accepts lifecycle, search, marketplace, `dateFrom`, and `dateTo` filters.
 - `GET /api/claims/export?format=csv|xlsx`: exports the same scoped and filtered reconciliation rows, up to 50,000 rows. Larger results return 413 and must be narrowed with date or marketplace filters.
 - `PATCH /api/claims/:id/status`: records lifecycle transitions plus the transition reason and, where applicable, approved amount, paid amount, payout reference, and payout date.
@@ -217,7 +234,7 @@ The Windows claim bot (Electron, `npm run desktop`) uses these agent routes. It 
 - `GET /api/automation/agent/poll`: atomically leases the oldest queued or approved Meesho job. Expired leases retry up to the configured maximum.
 - `GET /api/automation/jobs/:id/bundle`: returns the claim, portal login, and evidence list for that job.
 - `POST /api/automation/jobs/:id/progress`: reports a stage such as prepared or manual action. Stage `not_eligible` (the marketplace refused the order) sets the claim to `manual_action_required` with the refusal text as a remark and clears any stale marketplace ticket id and completion time on the job.
-- `POST /api/automation/jobs/:id/complete`: stores the marketplace ticket id and marks the job completed, and creates the ticket follow-up that starts the 2-day status checks.
+- `POST /api/automation/jobs/:id/complete`: stores the marketplace ticket id and marks the job completed, and creates the ticket follow-up that starts the 2-day status checks. Verifies the lease holder, lease liveness and the `submitting` stage atomically; replaying the same ticket id is idempotent, a different ticket or a claimed outcome is rejected.
 - `GET /api/automation/follow-ups/due`: leases the oldest active follow-up whose next check is due, scoped to the accounts the enrolling user may see. Reading a ticket has no external side effect, so an expired lease is simply returned to the queue.
 - `POST /api/automation/follow-ups/:id/result`: records one check. The outcome is one of `status_read`, `not_supported`, `login_required`, `not_found`, `error`. A read schedules the next check 48 hours out and advances the claim status when the ticket text maps to a lifecycle state; `approved`, `rejected`, `paid` and `reconciled` stop the follow-up, a missing reader stops it with `check_not_supported`, three failed checks stop it with `repeated_errors`, and an expired sign-in keeps it active without spending a check.
 - `GET /api/automation/follow-ups`: the follow-up list plus a summary (active, due, resolved, stopped, failing), scoped to the signed-in user's accounts.

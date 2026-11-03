@@ -50,7 +50,7 @@ The automation engine (`desktop-agent/src/marketplaces/meesho.ts`) implements th
    - Waits 1.5s.
 5. **Fill Claim Form**:
    - Types Sub-Order ID into `subOrderId` input with human keystrokes.
-   - Selects packet condition "Tampered".
+   - Leaves packet condition at the Unknown default (Unknown blocks auto-submit for operator review; Intact/Tampered are only set from explicit evidence — never force Tampered to file).
    - Types flyer ID / barcode.
    - Attaches proof images (front, back, label) and unboxing video via CDP file input setting.
    - Types detailed claim description with order ID, AWB, SKU, and condition details.

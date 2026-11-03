@@ -49,7 +49,7 @@ Closing the window keeps it running in the tray.
 
 ## 3. Daily operation
 
-- **First-time setup box**: connect/reconnect panels, `X of 6 connected`, credential-storage mode, Check-for-updates button.
+- **First-time setup box**: connect/reconnect panels, `X of 6 connected`, credential-storage mode. App updates moved to the Updates tab (Check now, auto-check toggle, dismissible banner; install over this version, cookies kept).
 - **Supplier browser tab**: while a supplier tab is open inside the app window, the dashboard shows its panel name with **Show/Hide supplier browser** buttons, so the operator can switch between the supplier page and the dashboard without a second window.
 - **Claims Queue Pipeline** table: filter, Run this claim, watch stages.
 - **Panel-wise strip**: per-panel state (Ready / Filing / Needs you /
@@ -63,8 +63,8 @@ Closing the window keeps it running in the tray.
   (one per panel — never delete while connected).
 - **Tray menu**: open, pause/resume, check-now, quit. Quit stops the worker;
   closing the window does not.
-- **Updates**: setup box → Check for updates → download the new setup and
-  install over this version (cookies kept). No silent auto-install.
+- **Updates**: setup box → Updates tab → Check now (or wait for the automatic check) → download the new setup and
+  install over this version (cookies kept). No silent auto-install. A banner appears when a newer GitHub release exists; Later dismisses it per release tag.
 
 ### Overall status and the green panel state
 
@@ -115,12 +115,7 @@ A job is never marked submitted from a screenshot alone. Duplicate filing is
 prevented by server-side leases + bounded attempts; an uncertain submission
 stops for manual reconciliation instead of retrying blind.
 
-**Ticket status reading is not built per marketplace yet.** The engine asks each
-marketplace class for the ticket state, and the shared default answers "not
-implemented", which stops the follow-up for that panel instead of guessing. Once
-the status page for a marketplace is described, that marketplace implements
-`checkClaimStatus()` and its tickets start being tracked automatically. Until
-then, the table is honest about it rather than showing a made-up state.
+**Ticket status reading exists for Meesho.** `desktop-agent/src/marketplaces/meesho.ts:537` implements `checkClaimStatus()` (DOM ticket-table reader, fixture-tested; live-portal verification still pending). All other panels use the shared default that answers "not implemented", which stops the follow-up for that panel instead of guessing. Once the status page for another marketplace is described, that marketplace implements `checkClaimStatus()` and its tickets start being tracked automatically.
 
 ## 5. Recovery
 
@@ -138,7 +133,6 @@ then, the table is honest about it rather than showing a made-up state.
 
 - **Bot idle, jobs queued**: check operator still signed in (`/api/status`),
   panel cookies in First-time setup, backend URL reachable (Test Ping).
-- **Browser never opens**: install Edge/Chrome or set `BROWSER_PATH`; see the
 - **Browser never opens**: the bundled browser needs no install. This entry only
   applies with `BROWSER_ADAPTER=external`: then install Edge/Chrome or set `BROWSER_PATH`, and see the
   bot log for `No compatible Chromium browser`.
@@ -252,11 +246,7 @@ Full server setup, health checks, systemd and Docker are in
 - Full auto-filing for Flipkart/Amazon/Myntra/Ajio (assisted today; writing
   untested portal scripts would be mock automation). This also means only Meesho
   is useful in headless remote mode.
-- **No marketplace implements `checkClaimStatus()` yet.** The follow-up
-  framework is complete end to end (schema, service, routes, worker, dashboard),
-  but every panel currently answers "not implemented", so follow-ups stop with
-  that reason instead of reading a ticket. Each marketplace's status page needs
-  its own reader before its tickets are tracked; no ticket state is ever guessed.
+- **Only Meesho implements `checkClaimStatus()` so far** (`meesho.ts:537`, fixture-tested, live verification pending). The follow-up framework is complete end to end (schema, service, routes, worker, dashboard). Each remaining marketplace's status page needs its own reader before its tickets are tracked; no ticket state is ever guessed.
 - Silent auto-update (needs code signing + notarization first).
 - The installer is **not code-signed**. Windows SmartScreen will warn on first
   run until a certificate is bought.
@@ -264,5 +254,5 @@ Full server setup, health checks, systemd and Docker are in
   flow is proven by prior runs, the rest by assisted screenshots + tests.
 - No live claim has been filed from a Linux server. The Linux paths are written
   and reviewed, not exercised end to end.
-- No AI reply service is wired in yet. See
-  [notes/ai-provider-comparison.md](notes/ai-provider-comparison.md).
+- AI assistance runs through the dashboard AI Center (6 providers, routing, approved-memory path). Historical design notes live in
+  [notes/ai-provider-comparison.md](notes/ai-provider-comparison.md) and are superseded where they say no LLM integration exists.

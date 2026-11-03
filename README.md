@@ -1,9 +1,9 @@
-<!-- Updated 2026-10-21. Desktop/engine split: engine owns the worker loop; Windows/Linux desktop + headless Linux server modes. Android v1.0.60. -->
+<!-- Updated 2026-11-03. Merged PR #50 (M9). Android latest tag v1.0.63. Desktop Windows-only, latest tag desktop-v1.2.0.82. -->
 # return-scanning-app
 
 A return scanning app for VB Exports. Marketplace return reports (Myntra VB and Myntra EJ, Flipkart, Meesho, Amazon, and Ajio) are loaded as lookup data, one account at a time. A scan then records what physically arrived in the return scan register, which is the permanent record. The app also stores channel listings and master SKUs from the OMSGuru API, for product titles and images.
 
-**Status (2026-10-20):** Full local and CI test suites pass with 463 tests (426 pass, 0 fail, 37 database checks run against a dedicated `postgres:16` container). The return register page (`/register`) was rebuilt: pure view helpers in `src/register-view.ts` (13 tests), code-split analysis tabs, memoized row labels, responsive tabs/filters/tables, and a fixed Amount sort. Deployed to production VPS (`https://return.youthnic.shop`). Native Android return scanning app active at `v1.0.58` (`versionCode` 10058). Cross-platform desktop application source is at `1.2.0` (`Return.App.Setup.1.2.0.exe` verified locally, 118,871,660 bytes); Windows/Linux/macOS installers publish as GitHub Release `desktop-v1.2.0.*` on merge via the matrix workflow. GitHub keeps only the newest two releases of each family (`v1.0.*` Android, `desktop-v*` desktop). See [docs/notes/agent-handoff.md](docs/notes/agent-handoff.md).
+**Status (2026-11-03):** Full local suite passes with 767 tests (721 pass, 0 fail, 46 skipped without `TEST_DATABASE_URL`; CI runs all 767 green). Deployed to production VPS (`https://return.youthnic.shop`). Native Android app latest tag `v1.0.63` (server fallback manifest still pins 1.0.58/10058). Windows desktop app at `1.2.0` with light-mode dashboard, sidebar tabs and Updates tab (installed build verified by operator UAT T1–T5); unsigned NSIS installers publish as GitHub Release `desktop-v1.2.0.*` (latest `desktop-v1.2.0.82`). GitHub keeps only the newest two releases of each family (`v1.0.*` Android, `desktop-v*` desktop). See [docs/notes/agent-handoff.md](docs/notes/agent-handoff.md).
 
 ## For agents
 
@@ -109,7 +109,7 @@ The two database checks run only when `TEST_DATABASE_URL` is set to a dedicated 
 
 - [Agent handoff](docs/notes/agent-handoff.md): the state of the work, how it is organised, and how to verify and hand it over
 - [AGENTS.md](AGENTS.md): the entry point for agents
-- [CLAUDE.md](CLAUDE.md): the rules the code depends on
+- Rules live in [AGENTS.md](AGENTS.md) plus [docs/notes/agent-handoff.md](docs/notes/agent-handoff.md) (`CLAUDE.md` is intentionally absent; do not invent it)
 - [Getting started](docs/GETTING-STARTED.md)
 - [Development](docs/DEVELOPMENT.md)
 - [Testing](docs/TESTING.md)

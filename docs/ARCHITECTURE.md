@@ -60,18 +60,14 @@ A service function with no scope argument defaults to every account. That defaul
 `server/index.ts` starts the HTTP listener first. It then calls `initDatabase()` in `server/db.ts`. That:
 
 1. runs `SELECT 1` on the pool;
-2. runs `applySchema()`, which applies the four schema files in order, in one transaction:
-   - `server/schema.sql` (base tables; the snapshot tables are kept but not used),
-   - `server/schema-import.sql` (lookup status, register tables, categories, audit),
-   - `server/schema-register.sql` (partners, tracking evidence, scan snapshots),
-   - `server/schema-scan-history.sql` (scan history snapshots and indexes);
+2. runs `applySchema()`, which applies the `SCHEMA_FILES` list in `server/db.ts` (18 files: `schema.sql`, `schema-import.sql`, `schema-register.sql`, `schema-scan-history.sql`, `schema-shopify.sql`, `schema-payment.sql`, `schema-unmapped-skus.sql`, `schema-return-reasons.sql`, `schema-iron.sql`, `schema-flyer.sql`, `schema-claims.sql`, `schema-meesho-claims.sql`, `schema-claim-automation.sql`, `schema-vms.sql`, `schema-ai-memory.sql`, `schema-ai-tasks.sql`, `schema-ai-center.sql`, `schema-return-tracking.sql`) in order, in one transaction;
 3. runs `ensureReferenceData()` in `server/reference-data.ts`, which adds the six marketplace channels when they are missing.
 
 Every statement is idempotent. A normal start drops nothing. The app tables are rebuilt only when the legacy check or a schema version bump asks for it (`SCHEMA_VERSION` is 1 and is not bumped). No users, scans, SKUs or sample figures are created. Users come from `npm run user:create`. Until the database is ready, routes that need it answer 503.
 
 ### Signing in
 
-`POST /api/auth/login` finds the user by email or login alias, checks the password with bcrypt, inserts a session row, and returns the token. Every later request is checked against that row.
+`POST /api/auth/login` finds the user by email or login alias, checks the password with bcrypt, inserts a session row, and returns the token. Every later request is checked against that row. Sessions carry an absolute and an idle expiry with sliding renewal; sign-in is login- and IP-rate-limited (`server/rate-limit.ts`).
 
 ### Uploading a return file
 
@@ -100,7 +96,7 @@ Every statement is idempotent. A normal start drops nothing. The app tables are 
 - **Missing-item sub-issues:** a sub-issue can be added to a category that takes sub-issues, and deactivated. Each change is audited.
 - **Logistics partners, courier names and tracking hosts:** added or switched on and off in `server/admin-config.ts`, and in `setDomainActive()` in `server/register-routes.ts`. Nothing is deleted. Each change is audited.
 
-### Syncing OMSGuru (command-line scripts only)
+### Syncing OMSGuru (scripts plus in-process schedulers)
 
 `npm run sync:oms` calls `GET /order_api/list_channels`. For each active channel it pages through `POST /order_api/list_channel_listings` with `last_id`, and writes each record to `oms_listings` and each listing SKU to `sku_catalog` (`syncChannelListings` in `server/oms/catalog.ts`). It then pages through `GET /order_api/skus` into `oms_skus` (`syncSkuMaster` in `server/oms/skus.ts`). Each step writes a row to `oms_sync_runs`. The endpoints, the joins and the order status IDs are in [notes/omsguru-api.md](notes/omsguru-api.md).
 
@@ -133,12 +129,12 @@ Every statement is idempotent. A normal start drops nothing. The app tables are 
 | `server/catalog-image.ts` | HTTP | Fetches and caches a stored catalog image | `sendCatalogImage` |
 | `server/logistics.ts` | Database | The partner index used by detection. Detection uses the courier name, not the tracking link | `loadPartnerIndex`, `applyPartners` |
 | `server/claim-automation-routes.ts` | Routes | Unified claim creation, desktop bot polling and status updates | `mountClaimAutomationRoutes` |
-| `server/claim-automation-service.ts` | Database | Ticket synchronizer linking claims to the register, job queue management | `syncClaimTicketToRegister`, `createOrQueueAutomationJob`, `pollAutomationJob`, `updateAutomationJob` |
+| `server/claim-automation-service.ts` | Database | Ticket synchronizer linking claims to the register, job queue management | `syncClaimTicketToRegister`, `createOrQueueAutomationJob`, `pollNextAutomationJob`, `updateJobProgress`, `completeJobSubmission` |
 | `server/claim-follow-up-service.ts` | Database | Ticket follow-up tracking: the row created when a filing job completes, the agent lease on the next due ticket check, and the record that reschedules or stops it | `createFollowUpForJob`, `leaseNextDueFollowUp`, `recordFollowUpResult`, `normalizeFollowUpStatus`, `decideFollowUpStep` |
 | `server/product-master-routes.ts` | Routes | Staged batched product master import routes (`/start`, `/batch`, `/cancel`) | `mountProductMasterRoutes` |
 | `server/product-master.ts` | Database | 500-row chunking, in-memory staging with TTL, and isolated batch commits | `stageMasterImport`, `commitMasterBatch`, `cancelMasterImport` |
 | `server/oms/master-bridge.ts` | Database | Pure channel mapping and nightly OMSGuru to product master mapping bridge | `marketplaceForChannel`, `bridgeMasterMappings` |
-| `server/mobile-release.ts` | Routes & Meta | Mobile APK release manifest and binary download streamer | `getMobileReleaseManifest`, `streamLatestApk` |
+| `server/mobile-release.ts` | Routes & Meta | Mobile APK release manifest and binary download streamer | `getMobileReleaseInfo`, `handleLatestRelease`, `handleApkDownload` |
 | `server/vms-catalog.ts` | Database | Read-only VMS catalog image sync into `product_master` | `syncVmsCatalog` |
 | `server/format.ts` | Pure | Display formatting and INR currency formatting | `formatCount`, `formatInr`, `percentOf`, `formatScanTime`, `formatUploadLabel`, `headerDateLabel`, `lastSignInLabel` |
 | `server/seed.ts` | Empty | Left from the removed demo seed. Safe to delete | none |
@@ -154,7 +150,7 @@ Every statement is idempotent. A normal start drops nothing. The app tables are 
 | `server/schema-import.sql` | Lookup status, the partial unique index for active AWBs per account, lookup lines, issue categories, scan items and issues, claim history, the audit log, product master, OMSGuru tables | Second |
 | `server/schema-register.sql` | Logistics partners and their aliases and hosts (seeded), tracking evidence and validation, return type and display identifiers, scan snapshots | Third |
 | `server/schema-scan-history.sql` | Scan snapshots for the file AWB, the link AWB, the tracking source, the forward AWB, the return event, the source file and the raw return type; four indexes | Fourth |
-| `server/schema-claims.sql` | Configurable claim templates, immutable scan-linked claims, evidence metadata, 24-month retention dates and status history | Last |
+| `server/schema-claims.sql` | Configurable claim templates, immutable scan-linked claims, evidence metadata, 24-month retention dates and status history | 11th |
 
 Every file is additive and runs on every start. A change to the schema goes into one of these files, or into a new file that is added to `SCHEMA_FILES` in `server/db.ts`, in the order it must run.
 
@@ -181,9 +177,9 @@ Every file is additive and runs on every start. A change to the schema goes into
 
 The native Android app is written in Kotlin for fast, ergonomics-focused warehouse scanning:
 - **Barcode & Label Scanning**: CameraX integration with automatic continuous autofocus and barcode decoding.
-- **Claim Capture (`ClaimCaptureActivity`)**: Multi-step photographic and video evidence capture. Enforces 480p SD unboxing video (minimum 15s, maximum 120s, bounded bitrate) to stay reliably under 25 MB.
+- **Claim Capture (`ClaimCaptureActivity`)**: Multi-step photographic and video evidence capture. Records 480p SD unboxing video (no minimum, 150 s maximum, 24 MB stop / 25 MB hard reject). Claim templates cap each evidence file at 25 MB.
 - **Upload Progress & Reset**: Visual determinate upload dialog showing file-by-file progress (`Uploading evidence files (x of y)...`). On submit completion, prompts "File Next Return (Start Again)", resetting all photo/video slots and claim state back to zero and focusing the search bar for the next order.
-- **Resilient Uploads**: Direct upload to Firebase Storage and server media endpoints with fallback to Android `WorkManager` for background retry on network jitter.
+- **Resilient Uploads**: Evidence uploads go to the server media endpoint (`POST /api/claims/:id/media/upload`); the server archives to Firebase Storage. Android `WorkManager` retries only failed files. The app never talks to Firebase directly (declared Firebase client deps are unused).
 - **In-App Auto-Updates (`AppUpdater.kt`)**: Checks `/api/app/latest` on start and prompts the operator to update when a new version is published.
 
 ### Windows Desktop Application & Claim Bot (`desktop/` & `desktop-agent/`)
@@ -300,8 +296,8 @@ CLAUDE.md                     Project rules the code depends on
 ## Design notes
 
 - The server listens on `0.0.0.0`, so other machines on the network can reach it. The port comes from `PORT`. The host is fixed in code.
-- CORS is enabled with the defaults of the `cors` package, which allow any origin. See [known risks](notes/agent-handoff.md#known-risks-and-gaps).
-- Sessions are rows in the `sessions` table, identified by a random 32-byte token. Sessions do not expire. The `SESSION_SECRET` variable in `.env.example` is not read by the code.
+- CORS uses an allowlist (`ALLOWED_ORIGINS`, defaulting to the production shop and local dev) with CSRF referer/origin checks.
+- Sessions are SHA-256-hashed device-token rows (`sessions`/`user_sessions`) with absolute and idle expiry. `SESSION_SECRET` is absent from `.env.example` and read by no code.
 - Staged uploads are held in process memory. They are lost when the server restarts, and the file has to be uploaded again.
 - Lookup data is activated, not replaced. Superseded rows stay, so a scan always refers to a row that still exists.
 - A scan keeps its own snapshot of its AWBs, order and item values, so it stays correct after the lookup data changes.

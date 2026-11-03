@@ -58,7 +58,7 @@ These rules protect the business logic. They apply to people and to agents. The 
 9. **Test data is synthetic.** Every test value starts with `SYN-`. No real names, emails, AWBs or account data go into code, tests, templates or docs. Do not add demo data.
 10. **Secrets.** Never print, log or commit `DATABASE_URL`, `TEST_DATABASE_URL`, the OMSGuru token or client ID, or `NEW_USER_PASSWORD`. Never write a password to a file, a doc or a command saved in the repository.
 11. **Database TLS.** Never add `rejectUnauthorized: false`, a `sslmode=no-verify` path, or any other way to skip the certificate check. See [CONFIGURATION.md](CONFIGURATION.md#database-ssl).
-12. **Rules change, rules are updated.** If a business rule changes, update `CLAUDE.md` in the same change. If a fact about the work changes, update the note in `docs/notes/` that records it, and say what was and was not run.
+12. **Rules change, rules are updated.** If a business rule changes, update `AGENTS.md` (rules) in the same change. If a fact about the work changes, update the note in `docs/notes/` that records it, and say what was and was not run.
 
 ## Code style
 
@@ -100,6 +100,6 @@ No branch naming convention is documented in the repository. The repository has 
 ## Project memory and agent guides
 
 - [AGENTS.md](../AGENTS.md): the entry point for any agent.
-- [CLAUDE.md](../CLAUDE.md): the business and technical rules the code depends on. Update it when a rule changes.
+- [notes/agent-handoff.md#invariants](notes/agent-handoff.md#invariants): the rules that must not be broken. Update them when a rule changes.
 - [notes/agent-handoff.md](notes/agent-handoff.md): how the work is organised, what is written and what is verified, how to verify, and how to hand over.
 - [notes/agent-roster.md](notes/agent-roster.md): the project's role agents and which one to use for which work.

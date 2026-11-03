@@ -1,5 +1,7 @@
 # AI Provider Comparison — Marketplace Claim Reply Service
 
+> Historical note (2026-11-03): this design note is superseded by the shipped AI Center (M6, `ai-center-m6.md`): 6 providers, direct-HTTPS adapters, DPAPI key store, cost-aware routing, usage ledger, approved memory. Kept for the decision record (Vercel AI SDK retained, Google ADK evaluated and rejected). What follows is the original 2026-10-21 text.
+
 Status: **design only, no provider committed** (2026-10-21)
 
 The brief asks for AI-assisted claim replies with persistent claim memory, rejection
