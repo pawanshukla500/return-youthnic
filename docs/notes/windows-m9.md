@@ -104,3 +104,13 @@ A saved login never authorizes submission on either path:
 - No schema change in this branch (additive-only rule holds vacuously).
 - Not verifiable without the operator: installed-app sandbox behavior,
   screenshot/log redaction on a real run, recovery after interrupted work.
+
+## Phase 11 — PR and CI (2026-11-03)
+
+- Branch pushed; PR [#50](https://github.com/pawanshukla500/return-youthnic/pull/50)
+  open with DO-NOT-MERGE until the live phases (4–9) are verified.
+- CI `ci.yml` provisions its own throwaway Postgres 16 (`return_test`) and runs
+  the full suite: **767 tests, 767 pass, 0 fail, 0 skipped** — the new
+  `claim-authorization-db.test.ts` runs green on CI as well as locally.
+- Required checks green: Build Desktop Setup (windows-latest) pass,
+  Verify Web & API pass. CodeAnt review still in progress; no human reviews yet.
