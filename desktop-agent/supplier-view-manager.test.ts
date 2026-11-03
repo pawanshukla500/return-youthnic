@@ -1,11 +1,14 @@
 import { describe, it } from "node:test"
 import assert from "node:assert/strict"
 import {
+  getBrowserWorkspaceRect,
   hideSupplierViews,
   layoutSupplierViews,
   registerSupplierView,
+  setBrowserWorkspaceRect,
   setSupplierViewHost,
   showSupplierView,
+  supplierViewBounds,
   supplierViewStatus,
   unregisterSupplierView,
   type SupplierViewHost,
@@ -90,6 +93,42 @@ describe("main-window supplier view manager", () => {
     assert.equal(showSupplierView("flipkart"), false)
     layoutSupplierViews()
     unregisterSupplierView("flipkart", toView(view))
+    setSupplierViewHost(null)
+  })
+})
+
+describe("dashboard browser workspace rect", () => {
+  it("fills the window when no workspace rect is set", () => {
+    const { host } = fakeHost()
+    setSupplierViewHost(host)
+    setBrowserWorkspaceRect(null)
+    assert.equal(getBrowserWorkspaceRect(), null)
+    assert.deepEqual(supplierViewBounds(), { x: 0, y: 0, width: 1600, height: 900 })
+    setSupplierViewHost(null)
+  })
+
+  it("confines a visible view to the dashboard workspace rect", () => {
+    const { host } = fakeHost()
+    const view = fakeView()
+    setSupplierViewHost(host)
+    registerSupplierView("meesho", toView(view))
+    setBrowserWorkspaceRect({ x: 10, y: 200, width: 800, height: 500 })
+    assert.deepEqual(supplierViewBounds(), { x: 10, y: 200, width: 800, height: 500 })
+    assert.equal(showSupplierView("meesho"), true)
+    assert.deepEqual(view.bounds, { x: 10, y: 200, width: 800, height: 500 })
+    layoutSupplierViews()
+    assert.deepEqual(view.bounds, { x: 10, y: 200, width: 800, height: 500 })
+    unregisterSupplierView("meesho", toView(view))
+    setBrowserWorkspaceRect(null)
+    setSupplierViewHost(null)
+  })
+
+  it("clamps an oversized rect into the window instead of overflowing", () => {
+    const { host } = fakeHost()
+    setSupplierViewHost(host)
+    setBrowserWorkspaceRect({ x: -50, y: 850, width: 5000, height: 5000 })
+    assert.deepEqual(supplierViewBounds(), { x: 0, y: 850, width: 1600, height: 50 })
+    setBrowserWorkspaceRect(null)
     setSupplierViewHost(null)
   })
 })

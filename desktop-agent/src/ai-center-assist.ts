@@ -20,6 +20,7 @@ import {
   generateWithRetries,
   testConnection,
   type ProviderId,
+  type TokenUsage,
 } from "./ai-providers.js"
 import {
   hasProviderKey,
@@ -75,6 +76,20 @@ function newActivityId(): string {
   return `act-${Date.now().toString(36)}-${Math.floor(Math.random() * 1e6).toString(36)}`
 }
 
+/** Provider token counts are recorded as-is; a missing count stays null, never zero-filled. */
+function tokenOrNull(value: number | undefined): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null
+}
+
+function usageRecordFields(usage: TokenUsage | undefined) {
+  return {
+    inputTokens: tokenOrNull(usage?.inputTokens),
+    outputTokens: tokenOrNull(usage?.outputTokens),
+    cachedTokens: tokenOrNull(usage?.cachedTokens),
+    reasoningTokens: tokenOrNull(usage?.reasoningTokens),
+  }
+}
+
 export async function runRoutedAssist(input: RoutedAssistInput): Promise<RoutedAssistResult> {
   const startedAt = new Date().toISOString()
   const activityId = newActivityId()
@@ -110,7 +125,7 @@ export async function runRoutedAssist(input: RoutedAssistInput): Promise<RoutedA
       const t0 = Date.now()
       try {
         const maxTokens = route.maxTokens ?? 400
-        const text = await requestAiProposal(
+        const answered = await requestAiProposal(
           {
             generateText: async (gen) =>
               generateWithRetries({
@@ -127,13 +142,14 @@ export async function runRoutedAssist(input: RoutedAssistInput): Promise<RoutedA
           route.maxCalls ?? 2,
         )
         const latencyMs = Date.now() - t0
-        const proposal = text ? { kind: "draft_response", summary: text, ticketRef: input.ctx.knownTicketId } : null
+        const usage = answered?.usage
+        const proposal = answered && answered.text ? { kind: "draft_response", summary: answered.text, ticketRef: input.ctx.knownTicketId } : null
         if (proposal && validateAiProposal(proposal, input.ctx)) {
           recordProviderSuccess(input.dir, candidate.provider)
-          const cost = estimateCost(candidate.provider, candidate.model, {})
+          const cost = estimateCost(candidate.provider, candidate.model, usage ?? {})
           recordUsage(input.dir, {
             at: new Date().toISOString(), provider: candidate.provider, model: candidate.model, task: input.task,
-            ok: true, errorCategory: null, inputTokens: null, outputTokens: null, cachedTokens: null, reasoningTokens: null,
+            ok: true, errorCategory: null, ...usageRecordFields(usage),
             latencyMs, estimatedUsd: cost.estimatedUsd, pricingProvenance: cost.provenance,
           })
           appendActivity(input.dir, {
@@ -179,15 +195,21 @@ export async function runRoutedAssist(input: RoutedAssistInput): Promise<RoutedA
   }
 }
 
-/** UI Test Connection path: genuine low-cost model call, error categorized. */
-export async function testProviderConnection(dir: string, provider: ProviderId, model: string): Promise<{ ok: true; latencyMs: number } | { ok: false; category: string; message: string }> {
+/** UI Test Connection path: genuine low-cost model call, usage kept, error categorized. */
+export async function testProviderConnection(dir: string, provider: ProviderId, model: string): Promise<{ ok: true; latencyMs: number; usage: TokenUsage } | { ok: false; category: string; message: string }> {
   const apiKey = revealProviderKey(dir, provider)
   if (!apiKey) return { ok: false, category: "authentication", message: "No API key stored for this provider." }
   const prefs = readProviderPrefs(dir, provider)
   try {
     const res = await testConnection({ provider, apiKey, model: model || prefs.defaultModel, baseUrl: prefs.baseUrlOverride || undefined })
     recordProviderSuccess(dir, provider)
-    return { ok: true, latencyMs: res.latencyMs }
+    const provenCost = estimateCost(provider, res.model, res.usage)
+    recordUsage(dir, {
+      at: new Date().toISOString(), provider, model: res.model, task: "connection_test",
+      ok: true, errorCategory: null, ...usageRecordFields(res.usage),
+      latencyMs: res.latencyMs, estimatedUsd: provenCost.estimatedUsd, pricingProvenance: provenCost.provenance,
+    })
+    return { ok: true, latencyMs: res.latencyMs, usage: res.usage }
   } catch (err) {
     const category = (err as { category?: string })?.category ?? "unknown"
     const message = err instanceof Error ? err.message : String(err)

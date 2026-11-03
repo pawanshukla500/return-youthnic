@@ -79,6 +79,43 @@ export type SupplierViewHost = {
 
 let supplierViewHost: SupplierViewHost | null = null
 
+/**
+ * Dashboard-owned workspace rect (DIPs, relative to the window content area).
+ * When set, visible supplier views are fitted to this rect so the dashboard
+ * keeps its layout controls visible; when null, views fill the window as
+ * before. The dashboard reports it over IPC and clears it on hide.
+ */
+let browserWorkspaceRect: { x: number; y: number; width: number; height: number } | null = null
+
+/** Confine the supplier view to the dashboard workspace rect. Null restores full-window layout. */
+export function setBrowserWorkspaceRect(rect: { x: number; y: number; width: number; height: number } | null): void {
+  browserWorkspaceRect = rect
+  layoutSupplierViews()
+}
+
+/** The active workspace rect, if the dashboard set one. Exported for tests and the shell. */
+export function getBrowserWorkspaceRect(): { x: number; y: number; width: number; height: number } | null {
+  return browserWorkspaceRect ? { ...browserWorkspaceRect } : null
+}
+
+/** Visible-view bounds: the workspace rect clamped into the window, or the full window. */
+export function supplierViewBounds(): { x: number; y: number; width: number; height: number } {
+  const host = supplierViewHost
+  const full = host && !host.isWindowDestroyed()
+    ? host.contentBounds()
+    : { x: 0, y: 0, width: 0, height: 0 }
+  const rect = browserWorkspaceRect
+  if (!rect) return full
+  const x = Math.min(Math.max(0, rect.x), Math.max(0, full.width - 1))
+  const y = Math.min(Math.max(0, rect.y), Math.max(0, full.height - 1))
+  return {
+    x,
+    y,
+    width: Math.min(Math.max(0, rect.width), Math.max(0, full.width - x)),
+    height: Math.min(Math.max(0, rect.height), Math.max(0, full.height - y)),
+  }
+}
+
 /** Register (or clear) the main-window host. Called once by the Electron shell. */
 export function setSupplierViewHost(host: SupplierViewHost | null): void {
   supplierViewHost = host
@@ -111,11 +148,11 @@ export function supplierViewStatus(): Array<{ panelKey: string; visible: boolean
   return [...managedSupplierViews.entries()].map(([panelKey, entry]) => ({ panelKey, visible: entry.visible }))
 }
 
-/** Re-fit every visible supplier view after the main window resizes. */
+/** Re-fit every visible supplier view after the window resizes, moves, or the display scale changes. */
 export function layoutSupplierViews(): void {
   const host = supplierViewHost
   if (!host || host.isWindowDestroyed()) return
-  const bounds = host.contentBounds()
+  const bounds = supplierViewBounds()
   for (const entry of managedSupplierViews.values()) {
     if (!entry.visible) continue
     try {
@@ -162,7 +199,7 @@ export function showSupplierView(panelKey: string): boolean {
       // ensure a single attach
     }
     host.addView(entry.view)
-    entry.view.setBounds(host.contentBounds())
+    entry.view.setBounds(supplierViewBounds())
     for (const popup of entry.popups) {
       try {
         host.removeView(popup)
@@ -170,7 +207,7 @@ export function showSupplierView(panelKey: string): boolean {
         // ensure a single attach
       }
       host.addView(popup)
-      popup.setBounds(host.contentBounds())
+      popup.setBounds(supplierViewBounds())
     }
     entry.visible = true
   }
@@ -321,7 +358,7 @@ class NativeSupplierBrowser implements SupplierBrowserApi {
         // ensure a single attach
       }
       host.addView(popup)
-      popup.setBounds(host.contentBounds())
+      popup.setBounds(supplierViewBounds())
       host.showWindow()
     } else if (this.host) {
       this.host.contentView.addChildView(popup)
@@ -333,9 +370,9 @@ class NativeSupplierBrowser implements SupplierBrowserApi {
   private async savePortalDownload(item: Electron.CrossProcessExports.DownloadItem): Promise<void> {
     const fileName = item.getFilename() || `portal-download-${Date.now()}`
     const { default: nodePath } = await import("node:path")
-    const { default: fs } = await import("node:fs")
+    const { default: fsp } = await import("node:fs/promises")
     const downloadsDir = this.electron.app.getPath("downloads")
-    fs.mkdirSync(downloadsDir, { recursive: true })
+    await fsp.mkdir(downloadsDir, { recursive: true })
     const savePath = nodePath.join(downloadsDir, fileName)
     item.setSavePath(savePath)
     await new Promise<void>((resolve) => {
@@ -374,8 +411,8 @@ class NativeSupplierBrowser implements SupplierBrowserApi {
 
   async captureScreenshot(outputPath: string): Promise<string> {
     const image = await this.contents.capturePage()
-    const { default: fs } = await import("node:fs")
-    fs.writeFileSync(outputPath, image.toPNG())
+    const { default: fsp } = await import("node:fs/promises")
+    await fsp.writeFile(outputPath, image.toPNG())
     return outputPath
   }
 

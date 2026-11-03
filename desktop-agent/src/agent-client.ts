@@ -71,6 +71,7 @@ export type JobExecutionBundle = {
   jobId: number
   claimId: number
   stage: string
+  claimStatus: string
   marketplace: string
   accountName: string
   portalUrl: string
@@ -365,9 +366,7 @@ export class AgentBackendClient {
   async downloadEvidenceFiles(claimId: number, files: JobExecutionBundle["evidenceFiles"]): Promise<Map<string, string[]>> {
     const downloadedMap = new Map<string, string[]>()
     const claimDir = path.join(this.config.workDir, `claim-${claimId}`)
-    if (!fs.existsSync(claimDir)) {
-      fs.mkdirSync(claimDir, { recursive: true })
-    }
+    await fs.promises.mkdir(claimDir, { recursive: true })
 
     for (const f of files) {
       const safeName = `${f.id}_${f.fieldKey}_${path.basename(f.originalFilename)}`
@@ -433,18 +432,20 @@ export class AgentBackendClient {
 
   async cleanClaimEvidenceFiles(claimId: number): Promise<void> {
     const claimDir = path.join(this.config.workDir, `claim-${claimId}`)
-    if (fs.existsSync(claimDir)) {
-      try {
-        await fs.promises.rm(claimDir, { recursive: true, force: true })
-        logger.info(`[Cleanup] Deleted local temporary evidence directory for claim #${claimId}`)
-      } catch (err) {
-        logger.warn(`[Cleanup] Failed to delete temporary claim directory ${claimDir}:`, err)
-      }
+    try {
+      await fs.promises.rm(claimDir, { recursive: true, force: true })
+      logger.info(`[Cleanup] Deleted local temporary evidence directory for claim #${claimId}`)
+    } catch (err) {
+      logger.warn(`[Cleanup] Failed to delete temporary claim directory ${claimDir}:`, err)
     }
   }
 
   async pruneOldEvidenceFiles(maxAgeHours = 24): Promise<void> {
-    if (!fs.existsSync(this.config.workDir)) return
+    try {
+      await fs.promises.stat(this.config.workDir)
+    } catch {
+      return
+    }
     try {
       const now = Date.now()
       const maxAgeMs = maxAgeHours * 60 * 60 * 1000

@@ -26,7 +26,7 @@ function memoryWithEvilProcedure() {
 }
 
 test("payload escapes markup in procedure fields", () => {
-  const payload = buildAiMemoryPayload(memoryWithEvilProcedure(), { calls: 0, failures: 0, lastLatencyMs: null, lastModel: "" }, false)
+  const payload = buildAiMemoryPayload(memoryWithEvilProcedure(), { calls: 0, failures: 0, lastLatencyMs: null, lastModel: "", lastUsage: null }, false)
   assert.equal(payload.procedures.length, 1)
   assert.doesNotMatch(payload.procedures[0].title, /<script>/)
   assert.match(payload.procedures[0].title, /&lt;script&gt;/)
@@ -47,7 +47,7 @@ test("payload caps recent events at 20", () => {
       note: "",
     })
   }
-  const payload = buildAiMemoryPayload(memory, { calls: 3, failures: 1, lastLatencyMs: 12, lastModel: "syn" }, true)
+  const payload = buildAiMemoryPayload(memory, { calls: 3, failures: 1, lastLatencyMs: 12, lastModel: "syn", lastUsage: null }, true)
   assert.equal(payload.events.length, PAYLOAD_EVENT_CAP)
   assert.equal(payload.usage.calls, 3)
   assert.equal(payload.assistEnabled, true)

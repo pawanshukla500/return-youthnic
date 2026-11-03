@@ -12,4 +12,7 @@ contextBridge.exposeInMainWorld("desktopApp", {
   onBotStatusChange: (callback) => {
     ipcRenderer.on("desktop:bot-status-changed", (_event, data) => callback(data))
   },
+  setBrowserWorkspaceRect: (rect) => {
+    ipcRenderer.send("desktop:browser-rect", rect)
+  },
 })

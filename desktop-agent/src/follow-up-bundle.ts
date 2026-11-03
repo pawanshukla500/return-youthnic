@@ -23,6 +23,7 @@ export function followUpExecutionBundle(input: {
     jobId: 0,
     claimId: input.claimId,
     stage: "follow_up",
+    claimStatus: "",
     marketplace: input.marketplace,
     accountName: input.accountName,
     portalUrl: input.portalUrl,

@@ -35,12 +35,12 @@ function leaseSelectSql(queries: Captured[]): string {
   return String(found.sql)
 }
 
-test("evidence gate: lease SELECT excludes claims still pending_evidence", async () => {
+test("evidence gate: lease SELECT allows only explicitly eligible claim states", async () => {
   const { pool, queries } = gatePool(null)
   const result = await pollNextAutomationJob(pool, "SYN-agent-uuid", SCOPE)
   assert.equal(result, null)
   const sql = leaseSelectSql(queries)
-  assert.match(sql, /c\.status <> 'pending_evidence'/, "lease must filter out pending_evidence claims")
+  assert.match(sql, /c\.status IN \('ready_for_claim', 'processing', 'reclaim', 'escalated'\)/, "lease must use the explicit eligibility allowlist")
 })
 
 test("evidence gate: ready claims remain leasable", async () => {
@@ -58,5 +58,5 @@ test("evidence gate: ready claims remain leasable", async () => {
   assert.equal(result.jobId, 42)
   assert.equal(result.claimId, 1001)
   assert.equal(result.stage, "downloading_media")
-  assert.match(leaseSelectSql(queries), /c\.status <> 'pending_evidence'/)
+  assert.match(leaseSelectSql(queries), /c\.status IN \('ready_for_claim', 'processing', 'reclaim', 'escalated'\)/)
 })

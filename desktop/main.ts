@@ -1,6 +1,6 @@
 import path from "node:path"
 import fs from "node:fs"
-import { app, BrowserWindow, Menu, Tray, nativeImage, Notification, ipcMain, session, type NativeImage } from "electron"
+import { app, BrowserWindow, Menu, Tray, nativeImage, Notification, ipcMain, screen, session, type NativeImage } from "electron"
 import {
   enginePause,
   engineRunOnceNow,
@@ -9,7 +9,7 @@ import {
   resumeClaimBotIfSignedIn,
   startDesktopAppServer,
 } from "../desktop-agent/src/desktop-app-server.js"
-import { layoutSupplierViews, setSupplierViewHost } from "../desktop-agent/src/native-browser-view.js"
+import { layoutSupplierViews, setBrowserWorkspaceRect, setSupplierViewHost } from "../desktop-agent/src/native-browser-view.js"
 import { isInsecureRemoteUrl, isSameOrigin, localEngineUrl, resolveEngineBind, type EngineBind } from "../desktop-agent/src/engine-config.js"
 import { escapeHtml, scriptLiteral } from "../desktop-agent/src/html-escape.js"
 import { logger } from "../desktop-agent/src/logger.js"
@@ -347,7 +347,11 @@ function createMainWindow(target: EngineTarget, startupError?: string): void {
   // The main window owns every supplier browser view: marketplace work is
   // embedded here through WebContentsView, never a separate window.
   registerSupplierViewHost()
+  // Bounds follow the window, not just its size: a move across displays or a
+  // DPI change re-fits the supplier view into the dashboard workspace rect.
   mainWindow.on("resize", () => layoutSupplierViews())
+  mainWindow.on("move", () => layoutSupplierViews())
+  screen.on("display-metrics-changed", () => layoutSupplierViews())
 
   mainWindow.once("ready-to-show", () => {
     if (!startHidden) mainWindow?.show()
@@ -625,6 +629,28 @@ ipcMain.on("desktop:notify", (_event, { title, body }) => {
 ipcMain.handle("desktop:get-bot-status", async () => shellStatus())
 
 ipcMain.handle("desktop:toggle-bot", async () => toggleWorker())
+
+/**
+ * Dashboard workspace rect (DIPs, relative to the window content area).
+ * The dashboard reports the rect of its browser placeholder so the supplier
+ * view shares the window with the layout controls instead of covering them.
+ * A null/empty rect restores full-window layout. Malformed rects are ignored.
+ */
+ipcMain.on("desktop:browser-rect", (_event, rect) => {
+  if (rect === null || rect === undefined) {
+    setBrowserWorkspaceRect(null)
+    return
+  }
+  if (typeof rect !== "object") return
+  const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null)
+  const x = num((rect as Record<string, unknown>).x)
+  const y = num((rect as Record<string, unknown>).y)
+  const width = num((rect as Record<string, unknown>).width)
+  const height = num((rect as Record<string, unknown>).height)
+  if (x === null || y === null || width === null || height === null) return
+  if (width < 0 || height < 0) return
+  setBrowserWorkspaceRect({ x, y, width, height })
+})
 
 // ---------------------------------------------------------------------------------------------------------------
 // App Lifecycle

@@ -34,6 +34,28 @@ export function resolveMeeshoPacketLabel(packetState: string): "Intact" | "Tampe
 }
 
 /**
+ * Finds a ticket the portal already shows for one of the order references, or null.
+ * Pure: takes support-table rows as cell arrays plus the claim's order references,
+ * so fixtures can test it without a browser. A row counts as already-filed only
+ * when it names one of the order references AND a ticket ID that is not itself one
+ * of the reference numbers (order/AWB digits must not be mistaken for tickets).
+ */
+export function findExistingTicketForOrder(rows: string[][], orderRefs: Array<string | undefined | null>): string | null {
+  const needleRuns = new Set<string>()
+  for (const ref of orderRefs) {
+    for (const digits of String(ref || "").match(/\d{9,15}/g) || []) needleRuns.add(digits)
+  }
+  if (!needleRuns.size) return null
+  for (const cells of rows || []) {
+    const text = cells.join(" | ")
+    if (![...needleRuns].some((run) => text.includes(run))) continue
+    const ticket = (text.match(/\d{9,15}/g) || []).find((id) => !needleRuns.has(id))
+    if (ticket) return ticket
+  }
+  return null
+}
+
+/**
  * Matches one row of the Meesho Support ticket table against a ticket reference.
  * Pure: takes table rows as cell arrays so fixtures can test it without a browser.
  * Returns the row's non-reference cells as the portal status text, plus a
@@ -54,7 +76,9 @@ export function parseMeeshoTicketRow(
     let normalizedStatus: string | undefined
     if (/paid|settled|credited/.test(lowered)) normalizedStatus = "paid"
     else if (/reject|denied|declined|cancelled|canceled/.test(lowered)) normalizedStatus = "rejected"
-    else if (/approv|accept|resolv|completed/.test(lowered)) normalizedStatus = "approved"
+    // A bare Resolved/Completed portal row is not approval evidence: the server re-normalizes
+    // the raw text and only an explicit approval (or payment evidence) advances the claim.
+    else if (/approv|accept/.test(lowered)) normalizedStatus = "approved"
     return normalizedStatus ? { statusText, normalizedStatus } : { statusText }
   }
   return null
@@ -119,6 +143,25 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
     await this.waitForContent()
     const ticketsBefore = await this.readRecentTicketIds(15000)
     logger.info(`Meesho shows ${ticketsBefore.length} recent tickets before this claim.`)
+
+    // F7: an already-filed claim for this order must not be filed again. The
+    // support table names the order reference next to its ticket; order/AWB
+    // digit runs are excluded from the ticket candidates so they are never
+    // mistaken for a filed ticket.
+    const alreadyFiled = findExistingTicketForOrder(await this.readTicketTableRows(), [
+      this.job.claim.subOrderId,
+      this.job.claim.orderNumber,
+      this.job.claim.trackingId,
+      this.job.claim.packetId,
+    ])
+    if (alreadyFiled) {
+      logger.warn(`Meesho already shows ticket ${alreadyFiled} for this order; not filing again.`)
+      return {
+        success: false,
+        stage: "manual_intervention_required",
+        manualActionReason: `Meesho already shows ticket ${alreadyFiled} for this order. Verify on the portal instead of filing again.`,
+      }
+    }
 
     logger.info(`Selecting issue category: ${issueLabel}...`)
     let openedIssue = false
@@ -530,12 +573,16 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
   }
 
   private async readTicketRow(ticketId: string): Promise<{ statusText: string; normalizedStatus?: string } | null> {
-    const rows = await this.browser.evaluate<string[][]>(`
+    return parseMeeshoTicketRow(await this.readTicketTableRows(), ticketId)
+  }
+
+  /** Single-shot read of the Support ticket table rows for the ticket checks. */
+  private async readTicketTableRows(): Promise<string[][]> {
+    return (await this.browser.evaluate<string[][]>(`
       Array.from(document.querySelectorAll("tr")).map((tr) =>
         Array.from(tr.querySelectorAll('td, th')).map((cell) => (cell.textContent || '').trim()).filter(Boolean),
       ).filter((cells) => cells.length > 1)
-    `)
-    return parseMeeshoTicketRow(rows || [], ticketId)
+    `)) || []
   }
 
   /** Reads the numeric ticket IDs in Meesho's "Recently raised tickets" table on the Support page. */
