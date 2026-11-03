@@ -157,10 +157,17 @@ async function pollAndProcessJob(manual = false): Promise<boolean> {
       return false
     }
 
-    await client.updateProgress(jobHeader.jobId, {
-      stage: "downloading_media",
-      logMessage: "Agent downloading evidence photos and unboxing videos from cloud storage...",
-    })
+    // M9: a run holding the submitting lease must keep that stage. Reporting
+    // downloading_media here would overwrite the backend's submission
+    // authorization with a prepare-stage value (and the F4 gate plus the
+    // completion endpoint both require the submitting stage to be intact).
+    // The lease itself still expires on its own 15-minute clock.
+    if (jobHeader.stage !== "submitting") {
+      await client.updateProgress(jobHeader.jobId, {
+        stage: "downloading_media",
+        logMessage: "Agent downloading evidence photos and unboxing videos from cloud storage...",
+      })
+    }
 
     const evidenceFilesMap = await client.downloadEvidenceFiles(bundle.claimId, bundle.evidenceFiles)
     logger.info(`Downloaded ${evidenceFilesMap.size} evidence files for Claim #${bundle.claimId}.`)
@@ -184,14 +191,20 @@ async function pollAndProcessJob(manual = false): Promise<boolean> {
         path.join(config.workDir, `claim-${bundle.claimId}`),
       )
 
-      const sessionSaved = Boolean(readSessionSavedAt(supplierSessionDir(config.userDataDir, bundle.marketplace, resolveBrowserAdapterKind())))
-      const action = jobHeader.stage === "submitting" || sessionSaved ? "submit" : "prepare"
-      if (action === "submit") {
+      // M9: a saved supplier login NEVER authorizes submission. Only the
+      // backend-issued `submitting` lease (granted when an approved job is
+      // leased) selects the submit path; cookie state is not consulted.
+      const action = jobHeader.stage === "submitting" ? "submit" : "prepare"
+      // Prepare runs on auto-submit accounts fall through to portal submission
+      // inside the engine, so they get the same revalidation (without the
+      // submitting-stage requirement, which only the approval path satisfies).
+      if (action === "submit" || bundle.requireApprovalBeforeSubmit === false) {
         // F4: minutes passed since the lease while evidence downloaded. Re-read the
-        // job and claim before the portal is touched; a retry, a second filing, or
-        // a recorded claim outcome stops this run instead of filing a duplicate.
+        // job and claim before the portal is touched; a retry, a second filing,
+        // a missing approval, or a recorded claim outcome stops this run instead
+        // of filing a duplicate.
         const fresh = await client.getExecutionBundle(jobHeader.jobId)
-        const gate = isSafeToSubmitBundle(fresh?.stage, fresh?.claimStatus)
+        const gate = isSafeToSubmitBundle(fresh?.stage, fresh?.claimStatus, bundle.requireApprovalBeforeSubmit)
         if (!gate.ok) {
           logger.warn(`Pre-submit revalidation stopped Job #${jobHeader.jobId}: ${gate.reason}`)
           markPanelResult(panelKey, "manual_action", gate.reason)

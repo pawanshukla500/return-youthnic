@@ -404,14 +404,16 @@ export function mountClaimAutomationRoutes(app: Express, requireUser: RequestHan
       const id = positiveId(req.params.id)
       if (!id) throw new ServiceError(404, "Job not found.")
       const credentials = agentCredentials(req)
-      await authenticateAutomationAgent(getPool(), credentials.uuid, credentials.apiKey, id)
+      const agent = await authenticateAutomationAgent(getPool(), credentials.uuid, credentials.apiKey, id)
       const body = (req.body ?? {}) as Record<string, unknown>
+      // M9: the lease-holder check inside updateJobProgress rejects progress
+      // from a worker that no longer holds a live lease on this job.
       const marketplaceId = await updateJobProgress(getPool(), id, {
         stage: text(body.stage) || "processing",
         logMessage: text(body.logMessage),
         screenshotPath: text(body.screenshotPath),
         manualActionReason: text(body.manualActionReason),
-      })
+      }, agent.id)
       publishChange({ kind: "claim.updated", marketplaceId })
       res.json({ ok: true })
     } catch (error) {
@@ -424,13 +426,15 @@ export function mountClaimAutomationRoutes(app: Express, requireUser: RequestHan
       const id = positiveId(req.params.id)
       if (!id) throw new ServiceError(404, "Job not found.")
       const credentials = agentCredentials(req)
-      await authenticateAutomationAgent(getPool(), credentials.uuid, credentials.apiKey, id)
+      const agent = await authenticateAutomationAgent(getPool(), credentials.uuid, credentials.apiKey, id)
       const body = (req.body ?? {}) as Record<string, unknown>
+      // M9: the endpoint verifies lease ownership, lease liveness and the
+      // account's submission authorization atomically before recording a ticket.
       const marketplaceId = await completeJobSubmission(getPool(), id, {
         marketplaceClaimId: text(body.marketplaceClaimId),
         screenshotPath: text(body.screenshotPath),
         notes: text(body.notes),
-      })
+      }, undefined, { agentId: agent.id })
       publishChange({ kind: "claim.updated", marketplaceId })
       res.json({ ok: true })
     } catch (error) {
@@ -551,11 +555,14 @@ export function mountClaimAutomationRoutes(app: Express, requireUser: RequestHan
       const body = (req.body ?? {}) as Record<string, unknown>
       const refId = text(body.marketplaceClaimId)
       if (!refId) throw new ServiceError(400, "Marketplace Claim Reference ID is required.")
+      // M9: operator-approved manual resolution stays separate from automated
+      // submission: the route is Supervisor/Admin-gated and carries the
+      // operator override instead of a worker lease.
       const marketplaceId = await completeJobSubmission(getPool(), id, {
         marketplaceClaimId: refId,
         screenshotPath: text(body.screenshotPath),
         notes: text(body.notes),
-      }, scopeOf(req))
+      }, scopeOf(req), { operatorOverride: true })
       publishChange({ kind: "claim.updated", marketplaceId, actorId: actorOf(req).id })
       res.json({ ok: true })
     } catch (error) {
