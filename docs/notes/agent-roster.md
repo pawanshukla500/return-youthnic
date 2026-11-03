@@ -6,7 +6,7 @@ Last updated: 2026-10-11.
 
 33 role files are installed in `.claude/agents/` in this project. The first 20 were copied in full from the local collection at `C:\Users\Pawan Shukla\.claude\agents\`. The 13 added on 2026-10-11 were downloaded from `https://github.com/msitarzewski/agency-agents` (branch `main`) and are listed under [Installed and not in use](#installed-and-not-in-use). Those 13 are present only. Do not start work from them until the user asks.
 
-A role file gives an agent a way of working. It does not give access to the database, to secrets, or to the production system. Every agent, whatever its role, follows the rules in [CLAUDE.md](../../CLAUDE.md) and the invariants in [agent-handoff.md](agent-handoff.md#invariants). No agent reads `.env`.
+A role file gives an agent a way of working. It does not give access to the database, to secrets, or to the production system. Every agent, whatever its role, follows the rules in [AGENTS.md](../../AGENTS.md) and the invariants in [agent-handoff.md](agent-handoff.md#invariants). No agent reads `.env`.
 
 ## Source and limits
 

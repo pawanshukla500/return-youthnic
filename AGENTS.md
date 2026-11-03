@@ -26,7 +26,7 @@ A return-scanning app for VB Exports. Marketplace return reports (Myntra VB and 
 ## Read in this order
 
 1. This file.
-2. [CLAUDE.md](CLAUDE.md): the business and technical rules. **This file is not in the folder as of 2026-10-12.** Do not treat a missing file as permission to change the rules in this document.
+2. [docs/notes/agent-handoff.md#invariants](docs/notes/agent-handoff.md#invariants): the rules that must not be broken (CLAUDE.md is absent; do not invent a replacement). **This file is not in the folder as of 2026-10-12.** Do not treat a missing file as permission to change the rules in this document.
 3. [docs/notes/agent-handoff.md](docs/notes/agent-handoff.md): how the work is organised, the invariants, the recipes, how to verify, and the handoff protocol.
 4. [docs/notes/phase1-register-status.md](docs/notes/phase1-register-status.md): what was written, and the verification commands.
 5. [docs/notes/phase1-audit-matrix.md](docs/notes/phase1-audit-matrix.md): the issue IDs (P0, P1, P2) and their status.

@@ -186,9 +186,9 @@ The repository includes automated GitHub Actions workflows:
 
 ## Verification status
 
-The test suite runs 463 tests with 0 failures:
-- Locally: 426 tests pass without a test database (37 database tests report skipped).
-- In CI: 463 tests pass (100% pass, 0 fail, 0 skipped) against the `postgres:16` container.
+The test suite runs 767 tests with 0 failures (verified 2026-11-03):
+- Locally: 721 tests pass without a test database (43 database tests report skipped without `TEST_DATABASE_URL`, plus 3 POSIX-only secret-permission skips on Windows).
+- In CI: 767 tests pass (100% pass, 0 fail, 0 skipped) against the throwaway Postgres service container.
 
 
 ## Not covered by the suite

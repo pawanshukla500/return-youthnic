@@ -4,7 +4,7 @@ Status date: 2026-10-17.
 
 Who this is for: any agent or person who picks up the Return App, whether a Claude Code session, one of the project's role agents in `.claude/agents/`, or a reviewer. It gives you the state of the work, the map of the code, the rules that must hold after any change, how to verify, what is waiting on the user, and how to hand back.
 
-It does not replace [CLAUDE.md](../../CLAUDE.md), which holds the business and technical rules. Where this file and CLAUDE.md disagree, CLAUDE.md is right, and you must say so in the session log.
+It does not replace the business and technical rules, which now live in [AGENTS.md](../../AGENTS.md) (CLAUDE.md is absent; do not invent it). Where this file and AGENTS.md disagree, AGENTS.md is right, and you must say so in the session log.
 
 ## Summary
 
@@ -16,7 +16,7 @@ It does not replace [CLAUDE.md](../../CLAUDE.md), which holds the business and t
 ## Reading order
 
 1. [AGENTS.md](../../AGENTS.md): the entry point.
-2. [CLAUDE.md](../../CLAUDE.md): the rules.
+2. [AGENTS.md](../../AGENTS.md): the entry point and the rules.
 3. This file.
 4. [phase1-register-status.md](phase1-register-status.md): what was written, the verification commands, and the blockers.
 5. [phase1-audit-matrix.md](phase1-audit-matrix.md): the issue IDs and their status.
@@ -113,7 +113,7 @@ These are not in the code. Each one is stated on the screen or in the docs, wher
 
 ## Waiting on the user
 
-These need a person's decision or input. Do not guess them. Full detail is in [CLAUDE.md, Pending from the user](../../CLAUDE.md).
+These need a person's decision or input. Do not guess them. Full detail is in the table below.
 
 | # | Item | What it blocks |
 |---|---|---|
@@ -1706,7 +1706,8 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
 |- **SPF claim path bypasses `createClaim`.** `fileSpfClaimFromTracking` inserts `pending_evidence` claims with no template, status-history or audit row and throws plain `Error` (500).|
 |- **Free-text stage columns.** Automation job `stage`, follow-up `stage` and return-tracking `claim_eligibility_status` are unconstrained text; valid values live only in code and docs.|
 |- **Native attach verification is fail-open.** `setFileInputFiles` logs and continues to `prepared` when a browser upload box cannot be verified; only the zero-evidence case is fail-closed. See M8 §8 finding (still open).|
-|- **A dead path.** The editable ticket cell in `src/returns-table.tsx` is used by no page. Its default save does nothing. Wire it or remove it before use.
+|- **Phantom endpoint (M8.5 audit artifact, not a bug).** `GET /api/claims/meesho-draft/:scanId` exists in NO server route and NO client caller (verified 2026-11-03 across 85 server files + Android sources); an earlier audit listed it in error. Do not re-add it without an implementation.
+- **A dead path.** The editable ticket cell in `src/returns-table.tsx` is used by no page. Its default save does nothing. Wire it or remove it before use.
 - **Stale code comment (recorded, not fixed — documentation-only task).** `server/claims-service.ts` header says "All transitions are allowed and audited"; the `CLAIM_TRANSITIONS` map next to it enforces with 409. Code wins; fix the comment in a code pass.
 - **An unused list.** `MARKETPLACES` in `src/marketplaces.ts` is no longer used for account lists.
 - **Stale comments.** These are in the code, and they were not edited on 2026-10-10:

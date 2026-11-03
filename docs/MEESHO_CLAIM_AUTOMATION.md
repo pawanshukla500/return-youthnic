@@ -91,7 +91,7 @@ Return Team Tullipprints
 ## 4. Ticket ID Linkage with Return Register
 
 ### The Synchronizer: `syncClaimTicketToRegister()`
-Located in [`server/claim-automation-service.ts`](file:///d:/Return%20APP%20-%20New/server/claim-automation-service.ts).
+Located in [`server/claim-automation-service.ts`](../server/claim-automation-service.ts).
 
 1. **On Mobile Claim Creation (`POST /api/claims/unified-create`)**:
    - Creates a pending claim ticket with initial code `CLM-<claimId>`.

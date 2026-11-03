@@ -132,7 +132,6 @@ Sign-in and mutating routes are login- and IP-rate-limited (`server/rate-limit.t
 | GET | `/api/automation/portal-login-secret` | Admin | Decrypts one stored portal password for the setup flow. |
 | POST | `/api/admin/automation/credentials` | Admin | Creates or updates a marketplace credential (needs `AUTOMATION_SECRET_KEY`). |
 | GET | `/api/claims/return-lookup` | Yes | Finds returns eligible for a claim by AWB or order. |
-| GET | `/api/claims/meesho-draft/:scanId` | Yes | Meesho claim draft for one scan. |
 | GET | `/api/claims/export` | Yes | Scoped claim reconciliation rows as CSV/XLSX (same 50,000-row cap). |
 | GET | `/api/payment/status` | Yes | Payment sync status. |
 | GET | `/api/payment/runs` | Yes | Past payment sync runs. |

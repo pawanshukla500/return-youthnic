@@ -1,6 +1,6 @@
 # Phase 1 register: status and verification handoff
 
-As of 2026-10-12. The typecheck, production build and non-database tests were run on 2026-10-11: 224 pass, 0 fail, 24 skipped. The skipped tests need `TEST_DATABASE_URL`. Read [Start here (2026-10-12)](agent-handoff.md#start-here-2026-10-12) before the older notes below. Two later facts override the bullets further down:
+As of 2026-10-12. The typecheck, production build and non-database tests were run on 2026-10-11: 224 pass, 0 fail, 24 skipped. The skipped tests need `TEST_DATABASE_URL`. Read [Start here](agent-handoff.md#start-here-2026-10-17) before the older notes below. Two later facts override the bullets further down:
 
 - The register has no card list under the table. Details opens a two-column record. Empty dates say Any day.
 - The logistics screen shows courier names and the brand mark. It does not show tracking hosts. A tracking link does not name the partner.
