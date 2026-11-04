@@ -53,6 +53,8 @@ import { buildAiMemoryPayload, disableLocalProcedure } from "./ai-memory-panel.j
 import { nightlyFollowUpOnly, nightlyWindowStatus, shouldSkipFollowUpCycle } from "./follow-up-window.js"
 import { runRoutedAssist } from "./ai-center-assist.js"
 import { handleAiCenterRoute } from "./ai-center-routes.js"
+import { corsAllowedOrigin, corsHeadersFor } from "./cors.js"
+import { evidenceStreamHeaders, isValidEvidenceClaimId, listEvidenceFiles, resolveEvidenceFile } from "./evidence-files.js"
 
 /**
  * The engine owns exactly one worker loop. The Electron shell embeds this
@@ -3277,6 +3279,28 @@ export function startDesktopAppServer(bind: EngineBind = resolveEngineBind()): P
     const server = http.createServer(async (req, res) => {
       const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`)
 
+      // Cross-origin support for the packaged desktop renderer (origin
+      // returnapp://desktop) and, outside production, the Vite dev server.
+      // Only allowlisted origins get CORS headers; every other request
+      // proceeds exactly as before. Preflights to /api/* are answered here,
+      // ahead of the remote bearer-token gate below, because a preflight
+      // carries no Authorization header; a non-allowed origin still gets a
+      // 204 but no allow headers, so its browser blocks the real call.
+      const corsOrigin = corsAllowedOrigin(req.headers.origin ?? null, {
+        extraOrigins: process.env.ENGINE_CORS_ORIGINS,
+        dev: process.env.NODE_ENV !== "production",
+      })
+      if (corsOrigin) {
+        for (const [header, value] of Object.entries(corsHeadersFor(corsOrigin))) {
+          res.setHeader(header, value)
+        }
+      }
+      if (req.method === "OPTIONS" && url.pathname.startsWith("/api/")) {
+        res.writeHead(204)
+        res.end()
+        return
+      }
+
       // The health probe is the only route that never needs the engine token, so
       // Docker, systemd and load balancers can check liveness without a secret.
       // Keep it to liveness only: on a non-loopback bind anyone who can reach the
@@ -3352,6 +3376,8 @@ export function startDesktopAppServer(bind: EngineBind = resolveEngineBind()): P
           agentUuid: status.agentUuid,
           agentName: status.agentName,
           signedIn: status.signedIn,
+          nightlyWindow: status.nightlyWindow,
+          browserAdapter: status.browserAdapter,
         })
         return
       }
@@ -3403,6 +3429,56 @@ export function startDesktopAppServer(bind: EngineBind = resolveEngineBind()): P
         const jobs = await client.getRecentJobs()
         res.writeHead(200, { "Content-Type": "application/json" })
         res.end(JSON.stringify(jobs))
+        return
+      }
+
+      // Local evidence cache only: these routes read config.workDir/claim-<id>/
+      // straight from disk, so they keep working while the backend is down.
+      // They never call the backend. url.pathname is already percent-decoded
+      // by the WHATWG URL parser, so an encoded traversal arrives decoded and
+      // is rejected by the validators before any disk access.
+      if (url.pathname.startsWith("/api/evidence/") && req.method === "GET") {
+        if (!operatorSignedIn) {
+          sendJson(res, 401, { error: "Sign in before viewing claim evidence." })
+          return
+        }
+        const segments = url.pathname.slice("/api/evidence/".length).split("/")
+        const claimId = segments[0] || ""
+        const fileName = segments.length > 1 ? segments[1] : ""
+        if (segments.length > 2 || !isValidEvidenceClaimId(claimId) || (segments.length > 1 && !fileName)) {
+          sendJson(res, 400, { error: "Malformed evidence path." })
+          return
+        }
+        if (segments.length === 1) {
+          sendJson(res, 200, { claimId, files: listEvidenceFiles(config.workDir, claimId) })
+          return
+        }
+        const evidencePath = resolveEvidenceFile(config.workDir, claimId, fileName)
+        if (!evidencePath) {
+          sendJson(res, 400, { error: "Invalid evidence file name." })
+          return
+        }
+        let stat: fs.Stats
+        try {
+          stat = fs.statSync(evidencePath)
+        } catch {
+          sendJson(res, 404, { error: "That evidence file is not available." })
+          return
+        }
+        if (!stat.isFile()) {
+          sendJson(res, 404, { error: "That evidence file is not available." })
+          return
+        }
+        res.writeHead(200, evidenceStreamHeaders(fileName, stat.size))
+        await new Promise<void>((streamDone) => {
+          const stream = fs.createReadStream(evidencePath)
+          stream.on("error", () => {
+            res.destroy()
+            streamDone()
+          })
+          res.on("finish", streamDone)
+          stream.pipe(res)
+        })
         return
       }
 
