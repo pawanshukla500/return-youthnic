@@ -1,6 +1,6 @@
 import path from "node:path"
 import fs from "node:fs"
-import { app, BrowserWindow, Menu, Tray, nativeImage, Notification, ipcMain, screen, session, type NativeImage } from "electron"
+import { app, BrowserWindow, Menu, Tray, nativeImage, Notification, ipcMain, protocol, screen, session, type NativeImage } from "electron"
 import {
   enginePause,
   engineRunOnceNow,
@@ -11,7 +11,6 @@ import {
 } from "../desktop-agent/src/desktop-app-server.js"
 import { notifyWindowGeometryChanged, setBrowserWorkspaceRect, setDetachedViewHost, setFullscreenSupplierView, setSupplierViewHost, handleDetachedWindowClosed, disposeDetachedSupplierViews, notifyWindowLifecycle, DETACHED_WINDOW_WEB_PREFERENCES, type WindowLifecycleEvent } from "../desktop-agent/src/native-browser-view.js"
 import { isInsecureRemoteUrl, isSameOrigin, localEngineUrl, resolveEngineBind, type EngineBind } from "../desktop-agent/src/engine-config.js"
-import { escapeHtml, scriptLiteral } from "../desktop-agent/src/html-escape.js"
 import { logger } from "../desktop-agent/src/logger.js"
 
 // Hardware efficiency switches for low-spec PCs (4GB RAM, 2-Core CPUs)
@@ -26,6 +25,118 @@ let isQuitting = false
 let refreshTray = () => {}
 
 const startHidden = process.argv.includes("--hidden")
+
+// ---------------------------------------------------------------------------------------------------------------
+// Bundled desktop renderer (returnapp://desktop)
+//
+// The window no longer loads the engine's server-rendered dashboard. Production
+// serves a bundled React renderer from desktop/renderer/dist through a
+// privileged custom scheme, which gives the app a real origin for CORS/CSP.
+// Development loads the Vite dev server instead. The engine dashboard HTML at
+// GET / stays in place for headless Linux mode — the desktop app simply never
+// loads it. Engine reachability is the renderer's concern: it probes the engine
+// API (see /api/health) and renders its own offline/connecting state.
+// ---------------------------------------------------------------------------------------------------------------
+
+const RENDERER_SCHEME = "returnapp"
+const RENDERER_HOST = "desktop"
+const DEV_RENDERER_URL = "http://localhost:5180"
+
+// Must run BEFORE app ready: tells Chromium to treat returnapp://desktop as a
+// standard, secure origin with fetch support. CSP from pages is still enforced
+// (bypassCSP stays false).
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: RENDERER_SCHEME,
+    privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, bypassCSP: false },
+  },
+])
+
+/** The URL the shell loads: bundled scheme in production, Vite dev URL in development. */
+function rendererUrl(): string {
+  if (app.isPackaged) return `${RENDERER_SCHEME}://${RENDERER_HOST}/index.html`
+  return process.env.DESKTOP_RENDERER_URL ?? DEV_RENDERER_URL
+}
+
+function rendererDistDir(): string {
+  // Packaged (asar): <app path>/desktop/renderer/dist. Unpackaged (the bundled
+  // main.cjs run from desktop/dist): desktop/dist/../renderer/dist. Resolving
+  // via app.getAppPath() first and falling back to __dirname follows the
+  // iconFor() asar pattern so both layouts work.
+  const packaged = path.join(app.getAppPath(), "desktop", "renderer", "dist")
+  if (fs.existsSync(packaged)) return packaged
+  return path.join(__dirname, "..", "renderer", "dist")
+}
+
+const RENDERER_MIME_BY_EXT: Record<string, string> = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".ico": "image/x-icon",
+  ".woff2": "font/woff2",
+  ".txt": "text/plain; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+}
+
+const RENDERER_NOT_BUILT_HTML = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Return App</title></head>` +
+  `<body style="font-family:system-ui,sans-serif;background:#0b1311;color:#f0fdf4;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0">` +
+  `<div style="max-width:440px;padding:24px;text-align:center"><h1 style="font-size:18px;margin:0 0 12px">Desktop renderer not built</h1>` +
+  `<p style="color:#94a3b8;font-size:13px;line-height:1.6;margin:0">The bundled desktop UI is missing. ` +
+  `Build it (the Vite output goes to <code>desktop/renderer/dist</code>) and restart the app.</p></div></body></html>`
+
+function rendererNotBuiltResponse(): Response {
+  return new Response(RENDERER_NOT_BUILT_HTML, {
+    status: 503,
+    headers: { "Content-Type": "text/html; charset=utf-8" },
+  })
+}
+
+/**
+ * Serve the bundled renderer over returnapp://desktop/<path>.
+ *
+ * Files resolve inside desktop/renderer/dist only: normalized paths that escape
+ * the dist root are rejected. Unknown extensionless paths (SPA routes) fall
+ * back to index.html; missing assets answer 404. If the dist folder does not
+ * exist at all (the renderer was never built), every request answers a minimal
+ * 503 page so a developer gets a clear message instead of a dead white screen.
+ */
+function registerRendererProtocol(): void {
+  protocol.handle(RENDERER_SCHEME, (request) => {
+    try {
+      const dist = path.normalize(rendererDistDir())
+      if (!fs.existsSync(dist)) return rendererNotBuiltResponse()
+
+      const url = new URL(request.url)
+      if (url.host !== RENDERER_HOST) return new Response("Not found", { status: 404 })
+
+      const rel = decodeURIComponent(url.pathname).replace(/^\/+/, "")
+      const resolved = path.normalize(path.join(dist, rel || "index.html"))
+      if (resolved !== dist && !resolved.startsWith(dist + path.sep)) {
+        return new Response("Not found", { status: 404 })
+      }
+
+      let filePath = resolved
+      if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+        if (rel === "" || rel === "index.html" || path.extname(rel) === "") {
+          filePath = path.join(dist, "index.html")
+        } else {
+          return new Response("Not found", { status: 404 })
+        }
+      }
+      if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) return rendererNotBuiltResponse()
+
+      const body = fs.readFileSync(filePath)
+      const type = RENDERER_MIME_BY_EXT[path.extname(filePath).toLowerCase()] ?? "application/octet-stream"
+      return new Response(new Uint8Array(body), { headers: { "Content-Type": type } })
+    } catch {
+      return new Response("Internal error", { status: 500 })
+    }
+  })
+}
 
 // ---------------------------------------------------------------------------------------------------------------
 // Engine target
@@ -194,6 +305,28 @@ async function toggleWorker(): Promise<ShellStatus> {
     }).catch(() => undefined)
   }
   return shellStatus()
+}
+
+/**
+ * Push worker status to the renderer so its dashboard chip stays live without
+ * renderer-side polling. Polls shellStatus() every 5 s (local: engineStatus();
+ * remote: the control API fetch) and broadcasts desktop:bot-status-changed.
+ * The send is guarded so a destroyed window is skipped, never an error.
+ */
+function startBotStatusPush(): void {
+  setInterval(() => {
+    void (async () => {
+      if (!mainWindow || mainWindow.isDestroyed()) return
+      const status = await shellStatus().catch(() => null)
+      if (!status) return
+      if (!mainWindow || mainWindow.isDestroyed()) return
+      try {
+        mainWindow.webContents.send("desktop:bot-status-changed", status)
+      } catch {
+        // window torn down mid-send
+      }
+    })()
+  }, 5000)
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -453,7 +586,7 @@ async function downloadUpdateAsset(url: string): Promise<void> {
   }
 }
 
-function createMainWindow(target: EngineTarget, startupError?: string): void {
+function createMainWindow(target: EngineTarget): void {
   const iconPath = iconFor()
   let appIcon: NativeImage | undefined
   if (fs.existsSync(iconPath)) {
@@ -467,9 +600,15 @@ function createMainWindow(target: EngineTarget, startupError?: string): void {
   // engine has one. That is always the remote engine, but also a *local* engine
   // bound to a non-loopback ENGINE_HOST: resolveEngineBind() gives that bind an
   // authToken too, because the port is reachable from outside this machine. The
-  // token is injected for the engine origin only, so the dashboard, panels, logs
+  // token is injected for the ENGINE origin only, so the dashboard, panels, logs
   // and SSE stream all work. A loopback bind has an empty authToken, so this
   // stays a no-op in the normal single-machine case.
+  //
+  // This stays keyed to the engine origin on purpose: it must keep covering
+  // renderer→engine fetches regardless of the renderer's own origin — the
+  // bundled returnapp://desktop origin in production, or the Vite dev origin
+  // (http://localhost:5180) in development. The renderer code never sees the
+  // token; remote-engine bearer auth stays in this main process.
   const engineAuthToken = target.kind === "remote" ? target.token : target.bind.authToken
   if (engineAuthToken) {
     const origin = engineOrigin(target)
@@ -515,7 +654,7 @@ function createMainWindow(target: EngineTarget, startupError?: string): void {
       session: ses,
       nodeIntegration: false,
       contextIsolation: true,
-      preload: path.join(__dirname, "preload.cjs"),
+      preload: path.join(__dirname, "..", "preload.cjs"),
       webSecurity: true,
       backgroundThrottling: true,
       spellcheck: false,
@@ -550,127 +689,50 @@ function createMainWindow(target: EngineTarget, startupError?: string): void {
     if (!startHidden) mainWindow?.show()
   })
 
-  const origin = engineOrigin(target)
-  const engineUrl = target.url
+  // The shell loads the bundled React renderer, never the engine dashboard.
+  // Engine reachability is the renderer's own concern: it probes the engine
+  // API (/api/health) through the fetch bridge and renders its
+  // offline/connecting state from failed calls.
+  const shellUrl = rendererUrl()
+  const shellOrigin = new URL(shellUrl).origin
 
-  function showOfflinePage(errorDescription?: string): void {
-    // The engine URL and the Chromium failure message are operator/OS controlled, but this window carries the
-    // preload bridge, so nothing is interpolated raw. `safeUrlText` covers the HTML text context; the URL is
-    // handed to the script as a JSON literal, so a quote in a URL fragment cannot end the string and inject
-    // code, and a `</script>` inside it cannot close the block.
-    const safeUrlText = escapeHtml(engineUrl)
-    const engineUrlLiteral = scriptLiteral(engineUrl)
-    const offlineHtml = `
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <meta charset="utf-8">
-        <title>Connecting to Return App...</title>
-        <style>
-          * { box-sizing: border-box; }
-          body {
-            background: #060b09;
-            color: #f0fdf4;
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            min-height: 100vh;
-            margin: 0;
-            padding: 24px;
-            text-align: center;
-          }
-          .card {
-            background: #0f1c18;
-            border: 1px solid #1a332a;
-            border-radius: 16px;
-            padding: 40px 36px;
-            max-width: 480px;
-            width: 100%;
-            box-shadow: 0 24px 48px rgba(0,0,0,0.5);
-          }
-          .icon { font-size: 38px; margin-bottom: 16px; display: inline-block; }
-          h2 { margin: 0 0 10px; font-size: 22px; font-weight: 700; color: #34d399; }
-          p { margin: 0 0 20px; color: #94a3b8; font-size: 13px; line-height: 1.6; }
-          .url-box {
-            background: #060b09;
-            border: 1px solid #1a332a;
-            border-radius: 8px;
-            padding: 10px 14px;
-            font-family: monospace;
-            color: #34d399;
-            font-size: 13px;
-            word-break: break-all;
-            margin-bottom: 24px;
-          }
-          .btn {
-            background: #10b981;
-            color: #022c22;
-            border: none;
-            padding: 12px 24px;
-            border-radius: 8px;
-            font-weight: 600;
-            font-size: 14px;
-            cursor: pointer;
-            display: block;
-            width: 100%;
-            text-decoration: none;
-          }
-          .btn:hover { background: #34d399; }
-          .countdown { font-size: 12px; color: #64748b; margin-top: 20px; }
-        </style>
-      </head>
-      <body>
-        <div class="card">
-          <div class="icon">🔄</div>
-          <h2>Opening the claim bot</h2>
-          <p>This window is the 24/7 claim bot. It does not open return scanning.${errorDescription ? `<br><small style="color:#64748b">(${escapeHtml(errorDescription)})</small>` : ""}</p>
-          <div class="url-box">${safeUrlText}</div>
-          <button class="btn" id="open-engine" type="button">Open the claim bot</button>
-          <div class="countdown" id="timer">Retrying automatically in 6 seconds...</div>
-        </div>
-        <script>
-          const engineUrl = ${engineUrlLiteral};
-          let seconds = 6;
-          const timerEl = document.getElementById('timer');
-          function retryConnection() { window.location.href = engineUrl; }
-          document.getElementById('open-engine').addEventListener('click', retryConnection);
-          setInterval(() => {
-            seconds--;
-            if (seconds <= 0) { retryConnection(); }
-            else { timerEl.innerText = 'Retrying automatically in ' + seconds + ' seconds...'; }
-          }, 1000);
-        </script>
-      </body>
-      </html>
-    `
-    mainWindow?.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(offlineHtml)}`)
-  }
+  logger.info(`Opening desktop shell at ${shellUrl} (engine: ${target.url})`)
+  mainWindow.loadURL(shellUrl).catch((err) => {
+    logger.error("Failed to open the desktop shell window:", err)
+  })
 
-  logger.info(`Opening claim bot window at ${engineUrl}`)
-  if (startupError) {
-    showOfflinePage(startupError)
-  } else {
-    mainWindow.loadURL(engineUrl).catch((err) => {
-      logger.error("Failed to open the claim bot window:", err)
-      showOfflinePage(err?.message)
-    })
-  }
-
-  // The window is the engine's own dashboard. Navigation away from the engine
-  // origin is blocked; popups are denied below (installers download in-app).
+  // The window hosts only the bundled renderer (or the Vite dev origin in
+  // development). Exact-origin check: the ENGINE origin is the API base for
+  // fetch/XHR through the preload bridge, never a navigable page in this
+  // window — and neither is anything else (file://, https://, data:).
   mainWindow.webContents.on("will-navigate", (event, url) => {
-    if (url.startsWith("data:")) return
-    if (!isSameOrigin(url, origin)) {
-      logger.warn(`Blocked navigation to a non-engine origin from the claim bot window: ${url}`)
+    if (!isSameOrigin(url, shellOrigin)) {
+      logger.warn(`Blocked navigation away from the desktop renderer origin: ${url}`)
       event.preventDefault()
     }
   })
 
+  // A failed RENDERER load is retried once. An engine outage does not surface
+  // here: renderer assets come from the app itself (returnapp://) or the dev
+  // server, while engine connectivity shows up as failed API calls inside the
+  // renderer, which renders its own offline/connecting state.
+  let rendererRetryScheduled = false
   mainWindow.webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL) => {
-    if (validatedURL?.startsWith("data:")) return
-    logger.warn(`Claim bot window failed to load (${errorCode}: ${errorDescription})`)
-    showOfflinePage(errorDescription)
+    if (errorCode === -3) return // ERR_ABORTED: navigation cancelled, not a real load failure
+    if (validatedURL && !isSameOrigin(validatedURL, shellOrigin)) return
+    logger.warn(`Desktop renderer failed to load (${errorCode}: ${errorDescription})`)
+    if (rendererRetryScheduled) return
+    rendererRetryScheduled = true
+    setTimeout(() => {
+      if (!isQuitting && mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.loadURL(shellUrl).catch((err) => {
+          logger.error("Retrying the desktop shell load failed:", err)
+        })
+      }
+    }, 3000)
+  })
+  mainWindow.webContents.on("did-finish-load", () => {
+    rendererRetryScheduled = false
   })
 
   // No system browser: popups are denied, and an installer link downloads the
@@ -822,6 +884,20 @@ ipcMain.on("desktop:notify", (_event, { title, body }) => {
   }
 })
 
+ipcMain.handle("desktop:get-app-info", async () => ({
+  version: app.getVersion(),
+  platform: process.platform,
+  isPackaged: app.isPackaged,
+}))
+
+// The engine API base for the renderer. The token is deliberately never
+// exposed here: remote-engine bearer auth stays in this main process (the
+// webRequest injection above), and an empty url means "engine still starting".
+ipcMain.handle("desktop:get-engine-target", async () => {
+  const target = engineTarget
+  return { kind: target?.kind ?? ("local" as const), url: target?.url ?? "" }
+})
+
 ipcMain.handle("desktop:get-bot-status", async () => shellStatus())
 
 ipcMain.handle("desktop:toggle-bot", async () => toggleWorker())
@@ -881,8 +957,8 @@ if (!gotTheLock) {
  *
  * A 24/7 bot must not stay dead because of a startup race (a previous instance
  * still holding the port, a slow antivirus scan of the app folder). Retry with a
- * bound so a genuine configuration error does not loop forever; the offline card
- * keeps showing why in the meantime.
+ * bound so a genuine configuration error does not loop forever; the bundled
+ * renderer keeps showing its connecting state in the meantime.
  */
 let engineRetryTimer: NodeJS.Timeout | null = null
 const ENGINE_RETRY_INTERVAL_MS = 30_000
@@ -932,11 +1008,13 @@ function scheduleLocalEngineRetry(): void {
         logger.info(`Claim bot engine started after retry ${attempts}.`)
         stopEngineRetry()
         // The window was created for the placeholder target, so its bearer header
-        // and its allowed navigation origin are the placeholder's. A retry can
-        // bind a different origin than the placeholder (a non-loopback
-        // ENGINE_HOST, or a port that changed), and then every protected request
-        // from that window answers 401. Rebuild the window for the real target
-        // instead of loading its URL into the old one.
+        // injection is the placeholder's. A retry can bind a different origin
+        // than the placeholder (a non-loopback ENGINE_HOST, or a port that
+        // changed), and then every protected request from that window answers
+        // 401. Rebuild the window for the real target instead of loading its
+        // URL into the old one. The rebuilt window loads the same bundled
+        // renderer URL; only the engine-side wiring (auth header injection)
+        // changes.
         const stale = mainWindow
         mainWindow = null
         if (stale && !stale.isDestroyed()) stale.destroy()
@@ -990,6 +1068,7 @@ function registerAutoStart(): void {
 app.whenReady().then(async () => {
   process.env.RETURN_APP_VERSION = app.getVersion()
 
+  registerRendererProtocol()
   registerAutoStart()
 
   let startupError: string | undefined
@@ -1000,14 +1079,16 @@ app.whenReady().then(async () => {
     logger.error("Claim bot engine failed to start. Scanning was not opened.", err)
   }
 
-  // Even with no engine, show a window so the operator can see why.
+  // Even with no engine, show the shell so the operator can see the renderer's
+  // connecting state; the retry loop may still bring the engine up.
   const fallbackTarget: EngineTarget = {
     kind: "local",
     bind: { host: "127.0.0.1", port: 3005, mode: "local", remoteAccess: false, authToken: "" },
     url: "http://127.0.0.1:3005/",
   }
-  createMainWindow(engineTarget ?? fallbackTarget, startupError)
+  createMainWindow(engineTarget ?? fallbackTarget)
   createTray()
+  startBotStatusPush()
 
   if (startupError) {
     scheduleLocalEngineRetry()

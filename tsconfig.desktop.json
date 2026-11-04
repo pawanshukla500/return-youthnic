@@ -12,5 +12,7 @@
     "resolveJsonModule": true,
     "allowImportingTsExtensions": true
   },
-  "include": ["desktop", "desktop-agent"]
+  "include": ["desktop", "desktop-agent"],
+  "exclude": ["desktop/renderer"]
+
 }
