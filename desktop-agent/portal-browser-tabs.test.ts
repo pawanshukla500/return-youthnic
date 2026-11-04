@@ -69,6 +69,7 @@ async function freePort(): Promise<number> {
 let stub: { port: number; close: () => Promise<void> } | null = null
 let engine: child_process.ChildProcess | null = null
 let engineBase = ""
+let agentDir = ""
 
 async function engineFetch(pathname: string, init?: RequestInit): Promise<{ status: number; data: Record<string, unknown> }> {
   const res = await fetch(`${engineBase}${pathname}`, init)
@@ -86,7 +87,7 @@ async function postJson(pathname: string, body: unknown): Promise<{ status: numb
 test.before(async () => {
   stub = await startStubBackend()
   const enginePort = await freePort()
-  const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "SYN-engine-portal-tabs-"))
+  agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "SYN-engine-portal-tabs-"))
   const boot = path.join(process.cwd(), "desktop-agent", "test-helpers", "engine-boot.ts")
   const tsx = path.join(process.cwd(), "node_modules", "tsx", "dist", "cli.mjs")
   engine = child_process.spawn(process.execPath, [tsx, boot], {
@@ -119,6 +120,7 @@ test.before(async () => {
 test.after(async () => {
   if (engine) engine.kill("SIGKILL")
   if (stub) await stub.close()
+  if (agentDir) fs.rmSync(agentDir, { recursive: true, force: true })
 })
 
 const REQUIRED_TAB_FIELDS = [
@@ -272,4 +274,36 @@ test("VAL-TABS-005: legacy GET and close routes stay backward compatible", async
   const legacy = await postJson("/api/portal-browser/close", {})
   assert.equal(legacy.status, 200)
   assert.ok("ok" in legacy.data, "expected the legacy close acknowledgement")
+})
+
+test("VAL-WIN-005: detach, focus, and dock routes preserve the tab session", async () => {
+  const opened = await postJson("/api/portal-browser/open", { marketplace: "Meesho" })
+  assert.equal(opened.status, 200)
+
+  const detached = await postJson("/api/portal-browser/detach", { tabId: "tab-meesho" })
+  assert.equal(detached.status, 200)
+  const afterDetach = await engineFetch("/api/portal-browser")
+  const det = getTabs(afterDetach.data).find((t) => t.tabId === "tab-meesho")
+  assert.ok(det && det.mode === "detached", "expected the tab to report detached mode")
+  assert.equal(det.partition, "persist:supplier-meesho", "detach must keep the session partition")
+
+  const focused = await postJson("/api/portal-browser/focus", { tabId: "tab-meesho" })
+  assert.equal(focused.status, 200)
+
+  const docked = await postJson("/api/portal-browser/dock", { tabId: "tab-meesho" })
+  assert.equal(docked.status, 200)
+  const afterDock = await engineFetch("/api/portal-browser")
+  const dock = getTabs(afterDock.data).find((t) => t.tabId === "tab-meesho")
+  assert.ok(dock && dock.mode !== "detached", "expected the tab to leave detached mode after dock")
+  assert.equal(dock.partition, "persist:supplier-meesho", "dock must keep the session partition")
+
+  const hidden = await postJson("/api/window-control", { action: "hide-to-tray" })
+  assert.equal(hidden.status, 200)
+  const restored = await postJson("/api/window-control", { action: "restore-from-tray" })
+  assert.equal(restored.status, 200)
+  const afterLifecycle = await engineFetch("/api/portal-browser")
+  assert.ok(
+    getTabs(afterLifecycle.data).find((t) => t.tabId === "tab-meesho"),
+    "window lifecycle must preserve the tab registry",
+  )
 })

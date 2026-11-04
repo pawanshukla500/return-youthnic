@@ -133,6 +133,16 @@ describe("Meesho upload-field mapping (M9 Phase 6: Claim #1 regression)", () => 
     } finally {
       fs.rmSync(tmpTxt, { force: true })
     }
+    // Empty file: a real zero-byte .jpg must be rejected, not attached.
+    const tmpEmpty = path.join(os.tmpdir(), `SYN-meesho-empty-${Date.now()}.jpg`)
+    fs.writeFileSync(tmpEmpty, "")
+    try {
+      const emptyCheck = checkMeeshoEvidenceFileLocal(tmpEmpty)
+      assert.equal(emptyCheck.ok, false)
+      assert.ok(emptyCheck.reason.includes("empty"))
+    } finally {
+      fs.rmSync(tmpEmpty, { force: true })
+    }
   })
 
   it("names the exact failed field and attachment status for the claim panel", () => {

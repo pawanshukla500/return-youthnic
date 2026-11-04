@@ -178,6 +178,10 @@ async function pollAndProcessJob(manual = false): Promise<boolean> {
     // focus; the view attaches silently for automation.
     openSupplierTab(panelKey)
     attachSupplierViewForBackground(panelKey)
+    // Paused here means the *claim* is paused for an operator step, never the
+    // worker loop. A manual Poll Now drives the tab even while the loop is
+    // paused, so paused must start false: the close guard (409) stays armed
+    // until the job settles and clears worker ownership in the finally below.
     setSupplierTabWorkerState(panelKey, {
       workerOwned: true,
       activeClaim: {
@@ -186,13 +190,17 @@ async function pollAndProcessJob(manual = false): Promise<boolean> {
         awb: String(jobHeader.trackingId || jobHeader.orderNumber || ""),
         stage: String(jobHeader.stage || ""),
         statusText: "running",
-        paused: !isWorkerRunning,
+        paused: false,
       },
     })
 
     const bundle = await client.getExecutionBundle(jobHeader.jobId)
     if (!bundle) {
       logger.error(`Could not retrieve bundle for job #${jobHeader.jobId}. Skipping.`)
+      // This return sits outside the inner try/finally that clears worker
+      // ownership on settle, so clear it here: otherwise the tab stays
+      // worker-owned indefinitely and every later close answers 409.
+      setSupplierTabWorkerState(panelKey, { workerOwned: false })
       isCurrentlyProcessing = false
       activeJobInfo = null
       return false

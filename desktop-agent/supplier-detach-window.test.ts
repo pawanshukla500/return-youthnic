@@ -2,13 +2,15 @@
 // lifecycle controls, and focus discipline.
 //
 // TDD-first for m1-detachable-browser-window-and-window-controls: these tests
-// run against pure view-manager state (fake hosts/views, no Electron), plus
-// the real engine in a child process for the HTTP detach/dock/focus routes.
-// No database, no real browser window, no production traffic.
+// run against pure view-manager state (fake hosts/views, no Electron).
+// The HTTP detach/dock/focus routes are covered against the real engine in
+// portal-browser-tabs.test.ts (VAL-WIN-005). No database, no real browser
+// window, no production traffic.
 
 import { describe, it } from "node:test"
 import assert from "node:assert/strict"
 import {
+  addSupplierPopupForTests,
   detachSupplierTab,
   dockSupplierTab,
   disposeDetachedSupplierViews,
@@ -93,6 +95,12 @@ function fakeDetachedHost(calls: string[] = []): DetachedViewHost {
     detachDetachedView: (_panelKey: string) => {
       calls.push("detached-detach")
     },
+    attachDetachedPopups: (_panelKey: string) => {
+      calls.push("detached-popups-attach")
+    },
+    detachDetachedPopups: (_panelKey: string) => {
+      calls.push("detached-popups-detach")
+    },
     closeDetachedWindow: (_panelKey: string) => {
       calls.push("detached-close")
     },
@@ -147,6 +155,33 @@ describe("VAL-WIN-001: detach into a hardened secondary window", () => {
     assert.ok(mainCalls.includes("main-remove"), "expected the view to leave the main window")
     assert.ok(detachedCalls.includes("detached-open"), "expected the secondary window to open")
     assert.ok(detachedCalls.includes("detached-attach"), "expected the live view to attach to the secondary window")
+
+    unregisterSupplierView("SYN-meesho", toView(view))
+    resetAll()
+  })
+
+  it("detach moves open OTP/CAPTCHA popups with the tab instead of orphaning them", () => {
+    resetAll()
+    const mainCalls: string[] = []
+    const detachedCalls: string[] = []
+    setSupplierViewHost(fakeMainHost(mainCalls))
+    setDetachedViewHost(fakeDetachedHost(detachedCalls))
+    setBrowserWorkspaceRect({ x: 240, y: 150, width: 980, height: 520 })
+    const view = fakeView()
+    const popup = fakeView("https://supplier.meesho.com/otp", "SYN OTP")
+    registerSupplierView("SYN-meesho", toView(view))
+    openSupplierTab("SYN-meesho")
+    assert.equal(showSupplierView("SYN-meesho"), true)
+    assert.equal(addSupplierPopupForTests("SYN-meesho", toView(popup)), true)
+
+    const tab = detachSupplierTab("tab-SYN-meesho")
+    assert.ok(tab, "expected the detached tab")
+    assert.ok(detachedCalls.includes("detached-popups-attach"), "expected popups to move to the secondary window")
+
+    detachedCalls.length = 0
+    const docked = dockSupplierTab("tab-SYN-meesho")
+    assert.ok(docked, "expected the docked tab")
+    assert.ok(detachedCalls.includes("detached-popups-detach"), "expected popups to leave the secondary window on dock")
 
     unregisterSupplierView("SYN-meesho", toView(view))
     resetAll()

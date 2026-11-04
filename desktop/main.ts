@@ -274,6 +274,7 @@ function registerSupplierViewHost(): void {
 type DetachedWindowEntry = {
   window: BrowserWindow
   view: Electron.CrossProcessExports.WebContentsView | null
+  popups: Array<Electron.CrossProcessExports.WebContentsView>
 }
 
 const detachedWindows = new Map<string, DetachedWindowEntry>()
@@ -284,6 +285,11 @@ function fitDetachedView(panelKey: string): void {
   const bounds = entry.window.getContentBounds()
   try {
     entry.view.setBounds({ x: 0, y: 0, width: Math.max(0, bounds.width), height: Math.max(0, bounds.height) })
+    // OTP/CAPTCHA popups ride with the detached tab: same content bounds so
+    // they stay usable instead of orphaned over the main-window dashboard.
+    for (const popup of entry.popups) {
+      popup.setBounds({ x: 0, y: 0, width: Math.max(0, bounds.width), height: Math.max(0, bounds.height) })
+    }
   } catch {
     // view already destroyed during teardown
   }
@@ -330,7 +336,7 @@ function registerDetachedViewHost(): void {
         // so no Node in the renderer and the Chromium sandbox stays on.
         webPreferences: { ...DETACHED_WINDOW_WEB_PREFERENCES },
       })
-      detachedWindows.set(panelKey, { window: win, view: null })
+      detachedWindows.set(panelKey, { window: win, view: null, popups: [] })
       win.on("resize", () => fitDetachedView(panelKey))
       win.once("ready-to-show", () => {
         if (!win.isDestroyed()) win.show()
@@ -368,6 +374,34 @@ function registerDetachedViewHost(): void {
         }
       }
       if (entry) entry.view = null
+    },
+    attachDetachedPopups: (panelKey, popups) => {
+      const entry = detachedWindows.get(panelKey)
+      if (!entry || entry.window.isDestroyed()) return
+      for (const popup of popups) {
+        try {
+          if (mainWindow && !mainWindow.isDestroyed()) mainWindow.contentView.removeChildView(popup)
+        } catch {
+          // the popup was not a child of the main window
+        }
+        entry.window.contentView.addChildView(popup)
+        if (!entry.popups.includes(popup)) entry.popups.push(popup)
+      }
+      fitDetachedView(panelKey)
+    },
+    detachDetachedPopups: (panelKey, popups) => {
+      const entry = detachedWindows.get(panelKey)
+      const live = popups.length ? popups : (entry?.popups ?? [])
+      if (entry && !entry.window.isDestroyed()) {
+        for (const popup of live) {
+          try {
+            entry.window.contentView.removeChildView(popup)
+          } catch {
+            // ignore teardown races
+          }
+        }
+      }
+      if (entry) entry.popups = []
     },
     closeDetachedWindow: (panelKey) => {
       const entry = detachedWindows.get(panelKey)

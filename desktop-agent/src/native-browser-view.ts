@@ -180,6 +180,10 @@ export type DetachedViewHost = {
   openDetachedWindow(panelKey: string, options: { label: string; accountName: string; partition: string }): void
   attachDetachedView(panelKey: string, view: Electron.CrossProcessExports.WebContentsView | null): void
   detachDetachedView(panelKey: string, view: Electron.CrossProcessExports.WebContentsView | null): void
+  /** Move the tab's OTP/CAPTCHA popups into the detached window with the main view. */
+  attachDetachedPopups(panelKey: string, popups: Array<Electron.CrossProcessExports.WebContentsView>): void
+  /** Remove the tab's popups from the detached window before it closes or docks. */
+  detachDetachedPopups(panelKey: string, popups: Array<Electron.CrossProcessExports.WebContentsView>): void
   closeDetachedWindow(panelKey: string): void
   focusDetachedWindow(panelKey: string): void
   isDetachedWindowOpen(panelKey: string): boolean
@@ -204,7 +208,9 @@ export function isSupplierTabDetached(panelKey: string): boolean {
 /**
  * Move a tab's live WebContentsView into the dedicated detached BrowserWindow.
  * The main-window placeholder flips to mode "detached"; cookies, DOM state,
- * and the worker lease ride along with the view.
+ * and the worker lease ride along with the view. Open OTP/CAPTCHA popups move
+ * with it: leaving them attached to the main window would orphan them over the
+ * dashboard while their session lives in the detached window.
  */
 export function detachSupplierTab(tabId: string): SupplierTabState | null {
   const resolved = resolveStoredPanelKey(tabId)
@@ -238,6 +244,7 @@ export function detachSupplierTab(tabId: string): SupplierTabState | null {
       partition: `${PARTITION_PREFIX}${panelKey}`,
     })
     detachedViewHost?.attachDetachedView(panelKey, entry?.view ?? null)
+    detachedViewHost?.attachDetachedPopups(panelKey, entry?.popups ?? [])
   } catch {
     // A headless/test shell keeps the detached bookkeeping without a window.
   }
@@ -269,6 +276,12 @@ export function dockSupplierTab(tabId: string): SupplierTabState | null {
   const panelKey = resolved
   if (!detachedTabPanels.has(panelKey)) return null
   const liveView = managedSupplierViews.get(panelKey)?.view ?? null
+  const livePopups = managedSupplierViews.get(panelKey)?.popups ?? []
+  try {
+    detachedViewHost?.detachDetachedPopups(panelKey, livePopups)
+  } catch {
+    // ignore teardown races
+  }
   try {
     detachedViewHost?.detachDetachedView(panelKey, liveView)
   } catch {
@@ -301,6 +314,12 @@ export function disposeDetachedSupplierViews(): string[] {
   const disposed = [...detachedTabPanels]
   for (const panelKey of disposed) {
     const liveView = managedSupplierViews.get(panelKey)?.view ?? null
+    const livePopups = managedSupplierViews.get(panelKey)?.popups ?? []
+    try {
+      detachedViewHost?.detachDetachedPopups(panelKey, livePopups)
+    } catch {
+      // ignore teardown races
+    }
     try {
       detachedViewHost?.detachDetachedView(panelKey, liveView)
     } catch {
@@ -896,6 +915,19 @@ export function resetSupplierTabsForTests(): void {
   closedTabStack.length = 0
   activeTabPanelKey = null
   detachedTabPanels.clear()
+}
+
+/** Attach an OTP/CAPTCHA popup to a tab's view entry. Tests only (the shell's adapter does this on window-open). */
+export function addSupplierPopupForTests(
+  panelKey: string,
+  popup: Electron.CrossProcessExports.WebContentsView,
+): boolean {
+  const resolved = resolveStoredPanelKey(panelKey)
+  if (!resolved) return false
+  const entry = managedSupplierViews.get(resolved)
+  if (!entry || entry.popups.includes(popup)) return false
+  entry.popups.push(popup)
+  return true
 }
 
 /** Track a supplier view in the main-window manager. Exported for tests and the shell. */
