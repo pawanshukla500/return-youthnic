@@ -263,6 +263,13 @@ async function pollAndProcessJob(manual = false): Promise<boolean> {
       const result = await engine.execute(action)
 
       if (result.stage === "prepared") {
+        // The operator must see the exact prepared form to approve it: keep
+        // the browser open and the view shown in the bounded workspace.
+        // showSupplierView never steals OS focus and is fail-closed (false
+        // when the workspace rect is not measurable, e.g. off the Browsers
+        // tab) — the session survives either way.
+        keepBrowserOpen = true
+        showSupplierView(panelKey)
         markPanelResult(panelKey, "prepared", "Prepared on the supplier panel. Waiting for approval.")
         await client.updateProgress(jobHeader.jobId, {
           stage: "prepared",
@@ -283,10 +290,13 @@ async function pollAndProcessJob(manual = false): Promise<boolean> {
       } else if (result.stage === "manual_intervention_required") {
         keepBrowserOpen = true
         holdPortalBrowser(browserRunner)
-        // Manual intervention needs the operator's eyes: this is the explicit
-        // user-visible path, so the view may show (but still never steals OS
-        // foreground focus — the tab badges instead).
-        attachSupplierViewForBackground(panelKey)
+        // Manual intervention needs the operator's eyes on the actual page:
+        // every manualActionReason says "in the open browser", so the view
+        // must be shown in the bounded workspace here. The background-only
+        // attach left operators facing the "browser is hidden" placeholder
+        // with no page to act on. showSupplierView never steals OS focus
+        // (the tab badges instead) and is fail-closed off the Browsers tab.
+        showSupplierView(panelKey)
         await browserRunner.showForManualStep?.()
         await client.createOperatorTask({ claimId: bundle.claimId, marketplace: bundle.marketplace, kind: "pending_approval", title: `${bundle.marketplace}: manual approval needed for claim #${bundle.claimId}`, note: "Filing paused for an operator action." })
         markPanelResult(panelKey, "manual_action", result.manualActionReason || "Manual action required on portal.")
