@@ -164,6 +164,263 @@ export function setSupplierViewHost(host: SupplierViewHost | null): void {
   layoutSupplierViews()
 }
 
+/**
+ * Hardened webPreferences shared by every detached supplier BrowserWindow.
+ * The secondary window only hosts the existing WebContentsView session — it
+ * never runs Node in the renderer and never relaxes the Chromium sandbox.
+ */
+export const DETACHED_WINDOW_WEB_PREFERENCES = {
+  contextIsolation: true,
+  nodeIntegration: false,
+  sandbox: true,
+} as const
+
+/** Structural host for detached supplier windows (Electron shell or tests). */
+export type DetachedViewHost = {
+  openDetachedWindow(panelKey: string, options: { label: string; accountName: string; partition: string }): void
+  attachDetachedView(panelKey: string, view: Electron.CrossProcessExports.WebContentsView | null): void
+  detachDetachedView(panelKey: string, view: Electron.CrossProcessExports.WebContentsView | null): void
+  closeDetachedWindow(panelKey: string): void
+  focusDetachedWindow(panelKey: string): void
+  isDetachedWindowOpen(panelKey: string): boolean
+  destroyDetachedWindow(panelKey: string): void
+}
+
+let detachedViewHost: DetachedViewHost | null = null
+
+/** Register (or clear) the detached-window host. Called once by the Electron shell. */
+export function setDetachedViewHost(host: DetachedViewHost | null): void {
+  detachedViewHost = host
+}
+
+const detachedTabPanels = new Set<string>()
+
+/** Whether the tab currently lives in the detached secondary window. */
+export function isSupplierTabDetached(panelKey: string): boolean {
+  const resolved = resolveStoredPanelKey(panelKey)
+  return resolved !== null && detachedTabPanels.has(resolved)
+}
+
+/**
+ * Move a tab's live WebContentsView into the dedicated detached BrowserWindow.
+ * The main-window placeholder flips to mode "detached"; cookies, DOM state,
+ * and the worker lease ride along with the view.
+ */
+export function detachSupplierTab(tabId: string): SupplierTabState | null {
+  const resolved = resolveStoredPanelKey(tabId)
+  if (!resolved) return null
+  const known = tabMetadata.has(resolved) || managedSupplierViews.has(resolved)
+  if (!known) return null
+  const panelKey = resolved
+  const meta = metadataFor(panelKey, managedSupplierViews.get(panelKey))
+  openSupplierTab(panelKey)
+  const entry = managedSupplierViews.get(panelKey)
+  if (entry?.visible) {
+    entry.visible = false
+    try {
+      supplierViewHost?.removeView(entry.view as Electron.CrossProcessExports.WebContentsView)
+    } catch {
+      // ignore teardown races
+    }
+    for (const popup of entry.popups) {
+      try {
+        supplierViewHost?.removeView(popup)
+      } catch {
+        // ignore teardown races
+      }
+    }
+  }
+  detachedTabPanels.add(panelKey)
+  try {
+    detachedViewHost?.openDetachedWindow(panelKey, {
+      label: meta.label,
+      accountName: meta.accountName,
+      partition: `${PARTITION_PREFIX}${panelKey}`,
+    })
+    detachedViewHost?.attachDetachedView(panelKey, entry?.view ?? null)
+  } catch {
+    // A headless/test shell keeps the detached bookkeeping without a window.
+  }
+  const tab = supplierTabRegistry().find((candidate) => candidate.panelKey === panelKey) || null
+  return tab
+}
+
+/** Focus the detached secondary window. Never touches the main window. */
+export function focusDetachedSupplierTab(tabId: string): boolean {
+  const resolved = resolveStoredPanelKey(tabId)
+  if (!resolved || !detachedTabPanels.has(resolved)) return false
+  const panelKey = resolved
+  try {
+    detachedViewHost?.focusDetachedWindow(panelKey)
+  } catch {
+    return false
+  }
+  return true
+}
+
+/**
+ * Move a tab's live WebContentsView back into the main window's bounded
+ * viewport (mode "active"). The transfer out of the detached window happens
+ * before the secondary window closes, so the session survives the dock.
+ */
+export function dockSupplierTab(tabId: string): SupplierTabState | null {
+  const resolved = resolveStoredPanelKey(tabId)
+  if (!resolved) return null
+  const panelKey = resolved
+  if (!detachedTabPanels.has(panelKey)) return null
+  const liveView = managedSupplierViews.get(panelKey)?.view ?? null
+  try {
+    detachedViewHost?.detachDetachedView(panelKey, liveView)
+  } catch {
+    // ignore teardown races
+  }
+  detachedTabPanels.delete(panelKey)
+  try {
+    detachedViewHost?.closeDetachedWindow(panelKey)
+  } catch {
+    // ignore teardown races
+  }
+  const tab = openSupplierTab(panelKey)
+  // Docking returns the tab to the main window as the visible tab: mark the
+  // restored view visible so the registry reports mode "active" even when the
+  // headless/test shell has no live WebContentsView to attach.
+  const entry = managedSupplierViews.get(panelKey)
+  if (entry) entry.visible = true
+  return supplierTabRegistry().find((candidate) => candidate.panelKey === panelKey) || tab
+}
+
+/** Detached-window close path: the window closing docks the tab first. */
+export function handleDetachedWindowClosed(panelKey: string): SupplierTabState | null {
+  const resolved = resolveStoredPanelKey(panelKey)
+  if (!resolved) return null
+  return dockSupplierTab(`tab-${resolved}`)
+}
+
+/** Clean quit: destroy every detached window and hide every main-window view. */
+export function disposeDetachedSupplierViews(): string[] {
+  const disposed = [...detachedTabPanels]
+  for (const panelKey of disposed) {
+    const liveView = managedSupplierViews.get(panelKey)?.view ?? null
+    try {
+      detachedViewHost?.detachDetachedView(panelKey, liveView)
+    } catch {
+      // ignore teardown races
+    }
+    try {
+      detachedViewHost?.destroyDetachedWindow(panelKey)
+    } catch {
+      // ignore teardown races
+    }
+    detachedTabPanels.delete(panelKey)
+    const entry = managedSupplierViews.get(panelKey)
+    if (entry?.visible) {
+      entry.visible = false
+      try {
+        supplierViewHost?.removeView(entry.view as Electron.CrossProcessExports.WebContentsView)
+      } catch {
+        // ignore teardown races
+      }
+    }
+  }
+  hideSupplierViews()
+  return disposed
+}
+
+export type WindowLifecycleEvent = "minimize" | "maximize" | "restore" | "hide-to-tray" | "restore-from-tray" | "before-quit"
+
+/**
+ * Window lifecycle transitions preserve every tab session and worker lease.
+ * Minimize/tray-hide keeps the state; restore re-syncs the bounds; quit
+ * disposes detached windows. Never drops a session or leaves stale bounds.
+ */
+export function notifyWindowLifecycle(event: WindowLifecycleEvent): string[] {
+  if (event === "before-quit") return disposeDetachedSupplierViews()
+  if (event === "restore" || event === "restore-from-tray" || event === "maximize") {
+    layoutSupplierViews()
+    if (supplierViewBounds() === null) hideSupplierViews()
+  }
+  return []
+}
+
+/**
+ * Attach a tab for background worker execution without touching OS focus.
+ * Used by claim preparation, follow-up checks, and status polls. Never calls
+ * showWindow() or focusWindow(): the window stays exactly where it is.
+ */
+export function attachSupplierViewForBackground(panelKey: string): boolean {
+  const resolved = resolveStoredPanelKey(panelKey)
+  if (!resolved) return false
+  const normalized = resolved
+  const host = supplierViewHost
+  const entry = managedSupplierViews.get(normalized)
+  if (!host || host.isWindowDestroyed() || !entry || !entry.view) return false
+  if (detachedTabPanels.has(normalized)) return true
+  const bounds = supplierViewBounds()
+  if (bounds === null) return false
+  if (!entry.visible) {
+    try {
+      host.removeView(entry.view)
+    } catch {
+      // ensure a single attach
+    }
+    host.addView(entry.view)
+    entry.view.setBounds(bounds)
+    entry.visible = true
+  } else {
+    try {
+      entry.view.setBounds(bounds)
+    } catch {
+      // ignore teardown races
+    }
+  }
+  return true
+}
+
+/**
+ * Explicit user-initiated show for a tab. Focus only when the caller passes
+ * focus: true (toolbar Detach/Dock, Focus Window, Open in Browsers, Sign in).
+ * Background worker steps must use attachSupplierViewForBackground() instead.
+ */
+export function showSupplierViewForUser(panelKey: string, options?: { focus?: boolean }): boolean {
+  const resolved = resolveStoredPanelKey(panelKey)
+  if (!resolved) return false
+  const normalized = resolved
+  const ok = showSupplierView(normalized)
+  if (!ok) return false
+  if (options?.focus === true) {
+    try {
+      supplierViewHost?.focusWindow()
+    } catch {
+      // ignore teardown races
+    }
+  }
+  return true
+}
+
+function normalizePanelKey(value: string): string {
+  return String(value || "").trim().toLowerCase().replace(/[^a-z0-9_]/g, "_") || "unknown"
+}
+
+/**
+ * Resolve a tab/panel reference to the stored panel key. Panel keys are
+ * stored verbatim (e.g. "SYN-meesho" in tests, "meesho" in production); this
+ * resolves tab ids, exact keys, and normalized keys without renaming the
+ * stored entry, so view registration and tab metadata never diverge.
+ */
+function resolveStoredPanelKey(value: string): string | null {
+  const raw = String(value || "")
+  const withoutTab = raw.startsWith("tab-") ? raw.slice(4) : raw
+  const candidates = [withoutTab, normalizePanelKey(withoutTab)]
+  for (const candidate of candidates) {
+    if (tabMetadata.has(candidate) || managedSupplierViews.has(candidate) || detachedTabPanels.has(candidate)) {
+      return candidate
+    }
+  }
+  // Exact-but-unknown keys are still usable for fresh detach/dock bookkeeping.
+  if (withoutTab && !candidates.includes(withoutTab)) return withoutTab
+  return candidates[0] || null
+}
+
 type ManagedSupplierView = {
   view: Electron.CrossProcessExports.WebContentsView | null
   visible: boolean
@@ -311,13 +568,17 @@ export function supplierTabRegistry(): SupplierTabState[] {
     const meta = metadataFor(panelKey, entry)
     const live = viewMetadata(entry.view)
     const closed = closedTabStack.includes(panelKey)
+    // A detached tab lives in the secondary window: it keeps its live session
+    // but never reports as active/background in the main window.
     const mode: SupplierTabMode = closed
       ? "closed"
-      : panelKey === activeTabPanelKey
-        ? "active"
-        : entry.visible
-          ? "background"
-          : "background"
+      : detachedTabPanels.has(panelKey)
+        ? "detached"
+        : panelKey === activeTabPanelKey
+          ? "active"
+          : entry.visible
+            ? "background"
+            : "background"
     tabs.push({
       tabId: tabIdForPanelKey(panelKey),
       panelKey,
@@ -337,13 +598,15 @@ export function supplierTabRegistry(): SupplierTabState[] {
   for (const [panelKey, meta] of tabMetadata) {
     if (seen.has(panelKey)) continue
     // Headless/test engines open tabs without a live WebContentsView: the tab
-    // is open (active or background) unless it sits on the closed stack.
+    // is open (active, background, or detached) unless it sits on the closed stack.
     const reopened = closedTabStack.includes(panelKey)
     const reopenedMode: SupplierTabMode = reopened
       ? "closed"
-      : panelKey === activeTabPanelKey
-        ? "active"
-        : "background"
+      : detachedTabPanels.has(panelKey)
+        ? "detached"
+        : panelKey === activeTabPanelKey
+          ? "active"
+          : "background"
     tabs.push({
       tabId: tabIdForPanelKey(panelKey),
       panelKey,
@@ -378,7 +641,12 @@ export function openSupplierTab(
   panelKey: string,
   options?: { label?: string; accountName?: string; url?: string; title?: string },
 ): SupplierTabState {
-  const normalized = String(panelKey || "").trim().toLowerCase().replace(/[^a-z0-9_]/g, "_") || "unknown"
+  const resolvedStored = resolveStoredPanelKey(panelKey)
+  // An empty reference can never be a stored key: resolveStoredPanelKey falls
+  // back to a candidate for bookkeeping, so guard empties explicitly.
+  const rawRef = String(panelKey || "").trim()
+  const normalized = resolvedStored && rawRef ? resolvedStored
+    : (rawRef.toLowerCase().replace(/[^a-z0-9_]/g, "_") || "unknown")
   const meta = metadataFor(normalized, managedSupplierViews.get(normalized))
   if (options?.label) meta.label = options.label
   if (options?.accountName) meta.accountName = options.accountName
@@ -387,6 +655,13 @@ export function openSupplierTab(
   const reopenIndex = closedTabStack.lastIndexOf(normalized)
   if (reopenIndex >= 0) closedTabStack.splice(reopenIndex, 1)
   activeTabPanelKey = normalized
+  // A detached tab stays in its secondary window until it is docked: opening
+  // or switching never yanks the live view back into the main window.
+  if (detachedTabPanels.has(normalized)) {
+    const current = supplierTabRegistry().find((tab) => tab.panelKey === normalized)
+    if (!current) throw new Error(`Could not open the supplier tab for ${normalized}.`)
+    return current
+  }
   // Background tabs keep their view, cookies, DOM state, and active claims:
   // only attachment changes, never a close or a reload.
   for (const [otherKey, otherEntry] of managedSupplierViews) {
@@ -399,7 +674,7 @@ export function openSupplierTab(
     }
   }
   const entry = managedSupplierViews.get(normalized)
-  if (entry) {
+  if (entry && !detachedTabPanels.has(normalized)) {
     showSupplierView(normalized)
   }
   const current = supplierTabRegistry().find((tab) => tab.panelKey === normalized)
@@ -457,6 +732,16 @@ export function closeSupplierTab(tabId: string, options?: { force?: boolean }): 
     entry.visible = false
     try {
       supplierViewHost?.removeView(entry.view as Electron.CrossProcessExports.WebContentsView)
+    } catch {
+      // ignore teardown races
+    }
+  }
+  // Closing a detached tab retires its secondary window with the tab; the
+  // persistent partition on disk survives for a later reopen.
+  if (detachedTabPanels.has(panelKey)) {
+    detachedTabPanels.delete(panelKey)
+    try {
+      detachedViewHost?.closeDetachedWindow(panelKey)
     } catch {
       // ignore teardown races
     }
@@ -610,6 +895,7 @@ export function resetSupplierTabsForTests(): void {
   tabMetadata.clear()
   closedTabStack.length = 0
   activeTabPanelKey = null
+  detachedTabPanels.clear()
 }
 
 /** Track a supplier view in the main-window manager. Exported for tests and the shell. */
@@ -680,10 +966,19 @@ export function hideSupplierViews(): string[] {
   return hidden
 }
 
-/** Attach a panel's view to the main window (tab-switch back from the dashboard). */
+/** Attach a panel's view to the main window (tab-switch back from the dashboard).
+ *
+ * Focus discipline (VAL-WIN-004): this low-level attach never touches OS
+ * focus. Explicit user actions go through showSupplierViewForUser(..., { focus:
+ * true }); background worker steps use attachSupplierViewForBackground().
+ */
 export function showSupplierView(panelKey: string): boolean {
+  const resolved = resolveStoredPanelKey(panelKey)
+  if (!resolved) return false
+  const normalized = resolved
+  if (detachedTabPanels.has(normalized)) return false
   const host = supplierViewHost
-  const entry = managedSupplierViews.get(panelKey)
+  const entry = managedSupplierViews.get(normalized)
   if (!host || host.isWindowDestroyed() || !entry || !entry.view) return false
   // Fail-closed: a null or undersized workspace rect hides the view instead
   // of covering the window. The session stays alive; returning to Browsers
@@ -712,8 +1007,6 @@ export function showSupplierView(panelKey: string): boolean {
     }
     entry.visible = true
   }
-  host.showWindow()
-  host.focusWindow()
   return true
 }
 
@@ -915,7 +1208,8 @@ class NativeSupplierBrowser implements SupplierBrowserApi {
         }
         host.addView(popup)
         popup.setBounds(bounds)
-        host.showWindow()
+        // Focus discipline: a background popup attach never shows or focuses
+        // the OS window. The operator opens it explicitly when needed.
       }
     } else if (this.host) {
       this.host.contentView.addChildView(popup)

@@ -69,7 +69,10 @@ describe("main-window supplier view manager", () => {
     assert.deepEqual(supplierViewStatus(), [{ panelKey: "meesho", visible: false }])
 
     assert.equal(showSupplierView("meesho"), true)
-    assert.deepEqual(calls, ["remove", "add", "show", "focus"])
+    // Focus discipline (VAL-WIN-004): low-level showSupplierView attaches the
+    // view without touching OS focus. Explicit user actions use
+    // showSupplierViewForUser(..., { focus: true }) instead.
+    assert.deepEqual(calls, ["remove", "add"])
     assert.deepEqual(view.bounds, { x: 240, y: 150, width: 980, height: 520 })
     assert.deepEqual(supplierViewStatus(), [{ panelKey: "meesho", visible: true }])
 

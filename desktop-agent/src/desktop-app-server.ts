@@ -15,14 +15,22 @@ import { currentOperator, loginOperator, logoutOperator } from "./operator-sessi
 import { closePortalLoginBrowser, holdPortalBrowser, listPortalLogins, PORTAL_CHANNELS, queueOneClaim, savePortalLogin, testPortalLogin } from "./portal-login.js"
 import {
   activeSupplierTabPanelKey,
+  attachSupplierViewForBackground,
   closeSupplierTab,
+  detachSupplierTab,
+  dockSupplierTab,
+  focusDetachedSupplierTab,
+  handleDetachedWindowClosed,
   hideSupplierViews,
+  isSupplierTabDetached,
   labelForPanelKey,
   navigateSupplierTab,
+  notifyWindowLifecycle,
   openSupplierTab,
   reopenClosedSupplierTab,
   setSupplierTabWorkerState,
   showSupplierView,
+  showSupplierViewForUser,
   supplierTabRegistry,
   supplierViewStatus,
   switchSupplierTab,
@@ -166,7 +174,10 @@ async function pollAndProcessJob(manual = false): Promise<boolean> {
     // The worker owns this tab until the job settles: a manual close needs a
     // pause first (409 WORKER_ACTIVE_PAUSE_REQUIRED). Opening the tab here
     // also keeps the tab strip honest while the worker drives the view.
+    // Focus discipline (VAL-WIN-004): background preparation never touches OS
+    // focus; the view attaches silently for automation.
     openSupplierTab(panelKey)
+    attachSupplierViewForBackground(panelKey)
     setSupplierTabWorkerState(panelKey, {
       workerOwned: true,
       activeClaim: {
@@ -264,6 +275,10 @@ async function pollAndProcessJob(manual = false): Promise<boolean> {
       } else if (result.stage === "manual_intervention_required") {
         keepBrowserOpen = true
         holdPortalBrowser(browserRunner)
+        // Manual intervention needs the operator's eyes: this is the explicit
+        // user-visible path, so the view may show (but still never steals OS
+        // foreground focus — the tab badges instead).
+        attachSupplierViewForBackground(panelKey)
         await browserRunner.showForManualStep?.()
         await client.createOperatorTask({ claimId: bundle.claimId, marketplace: bundle.marketplace, kind: "pending_approval", title: `${bundle.marketplace}: manual approval needed for claim #${bundle.claimId}`, note: "Filing paused for an operator action." })
         markPanelResult(panelKey, "manual_action", result.manualActionReason || "Manual action required on portal.")
@@ -520,6 +535,10 @@ async function pollAndProcessFollowUp(): Promise<boolean> {
 
     // One adapter for filing and follow-ups: the bundled browser in the desktop
     // app, the system browser everywhere else (BROWSER_ADAPTER=external forces it).
+    // Focus discipline (VAL-WIN-004): follow-up checks attach silently and
+    // never call focusWindow(); the tab badge carries the outcome.
+    openSupplierTab(panelKey)
+    attachSupplierViewForBackground(panelKey)
     const supplierBrowser = await openSupplierBrowser({
       panelKey,
       profileDir: profileDirFor(config.userDataDir, followUp.marketplace),
@@ -894,6 +913,14 @@ function getDashboardHtml(): string {
       border-radius: 10px; background: #060b09; display: flex; align-items: center; justify-content: center;
       color: #6ee7b7; font-size: 12px; text-align: center; padding: 16px; }
     [data-theme="light"] #browser-workspace-viewport { background: #f2f7f4; color: #047857; }
+    #browser-detached-placeholder { flex: 1; min-height: 420px; border: 1px dashed var(--card-border);
+      border-radius: 10px; background: var(--card-bg); display: flex; align-items: center; justify-content: center;
+      padding: 24px; }
+    .detached-card { display: flex; flex-direction: column; align-items: center; gap: 14px; max-width: 420px; text-align: center; }
+    .detached-card-icon { font-size: 40px; line-height: 1; }
+    .detached-card-text { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+    .detached-card-text strong { font-size: 14px; color: var(--fg); }
+    .detached-card-actions { display: flex; gap: 10px; }
     #browser-claim-control-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
       background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 10px;
       padding: 8px 12px; font-size: 12px; }
@@ -1110,9 +1137,23 @@ catch (e) { document.documentElement.setAttribute('data-theme', 'light'); }
           <span id="browser-url-pill" title="Supplier page address">No supplier page open</span>
           <span id="browser-partition-badge" class="browser-tab-badge" title="Isolated session partition persist:supplier-<panelKey> (cookies and login stay in this tab)">no session</span>
           <button class="btn btn-secondary" type="button" id="browser-expand-btn" onclick="expandBrowserFullscreen()" title="Expand the supplier browser to the full window">Expand</button>
-          <button class="btn btn-secondary" type="button" id="browser-detach-btn" onclick="supplierBrowserDetach()" title="Detach is hardened in the detachable window feature">Detach</button>
-          <button class="btn btn-secondary" type="button" onclick="showSupplierBrowser()" title="Show the supplier browser in this workspace">Dock</button>
+          <button class="btn btn-secondary" type="button" id="browser-detach-btn" onclick="supplierBrowserDetach()" title="Open this supplier tab in its own window; cookies and login ride along">Detach</button>
+          <button class="btn btn-secondary" type="button" id="browser-focus-window-btn" onclick="supplierBrowserFocusWindow()" title="Bring the detached supplier window to the front" style="display: none;">Focus Window</button>
+          <button class="btn btn-secondary" type="button" id="browser-dock-btn" onclick="supplierBrowserDock()" title="Bring the detached supplier window back into this workspace">Dock</button>
           <button class="btn btn-secondary" type="button" onclick="hideSupplierBrowser()" title="Hide the supplier browser; the session stays saved">Hide</button>
+        </div>
+        <div id="browser-detached-placeholder" style="display: none;">
+          <div class="detached-card">
+            <div class="detached-card-icon" aria-hidden="true">🗗</div>
+            <div class="detached-card-text">
+              <strong id="detached-card-title">Detached in a separate window</strong>
+              <span id="detached-card-detail">The supplier page is running in its own window with the same login session.</span>
+            </div>
+            <div class="detached-card-actions">
+              <button class="btn btn-primary" type="button" onclick="supplierBrowserDock()" title="Move this supplier window back into the workspace">Dock Back</button>
+              <button class="btn btn-secondary" type="button" onclick="supplierBrowserFocusWindow()" title="Bring the detached window to the front">Focus Window</button>
+            </div>
+          </div>
         </div>
         <div id="browser-workspace-viewport">No supplier browser is open. Use Settings to sign in to a marketplace, then open it here.</div>
         <div id="browser-claim-control-bar">
@@ -2527,8 +2568,9 @@ catch (e) { document.documentElement.setAttribute('data-theme', 'light'); }
         var isActive = (activeTabId && t.tabId === activeTabId) || (!activeTabId && (t.mode === 'active'));
         var workerBadge = t.workerOwned ? ' <span class="browser-tab-badge" title="A worker claim is running on this tab. Pause the worker before closing it.">worker</span>' : '';
         var closedBadge = t.mode === 'closed' ? ' <span class="browser-tab-badge" title="This tab is closed. Its session is preserved; use Reopen Closed Tab.">closed</span>' : '';
+        var detachedBadge = t.mode === 'detached' ? ' <span class="browser-tab-badge" title="This tab is open in its own window. Dock Back brings it home; the session rides along.">detached</span>' : '';
         return '<button type="button" class="browser-tab-pill' + (isActive ? ' active' : '') + (t.mode === 'closed' ? ' closed' : '') + '" role="tab" data-tab="' + escapeHtml(t.tabId) + '" onclick="supplierBrowserSwitch(this.dataset.tab)" title="Switch to the ' + escapeHtml(t.label || t.panelKey) + ' tab (session preserved)">' +
-          escapeHtml(t.label || t.panelKey) + (isActive ? ' · open' : '') + workerBadge + closedBadge +
+          escapeHtml(t.label || t.panelKey) + (isActive ? ' · open' : '') + workerBadge + closedBadge + detachedBadge +
           ' <span class="browser-tab-close" role="button" data-tab="' + escapeHtml(t.tabId) + '" onclick="supplierBrowserClose(event, this.dataset.tab)" title="Close the ' + escapeHtml(t.label || t.panelKey) + ' tab">×</span></button>';
       }).join('') +
       '<button class="btn btn-secondary" type="button" style="font-size:11px;padding:4px 10px;" onclick="supplierBrowserOpen()" title="Open a supplier marketplace tab">+ Open Panel</button>';
@@ -2560,14 +2602,47 @@ catch (e) { document.documentElement.setAttribute('data-theme', 'light'); }
         stop.title = hasActive ? (loading ? 'Stop loading the supplier page' : 'The supplier page is not loading') : 'Open a supplier tab first';
       }
       var detach = document.getElementById('browser-detach-btn');
+      var focusWindow = document.getElementById('browser-focus-window-btn');
+      var dock = document.getElementById('browser-dock-btn');
+      var isDetached = hasActive && active.mode === 'detached';
       if (detach) {
-        detach.disabled = !hasActive;
-        detach.title = hasActive ? 'Detach is hardened in the detachable window feature' : 'Open a supplier tab first';
+        detach.disabled = !hasActive || isDetached;
+        detach.title = !hasActive ? 'Open a supplier tab first'
+          : isDetached ? 'This tab is already detached; use Dock to bring it back'
+          : 'Open this supplier tab in its own window; cookies and login ride along';
+      }
+      if (focusWindow) {
+        focusWindow.style.display = isDetached ? '' : 'none';
+        focusWindow.disabled = !isDetached;
+        focusWindow.title = isDetached ? 'Bring the detached supplier window to the front' : 'Detach a tab first';
+      }
+      if (dock) {
+        dock.disabled = !isDetached;
+        dock.title = isDetached ? 'Bring the detached supplier window back into this workspace' : 'Nothing is detached right now';
       }
       var expand = document.getElementById('browser-expand-btn');
       if (expand) {
-        expand.disabled = !hasActive;
-        expand.title = hasActive ? 'Expand the supplier browser to the full window' : 'Open a supplier tab first';
+        expand.disabled = !hasActive || isDetached;
+        expand.title = !hasActive ? 'Open a supplier tab first'
+          : isDetached ? 'Dock the tab back before expanding'
+          : 'Expand the supplier browser to the full window';
+      }
+    }
+
+    function renderDetachedPlaceholder(active) {
+      var placeholder = document.getElementById('browser-detached-placeholder');
+      var viewport = document.getElementById('browser-workspace-viewport');
+      var isDetached = Boolean(active && active.mode === 'detached');
+      if (placeholder) placeholder.style.display = isDetached ? 'flex' : 'none';
+      if (viewport) viewport.style.display = isDetached ? 'none' : '';
+      if (isDetached) {
+        var title = document.getElementById('detached-card-title');
+        var detail = document.getElementById('detached-card-detail');
+        var label = active.label || active.panelKey;
+        if (title) title.textContent = label + ' is detached in a separate window';
+        if (detail) {
+          detail.textContent = 'Cookies, the login session, and any running worker ride along in the detached window (' + (active.partition || '') + ').';
+        }
       }
     }
 
@@ -2731,13 +2806,74 @@ catch (e) { document.documentElement.setAttribute('data-theme', 'light'); }
     async function supplierBrowserDetach() {
       var message = document.getElementById('portal-browser-message');
       if (message) {
-        message.style.color = '#fca5a5';
-        message.textContent = 'Detach arrives with the detachable browser window feature; the tab stays here for now.';
+        message.style.color = '#a7f3d0';
+        message.textContent = 'Moving the tab into its own window…';
       }
       try {
-        await fetch('/api/portal-browser/detach', { method: 'POST' });
-      } catch {}
-      await loadSupplierBrowser();
+        var res = await fetch('/api/portal-browser/detach', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        });
+        var data = await res.json().catch(function () { return {}; });
+        if (message) {
+          message.style.color = res.ok ? '#6ee7b7' : '#fca5a5';
+          message.textContent = res.ok ? 'Tab detached into its own window. Use Dock Back here to bring it home.' : (data.error || 'Could not detach that tab.');
+        }
+        await loadSupplierBrowser();
+      } catch (err) {
+        if (message) {
+          message.style.color = '#fca5a5';
+          message.textContent = 'Could not reach the claim bot. Check the connection and try again.';
+        }
+      }
+    }
+
+    async function supplierBrowserDock() {
+      var message = document.getElementById('portal-browser-message');
+      if (message) {
+        message.style.color = '#a7f3d0';
+        message.textContent = 'Bringing the supplier window back…';
+      }
+      try {
+        var res = await fetch('/api/portal-browser/dock', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        });
+        var data = await res.json().catch(function () { return {}; });
+        if (message) {
+          message.style.color = res.ok ? '#6ee7b7' : '#fca5a5';
+          message.textContent = res.ok ? 'Supplier window docked back into this workspace.' : (data.error || 'Could not dock that tab.');
+        }
+        await loadSupplierBrowser();
+      } catch (err) {
+        if (message) {
+          message.style.color = '#fca5a5';
+          message.textContent = 'Could not reach the claim bot. Check the connection and try again.';
+        }
+      }
+    }
+
+    async function supplierBrowserFocusWindow() {
+      var message = document.getElementById('portal-browser-message');
+      try {
+        var res = await fetch('/api/portal-browser/focus', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        });
+        var data = await res.json().catch(function () { return {}; });
+        if (message && !res.ok) {
+          message.style.color = '#fca5a5';
+          message.textContent = data.error || 'Could not focus that window.';
+        }
+      } catch (err) {
+        if (message) {
+          message.style.color = '#fca5a5';
+          message.textContent = 'Could not reach the claim bot. Check the connection and try again.';
+        }
+      }
     }
 
     // Flicker-free poll: layout state is updated in place only after
@@ -2754,6 +2890,7 @@ catch (e) { document.documentElement.setAttribute('data-theme', 'light'); }
           renderBrowserTabs([]);
           renderBrowserPill(null);
           browserToolbarState(null);
+          renderDetachedPlaceholder(null);
           reportBrowserWorkspace();
           return;
         }
@@ -2763,7 +2900,9 @@ catch (e) { document.documentElement.setAttribute('data-theme', 'light'); }
         const activeTabId = data.activeTabId || null;
         const active = tabs.filter(function (t) { return t.tabId === activeTabId && t.mode !== 'closed'; })[0]
           || tabs.filter(function (t) { return t.mode === 'active'; })[0]
+          || tabs.filter(function (t) { return t.mode === 'detached'; })[0]
           || null;
+        const activeDetached = Boolean(active && active.mode === 'detached');
         if (row) row.style.display = views.length === 0 && tabs.length === 0 ? 'none' : 'flex';
         if (status) {
           const visible = views.filter((v) => v.visible);
@@ -2776,8 +2915,9 @@ catch (e) { document.documentElement.setAttribute('data-theme', 'light'); }
         renderBrowserTabs(views, tabs, activeTabId);
         renderBrowserPill(active);
         browserToolbarState(active);
+        renderDetachedPlaceholder(active);
         const open = views.filter((v) => v.visible);
-        if (viewport) {
+        if (viewport && !activeDetached) {
           viewport.textContent = open.length > 0
             ? 'Supplier browser is shown in this area: ' + open.map((v) => v.panelKey).join(', ')
             : (tabs.length > 0 ? 'Supplier browser is hidden. Show it to continue, or switch back to Browsers.' : 'No supplier browser is open. Use Settings to sign in to a marketplace, then open it here.');
@@ -2801,6 +2941,7 @@ catch (e) { document.documentElement.setAttribute('data-theme', 'light'); }
         renderBrowserTabs([]);
         renderBrowserPill(null);
         browserToolbarState(null);
+        renderDetachedPlaceholder(null);
         reportBrowserWorkspace();
       }
     }
@@ -3491,7 +3632,13 @@ export function startDesktopAppServer(bind: EngineBind = resolveEngineBind()): P
           const body = await readJson(req)
           const panelKey = panelKeyForMarketplace(String(body.marketplace || body.panelKey || body.tabId || ""))
           openSupplierTab(panelKey)
-          if (showSupplierView(panelKey)) {
+          // Explicit user action (Open in Browsers / Sign in): focus only when
+          // the caller asks for it. Background paths never send focus: true.
+          const wantsFocus = body.focus === true
+          const shown = wantsFocus
+            ? showSupplierViewForUser(panelKey, { focus: true })
+            : showSupplierView(panelKey)
+          if (shown) {
             sendJson(res, 200, { ok: true, panelKey, ...portalBrowserSnapshot() })
           } else {
             // Headless/test engines have no attached window: the tab is still
@@ -3646,9 +3793,31 @@ export function startDesktopAppServer(bind: EngineBind = resolveEngineBind()): P
           sendJson(res, 401, { error: "Sign in before detaching a supplier browser tab." })
           return
         }
-        // The hardened detached BrowserWindow lands with the detachable-window
-        // feature; until then the route answers explicitly instead of 404.
-        sendJson(res, 501, { code: "DETACH_PENDING", error: "Detach arrives with the detachable browser window feature." })
+        try {
+          const body = await readJson(req).catch(() => ({} as Record<string, unknown>))
+          const raw = String(body.tabId || body.panelKey || body.marketplace || "")
+          const tabId = raw
+            ? raw.startsWith("tab-")
+              ? raw
+              : tabIdForPanelKey(panelKeyForMarketplace(raw))
+            : activeSupplierTabPanelKey()
+              ? tabIdForPanelKey(activeSupplierTabPanelKey() as string)
+              : null
+          if (!tabId) {
+            sendJson(res, 404, { error: "No supplier browser tab is open to detach." })
+            return
+          }
+          // Explicit user action (toolbar Detach): the shell moves the live
+          // WebContentsView into the hardened detached BrowserWindow.
+          const tab = detachSupplierTab(tabId)
+          if (!tab) {
+            sendJson(res, 404, { error: "No supplier browser tab matches that id." })
+            return
+          }
+          sendJson(res, 200, { ok: true, tabId: tab.tabId, tab, ...portalBrowserSnapshot() })
+        } catch (error) {
+          sendJson(res, 400, { error: error instanceof Error ? error.message : "Could not detach the supplier browser tab." })
+        }
         return
       }
 
@@ -3657,7 +3826,109 @@ export function startDesktopAppServer(bind: EngineBind = resolveEngineBind()): P
           sendJson(res, 401, { error: "Sign in before docking a supplier browser tab." })
           return
         }
-        sendJson(res, 501, { code: "DETACH_PENDING", error: "Dock arrives with the detachable browser window feature." })
+        try {
+          const body = await readJson(req).catch(() => ({} as Record<string, unknown>))
+          const raw = String(body.tabId || body.panelKey || body.marketplace || "")
+          const tabId = raw
+            ? raw.startsWith("tab-")
+              ? raw
+              : tabIdForPanelKey(panelKeyForMarketplace(raw))
+            : activeSupplierTabPanelKey()
+              ? tabIdForPanelKey(activeSupplierTabPanelKey() as string)
+              : null
+          if (!tabId) {
+            sendJson(res, 404, { error: "No supplier browser tab is open to dock." })
+            return
+          }
+          // Explicit user action (Dock Back button or detached-window close):
+          // the live view returns to the bounded viewport as mode "active".
+          const tab = dockSupplierTab(tabId)
+          if (!tab) {
+            sendJson(res, 404, { error: "That tab is not detached." })
+            return
+          }
+          sendJson(res, 200, { ok: true, tabId: tab.tabId, tab, ...portalBrowserSnapshot() })
+        } catch (error) {
+          sendJson(res, 400, { error: error instanceof Error ? error.message : "Could not dock the supplier browser tab." })
+        }
+        return
+      }
+
+      if (url.pathname === "/api/portal-browser/focus" && req.method === "POST") {
+        if (!operatorSignedIn) {
+          sendJson(res, 401, { error: "Sign in before focusing a supplier browser window." })
+          return
+        }
+        try {
+          const body = await readJson(req).catch(() => ({} as Record<string, unknown>))
+          const raw = String(body.tabId || body.panelKey || body.marketplace || "")
+          const tabId = raw
+            ? raw.startsWith("tab-")
+              ? raw
+              : tabIdForPanelKey(panelKeyForMarketplace(raw))
+            : activeSupplierTabPanelKey()
+              ? tabIdForPanelKey(activeSupplierTabPanelKey() as string)
+              : null
+          if (!tabId) {
+            sendJson(res, 404, { error: "No supplier browser tab is open to focus." })
+            return
+          }
+          // Explicit user action only (Focus Window button): background worker
+          // steps never reach this route (VAL-WIN-004).
+          const panelKey = tabId.startsWith("tab-") ? tabId.slice(4) : tabId
+          if (isSupplierTabDetached(panelKey)) {
+            if (!focusDetachedSupplierTab(tabId)) {
+              sendJson(res, 404, { error: "That detached window is no longer open." })
+              return
+            }
+            sendJson(res, 200, { ok: true, focused: "detached", ...portalBrowserSnapshot() })
+            return
+          }
+          if (!showSupplierViewForUser(panelKey, { focus: true })) {
+            sendJson(res, 200, { ok: true, focused: "pending", ...portalBrowserSnapshot() })
+            return
+          }
+          sendJson(res, 200, { ok: true, focused: "main", ...portalBrowserSnapshot() })
+        } catch (error) {
+          sendJson(res, 400, { error: error instanceof Error ? error.message : "Could not focus the supplier browser window." })
+        }
+        return
+      }
+
+      if (url.pathname === "/api/window-control" && req.method === "POST") {
+        if (!operatorSignedIn) {
+          sendJson(res, 401, { error: "Sign in before controlling the app window." })
+          return
+        }
+        try {
+          const body = await readJson(req).catch(() => ({} as Record<string, unknown>))
+          const action = String(body.action || "")
+          if (
+            action !== "minimize" &&
+            action !== "maximize" &&
+            action !== "restore" &&
+            action !== "hide-to-tray" &&
+            action !== "restore-from-tray"
+          ) {
+            sendJson(res, 400, { error: "Unknown window action. Use minimize, maximize, restore, hide-to-tray, or restore-from-tray." })
+            return
+          }
+          // Headless/test engines track lifecycle state without a BrowserWindow:
+          // tab sessions and worker leases are preserved either way.
+          notifyWindowLifecycle(action)
+          sendJson(res, 200, { ok: true, action, ...portalBrowserSnapshot() })
+        } catch (error) {
+          sendJson(res, 400, { error: error instanceof Error ? error.message : "Could not control the app window." })
+        }
+        return
+      }
+
+      if (url.pathname === "/api/window-state" && req.method === "GET") {
+        if (!operatorSignedIn) {
+          sendJson(res, 401, { error: "Sign in before reading the app window state." })
+          return
+        }
+        sendJson(res, 200, { ok: true, ...portalBrowserSnapshot() })
         return
       }
 
