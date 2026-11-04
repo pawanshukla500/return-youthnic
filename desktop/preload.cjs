@@ -15,4 +15,7 @@ contextBridge.exposeInMainWorld("desktopApp", {
   setBrowserWorkspaceRect: (rect) => {
     ipcRenderer.send("desktop:browser-rect", rect)
   },
+  setBrowserFullscreen: (fullscreen) => {
+    ipcRenderer.send("desktop:browser-fullscreen", fullscreen === true)
+  },
 })

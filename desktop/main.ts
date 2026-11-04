@@ -9,7 +9,7 @@ import {
   resumeClaimBotIfSignedIn,
   startDesktopAppServer,
 } from "../desktop-agent/src/desktop-app-server.js"
-import { layoutSupplierViews, setBrowserWorkspaceRect, setSupplierViewHost } from "../desktop-agent/src/native-browser-view.js"
+import { notifyWindowGeometryChanged, setBrowserWorkspaceRect, setFullscreenSupplierView, setSupplierViewHost } from "../desktop-agent/src/native-browser-view.js"
 import { isInsecureRemoteUrl, isSameOrigin, localEngineUrl, resolveEngineBind, type EngineBind } from "../desktop-agent/src/engine-config.js"
 import { escapeHtml, scriptLiteral } from "../desktop-agent/src/html-escape.js"
 import { logger } from "../desktop-agent/src/logger.js"
@@ -347,11 +347,14 @@ function createMainWindow(target: EngineTarget, startupError?: string): void {
   // The main window owns every supplier browser view: marketplace work is
   // embedded here through WebContentsView, never a separate window.
   registerSupplierViewHost()
-  // Bounds follow the window, not just its size: a move across displays or a
-  // DPI change re-fits the supplier view into the dashboard workspace rect.
-  mainWindow.on("resize", () => layoutSupplierViews())
-  mainWindow.on("move", () => layoutSupplierViews())
-  screen.on("display-metrics-changed", () => layoutSupplierViews())
+  // Bounds follow the window, not just its size: a resize, move, maximize,
+  // unmaximize, display move or DPI change re-fits the supplier view into the
+  // dashboard workspace rect — or hides it when no valid rect is reported.
+  mainWindow.on("resize", () => notifyWindowGeometryChanged("resize"))
+  mainWindow.on("move", () => notifyWindowGeometryChanged("move"))
+  mainWindow.on("maximize", () => notifyWindowGeometryChanged("maximize"))
+  mainWindow.on("unmaximize", () => notifyWindowGeometryChanged("unmaximize"))
+  screen.on("display-metrics-changed", () => notifyWindowGeometryChanged("display-metrics-changed"))
 
   mainWindow.once("ready-to-show", () => {
     if (!startHidden) mainWindow?.show()
@@ -632,9 +635,10 @@ ipcMain.handle("desktop:toggle-bot", async () => toggleWorker())
 
 /**
  * Dashboard workspace rect (DIPs, relative to the window content area).
- * The dashboard reports the rect of its browser placeholder so the supplier
- * view shares the window with the layout controls instead of covering them.
- * A null/empty rect restores full-window layout. Malformed rects are ignored.
+ * The dashboard reports the rect of its browser viewport so the supplier
+ * view shares the window with the sidebar and layout controls instead of
+ * covering them. A null rect (non-Browsers sidebar tab) hides the view
+ * while preserving its session. Malformed rects are ignored.
  */
 ipcMain.on("desktop:browser-rect", (_event, rect) => {
   if (rect === null || rect === undefined) {
@@ -650,6 +654,15 @@ ipcMain.on("desktop:browser-rect", (_event, rect) => {
   if (x === null || y === null || width === null || height === null) return
   if (width < 0 || height < 0) return
   setBrowserWorkspaceRect({ x, y, width, height })
+})
+
+/**
+ * Explicit user-triggered fullscreen/expand mode for the supplier browser.
+ * Sent only by the renderer's Expand / Exit Fullscreen button and its Escape
+ * shortcut — never by background polling or worker steps.
+ */
+ipcMain.on("desktop:browser-fullscreen", (_event, fullscreen) => {
+  setFullscreenSupplierView(fullscreen === true)
 })
 
 // ---------------------------------------------------------------------------------------------------------------

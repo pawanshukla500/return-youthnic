@@ -81,16 +81,29 @@ let supplierViewHost: SupplierViewHost | null = null
 
 /**
  * Dashboard-owned workspace rect (DIPs, relative to the window content area).
- * When set, visible supplier views are fitted to this rect so the dashboard
- * keeps its layout controls visible; when null, views fill the window as
- * before. The dashboard reports it over IPC and clears it on hide.
+ * Visible supplier views are fitted to this rect so the dashboard keeps its
+ * sidebar, header, and controls visible. Fail-closed: when null (the Browsers
+ * sidebar tab is inactive) or smaller than the minimum valid bounds, no view
+ * is shown at all — never a full-window fallback.
  */
 let browserWorkspaceRect: { x: number; y: number; width: number; height: number } | null = null
 
-/** Confine the supplier view to the dashboard workspace rect. Null restores full-window layout. */
+/**
+ * Explicit user-triggered fullscreen/expand mode. Set only from the renderer's
+ * Expand button; cleared by the Exit Fullscreen button or the Escape key. It
+ * is the only path that shows the active view across the full window.
+ */
+let fullscreenSupplierView = false
+
+/** Minimum valid workspace size in DIPs. Smaller rects hide the view. */
+export const MIN_SUPPLIER_VIEW_SIZE = 120
+
+/** Confine the supplier view to the dashboard workspace rect. Null hides every view. */
 export function setBrowserWorkspaceRect(rect: { x: number; y: number; width: number; height: number } | null): void {
   browserWorkspaceRect = rect
   layoutSupplierViews()
+  const bounds = supplierViewBounds()
+  if (bounds === null) hideSupplierViews()
 }
 
 /** The active workspace rect, if the dashboard set one. Exported for tests and the shell. */
@@ -98,14 +111,33 @@ export function getBrowserWorkspaceRect(): { x: number; y: number; width: number
   return browserWorkspaceRect ? { ...browserWorkspaceRect } : null
 }
 
-/** Visible-view bounds: the workspace rect clamped into the window, or the full window. */
-export function supplierViewBounds(): { x: number; y: number; width: number; height: number } {
+/** Explicit fullscreen/expand state. True only after the operator clicks Expand. */
+export function isFullscreenSupplierView(): boolean {
+  return fullscreenSupplierView
+}
+
+/** Enter or exit explicit fullscreen mode, then re-fit the visible views. */
+export function setFullscreenSupplierView(fullscreen: boolean): void {
+  fullscreenSupplierView = fullscreen
+  layoutSupplierViews()
+  const bounds = supplierViewBounds()
+  if (bounds === null) hideSupplierViews()
+}
+
+/**
+ * Visible-view bounds: the workspace rect clamped into the window, or null to
+ * hide the view. Null whenever the Browsers tab is inactive (rect is null) or
+ * the rect is smaller than 120x120, unless explicit fullscreen mode is active.
+ */
+export function supplierViewBounds(): { x: number; y: number; width: number; height: number } | null {
   const host = supplierViewHost
   const full = host && !host.isWindowDestroyed()
     ? host.contentBounds()
     : { x: 0, y: 0, width: 0, height: 0 }
+  if (fullscreenSupplierView) return full
   const rect = browserWorkspaceRect
-  if (!rect) return full
+  if (!rect) return null
+  if (rect.width < MIN_SUPPLIER_VIEW_SIZE || rect.height < MIN_SUPPLIER_VIEW_SIZE) return null
   const x = Math.min(Math.max(0, rect.x), Math.max(0, full.width - 1))
   const y = Math.min(Math.max(0, rect.y), Math.max(0, full.height - 1))
   return {
@@ -114,6 +146,16 @@ export function supplierViewBounds(): { x: number; y: number; width: number; hei
     width: Math.min(Math.max(0, rect.width), Math.max(0, full.width - x)),
     height: Math.min(Math.max(0, rect.height), Math.max(0, full.height - y)),
   }
+}
+
+/**
+ * Re-fit visible views after a window/display geometry change (resize, move,
+ * maximize, unmaximize, display-metrics-changed). A null bounds hides the
+ * views instead of leaving stale coordinates on screen.
+ */
+export function notifyWindowGeometryChanged(_event: "resize" | "move" | "maximize" | "unmaximize" | "display-metrics-changed"): void {
+  layoutSupplierViews()
+  if (supplierViewBounds() === null) hideSupplierViews()
 }
 
 /** Register (or clear) the main-window host. Called once by the Electron shell. */
@@ -153,6 +195,10 @@ export function layoutSupplierViews(): void {
   const host = supplierViewHost
   if (!host || host.isWindowDestroyed()) return
   const bounds = supplierViewBounds()
+  if (bounds === null) {
+    hideSupplierViews()
+    return
+  }
   for (const entry of managedSupplierViews.values()) {
     if (!entry.visible) continue
     for (const popup of entry.popups) {
@@ -199,6 +245,14 @@ export function showSupplierView(panelKey: string): boolean {
   const host = supplierViewHost
   const entry = managedSupplierViews.get(panelKey)
   if (!host || host.isWindowDestroyed() || !entry) return false
+  // Fail-closed: a null or undersized workspace rect hides the view instead
+  // of covering the window. The session stays alive; returning to Browsers
+  // re-attaches it at the exact bounded coordinates.
+  const bounds = supplierViewBounds()
+  if (bounds === null) {
+    hideSupplierViews()
+    return false
+  }
   if (!entry.visible) {
     try {
       host.removeView(entry.view)
@@ -206,7 +260,7 @@ export function showSupplierView(panelKey: string): boolean {
       // ensure a single attach
     }
     host.addView(entry.view)
-    entry.view.setBounds(supplierViewBounds())
+    entry.view.setBounds(bounds)
     for (const popup of entry.popups) {
       try {
         host.removeView(popup)
@@ -214,7 +268,7 @@ export function showSupplierView(panelKey: string): boolean {
         // ensure a single attach
       }
       host.addView(popup)
-      popup.setBounds(supplierViewBounds())
+      popup.setBounds(bounds)
     }
     entry.visible = true
   }
@@ -359,14 +413,17 @@ class NativeSupplierBrowser implements SupplierBrowserApi {
     await popup.webContents.loadURL(url)
     const host = supplierViewHost
     if (host && !host.isWindowDestroyed()) {
-      try {
-        host.removeView(popup)
-      } catch {
-        // ensure a single attach
+      const bounds = supplierViewBounds()
+      if (bounds !== null) {
+        try {
+          host.removeView(popup)
+        } catch {
+          // ensure a single attach
+        }
+        host.addView(popup)
+        popup.setBounds(bounds)
+        host.showWindow()
       }
-      host.addView(popup)
-      popup.setBounds(supplierViewBounds())
-      host.showWindow()
     } else if (this.host) {
       this.host.contentView.addChildView(popup)
       popup.setBounds({ x: 0, y: 0, width: 1280, height: 800 })
