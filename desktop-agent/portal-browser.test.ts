@@ -149,6 +149,7 @@ test("the dashboard has a dedicated Browsers sidebar tab with a bounded workspac
   assert.ok(html.includes('id="browser-workspace-viewport"'), "expected the bounded viewport")
   assert.ok(html.includes('id="browser-tab-strip"'), "expected the marketplace tab strip")
   assert.ok(html.includes('id="browser-nav-toolbar"'), "expected the navigation toolbar")
+  assert.ok(html.includes('title="Back navigation arrives with the multi-tab manager"'), "expected the disabled Back button title")
   assert.ok(html.includes('id="browser-claim-control-bar"'), "expected the claim control bar")
   assert.ok(html.includes('id="browser-exit-bar"'), "expected the fullscreen exit bar")
   assert.ok(!html.includes("left: 10px"), "the workspace must not use fixed overlay CSS")

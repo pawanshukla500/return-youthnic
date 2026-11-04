@@ -1066,9 +1066,9 @@ catch (e) { document.documentElement.setAttribute('data-theme', 'light'); }
       <div id="browser-workspace">
         <div id="browser-tab-strip" role="tablist" aria-label="Marketplace browser tabs"></div>
         <div id="browser-nav-toolbar">
-          <button class="btn btn-secondary" type="button" id="browser-back-btn" onclick="supplierBrowserNav('back')" title="Go back in the supplier page">← Back</button>
-          <button class="btn btn-secondary" type="button" id="browser-forward-btn" onclick="supplierBrowserNav('forward')" title="Go forward in the supplier page">Forward →</button>
-          <button class="btn btn-secondary" type="button" id="browser-reload-btn" onclick="supplierBrowserNav('reload')" title="Reload the supplier page">↻ Reload</button>
+          <button class="btn btn-secondary" type="button" id="browser-back-btn" disabled title="Back navigation arrives with the multi-tab manager">← Back</button>
+          <button class="btn btn-secondary" type="button" id="browser-forward-btn" disabled title="Forward navigation arrives with the multi-tab manager">Forward →</button>
+          <button class="btn btn-secondary" type="button" id="browser-reload-btn" disabled title="Reload arrives with the multi-tab manager">↻ Reload</button>
           <span id="browser-url-pill" title="Supplier page address">No supplier page open</span>
           <button class="btn btn-secondary" type="button" onclick="expandBrowserFullscreen()" title="Expand the supplier browser to the full window">Expand</button>
           <button class="btn btn-secondary" type="button" onclick="showSupplierBrowser()" title="Show the supplier browser in this workspace">Dock</button>
@@ -2482,32 +2482,6 @@ catch (e) { document.documentElement.setAttribute('data-theme', 'light'); }
         return '<span class="browser-tab-pill' + (v.visible ? ' active' : '') + '" role="tab">' +
           escapeHtml(v.panelKey) + (v.visible ? ' · open' : '') + '</span>';
       }).join('');
-    }
-
-    async function supplierBrowserNav(action) {
-      var message = document.getElementById('portal-browser-message');
-      if (message) {
-        message.style.color = '#a7f3d0';
-        message.textContent = action === 'back' ? 'Going back…' : action === 'forward' ? 'Going forward…' : 'Reloading…';
-      }
-      try {
-        var res = await fetch('/api/portal-browser/nav', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: action }),
-        });
-        var data = await res.json().catch(function () { return {}; });
-        if (message) {
-          message.style.color = res.ok ? '#6ee7b7' : '#fca5a5';
-          message.textContent = res.ok ? '' : (data.error || 'Navigation failed.');
-        }
-        await loadSupplierBrowser();
-      } catch (err) {
-        if (message) {
-          message.style.color = '#fca5a5';
-          message.textContent = 'Could not reach the claim bot. Check the connection and try again.';
-        }
-      }
     }
 
     // Flicker-free poll: layout state is updated in place only after
