@@ -4,10 +4,13 @@ import { describe, it } from "node:test"
 import assert from "node:assert/strict"
 import {
   MEESHO_PORTAL_ISSUE_LABELS,
+  checkMeeshoEvidenceFileLocal,
   findExistingTicketForOrder,
   parseMeeshoTicketRow,
   resolveMeeshoIssueLabel,
   resolveMeeshoPacketLabel,
+  resolveMeeshoUploadField,
+  summarizeMeeshoUploadFailures,
 } from "./src/marketplaces/meesho.js"
 
 describe("Meesho portal issue mapping", () => {
@@ -97,5 +100,58 @@ describe("Meesho already-filed check", () => {
     assert.equal(findExistingTicketForOrder([], ["1234567890123"]), null)
     assert.equal(findExistingTicketForOrder([["1234567890123", "Raised"]], []), null)
     assert.equal(findExistingTicketForOrder([["1234567890123", "Raised"]], [undefined, null, ""]), null)
+  })
+})
+
+describe("Meesho upload-field mapping (M9 Phase 6: Claim #1 regression)", () => {
+  it("maps the five production upload boxes to their evidence fields", () => {
+    assert.equal(resolveMeeshoUploadField("barcode_image_link_6"), "barcode_image")
+    assert.equal(resolveMeeshoUploadField("product_image_link_7"), "product_images")
+    assert.equal(resolveMeeshoUploadField("product_reverse_way_bill_link_8"), "reverse_waybill")
+    assert.equal(resolveMeeshoUploadField("product_openingvideo_link_9"), "unboxing_video")
+    assert.equal(resolveMeeshoUploadField("attachments_12"), "attachments")
+  })
+
+  it("returns null for empty or unknown inputs instead of guessing", () => {
+    assert.equal(resolveMeeshoUploadField(""), null)
+    assert.equal(resolveMeeshoUploadField("some_random_box"), null)
+  })
+
+  it("rejects missing, empty, and wrong-MIME local evidence files", async () => {
+    const { default: fs } = await import("node:fs")
+    const { default: os } = await import("node:os")
+    const { default: path } = await import("node:path")
+    assert.equal(checkMeeshoEvidenceFileLocal("D:/no-such-dir/SYN-missing.jpg").ok, false)
+    assert.equal(checkMeeshoEvidenceFileLocal("D:/no-such-dir/SYN-missing.jpg").reason, "file missing on disk")
+    // Wrong MIME: a real non-empty .txt file must be rejected by extension.
+    const tmpTxt = path.join(os.tmpdir(), `SYN-meesho-mime-${Date.now()}.txt`)
+    fs.writeFileSync(tmpTxt, "SYN not an image")
+    try {
+      const mimeCheck = checkMeeshoEvidenceFileLocal(tmpTxt)
+      assert.equal(mimeCheck.ok, false)
+      assert.ok(mimeCheck.reason.includes("MIME"))
+    } finally {
+      fs.rmSync(tmpTxt, { force: true })
+    }
+    // Empty file: a real zero-byte .jpg must be rejected, not attached.
+    const tmpEmpty = path.join(os.tmpdir(), `SYN-meesho-empty-${Date.now()}.jpg`)
+    fs.writeFileSync(tmpEmpty, "")
+    try {
+      const emptyCheck = checkMeeshoEvidenceFileLocal(tmpEmpty)
+      assert.equal(emptyCheck.ok, false)
+      assert.ok(emptyCheck.reason.includes("empty"))
+    } finally {
+      fs.rmSync(tmpEmpty, { force: true })
+    }
+  })
+
+  it("names the exact failed field and attachment status for the claim panel", () => {
+    const summary = summarizeMeeshoUploadFailures([
+      { inputId: "barcode_image_link_6", field: "barcode_image", ok: false, reason: "no portal acknowledgement (files=1, no file name/thumbnail/success chip nearby)", attachedCount: 1, portalAck: false },
+      { inputId: "attachments_12", field: "attachments", ok: false, reason: "DOM.setFileInputFiles rejected the files", attachedCount: 0, portalAck: false },
+    ])
+    assert.ok(summary.includes("#barcode_image_link_6 (barcode_image)"))
+    assert.ok(summary.includes("#attachments_12 (attachments)"))
+    assert.ok(summary.includes("portalAck=no"))
   })
 })

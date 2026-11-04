@@ -13,8 +13,31 @@ import { BrowserRunner, findSystemBrowser } from "./browser-runner.js"
 import { getAutomationEngine, isMarketplaceSupported } from "./marketplaces/registry.js"
 import { currentOperator, loginOperator, logoutOperator } from "./operator-session.js"
 import { closePortalLoginBrowser, holdPortalBrowser, listPortalLogins, PORTAL_CHANNELS, queueOneClaim, savePortalLogin, testPortalLogin } from "./portal-login.js"
-import { hideSupplierViews, showSupplierView, supplierViewStatus } from "./native-browser-view.js"
-import { clearPanelHold, getPanelStatuses, markPanelBusy, markPanelResult, panelKeyForMarketplace } from "./panel-queue.js"
+import {
+  activeSupplierTabPanelKey,
+  attachSupplierViewForBackground,
+  closeSupplierTab,
+  detachSupplierTab,
+  dockSupplierTab,
+  focusDetachedSupplierTab,
+  handleDetachedWindowClosed,
+  hideSupplierViews,
+  isSupplierTabDetached,
+  labelForPanelKey,
+  navigateSupplierTab,
+  notifyWindowLifecycle,
+  openSupplierTab,
+  reopenClosedSupplierTab,
+  setSupplierTabWorkerState,
+  showSupplierView,
+  showSupplierViewForUser,
+  supplierTabRegistry,
+  supplierViewStatus,
+  switchSupplierTab,
+  tabIdForPanelKey,
+  WORKER_ACTIVE_PAUSE_REQUIRED,
+} from "./native-browser-view.js"
+import { CLAIM_PANELS, clearPanelHold, getPanelStatuses, markPanelBusy, markPanelResult, panelKeyForMarketplace } from "./panel-queue.js"
 import { localEncryptionAvailable } from "./local-secrets.js"
 import { checkForUpdates } from "./update-check.js"
 import { followUpExecutionBundle } from "./follow-up-bundle.js"
@@ -148,10 +171,36 @@ async function pollAndProcessJob(manual = false): Promise<boolean> {
     logger.info(`=== Received Claim Job #${jobHeader.jobId} (${jobHeader.marketplace} · AWB/Order: ${jobHeader.trackingId || jobHeader.orderNumber} · Stage: ${jobHeader.stage}) ===`)
     await client.sendHeartbeat("busy", { activeJobId: jobHeader.jobId, marketplace: jobHeader.marketplace })
     markPanelBusy(panelKey, jobHeader.jobId, String(jobHeader.stage || ""))
+    // The worker owns this tab until the job settles: a manual close needs a
+    // pause first (409 WORKER_ACTIVE_PAUSE_REQUIRED). Opening the tab here
+    // also keeps the tab strip honest while the worker drives the view.
+    // Focus discipline (VAL-WIN-004): background preparation never touches OS
+    // focus; the view attaches silently for automation.
+    openSupplierTab(panelKey)
+    attachSupplierViewForBackground(panelKey)
+    // Paused here means the *claim* is paused for an operator step, never the
+    // worker loop. A manual Poll Now drives the tab even while the loop is
+    // paused, so paused must start false: the close guard (409) stays armed
+    // until the job settles and clears worker ownership in the finally below.
+    setSupplierTabWorkerState(panelKey, {
+      workerOwned: true,
+      activeClaim: {
+        claimId: String(jobHeader.jobId || ""),
+        orderId: String(jobHeader.orderNumber || ""),
+        awb: String(jobHeader.trackingId || jobHeader.orderNumber || ""),
+        stage: String(jobHeader.stage || ""),
+        statusText: "running",
+        paused: false,
+      },
+    })
 
     const bundle = await client.getExecutionBundle(jobHeader.jobId)
     if (!bundle) {
       logger.error(`Could not retrieve bundle for job #${jobHeader.jobId}. Skipping.`)
+      // This return sits outside the inner try/finally that clears worker
+      // ownership on settle, so clear it here: otherwise the tab stays
+      // worker-owned indefinitely and every later close answers 409.
+      setSupplierTabWorkerState(panelKey, { workerOwned: false })
       isCurrentlyProcessing = false
       activeJobInfo = null
       return false
@@ -234,6 +283,10 @@ async function pollAndProcessJob(manual = false): Promise<boolean> {
       } else if (result.stage === "manual_intervention_required") {
         keepBrowserOpen = true
         holdPortalBrowser(browserRunner)
+        // Manual intervention needs the operator's eyes: this is the explicit
+        // user-visible path, so the view may show (but still never steals OS
+        // foreground focus — the tab badges instead).
+        attachSupplierViewForBackground(panelKey)
         await browserRunner.showForManualStep?.()
         await client.createOperatorTask({ claimId: bundle.claimId, marketplace: bundle.marketplace, kind: "pending_approval", title: `${bundle.marketplace}: manual approval needed for claim #${bundle.claimId}`, note: "Filing paused for an operator action." })
         markPanelResult(panelKey, "manual_action", result.manualActionReason || "Manual action required on portal.")
@@ -256,6 +309,9 @@ async function pollAndProcessJob(manual = false): Promise<boolean> {
       }
     } finally {
       if (!keepBrowserOpen) await supplierBrowser.close()
+      // The tab keeps its session either way; worker ownership ends when the
+      // job settles so a manual close no longer needs the pause-first guard.
+      setSupplierTabWorkerState(panelKey, { workerOwned: false })
     }
   } catch (err: any) {
     logger.error("Error processing automation job:", err)
@@ -266,6 +322,7 @@ async function pollAndProcessJob(manual = false): Promise<boolean> {
         submissionOutcomeUnknown ? "manual_action" : "failed",
         err instanceof Error ? err.message : "Desktop automation failed.",
       )
+      setSupplierTabWorkerState(failedPanel, { workerOwned: false })
       await client.updateProgress(activeJobInfo.jobId, {
         stage: submissionOutcomeUnknown ? "manual_intervention_required" : "failed",
         logMessage: err instanceof Error ? err.message : "Desktop automation failed.",
@@ -486,6 +543,10 @@ async function pollAndProcessFollowUp(): Promise<boolean> {
 
     // One adapter for filing and follow-ups: the bundled browser in the desktop
     // app, the system browser everywhere else (BROWSER_ADAPTER=external forces it).
+    // Focus discipline (VAL-WIN-004): follow-up checks attach silently and
+    // never call focusWindow(); the tab badge carries the outcome.
+    openSupplierTab(panelKey)
+    attachSupplierViewForBackground(panelKey)
     const supplierBrowser = await openSupplierBrowser({
       panelKey,
       profileDir: profileDirFor(config.userDataDir, followUp.marketplace),
@@ -832,14 +893,45 @@ function getDashboardHtml(): string {
     .portal-row { display: grid; grid-template-columns: 140px 1fr 1fr auto; gap: 10px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--line); }
     .portal-row input { width: 100%; }
     @media (max-width: 900px) { .portal-row { grid-template-columns: 1fr; } }
-    #browser-workspace { display: none; }
-    body.supplier-browser-open { overflow: hidden; }
-    body.supplier-browser-open #browser-workspace {
-      display: flex; position: fixed; left: 10px; right: 10px; bottom: 10px; z-index: 1;
-      border: 1px dashed #34d399; border-radius: 8px;
-      align-items: center; justify-content: center; text-align: center;
-      color: #6ee7b7; font-size: 12px; pointer-events: none;
-    }
+    /* Browsers workspace: a bounded flex column inside the main content
+       column, to the right of .sidebar. Never fixed, never over the sidebar
+       or the top header. The native WebContentsView is fitted to
+       #browser-workspace-viewport through desktop:browser-rect. */
+    #browser-workspace { display: none; flex-direction: column; gap: 10px; min-height: 560px; }
+    body.supplier-browser-open #browser-workspace { display: flex; }
+    #browser-exit-bar { display: none; align-items: center; justify-content: space-between; gap: 10px;
+      background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 10px;
+      padding: 8px 12px; font-size: 12px; font-weight: 700; }
+    body.browser-fullscreen #browser-exit-bar { display: flex; position: sticky; top: 0; z-index: 5; }
+    body.browser-fullscreen .sidebar, body.browser-fullscreen header, body.browser-fullscreen .top-toolbar { display: none; }
+    #browser-tab-strip { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+    .browser-tab-pill { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line);
+      border-radius: 999px; padding: 4px 10px; font-size: 12px; font-weight: 600; background: var(--card-bg); cursor: pointer; }
+    .browser-tab-pill.active { border-color: var(--primary); color: var(--primary-dark); }
+    .browser-tab-pill.closed { opacity: 0.55; }
+    .browser-tab-close { border: none; background: transparent; color: inherit; cursor: pointer; font-size: 13px; line-height: 1; padding: 0 2px; }
+    .browser-tab-badge { font-size: 10px; border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; color: var(--muted); }
+    [data-theme="dark"] .browser-tab-pill.active { color: var(--primary); }
+    #browser-nav-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+      background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 10px; padding: 8px 12px; }
+    #browser-nav-toolbar .btn { font-size: 11px; padding: 4px 10px; }
+    #browser-url-pill { flex: 1; min-width: 180px; font-size: 12px; color: var(--muted);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #browser-workspace-viewport { flex: 1; min-height: 420px; border: 1px solid var(--card-border);
+      border-radius: 10px; background: #060b09; display: flex; align-items: center; justify-content: center;
+      color: #6ee7b7; font-size: 12px; text-align: center; padding: 16px; }
+    [data-theme="light"] #browser-workspace-viewport { background: #f2f7f4; color: #047857; }
+    #browser-detached-placeholder { flex: 1; min-height: 420px; border: 1px dashed var(--card-border);
+      border-radius: 10px; background: var(--card-bg); display: flex; align-items: center; justify-content: center;
+      padding: 24px; }
+    .detached-card { display: flex; flex-direction: column; align-items: center; gap: 14px; max-width: 420px; text-align: center; }
+    .detached-card-icon { font-size: 40px; line-height: 1; }
+    .detached-card-text { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+    .detached-card-text strong { font-size: 14px; color: var(--fg); }
+    .detached-card-actions { display: flex; gap: 10px; }
+    #browser-claim-control-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+      background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 10px;
+      padding: 8px 12px; font-size: 12px; }
     /* Light-theme surface overrides (hardcoded dark surfaces + inline JS colors). */
     [data-theme="light"] header { background: #ffffff; }
     [data-theme="light"] .panel-header { background: #f2f7f4; }
@@ -975,11 +1067,12 @@ catch (e) { document.documentElement.setAttribute('data-theme', 'light'); }
   <div class="app-shell">
     <aside class="sidebar" id="sidebar">
       <div class="side-title">Claim bot</div>
-      <button class="side-btn" type="button" data-side="status" onclick="showSideTab('status')">Status</button>
-      <button class="side-btn" type="button" data-side="setup" onclick="showSideTab('setup')">Setup</button>
+      <button class="side-btn" type="button" data-side="status" onclick="showSideTab('status')">Dashboard</button>
       <button class="side-btn" type="button" data-side="claims" onclick="showSideTab('claims')">Claims</button>
+      <button class="side-btn" type="button" data-side="browsers" onclick="showSideTab('browsers')">Browsers</button>
       <button class="side-btn" type="button" data-side="follow-ups" onclick="showSideTab('follow-ups')">Follow-ups</button>
       <button class="side-btn" type="button" data-side="ai" onclick="showSideTab('ai')">AI Center</button>
+      <button class="side-btn" type="button" data-side="setup" onclick="showSideTab('setup')">Settings</button>
       <button class="side-btn" type="button" data-side="updates" onclick="showSideTab('updates')">Updates</button>
     </aside>
     <div class="side-content">
@@ -1032,7 +1125,51 @@ catch (e) { document.documentElement.setAttribute('data-theme', 'light'); }
         <button class="btn btn-secondary" type="button" style="font-size: 11px; padding: 2px 8px;" onclick="hideSupplierBrowser()">Hide supplier browser</button>
       </div>
       <div id="portal-browser-message" style="margin-top: 6px; font-size: 12px; color: #fca5a5;"></div>
-      <div id="browser-workspace">Supplier browser is shown in this area. The controls above stay available — use Hide supplier browser to return to the dashboard.</div>
+      <div id="browser-workspace-note" style="margin-top: 6px; font-size: 12px; color: var(--muted);">Supplier pages open in the <button class="btn btn-secondary" type="button" style="font-size: 11px; padding: 2px 8px;" onclick="openBrowsersWorkspace()">Browsers workspace</button> tab.</div>
+    </section>
+
+    <section class="panel" id="browsers-panel" style="padding: 16px 18px;">
+      <div class="panel-title" style="margin-bottom: 4px;">Browsers</div>
+      <p style="color: var(--muted); font-size: 12px; line-height: 1.5; margin-bottom: 12px;">Marketplace supplier pages open inside this app window, bounded below. The sidebar and these controls stay visible while a page is open. Sessions are preserved when you switch tabs.</p>
+      <div id="browser-exit-bar">
+        <span id="browser-exit-label">Supplier browser expanded</span>
+        <button class="btn btn-secondary" type="button" style="font-size: 11px; padding: 4px 10px;" onclick="exitBrowserFullscreen()" title="Return the supplier browser to the bounded workspace">Exit Fullscreen (Esc)</button>
+      </div>
+      <div id="browser-workspace">
+        <div id="browser-tab-strip" role="tablist" aria-label="Marketplace browser tabs"></div>
+        <div id="browser-nav-toolbar">
+          <button class="btn btn-secondary" type="button" id="browser-back-btn" onclick="supplierBrowserNav('back')" title="Go back in the supplier page">← Back</button>
+          <button class="btn btn-secondary" type="button" id="browser-forward-btn" onclick="supplierBrowserNav('forward')" title="Go forward in the supplier page">Forward →</button>
+          <button class="btn btn-secondary" type="button" id="browser-reload-btn" onclick="supplierBrowserNav('reload')" title="Reload the supplier page">↻ Reload</button>
+          <button class="btn btn-secondary" type="button" id="browser-stop-btn" onclick="supplierBrowserNav('stop')" title="Stop loading the supplier page">✕ Stop</button>
+          <span id="browser-url-pill" title="Supplier page address">No supplier page open</span>
+          <span id="browser-partition-badge" class="browser-tab-badge" title="Isolated session partition persist:supplier-<panelKey> (cookies and login stay in this tab)">no session</span>
+          <button class="btn btn-secondary" type="button" id="browser-expand-btn" onclick="expandBrowserFullscreen()" title="Expand the supplier browser to the full window">Expand</button>
+          <button class="btn btn-secondary" type="button" id="browser-detach-btn" onclick="supplierBrowserDetach()" title="Open this supplier tab in its own window; cookies and login ride along">Detach</button>
+          <button class="btn btn-secondary" type="button" id="browser-focus-window-btn" onclick="supplierBrowserFocusWindow()" title="Bring the detached supplier window to the front" style="display: none;">Focus Window</button>
+          <button class="btn btn-secondary" type="button" id="browser-dock-btn" onclick="supplierBrowserDock()" title="Bring the detached supplier window back into this workspace">Dock</button>
+          <button class="btn btn-secondary" type="button" onclick="hideSupplierBrowser()" title="Hide the supplier browser; the session stays saved">Hide</button>
+        </div>
+        <div id="browser-detached-placeholder" style="display: none;">
+          <div class="detached-card">
+            <div class="detached-card-icon" aria-hidden="true">🗗</div>
+            <div class="detached-card-text">
+              <strong id="detached-card-title">Detached in a separate window</strong>
+              <span id="detached-card-detail">The supplier page is running in its own window with the same login session.</span>
+            </div>
+            <div class="detached-card-actions">
+              <button class="btn btn-primary" type="button" onclick="supplierBrowserDock()" title="Move this supplier window back into the workspace">Dock Back</button>
+              <button class="btn btn-secondary" type="button" onclick="supplierBrowserFocusWindow()" title="Bring the detached window to the front">Focus Window</button>
+            </div>
+          </div>
+        </div>
+        <div id="browser-workspace-viewport">No supplier browser is open. Use Settings to sign in to a marketplace, then open it here.</div>
+        <div id="browser-claim-control-bar">
+          <span id="browser-claim-status" style="color: var(--muted);">Idle — no supplier page open.</span>
+          <button class="btn btn-secondary" type="button" id="browser-reopen-btn" onclick="supplierBrowserReopen()" title="Reopen the most recently closed supplier tab">Reopen Closed Tab</button>
+        </div>
+        <div id="portal-browser-message" style="margin-top: 6px; font-size: 12px; color: #fca5a5;" role="status"></div>
+      </div>
     </section>
 
     <section class="panel" id="updates" style="padding: 16px 18px;">
@@ -2117,6 +2254,7 @@ catch (e) { document.documentElement.setAttribute('data-theme', 'light'); }
     }
 
     function focusLogin(marketplace) {
+      showSideTab('setup');
       const panel = document.getElementById('portal-setup');
       if (marketplace) {
         const select = document.getElementById('portal-marketplace');
@@ -2292,15 +2430,48 @@ catch (e) { document.documentElement.setAttribute('data-theme', 'light'); }
     }
     var SIDE_TABS = {
       'status': ['overall-status', 'kpi-overview'],
-      'setup': ['onboarding', 'portal-setup'],
       'claims': ['panel-queue', 'claims-pipeline'],
+      'browsers': ['browsers-panel'],
       'follow-ups': ['follow-ups'],
       'ai': ['ai-memory', 'ai-center'],
+      'setup': ['onboarding', 'portal-setup'],
       'updates': ['updates']
     };
     function sideTabFromHash() {
       const h = (location.hash || '').replace(/^#\\/?/, '');
       return SIDE_TABS[h] ? h : null;
+    }
+    var browserWorkspaceFullscreen = false;
+    function isBrowsersTabActive() {
+      var btn = document.querySelector('#sidebar .side-btn[data-side="browsers"]');
+      return Boolean(btn && btn.classList.contains('active'));
+    }
+    function openBrowsersWorkspace() {
+      showSideTab('browsers');
+    }
+    function expandBrowserFullscreen() {
+      // Explicit user trigger only: fullscreen is never entered by polling.
+      browserWorkspaceFullscreen = true;
+      try {
+        var bridge = window.desktopApp && window.desktopApp.setBrowserFullscreen;
+        if (typeof bridge === 'function') bridge(true);
+      } catch {}
+      syncBrowserFullscreen();
+      reportBrowserWorkspace();
+    }
+    function exitBrowserFullscreen() {
+      browserWorkspaceFullscreen = false;
+      try {
+        var bridge = window.desktopApp && window.desktopApp.setBrowserFullscreen;
+        if (typeof bridge === 'function') bridge(false);
+      } catch {}
+      syncBrowserFullscreen();
+      reportBrowserWorkspace();
+    }
+    function syncBrowserFullscreen() {
+      document.body.classList.toggle('browser-fullscreen', browserWorkspaceFullscreen);
+      var label = document.getElementById('browser-exit-label');
+      if (label) label.textContent = browserWorkspaceFullscreen ? 'Supplier browser expanded — press Esc or Exit Fullscreen to return' : 'Supplier browser expanded';
     }
     function showSideTab(name, skipHash) {
       if (!SIDE_TABS[name]) name = 'status';
@@ -2316,6 +2487,10 @@ catch (e) { document.documentElement.setAttribute('data-theme', 'light'); }
       });
       try { localStorage.setItem('ra-side-tab', name); } catch {}
       if (!skipHash) { try { history.replaceState(null, '', '#' + name); } catch {} }
+      // Leaving Browsers hides the native view (session preserved); returning
+      // re-measures the viewport and restores it at bounded coordinates.
+      if (name !== 'browsers' && browserWorkspaceFullscreen) exitBrowserFullscreen();
+      else reportBrowserWorkspace();
     }
     async function savePortal() {
       const message = document.getElementById('portal-message');
@@ -2369,43 +2544,414 @@ catch (e) { document.documentElement.setAttribute('data-theme', 'light'); }
       }
     }
 
-    // F10: the native supplier view shares the window with the dashboard. The
-    // shell fits the view to this placeholder rect; null restores full-window.
+    // The native supplier view shares the window with the dashboard. The shell
+    // fits the view to the Browsers viewport rect; null hides the view while
+    // preserving its session. Only the Browsers sidebar tab reports a rect.
     function reportBrowserWorkspace() {
       try {
         const bridge = window.desktopApp && window.desktopApp.setBrowserWorkspaceRect;
         if (typeof bridge !== 'function') return;
+        if (!isBrowsersTabActive()) { bridge(null); return; }
+        if (browserWorkspaceFullscreen) return;
         if (!document.body.classList.contains('supplier-browser-open')) { bridge(null); return; }
-        const row = document.getElementById('supplier-browser-row');
-        const el = document.getElementById('browser-workspace');
+        const el = document.getElementById('browser-workspace-viewport');
         if (!el) { bridge(null); return; }
-        const top = row ? Math.round(row.getBoundingClientRect().bottom + 8) : 120;
-        el.style.top = top + 'px';
         const r = el.getBoundingClientRect();
-        if (r.width < 50 || r.height < 50) return;
+        if (r.width < 120 || r.height < 120) { bridge(null); return; }
         bridge({ x: Math.round(r.left), y: Math.round(r.top), width: Math.round(r.width), height: Math.round(r.height) });
       } catch { /* the dashboard must never break on IPC */ }
     }
 
+    function renderBrowserTabs(views, tabs, activeTabId) {
+      var strip = document.getElementById('browser-tab-strip');
+      if (!strip) return;
+      var list = (tabs && tabs.length ? tabs : (views || []).map(function (v) {
+        return { tabId: 'tab-' + v.panelKey, panelKey: v.panelKey, label: v.panelKey, mode: v.visible ? 'active' : 'background', workerOwned: false, activeClaim: null };
+      }));
+      if (!list.length) {
+        strip.innerHTML = '<span style="font-size:12px;color:var(--muted);">No supplier pages open.</span>';
+        return;
+      }
+      strip.innerHTML = list.map(function (t) {
+        var isActive = (activeTabId && t.tabId === activeTabId) || (!activeTabId && (t.mode === 'active'));
+        var workerBadge = t.workerOwned ? ' <span class="browser-tab-badge" title="A worker claim is running on this tab. Pause the worker before closing it.">worker</span>' : '';
+        var closedBadge = t.mode === 'closed' ? ' <span class="browser-tab-badge" title="This tab is closed. Its session is preserved; use Reopen Closed Tab.">closed</span>' : '';
+        var detachedBadge = t.mode === 'detached' ? ' <span class="browser-tab-badge" title="This tab is open in its own window. Dock Back brings it home; the session rides along.">detached</span>' : '';
+        return '<button type="button" class="browser-tab-pill' + (isActive ? ' active' : '') + (t.mode === 'closed' ? ' closed' : '') + '" role="tab" data-tab="' + escapeHtml(t.tabId) + '" onclick="supplierBrowserSwitch(this.dataset.tab)" title="Switch to the ' + escapeHtml(t.label || t.panelKey) + ' tab (session preserved)">' +
+          escapeHtml(t.label || t.panelKey) + (isActive ? ' · open' : '') + workerBadge + closedBadge + detachedBadge +
+          ' <span class="browser-tab-close" role="button" data-tab="' + escapeHtml(t.tabId) + '" onclick="supplierBrowserClose(event, this.dataset.tab)" title="Close the ' + escapeHtml(t.label || t.panelKey) + ' tab">×</span></button>';
+      }).join('') +
+      '<button class="btn btn-secondary" type="button" style="font-size:11px;padding:4px 10px;" onclick="supplierBrowserOpen()" title="Open a supplier marketplace tab">+ Open Panel</button>';
+    }
+
+    function browserToolbarState(active) {
+      var back = document.getElementById('browser-back-btn');
+      var forward = document.getElementById('browser-forward-btn');
+      var reload = document.getElementById('browser-reload-btn');
+      var stop = document.getElementById('browser-stop-btn');
+      var hasActive = Boolean(active && active.mode !== 'closed');
+      if (back) {
+        var canBack = hasActive && Boolean(active.canGoBack);
+        back.disabled = !canBack;
+        back.title = hasActive ? (canBack ? 'Go back in the supplier page' : 'No earlier page in this tab') : 'Open a supplier tab first';
+      }
+      if (forward) {
+        var canForward = hasActive && Boolean(active.canGoForward);
+        forward.disabled = !canForward;
+        forward.title = hasActive ? (canForward ? 'Go forward in the supplier page' : 'No later page in this tab') : 'Open a supplier tab first';
+      }
+      if (reload) {
+        reload.disabled = !hasActive;
+        reload.title = hasActive ? 'Reload the supplier page' : 'Open a supplier tab first';
+      }
+      if (stop) {
+        var loading = hasActive && Boolean(active.loading);
+        stop.disabled = !loading;
+        stop.title = hasActive ? (loading ? 'Stop loading the supplier page' : 'The supplier page is not loading') : 'Open a supplier tab first';
+      }
+      var detach = document.getElementById('browser-detach-btn');
+      var focusWindow = document.getElementById('browser-focus-window-btn');
+      var dock = document.getElementById('browser-dock-btn');
+      var isDetached = hasActive && active.mode === 'detached';
+      if (detach) {
+        detach.disabled = !hasActive || isDetached;
+        detach.title = !hasActive ? 'Open a supplier tab first'
+          : isDetached ? 'This tab is already detached; use Dock to bring it back'
+          : 'Open this supplier tab in its own window; cookies and login ride along';
+      }
+      if (focusWindow) {
+        focusWindow.style.display = isDetached ? '' : 'none';
+        focusWindow.disabled = !isDetached;
+        focusWindow.title = isDetached ? 'Bring the detached supplier window to the front' : 'Detach a tab first';
+      }
+      if (dock) {
+        dock.disabled = !isDetached;
+        dock.title = isDetached ? 'Bring the detached supplier window back into this workspace' : 'Nothing is detached right now';
+      }
+      var expand = document.getElementById('browser-expand-btn');
+      if (expand) {
+        expand.disabled = !hasActive || isDetached;
+        expand.title = !hasActive ? 'Open a supplier tab first'
+          : isDetached ? 'Dock the tab back before expanding'
+          : 'Expand the supplier browser to the full window';
+      }
+    }
+
+    function renderDetachedPlaceholder(active) {
+      var placeholder = document.getElementById('browser-detached-placeholder');
+      var viewport = document.getElementById('browser-workspace-viewport');
+      var isDetached = Boolean(active && active.mode === 'detached');
+      if (placeholder) placeholder.style.display = isDetached ? 'flex' : 'none';
+      if (viewport) viewport.style.display = isDetached ? 'none' : '';
+      if (isDetached) {
+        var title = document.getElementById('detached-card-title');
+        var detail = document.getElementById('detached-card-detail');
+        var label = active.label || active.panelKey;
+        if (title) title.textContent = label + ' is detached in a separate window';
+        if (detail) {
+          detail.textContent = 'Cookies, the login session, and any running worker ride along in the detached window (' + (active.partition || '') + ').';
+        }
+      }
+    }
+
+    function renderBrowserPill(active) {
+      var pill = document.getElementById('browser-url-pill');
+      var badge = document.getElementById('browser-partition-badge');
+      if (pill) {
+        if (!active || active.mode === 'closed') {
+          pill.textContent = 'No supplier page open';
+          pill.title = 'Supplier page address';
+        } else {
+          var safeUrl = active.url || '(loading supplier page…)';
+          var safeTitle = active.title ? ' — ' + active.title : '';
+          var safeAccount = active.accountName ? ' · ' + active.accountName : '';
+          // textContent only: the supplier URL is never interpolated as HTML.
+          pill.textContent = safeUrl + safeTitle + safeAccount;
+          pill.title = 'Supplier page address: ' + safeUrl + (active.title ? ' (' + active.title + ')' : '') + (active.accountName ? ' · account ' + active.accountName : '');
+        }
+      }
+      if (badge) {
+        if (!active || active.mode === 'closed') {
+          badge.textContent = 'no session';
+          badge.title = 'Isolated session partition for this tab';
+        } else {
+          badge.textContent = active.partition;
+          badge.title = 'Isolated session partition: ' + active.partition + ' (cookies and login stay in this tab)';
+        }
+      }
+    }
+
+    async function supplierBrowserOpen() {
+      var message = document.getElementById('portal-browser-message');
+      var marketplace = '';
+      try {
+        var select = document.getElementById('portal-marketplace');
+        marketplace = select ? select.value : 'Meesho';
+      } catch {}
+      if (!marketplace) marketplace = 'Meesho';
+      if (message) {
+        message.style.color = '#a7f3d0';
+        message.textContent = 'Opening the ' + marketplace + ' tab…';
+      }
+      try {
+        var res = await fetch('/api/portal-browser/open', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ marketplace: marketplace }),
+        });
+        var data = await res.json().catch(function () { return {}; });
+        if (message) {
+          message.style.color = res.ok ? '#6ee7b7' : '#fca5a5';
+          message.textContent = res.ok ? '' : (data.error || 'Could not open that tab.');
+        }
+        await loadSupplierBrowser();
+      } catch (err) {
+        if (message) {
+          message.style.color = '#fca5a5';
+          message.textContent = 'Could not reach the claim bot. Check the connection and try again.';
+        }
+      }
+    }
+
+    async function supplierBrowserSwitch(tabId) {
+      var message = document.getElementById('portal-browser-message');
+      try {
+        var res = await fetch('/api/portal-browser/switch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ tabId: tabId }),
+        });
+        var data = await res.json().catch(function () { return {}; });
+        if (message) {
+          message.style.color = res.ok ? '#6ee7b7' : '#fca5a5';
+          message.textContent = res.ok ? '' : (data.error || 'Could not switch tabs.');
+        }
+        await loadSupplierBrowser();
+      } catch (err) {
+        if (message) {
+          message.style.color = '#fca5a5';
+          message.textContent = 'Could not reach the claim bot. Check the connection and try again.';
+        }
+      }
+    }
+
+    async function supplierBrowserClose(event, tabId) {
+      if (event && event.stopPropagation) event.stopPropagation();
+      var message = document.getElementById('portal-browser-message');
+      if (message) {
+        message.style.color = '#a7f3d0';
+        message.textContent = 'Closing that tab…';
+      }
+      try {
+        var res = await fetch('/api/portal-browser/close-tab', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ tabId: tabId }),
+        });
+        var data = await res.json().catch(function () { return {}; });
+        if (message) {
+          if (res.status === 409 && data.code === 'WORKER_ACTIVE_PAUSE_REQUIRED') {
+            message.style.color = '#fca5a5';
+            message.textContent = 'Pause the worker before closing this tab: ' + (data.error || 'a claim is running here.');
+          } else {
+            message.style.color = res.ok ? '#6ee7b7' : '#fca5a5';
+            message.textContent = res.ok ? '' : (data.error || 'Could not close that tab.');
+          }
+        }
+        await loadSupplierBrowser();
+      } catch (err) {
+        if (message) {
+          message.style.color = '#fca5a5';
+          message.textContent = 'Could not reach the claim bot. Check the connection and try again.';
+        }
+      }
+    }
+
+    async function supplierBrowserReopen() {
+      var message = document.getElementById('portal-browser-message');
+      try {
+        var res = await fetch('/api/portal-browser/reopen', { method: 'POST' });
+        var data = await res.json().catch(function () { return {}; });
+        if (message) {
+          message.style.color = res.ok ? '#6ee7b7' : '#fca5a5';
+          message.textContent = res.ok ? '' : (data.error || 'No closed tab to reopen.');
+        }
+        await loadSupplierBrowser();
+      } catch (err) {
+        if (message) {
+          message.style.color = '#fca5a5';
+          message.textContent = 'Could not reach the claim bot. Check the connection and try again.';
+        }
+      }
+    }
+
+    async function supplierBrowserNav(action) {
+      var message = document.getElementById('portal-browser-message');
+      if (message) {
+        message.style.color = '#a7f3d0';
+        message.textContent = action === 'back' ? 'Going back…' : action === 'forward' ? 'Going forward…' : action === 'stop' ? 'Stopping…' : 'Reloading…';
+      }
+      try {
+        var res = await fetch('/api/portal-browser/nav', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: action }),
+        });
+        var data = await res.json().catch(function () { return {}; });
+        if (message) {
+          message.style.color = res.ok ? '#6ee7b7' : '#fca5a5';
+          message.textContent = res.ok ? '' : (data.error || 'Navigation failed.');
+        }
+        await loadSupplierBrowser();
+      } catch (err) {
+        if (message) {
+          message.style.color = '#fca5a5';
+          message.textContent = 'Could not reach the claim bot. Check the connection and try again.';
+        }
+      }
+    }
+
+    async function supplierBrowserDetach() {
+      var message = document.getElementById('portal-browser-message');
+      if (message) {
+        message.style.color = '#a7f3d0';
+        message.textContent = 'Moving the tab into its own window…';
+      }
+      try {
+        var res = await fetch('/api/portal-browser/detach', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        });
+        var data = await res.json().catch(function () { return {}; });
+        if (message) {
+          message.style.color = res.ok ? '#6ee7b7' : '#fca5a5';
+          message.textContent = res.ok ? 'Tab detached into its own window. Use Dock Back here to bring it home.' : (data.error || 'Could not detach that tab.');
+        }
+        await loadSupplierBrowser();
+      } catch (err) {
+        if (message) {
+          message.style.color = '#fca5a5';
+          message.textContent = 'Could not reach the claim bot. Check the connection and try again.';
+        }
+      }
+    }
+
+    async function supplierBrowserDock() {
+      var message = document.getElementById('portal-browser-message');
+      if (message) {
+        message.style.color = '#a7f3d0';
+        message.textContent = 'Bringing the supplier window back…';
+      }
+      try {
+        var res = await fetch('/api/portal-browser/dock', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        });
+        var data = await res.json().catch(function () { return {}; });
+        if (message) {
+          message.style.color = res.ok ? '#6ee7b7' : '#fca5a5';
+          message.textContent = res.ok ? 'Supplier window docked back into this workspace.' : (data.error || 'Could not dock that tab.');
+        }
+        await loadSupplierBrowser();
+      } catch (err) {
+        if (message) {
+          message.style.color = '#fca5a5';
+          message.textContent = 'Could not reach the claim bot. Check the connection and try again.';
+        }
+      }
+    }
+
+    async function supplierBrowserFocusWindow() {
+      var message = document.getElementById('portal-browser-message');
+      try {
+        var res = await fetch('/api/portal-browser/focus', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        });
+        var data = await res.json().catch(function () { return {}; });
+        if (message && !res.ok) {
+          message.style.color = '#fca5a5';
+          message.textContent = data.error || 'Could not focus that window.';
+        }
+      } catch (err) {
+        if (message) {
+          message.style.color = '#fca5a5';
+          message.textContent = 'Could not reach the claim bot. Check the connection and try again.';
+        }
+      }
+    }
+
+    // Flicker-free poll: layout state is updated in place only after
+    // fetch('/api/portal-browser') resolves — never cleared beforehand.
     async function loadSupplierBrowser() {
       const row = document.getElementById('supplier-browser-row');
       const status = document.getElementById('supplier-browser-status');
-      document.body.classList.remove('supplier-browser-open');
-      reportBrowserWorkspace();
+      const viewport = document.getElementById('browser-workspace-viewport');
+      const claimBar = document.getElementById('browser-claim-status');
       try {
         const res = await fetch('/api/portal-browser');
-        if (!res.ok) { row.style.display = 'none'; return; }
+        if (!res.ok) {
+          if (row) row.style.display = 'none';
+          renderBrowserTabs([]);
+          renderBrowserPill(null);
+          browserToolbarState(null);
+          renderDetachedPlaceholder(null);
+          reportBrowserWorkspace();
+          return;
+        }
         const data = await res.json();
         const views = data.views || [];
-        if (views.length === 0) { row.style.display = 'none'; return; }
-        row.style.display = 'flex';
-        const visible = views.filter((v) => v.visible);
-        status.textContent = visible.length > 0
-          ? 'Supplier browser: ' + visible.map((v) => v.panelKey).join(', ') + ' (inside this window)'
-          : 'Supplier browser: hidden (sessions kept)';
-        document.body.classList.toggle('supplier-browser-open', visible.length > 0);
+        const tabs = data.tabs || [];
+        const activeTabId = data.activeTabId || null;
+        const active = tabs.filter(function (t) { return t.tabId === activeTabId && t.mode !== 'closed'; })[0]
+          || tabs.filter(function (t) { return t.mode === 'active'; })[0]
+          || tabs.filter(function (t) { return t.mode === 'detached'; })[0]
+          || null;
+        const activeDetached = Boolean(active && active.mode === 'detached');
+        if (row) row.style.display = views.length === 0 && tabs.length === 0 ? 'none' : 'flex';
+        if (status) {
+          const visible = views.filter((v) => v.visible);
+          status.textContent = tabs.length === 0 && views.length === 0
+            ? 'Supplier browser: dashboard'
+            : visible.length > 0
+              ? 'Supplier browser: ' + visible.map((v) => v.panelKey).join(', ') + ' (inside this window)'
+              : 'Supplier browser: hidden (sessions kept)';
+        }
+        renderBrowserTabs(views, tabs, activeTabId);
+        renderBrowserPill(active);
+        browserToolbarState(active);
+        renderDetachedPlaceholder(active);
+        const open = views.filter((v) => v.visible);
+        if (viewport && !activeDetached) {
+          viewport.textContent = open.length > 0
+            ? 'Supplier browser is shown in this area: ' + open.map((v) => v.panelKey).join(', ')
+            : (tabs.length > 0 ? 'Supplier browser is hidden. Show it to continue, or switch back to Browsers.' : 'No supplier browser is open. Use Settings to sign in to a marketplace, then open it here.');
+        }
+        if (claimBar) {
+          var claimText = 'Idle — no supplier page open.';
+          if (active && active.activeClaim && active.activeClaim.claimId) {
+            claimText = 'Claim ' + active.activeClaim.claimId +
+              (active.activeClaim.orderId ? ' · order ' + active.activeClaim.orderId : '') +
+              (active.activeClaim.awb ? ' · AWB ' + active.activeClaim.awb : '') +
+              (active.workerOwned ? ' · worker running (pause before closing)' : ' · worker paused');
+          } else if (active) {
+            claimText = 'Open: ' + (active.label || active.panelKey) + ' — session preserved across tabs.';
+          }
+          claimBar.textContent = claimText;
+        }
+        document.body.classList.toggle('supplier-browser-open', views.length > 0 || tabs.filter(function (t) { return t.mode !== 'closed'; }).length > 0);
         reportBrowserWorkspace();
-      } catch { row.style.display = 'none'; }
+      } catch {
+        if (row) row.style.display = 'none';
+        renderBrowserTabs([]);
+        renderBrowserPill(null);
+        browserToolbarState(null);
+        renderDetachedPlaceholder(null);
+        reportBrowserWorkspace();
+      }
     }
 
     async function showSupplierBrowser() {
@@ -2504,7 +3050,27 @@ catch (e) { document.documentElement.setAttribute('data-theme', 'light'); }
     loadAiMemory();
     loadAiCenter();
     loadSupplierBrowser();
+    // Keep the native view aligned with the bounded viewport across window
+    // resizes, moves, maximize/restore transitions, and DPI scaling.
     window.addEventListener('resize', reportBrowserWorkspace);
+    window.addEventListener('scroll', reportBrowserWorkspace, true);
+    if (typeof ResizeObserver !== 'undefined') {
+      var viewportEl = document.getElementById('browser-workspace-viewport');
+      if (viewportEl) {
+        var viewportObserver = new ResizeObserver(function () { reportBrowserWorkspace(); });
+        viewportObserver.observe(viewportEl);
+      }
+    }
+    document.addEventListener('keydown', function (event) {
+      if (event.key === 'Escape' && browserWorkspaceFullscreen) exitBrowserFullscreen();
+    });
+    document.addEventListener('fullscreenchange', function () { reportBrowserWorkspace(); });
+    try {
+      var mediaQuery = window.matchMedia('(resolution: 1dppx)');
+      if (mediaQuery && typeof mediaQuery.addEventListener === 'function') {
+        mediaQuery.addEventListener('change', function () { reportBrowserWorkspace(); });
+      }
+    } catch {}
     connectSse();
     bootUpdateChecker();
     setInterval(loadStatus, 2000);
@@ -2555,6 +3121,37 @@ function readJson(req: http.IncomingMessage): Promise<Record<string, unknown>> {
     })
     req.on("error", reject)
   })
+}
+
+/**
+ * Multi-tab portal browser snapshot. New clients read tabs[] + activeTabId;
+ * legacy callers keep the top-level active-tab fields (open, panelKey, label,
+ * url, title, held, reason) so GET /api/portal-browser and
+ * POST /api/portal-browser/close never break.
+ */
+function portalBrowserSnapshot(): Record<string, unknown> {
+  const tabs = supplierTabRegistry()
+  const activePanelKey = activeSupplierTabPanelKey()
+  const active = tabs.find((tab) => tab.panelKey === activePanelKey && tab.mode !== "closed")
+    || tabs.find((tab) => tab.mode === "active")
+    || tabs.find((tab) => tab.mode === "background")
+    || null
+  return {
+    views: supplierViewStatus(),
+    tabs,
+    activeTabId: active ? active.tabId : null,
+    open: active !== null,
+    panelKey: active ? active.panelKey : null,
+    label: active ? active.label : null,
+    url: active ? active.url : "",
+    title: active ? active.title : "",
+    held: holdPortalBrowser(),
+    reason: active?.activeClaim
+      ? `Claim ${active.activeClaim.claimId || ""} ${active.activeClaim.statusText || active.activeClaim.stage || ""}`.trim()
+      : holdPortalBrowser()
+        ? "The supplier browser is held open for manual completion."
+        : null,
+  }
 }
 
 async function beginClaimWork(): Promise<void> {
@@ -3020,7 +3617,7 @@ export function startDesktopAppServer(bind: EngineBind = resolveEngineBind()): P
           sendJson(res, 401, { error: "Sign in before viewing the supplier browser." })
           return
         }
-        sendJson(res, 200, { views: supplierViewStatus() })
+        sendJson(res, 200, portalBrowserSnapshot())
         return
       }
 
@@ -3030,7 +3627,7 @@ export function startDesktopAppServer(bind: EngineBind = resolveEngineBind()): P
           return
         }
         const hidden = hideSupplierViews()
-        sendJson(res, 200, { ok: true, hidden })
+        sendJson(res, 200, { ok: true, hidden, ...portalBrowserSnapshot() })
         return
       }
 
@@ -3041,14 +3638,350 @@ export function startDesktopAppServer(bind: EngineBind = resolveEngineBind()): P
         }
         try {
           const body = await readJson(req)
-          const panelKey = panelKeyForMarketplace(String(body.marketplace || ""))
-          if (showSupplierView(panelKey)) {
-            sendJson(res, 200, { ok: true, panelKey })
+          const panelKey = panelKeyForMarketplace(String(body.marketplace || body.panelKey || body.tabId || ""))
+          openSupplierTab(panelKey)
+          // Explicit user action (Open in Browsers / Sign in): focus only when
+          // the caller asks for it. Background paths never send focus: true.
+          const wantsFocus = body.focus === true
+          const shown = wantsFocus
+            ? showSupplierViewForUser(panelKey, { focus: true })
+            : showSupplierView(panelKey)
+          if (shown) {
+            sendJson(res, 200, { ok: true, panelKey, ...portalBrowserSnapshot() })
           } else {
-            sendJson(res, 404, { error: "No open supplier browser for that marketplace. Test the login first." })
+            // Headless/test engines have no attached window: the tab is still
+            // open with its persistent session, just not visible on screen.
+            sendJson(res, 200, { ok: true, panelKey, visible: false, ...portalBrowserSnapshot() })
           }
         } catch (error) {
           sendJson(res, 400, { error: error instanceof Error ? error.message : "Could not show the supplier browser." })
+        }
+        return
+      }
+
+      if (url.pathname === "/api/portal-browser/open" && req.method === "POST") {
+        if (!operatorSignedIn) {
+          sendJson(res, 401, { error: "Sign in before opening a supplier browser tab." })
+          return
+        }
+        try {
+          const body = await readJson(req)
+          const raw = String(body.marketplace || body.panelKey || body.tabId || "")
+          if (!raw) {
+            sendJson(res, 400, { error: "Choose a marketplace to open." })
+            return
+          }
+          const panelKey = panelKeyForMarketplace(raw)
+          const panel = CLAIM_PANELS.find((candidate) => candidate.key === panelKey)
+          const label = panel?.name || labelForPanelKey(panelKey)
+          const tab = openSupplierTab(panelKey, {
+            label,
+            accountName: typeof body.accountName === "string" && body.accountName ? String(body.accountName) : label,
+          })
+          showSupplierView(panelKey)
+          sendJson(res, 200, { ok: true, tab, ...portalBrowserSnapshot() })
+        } catch (error) {
+          sendJson(res, 400, { error: error instanceof Error ? error.message : "Could not open the supplier browser tab." })
+        }
+        return
+      }
+
+      if (url.pathname === "/api/portal-browser/switch" && req.method === "POST") {
+        if (!operatorSignedIn) {
+          sendJson(res, 401, { error: "Sign in before switching supplier browser tabs." })
+          return
+        }
+        try {
+          const body = await readJson(req)
+          const raw = String(body.tabId || body.panelKey || body.marketplace || "")
+          if (!raw) {
+            sendJson(res, 400, { error: "Choose a tab to switch to." })
+            return
+          }
+          const tabId = raw.startsWith("tab-") ? raw : tabIdForPanelKey(panelKeyForMarketplace(raw))
+          const tab = switchSupplierTab(tabId)
+          if (!tab) {
+            sendJson(res, 404, { error: "No supplier browser tab matches that id." })
+            return
+          }
+          sendJson(res, 200, { ok: true, tab, ...portalBrowserSnapshot() })
+        } catch (error) {
+          sendJson(res, 400, { error: error instanceof Error ? error.message : "Could not switch supplier browser tabs." })
+        }
+        return
+      }
+
+      if ((url.pathname === "/api/portal-browser/close-tab" || url.pathname === "/api/portal-browser/close") && req.method === "POST") {
+        if (!operatorSignedIn) {
+          sendJson(res, 401, { error: "Sign in before closing a supplier browser tab." })
+          return
+        }
+        try {
+          const body = await readJson(req).catch(() => ({} as Record<string, unknown>))
+          const raw = String(body.tabId || body.panelKey || body.marketplace || "")
+          // Legacy POST /api/portal-browser/close sends no body: close the
+          // active tab, preserving the old acknowledgement shape.
+          const tabId = raw
+            ? raw.startsWith("tab-")
+              ? raw
+              : tabIdForPanelKey(panelKeyForMarketplace(raw))
+            : activeSupplierTabPanelKey()
+              ? tabIdForPanelKey(activeSupplierTabPanelKey() as string)
+              : null
+          if (!tabId) {
+            sendJson(res, 200, { ok: true, closed: null, ...portalBrowserSnapshot() })
+            return
+          }
+          const result = closeSupplierTab(tabId, { force: body.force === true })
+          if (!result.ok) {
+            sendJson(res, 409, { code: result.code, error: result.error })
+            return
+          }
+          sendJson(res, 200, { ok: true, closed: result.tab.tabId, tab: result.tab, ...portalBrowserSnapshot() })
+        } catch (error) {
+          sendJson(res, 400, { error: error instanceof Error ? error.message : "Could not close the supplier browser tab." })
+        }
+        return
+      }
+
+      if (url.pathname === "/api/portal-browser/reopen" && req.method === "POST") {
+        if (!operatorSignedIn) {
+          sendJson(res, 401, { error: "Sign in before reopening a supplier browser tab." })
+          return
+        }
+        const tab = reopenClosedSupplierTab()
+        if (!tab) {
+          sendJson(res, 404, { error: "No closed supplier browser tab to reopen." })
+          return
+        }
+        showSupplierView(tab.panelKey)
+        sendJson(res, 200, { ok: true, tabId: tab.tabId, tab, ...portalBrowserSnapshot() })
+        return
+      }
+
+      if (url.pathname === "/api/portal-browser/nav" && req.method === "POST") {
+        if (!operatorSignedIn) {
+          sendJson(res, 401, { error: "Sign in before navigating the supplier browser." })
+          return
+        }
+        try {
+          const body = await readJson(req)
+          const action = String(body.action || "")
+          if (action !== "back" && action !== "forward" && action !== "reload" && action !== "stop") {
+            sendJson(res, 400, { error: "Unknown navigation action. Use back, forward, reload, or stop." })
+            return
+          }
+          const raw = String(body.tabId || body.panelKey || body.marketplace || "")
+          const active = activeSupplierTabPanelKey()
+          const tabId = raw
+            ? raw.startsWith("tab-")
+              ? raw
+              : tabIdForPanelKey(panelKeyForMarketplace(raw))
+            : active
+              ? tabIdForPanelKey(active)
+              : null
+          if (!tabId) {
+            sendJson(res, 404, { error: "No supplier browser tab is open to navigate." })
+            return
+          }
+          const result = navigateSupplierTab(tabId, action)
+          if (!result.ok) {
+            sendJson(res, 400, { error: result.error || "Navigation failed." })
+            return
+          }
+          sendJson(res, 200, { ok: true, action, tab: result.tab, ...portalBrowserSnapshot() })
+        } catch (error) {
+          sendJson(res, 400, { error: error instanceof Error ? error.message : "Could not navigate the supplier browser." })
+        }
+        return
+      }
+
+      if (url.pathname === "/api/portal-browser/detach" && req.method === "POST") {
+        if (!operatorSignedIn) {
+          sendJson(res, 401, { error: "Sign in before detaching a supplier browser tab." })
+          return
+        }
+        try {
+          const body = await readJson(req).catch(() => ({} as Record<string, unknown>))
+          const raw = String(body.tabId || body.panelKey || body.marketplace || "")
+          const tabId = raw
+            ? raw.startsWith("tab-")
+              ? raw
+              : tabIdForPanelKey(panelKeyForMarketplace(raw))
+            : activeSupplierTabPanelKey()
+              ? tabIdForPanelKey(activeSupplierTabPanelKey() as string)
+              : null
+          if (!tabId) {
+            sendJson(res, 404, { error: "No supplier browser tab is open to detach." })
+            return
+          }
+          // Explicit user action (toolbar Detach): the shell moves the live
+          // WebContentsView into the hardened detached BrowserWindow.
+          const tab = detachSupplierTab(tabId)
+          if (!tab) {
+            sendJson(res, 404, { error: "No supplier browser tab matches that id." })
+            return
+          }
+          sendJson(res, 200, { ok: true, tabId: tab.tabId, tab, ...portalBrowserSnapshot() })
+        } catch (error) {
+          sendJson(res, 400, { error: error instanceof Error ? error.message : "Could not detach the supplier browser tab." })
+        }
+        return
+      }
+
+      if (url.pathname === "/api/portal-browser/dock" && req.method === "POST") {
+        if (!operatorSignedIn) {
+          sendJson(res, 401, { error: "Sign in before docking a supplier browser tab." })
+          return
+        }
+        try {
+          const body = await readJson(req).catch(() => ({} as Record<string, unknown>))
+          const raw = String(body.tabId || body.panelKey || body.marketplace || "")
+          const tabId = raw
+            ? raw.startsWith("tab-")
+              ? raw
+              : tabIdForPanelKey(panelKeyForMarketplace(raw))
+            : activeSupplierTabPanelKey()
+              ? tabIdForPanelKey(activeSupplierTabPanelKey() as string)
+              : null
+          if (!tabId) {
+            sendJson(res, 404, { error: "No supplier browser tab is open to dock." })
+            return
+          }
+          // Explicit user action (Dock Back button or detached-window close):
+          // the live view returns to the bounded viewport as mode "active".
+          const tab = dockSupplierTab(tabId)
+          if (!tab) {
+            sendJson(res, 404, { error: "That tab is not detached." })
+            return
+          }
+          sendJson(res, 200, { ok: true, tabId: tab.tabId, tab, ...portalBrowserSnapshot() })
+        } catch (error) {
+          sendJson(res, 400, { error: error instanceof Error ? error.message : "Could not dock the supplier browser tab." })
+        }
+        return
+      }
+
+      if (url.pathname === "/api/portal-browser/focus" && req.method === "POST") {
+        if (!operatorSignedIn) {
+          sendJson(res, 401, { error: "Sign in before focusing a supplier browser window." })
+          return
+        }
+        try {
+          const body = await readJson(req).catch(() => ({} as Record<string, unknown>))
+          const raw = String(body.tabId || body.panelKey || body.marketplace || "")
+          const tabId = raw
+            ? raw.startsWith("tab-")
+              ? raw
+              : tabIdForPanelKey(panelKeyForMarketplace(raw))
+            : activeSupplierTabPanelKey()
+              ? tabIdForPanelKey(activeSupplierTabPanelKey() as string)
+              : null
+          if (!tabId) {
+            sendJson(res, 404, { error: "No supplier browser tab is open to focus." })
+            return
+          }
+          // Explicit user action only (Focus Window button): background worker
+          // steps never reach this route (VAL-WIN-004).
+          const panelKey = tabId.startsWith("tab-") ? tabId.slice(4) : tabId
+          if (isSupplierTabDetached(panelKey)) {
+            if (!focusDetachedSupplierTab(tabId)) {
+              sendJson(res, 404, { error: "That detached window is no longer open." })
+              return
+            }
+            sendJson(res, 200, { ok: true, focused: "detached", ...portalBrowserSnapshot() })
+            return
+          }
+          if (!showSupplierViewForUser(panelKey, { focus: true })) {
+            sendJson(res, 200, { ok: true, focused: "pending", ...portalBrowserSnapshot() })
+            return
+          }
+          sendJson(res, 200, { ok: true, focused: "main", ...portalBrowserSnapshot() })
+        } catch (error) {
+          sendJson(res, 400, { error: error instanceof Error ? error.message : "Could not focus the supplier browser window." })
+        }
+        return
+      }
+
+      if (url.pathname === "/api/window-control" && req.method === "POST") {
+        if (!operatorSignedIn) {
+          sendJson(res, 401, { error: "Sign in before controlling the app window." })
+          return
+        }
+        try {
+          const body = await readJson(req).catch(() => ({} as Record<string, unknown>))
+          const action = String(body.action || "")
+          if (
+            action !== "minimize" &&
+            action !== "maximize" &&
+            action !== "restore" &&
+            action !== "hide-to-tray" &&
+            action !== "restore-from-tray"
+          ) {
+            sendJson(res, 400, { error: "Unknown window action. Use minimize, maximize, restore, hide-to-tray, or restore-from-tray." })
+            return
+          }
+          // Headless/test engines track lifecycle state without a BrowserWindow:
+          // tab sessions and worker leases are preserved either way.
+          notifyWindowLifecycle(action)
+          sendJson(res, 200, { ok: true, action, ...portalBrowserSnapshot() })
+        } catch (error) {
+          sendJson(res, 400, { error: error instanceof Error ? error.message : "Could not control the app window." })
+        }
+        return
+      }
+
+      if (url.pathname === "/api/window-state" && req.method === "GET") {
+        if (!operatorSignedIn) {
+          sendJson(res, 401, { error: "Sign in before reading the app window state." })
+          return
+        }
+        sendJson(res, 200, { ok: true, ...portalBrowserSnapshot() })
+        return
+      }
+
+      if (url.pathname === "/api/portal-browser/test-claim" && req.method === "POST") {
+        if (!operatorSignedIn) {
+          sendJson(res, 401, { error: "Sign in before changing test worker state." })
+          return
+        }
+        if (process.env.NODE_ENV === "production") {
+          sendJson(res, 404, { error: "Not Found" })
+          return
+        }
+        try {
+          const body = await readJson(req)
+          const raw = String(body.tabId || body.panelKey || body.marketplace || "")
+          if (!raw) {
+            sendJson(res, 400, { error: "Choose a tab for the test claim." })
+            return
+          }
+          const panelKey = panelKeyForMarketplace(raw.startsWith("tab-") ? raw.slice(4) : raw)
+          const claim = body.claim as { claimId?: string; orderId?: string; awb?: string } | undefined
+          const paused = body.paused === true
+          openSupplierTab(panelKey)
+          // Pausing keeps workerOwned true with a paused claim so the close
+          // guard can tell "active worker" (409) from "paused worker" (close
+          // allowed). isSupplierTabCloseBlocked checks claim.paused.
+          const tab = setSupplierTabWorkerState(panelKey, {
+            workerOwned: body.workerOwned !== false,
+            activeClaim: claim
+              ? {
+                  claimId: String(claim.claimId || "SYN-CLAIM-001"),
+                  orderId: claim.orderId ? String(claim.orderId) : undefined,
+                  awb: claim.awb ? String(claim.awb) : undefined,
+                  stage: "running",
+                  statusText: paused ? "paused" : "running",
+                  paused,
+                }
+              : paused
+                ? { claimId: "SYN-CLAIM-001", stage: "running", statusText: "paused", paused: true }
+                : { claimId: "", stage: "", statusText: paused ? "paused" : "running", paused },
+            paused,
+          })
+          sendJson(res, 200, { ok: true, tab, ...portalBrowserSnapshot() })
+        } catch (error) {
+          sendJson(res, 400, { error: error instanceof Error ? error.message : "Could not update test worker state." })
         }
         return
       }

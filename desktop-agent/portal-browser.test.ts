@@ -138,6 +138,53 @@ test("the served dashboard wires the supplier browser tab controls", async () =>
   assert.ok(html.includes("/api/portal-browser/hide"), "expected the hide endpoint call")
 })
 
+test("the dashboard has a dedicated Browsers sidebar tab with a bounded workspace", async () => {
+  const res = await fetch(`${engineBase}/`)
+  assert.equal(res.status, 200)
+  const html = await res.text()
+  assert.ok(html.includes('data-side="browsers"'), "expected the Browsers sidebar button")
+  assert.ok(html.includes("'browsers':"), "expected the browsers SIDE_TABS entry")
+  assert.ok(html.includes('id="browsers-panel"'), "expected the Browsers workspace panel")
+  assert.ok(html.includes('id="browser-workspace"'), "expected the bounded browser workspace")
+  assert.ok(html.includes('id="browser-workspace-viewport"'), "expected the bounded viewport")
+  assert.ok(html.includes('id="browser-tab-strip"'), "expected the marketplace tab strip")
+  assert.ok(html.includes('id="browser-nav-toolbar"'), "expected the navigation toolbar")
+  assert.ok(html.includes('id="browser-back-btn"'), "expected the Back toolbar button")
+  assert.ok(html.includes('id="browser-partition-badge"'), "expected the session partition badge")
+  assert.ok(html.includes('id="browser-claim-control-bar"'), "expected the claim control bar")
+  assert.ok(html.includes('id="browser-exit-bar"'), "expected the fullscreen exit bar")
+  assert.ok(!html.includes("left: 10px"), "the workspace must not use fixed overlay CSS")
+  // #browser-workspace lives inside the Browsers panel, which sits in the
+  // main content column after the sidebar.
+  const sidebarAt = html.indexOf('id="sidebar"')
+  const panelAt = html.indexOf('id="browsers-panel"')
+  const workspaceAt = html.indexOf('id="browser-workspace"')
+  assert.ok(sidebarAt >= 0 && panelAt > sidebarAt, "expected the Browsers panel after the sidebar")
+  assert.ok(workspaceAt > panelAt, "expected #browser-workspace inside the Browsers panel")
+})
+
+test("the 2-second poll never clears browser layout state before the fetch resolves", async () => {
+  const res = await fetch(`${engineBase}/`)
+  assert.equal(res.status, 200)
+  const html = await res.text()
+  const poller = html.slice(html.indexOf("async function loadSupplierBrowser()"))
+  const pollerBody = poller.slice(0, poller.indexOf("async function showSupplierBrowser()"))
+  const firstRemove = pollerBody.indexOf("classList.remove('supplier-browser-open')")
+  const firstFetch = pollerBody.indexOf("fetch('/api/portal-browser')")
+  assert.ok(firstFetch >= 0, "expected the poller to fetch /api/portal-browser")
+  assert.ok(firstRemove < 0 || firstRemove > firstFetch, "the poller must not clear layout state before the fetch resolves")
+  assert.ok(!pollerBody.includes("bridge(null)"), "the poller must not dispatch null rects on its own")
+})
+
+test("the viewport reports bounds through ResizeObserver and window/DPI events", async () => {
+  const res = await fetch(`${engineBase}/`)
+  assert.equal(res.status, 200)
+  const html = await res.text()
+  assert.ok(html.includes("ResizeObserver"), "expected a ResizeObserver on the browser viewport")
+  assert.ok(html.includes("matchMedia('(resolution:"), "expected DPI change handling")
+  assert.ok(html.includes("browserWorkspaceFullscreen") || html.includes("exitBrowserFullscreen"), "expected explicit fullscreen controls")
+})
+
 test("a signed-in operator sees an empty browser registry without opening a window", async () => {
   const login = await engineFetch("/api/operator/login", {
     method: "POST",
@@ -151,11 +198,15 @@ test("a signed-in operator sees an empty browser registry without opening a wind
   const hide = await engineFetch("/api/portal-browser/hide", { method: "POST" })
   assert.equal(hide.status, 200)
   assert.deepEqual(hide.data.hidden, [])
+  // Showing a panel opens its isolated tab: the engine no longer 404s on
+  // headless/test instances without an attached Electron window. The tab is
+  // open with its persistent session, just not visible on screen.
   const show = await engineFetch("/api/portal-browser/show", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ marketplace: "Meesho" }),
   })
-  assert.equal(show.status, 404)
-  assert.match(String(show.data.error || ""), /no open supplier browser/i)
+  assert.equal(show.status, 200)
+  assert.equal(show.data.panelKey, "meesho")
+  assert.equal(show.data.visible, false)
 })

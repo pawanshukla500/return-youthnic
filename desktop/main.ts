@@ -9,7 +9,7 @@ import {
   resumeClaimBotIfSignedIn,
   startDesktopAppServer,
 } from "../desktop-agent/src/desktop-app-server.js"
-import { layoutSupplierViews, setBrowserWorkspaceRect, setSupplierViewHost } from "../desktop-agent/src/native-browser-view.js"
+import { notifyWindowGeometryChanged, setBrowserWorkspaceRect, setDetachedViewHost, setFullscreenSupplierView, setSupplierViewHost, handleDetachedWindowClosed, disposeDetachedSupplierViews, notifyWindowLifecycle, DETACHED_WINDOW_WEB_PREFERENCES, type WindowLifecycleEvent } from "../desktop-agent/src/native-browser-view.js"
 import { isInsecureRemoteUrl, isSameOrigin, localEngineUrl, resolveEngineBind, type EngineBind } from "../desktop-agent/src/engine-config.js"
 import { escapeHtml, scriptLiteral } from "../desktop-agent/src/html-escape.js"
 import { logger } from "../desktop-agent/src/logger.js"
@@ -216,6 +216,19 @@ function iconFor(): string {
  * supplier sign-in, OTP/CAPTCHA and evidence work happen inside the main
  * window. No per-panel `BrowserWindow` and no system browser are involved.
  */
+/**
+ * Notify the engine's tab manager of window lifecycle transitions so sessions
+ * survive minimize/maximize/restore/tray-hide and detached windows are
+ * disposed cleanly on quit.
+ */
+function notifyWindowLifecycleFromShell(event: WindowLifecycleEvent): void {
+  try {
+    notifyWindowLifecycle(event)
+  } catch {
+    // ignore teardown races
+  }
+}
+
 function registerSupplierViewHost(): void {
   if (!mainWindow || mainWindow.isDestroyed()) return
   setSupplierViewHost({
@@ -246,6 +259,171 @@ function registerSupplierViewHost(): void {
       if (mainWindow && !mainWindow.isDestroyed()) mainWindow.focus()
     },
     isWindowDestroyed: () => !mainWindow || mainWindow.isDestroyed(),
+  })
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Detached supplier windows
+//
+// The Detach toolbar button moves a tab's live WebContentsView into its own
+// hardened BrowserWindow (contextIsolation, no Node, sandbox). Cookies, DOM
+// state and the worker lease ride along with the view; closing the window
+// docks the tab back before the window disappears.
+// ---------------------------------------------------------------------------------------------------------------
+
+type DetachedWindowEntry = {
+  window: BrowserWindow
+  view: Electron.CrossProcessExports.WebContentsView | null
+  popups: Array<Electron.CrossProcessExports.WebContentsView>
+}
+
+const detachedWindows = new Map<string, DetachedWindowEntry>()
+
+function fitDetachedView(panelKey: string): void {
+  const entry = detachedWindows.get(panelKey)
+  if (!entry || entry.window.isDestroyed() || !entry.view) return
+  const bounds = entry.window.getContentBounds()
+  try {
+    entry.view.setBounds({ x: 0, y: 0, width: Math.max(0, bounds.width), height: Math.max(0, bounds.height) })
+    // OTP/CAPTCHA popups ride with the detached tab: same content bounds so
+    // they stay usable instead of orphaned over the main-window dashboard.
+    for (const popup of entry.popups) {
+      popup.setBounds({ x: 0, y: 0, width: Math.max(0, bounds.width), height: Math.max(0, bounds.height) })
+    }
+  } catch {
+    // view already destroyed during teardown
+  }
+}
+
+function removeDetachedWindow(panelKey: string): void {
+  const entry = detachedWindows.get(panelKey)
+  detachedWindows.delete(panelKey)
+  if (entry && !entry.window.isDestroyed()) {
+    try {
+      entry.window.destroy()
+    } catch {
+      // ignore teardown races
+    }
+  }
+}
+
+function sanitizeWindowTitle(value: unknown): string {
+  return String(value ?? "").replace(/[\u0000-\u001F\u007F]/g, "").slice(0, 120) || "Supplier"
+}
+
+function registerDetachedViewHost(): void {
+  setDetachedViewHost({
+    openDetachedWindow: (panelKey, options) => {
+      if (!mainWindow || mainWindow.isDestroyed()) return
+      const existing = detachedWindows.get(panelKey)
+      if (existing && !existing.window.isDestroyed()) {
+        existing.window.show()
+        return
+      }
+      const win = new BrowserWindow({
+        width: 1200,
+        height: 820,
+        minWidth: 800,
+        minHeight: 540,
+        // Label/accountName come from the engine's own panel registry, but a
+        // window title is still plain OS text; strip control characters.
+        title: `Return App · ${sanitizeWindowTitle(options.label)} (${sanitizeWindowTitle(options.accountName)})`,
+        icon: iconFor(),
+        backgroundColor: "#0b1311",
+        autoHideMenuBar: true,
+        show: false,
+        // Hardened secondary window: the supplier page runs untrusted script,
+        // so no Node in the renderer and the Chromium sandbox stays on.
+        webPreferences: { ...DETACHED_WINDOW_WEB_PREFERENCES },
+      })
+      detachedWindows.set(panelKey, { window: win, view: null, popups: [] })
+      win.on("resize", () => fitDetachedView(panelKey))
+      win.once("ready-to-show", () => {
+        if (!win.isDestroyed()) win.show()
+      })
+      // Closing the detached window docks the tab first: the live view leaves
+      // this window before Chromium tears it down, so the session survives.
+      win.on("close", () => {
+        if (isQuitting) return
+        handleDetachedWindowClosed(panelKey)
+      })
+      win.on("closed", () => {
+        detachedWindows.delete(panelKey)
+      })
+    },
+    attachDetachedView: (panelKey, view) => {
+      const entry = detachedWindows.get(panelKey)
+      if (!entry || entry.window.isDestroyed() || !view) return
+      try {
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.contentView.removeChildView(view)
+      } catch {
+        // the view was not a child of the main window
+      }
+      entry.view = view
+      entry.window.contentView.addChildView(view)
+      fitDetachedView(panelKey)
+    },
+    detachDetachedView: (panelKey, view) => {
+      const entry = detachedWindows.get(panelKey)
+      const liveView = view ?? entry?.view ?? null
+      if (entry && !entry.window.isDestroyed() && liveView) {
+        try {
+          entry.window.contentView.removeChildView(liveView)
+        } catch {
+          // ignore teardown races
+        }
+      }
+      if (entry) entry.view = null
+    },
+    attachDetachedPopups: (panelKey, popups) => {
+      const entry = detachedWindows.get(panelKey)
+      if (!entry || entry.window.isDestroyed()) return
+      for (const popup of popups) {
+        try {
+          if (mainWindow && !mainWindow.isDestroyed()) mainWindow.contentView.removeChildView(popup)
+        } catch {
+          // the popup was not a child of the main window
+        }
+        entry.window.contentView.addChildView(popup)
+        if (!entry.popups.includes(popup)) entry.popups.push(popup)
+      }
+      fitDetachedView(panelKey)
+    },
+    detachDetachedPopups: (panelKey, popups) => {
+      const entry = detachedWindows.get(panelKey)
+      const live = popups.length ? popups : (entry?.popups ?? [])
+      if (entry && !entry.window.isDestroyed()) {
+        for (const popup of live) {
+          try {
+            entry.window.contentView.removeChildView(popup)
+          } catch {
+            // ignore teardown races
+          }
+        }
+      }
+      if (entry) entry.popups = []
+    },
+    closeDetachedWindow: (panelKey) => {
+      const entry = detachedWindows.get(panelKey)
+      if (entry && !entry.window.isDestroyed()) {
+        entry.window.close()
+      }
+    },
+    focusDetachedWindow: (panelKey) => {
+      const entry = detachedWindows.get(panelKey)
+      if (entry && !entry.window.isDestroyed()) {
+        if (entry.window.isMinimized()) entry.window.restore()
+        entry.window.show()
+        entry.window.focus()
+      }
+    },
+    isDetachedWindowOpen: (panelKey) => {
+      const entry = detachedWindows.get(panelKey)
+      return Boolean(entry && !entry.window.isDestroyed())
+    },
+    destroyDetachedWindow: (panelKey) => {
+      removeDetachedWindow(panelKey)
+    },
   })
 }
 
@@ -347,11 +525,26 @@ function createMainWindow(target: EngineTarget, startupError?: string): void {
   // The main window owns every supplier browser view: marketplace work is
   // embedded here through WebContentsView, never a separate window.
   registerSupplierViewHost()
-  // Bounds follow the window, not just its size: a move across displays or a
-  // DPI change re-fits the supplier view into the dashboard workspace rect.
-  mainWindow.on("resize", () => layoutSupplierViews())
-  mainWindow.on("move", () => layoutSupplierViews())
-  screen.on("display-metrics-changed", () => layoutSupplierViews())
+  registerDetachedViewHost()
+  // Bounds follow the window, not just its size: a resize, move, maximize,
+  // unmaximize, display move or DPI change re-fits the supplier view into the
+  // dashboard workspace rect — or hides it when no valid rect is reported.
+  mainWindow.on("resize", () => notifyWindowGeometryChanged("resize"))
+  mainWindow.on("move", () => notifyWindowGeometryChanged("move"))
+  mainWindow.on("maximize", () => {
+    notifyWindowGeometryChanged("maximize")
+    notifyWindowLifecycleFromShell("maximize")
+  })
+  mainWindow.on("unmaximize", () => {
+    notifyWindowGeometryChanged("unmaximize")
+    notifyWindowLifecycleFromShell("restore")
+  })
+  screen.on("display-metrics-changed", () => notifyWindowGeometryChanged("display-metrics-changed"))
+
+  // Lifecycle: minimize/restore keep every tab session; restore re-syncs the
+  // supplier view bounds after a maximize or tray restore.
+  mainWindow.on("minimize", () => notifyWindowLifecycleFromShell("minimize"))
+  mainWindow.on("restore", () => notifyWindowLifecycleFromShell("restore"))
 
   mainWindow.once("ready-to-show", () => {
     if (!startHidden) mainWindow?.show()
@@ -512,6 +705,7 @@ function createMainWindow(target: EngineTarget, startupError?: string): void {
     if (!isQuitting) {
       event.preventDefault()
       mainWindow?.hide()
+      notifyWindowLifecycleFromShell("hide-to-tray")
       if (Notification.isSupported()) {
         new Notification({
           title: "Return App Minimized to Tray",
@@ -548,6 +742,7 @@ function createTray(): void {
           if (mainWindow) {
             mainWindow.show()
             mainWindow.focus()
+            notifyWindowLifecycleFromShell("restore-from-tray")
           }
         },
       },
@@ -597,6 +792,7 @@ function createTray(): void {
     if (mainWindow) {
       mainWindow.show()
       mainWindow.focus()
+      notifyWindowLifecycleFromShell("restore-from-tray")
     }
   })
 }
@@ -632,9 +828,10 @@ ipcMain.handle("desktop:toggle-bot", async () => toggleWorker())
 
 /**
  * Dashboard workspace rect (DIPs, relative to the window content area).
- * The dashboard reports the rect of its browser placeholder so the supplier
- * view shares the window with the layout controls instead of covering them.
- * A null/empty rect restores full-window layout. Malformed rects are ignored.
+ * The dashboard reports the rect of its browser viewport so the supplier
+ * view shares the window with the sidebar and layout controls instead of
+ * covering them. A null rect (non-Browsers sidebar tab) hides the view
+ * while preserving its session. Malformed rects are ignored.
  */
 ipcMain.on("desktop:browser-rect", (_event, rect) => {
   if (rect === null || rect === undefined) {
@@ -650,6 +847,15 @@ ipcMain.on("desktop:browser-rect", (_event, rect) => {
   if (x === null || y === null || width === null || height === null) return
   if (width < 0 || height < 0) return
   setBrowserWorkspaceRect({ x, y, width, height })
+})
+
+/**
+ * Explicit user-triggered fullscreen/expand mode for the supplier browser.
+ * Sent only by the renderer's Expand / Exit Fullscreen button and its Escape
+ * shortcut — never by background polling or worker steps.
+ */
+ipcMain.on("desktop:browser-fullscreen", (_event, fullscreen) => {
+  setFullscreenSupplierView(fullscreen === true)
 })
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -817,6 +1023,8 @@ app.whenReady().then(async () => {
 
 app.on("before-quit", () => {
   isQuitting = true
+  notifyWindowLifecycleFromShell("before-quit")
+  disposeDetachedSupplierViews()
 })
 
 app.on("window-all-closed", () => {

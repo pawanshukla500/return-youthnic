@@ -4,8 +4,10 @@ import {
   getBrowserWorkspaceRect,
   hideSupplierViews,
   layoutSupplierViews,
+  notifyWindowGeometryChanged,
   registerSupplierView,
   setBrowserWorkspaceRect,
+  setFullscreenSupplierView,
   setSupplierViewHost,
   showSupplierView,
   supplierViewBounds,
@@ -62,16 +64,20 @@ describe("main-window supplier view manager", () => {
     const { host, calls } = fakeHost()
     const view = fakeView()
     setSupplierViewHost(host)
+    setBrowserWorkspaceRect({ x: 240, y: 150, width: 980, height: 520 })
     registerSupplierView("meesho", toView(view))
     assert.deepEqual(supplierViewStatus(), [{ panelKey: "meesho", visible: false }])
 
     assert.equal(showSupplierView("meesho"), true)
-    assert.deepEqual(calls, ["remove", "add", "show", "focus"])
-    assert.deepEqual(view.bounds, { x: 0, y: 0, width: 1600, height: 900 })
+    // Focus discipline (VAL-WIN-004): low-level showSupplierView attaches the
+    // view without touching OS focus. Explicit user actions use
+    // showSupplierViewForUser(..., { focus: true }) instead.
+    assert.deepEqual(calls, ["remove", "add"])
+    assert.deepEqual(view.bounds, { x: 240, y: 150, width: 980, height: 520 })
     assert.deepEqual(supplierViewStatus(), [{ panelKey: "meesho", visible: true }])
 
     layoutSupplierViews()
-    assert.deepEqual(view.bounds, { x: 0, y: 0, width: 1600, height: 900 })
+    assert.deepEqual(view.bounds, { x: 240, y: 150, width: 980, height: 520 })
 
     assert.deepEqual(hideSupplierViews(), ["meesho"])
     assert.equal(calls[calls.length - 1], "remove")
@@ -82,6 +88,7 @@ describe("main-window supplier view manager", () => {
 
     unregisterSupplierView("meesho", toView(view))
     assert.deepEqual(supplierViewStatus(), [])
+    setBrowserWorkspaceRect(null)
     setSupplierViewHost(null)
   })
 
@@ -98,12 +105,30 @@ describe("main-window supplier view manager", () => {
 })
 
 describe("dashboard browser workspace rect", () => {
-  it("fills the window when no workspace rect is set", () => {
+  it("stays hidden when no workspace rect is set instead of filling the window", () => {
     const { host } = fakeHost()
     setSupplierViewHost(host)
     setBrowserWorkspaceRect(null)
     assert.equal(getBrowserWorkspaceRect(), null)
-    assert.deepEqual(supplierViewBounds(), { x: 0, y: 0, width: 1600, height: 900 })
+    assert.equal(supplierViewBounds(), null)
+    // The null rect must also hide visible views instead of re-fitting them.
+    const view = fakeView()
+    registerSupplierView("SYN-meesho", toView(view))
+    assert.equal(showSupplierView("SYN-meesho"), false)
+    unregisterSupplierView("SYN-meesho", toView(view))
+    setSupplierViewHost(null)
+  })
+
+  it("stays hidden when the workspace rect is smaller than 120x120", () => {
+    const { host } = fakeHost()
+    setSupplierViewHost(host)
+    setBrowserWorkspaceRect({ x: 240, y: 150, width: 119, height: 500 })
+    assert.equal(supplierViewBounds(), null)
+    setBrowserWorkspaceRect({ x: 240, y: 150, width: 980, height: 119 })
+    assert.equal(supplierViewBounds(), null)
+    setBrowserWorkspaceRect({ x: 240, y: 150, width: 0, height: 0 })
+    assert.equal(supplierViewBounds(), null)
+    setBrowserWorkspaceRect(null)
     setSupplierViewHost(null)
   })
 
@@ -128,6 +153,74 @@ describe("dashboard browser workspace rect", () => {
     setSupplierViewHost(host)
     setBrowserWorkspaceRect({ x: -50, y: 850, width: 5000, height: 5000 })
     assert.deepEqual(supplierViewBounds(), { x: 0, y: 850, width: 1600, height: 50 })
+    setBrowserWorkspaceRect(null)
+    setSupplierViewHost(null)
+  })
+
+  it("detaches visible views when the rect becomes null (sidebar tab switch)", () => {
+    const { host, calls } = fakeHost()
+    const view = fakeView()
+    setSupplierViewHost(host)
+    registerSupplierView("SYN-meesho", toView(view))
+    setBrowserWorkspaceRect({ x: 240, y: 150, width: 980, height: 520 })
+    assert.equal(showSupplierView("SYN-meesho"), true)
+    assert.deepEqual(supplierViewStatus(), [{ panelKey: "SYN-meesho", visible: true }])
+
+    // Switching away from Browsers reports desktop:browser-rect = null.
+    setBrowserWorkspaceRect(null)
+    assert.equal(supplierViewBounds(), null)
+    assert.ok(calls.includes("remove"), "expected the view to detach from the window")
+    assert.deepEqual(supplierViewStatus(), [{ panelKey: "SYN-meesho", visible: false }])
+
+    // Switching back re-attaches at the exact bounded coordinates.
+    setBrowserWorkspaceRect({ x: 240, y: 150, width: 980, height: 520 })
+    assert.equal(showSupplierView("SYN-meesho"), true)
+    assert.deepEqual(view.bounds, { x: 240, y: 150, width: 980, height: 520 })
+    unregisterSupplierView("SYN-meesho", toView(view))
+    setBrowserWorkspaceRect(null)
+    setSupplierViewHost(null)
+  })
+
+  it("expands to the full window only through explicit fullscreen mode", () => {
+    const { host } = fakeHost()
+    setSupplierViewHost(host)
+    setBrowserWorkspaceRect(null)
+    setFullscreenSupplierView(true)
+    assert.deepEqual(supplierViewBounds(), { x: 0, y: 0, width: 1600, height: 900 })
+    setFullscreenSupplierView(false)
+    assert.equal(supplierViewBounds(), null)
+    setSupplierViewHost(null)
+  })
+
+  it("escape exits fullscreen back to bounded coordinates", () => {
+    const { host } = fakeHost()
+    const view = fakeView()
+    setSupplierViewHost(host)
+    registerSupplierView("SYN-meesho", toView(view))
+    setBrowserWorkspaceRect({ x: 240, y: 150, width: 980, height: 520 })
+    setFullscreenSupplierView(true)
+    assert.deepEqual(supplierViewBounds(), { x: 0, y: 0, width: 1600, height: 900 })
+    setFullscreenSupplierView(false)
+    assert.deepEqual(supplierViewBounds(), { x: 240, y: 150, width: 980, height: 520 })
+    assert.equal(showSupplierView("SYN-meesho"), true)
+    assert.deepEqual(view.bounds, { x: 240, y: 150, width: 980, height: 520 })
+    unregisterSupplierView("SYN-meesho", toView(view))
+    setBrowserWorkspaceRect(null)
+    setSupplierViewHost(null)
+  })
+
+  it("re-syncs bounds after window resize, move, maximize and DPI changes", () => {
+    const { host } = fakeHost()
+    const view = fakeView()
+    setSupplierViewHost(host)
+    registerSupplierView("SYN-meesho", toView(view))
+    setBrowserWorkspaceRect({ x: 240, y: 150, width: 980, height: 520 })
+    assert.equal(showSupplierView("SYN-meesho"), true)
+    for (const event of ["resize", "move", "maximize", "unmaximize", "display-metrics-changed"] as const) {
+      notifyWindowGeometryChanged(event)
+      assert.deepEqual(view.bounds, { x: 240, y: 150, width: 980, height: 520 }, `stale bounds after ${event}`)
+    }
+    unregisterSupplierView("SYN-meesho", toView(view))
     setBrowserWorkspaceRect(null)
     setSupplierViewHost(null)
   })

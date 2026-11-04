@@ -81,16 +81,29 @@ let supplierViewHost: SupplierViewHost | null = null
 
 /**
  * Dashboard-owned workspace rect (DIPs, relative to the window content area).
- * When set, visible supplier views are fitted to this rect so the dashboard
- * keeps its layout controls visible; when null, views fill the window as
- * before. The dashboard reports it over IPC and clears it on hide.
+ * Visible supplier views are fitted to this rect so the dashboard keeps its
+ * sidebar, header, and controls visible. Fail-closed: when null (the Browsers
+ * sidebar tab is inactive) or smaller than the minimum valid bounds, no view
+ * is shown at all — never a full-window fallback.
  */
 let browserWorkspaceRect: { x: number; y: number; width: number; height: number } | null = null
 
-/** Confine the supplier view to the dashboard workspace rect. Null restores full-window layout. */
+/**
+ * Explicit user-triggered fullscreen/expand mode. Set only from the renderer's
+ * Expand button; cleared by the Exit Fullscreen button or the Escape key. It
+ * is the only path that shows the active view across the full window.
+ */
+let fullscreenSupplierView = false
+
+/** Minimum valid workspace size in DIPs. Smaller rects hide the view. */
+export const MIN_SUPPLIER_VIEW_SIZE = 120
+
+/** Confine the supplier view to the dashboard workspace rect. Null hides every view. */
 export function setBrowserWorkspaceRect(rect: { x: number; y: number; width: number; height: number } | null): void {
   browserWorkspaceRect = rect
   layoutSupplierViews()
+  const bounds = supplierViewBounds()
+  if (bounds === null) hideSupplierViews()
 }
 
 /** The active workspace rect, if the dashboard set one. Exported for tests and the shell. */
@@ -98,14 +111,33 @@ export function getBrowserWorkspaceRect(): { x: number; y: number; width: number
   return browserWorkspaceRect ? { ...browserWorkspaceRect } : null
 }
 
-/** Visible-view bounds: the workspace rect clamped into the window, or the full window. */
-export function supplierViewBounds(): { x: number; y: number; width: number; height: number } {
+/** Explicit fullscreen/expand state. True only after the operator clicks Expand. */
+export function isFullscreenSupplierView(): boolean {
+  return fullscreenSupplierView
+}
+
+/** Enter or exit explicit fullscreen mode, then re-fit the visible views. */
+export function setFullscreenSupplierView(fullscreen: boolean): void {
+  fullscreenSupplierView = fullscreen
+  layoutSupplierViews()
+  const bounds = supplierViewBounds()
+  if (bounds === null) hideSupplierViews()
+}
+
+/**
+ * Visible-view bounds: the workspace rect clamped into the window, or null to
+ * hide the view. Null whenever the Browsers tab is inactive (rect is null) or
+ * the rect is smaller than 120x120, unless explicit fullscreen mode is active.
+ */
+export function supplierViewBounds(): { x: number; y: number; width: number; height: number } | null {
   const host = supplierViewHost
   const full = host && !host.isWindowDestroyed()
     ? host.contentBounds()
     : { x: 0, y: 0, width: 0, height: 0 }
+  if (fullscreenSupplierView) return full
   const rect = browserWorkspaceRect
-  if (!rect) return full
+  if (!rect) return null
+  if (rect.width < MIN_SUPPLIER_VIEW_SIZE || rect.height < MIN_SUPPLIER_VIEW_SIZE) return null
   const x = Math.min(Math.max(0, rect.x), Math.max(0, full.width - 1))
   const y = Math.min(Math.max(0, rect.y), Math.max(0, full.height - 1))
   return {
@@ -116,19 +148,787 @@ export function supplierViewBounds(): { x: number; y: number; width: number; hei
   }
 }
 
+/**
+ * Re-fit visible views after a window/display geometry change (resize, move,
+ * maximize, unmaximize, display-metrics-changed). A null bounds hides the
+ * views instead of leaving stale coordinates on screen.
+ */
+export function notifyWindowGeometryChanged(_event: "resize" | "move" | "maximize" | "unmaximize" | "display-metrics-changed"): void {
+  layoutSupplierViews()
+  if (supplierViewBounds() === null) hideSupplierViews()
+}
+
 /** Register (or clear) the main-window host. Called once by the Electron shell. */
 export function setSupplierViewHost(host: SupplierViewHost | null): void {
   supplierViewHost = host
   layoutSupplierViews()
 }
 
+/**
+ * Hardened webPreferences shared by every detached supplier BrowserWindow.
+ * The secondary window only hosts the existing WebContentsView session — it
+ * never runs Node in the renderer and never relaxes the Chromium sandbox.
+ */
+export const DETACHED_WINDOW_WEB_PREFERENCES = {
+  contextIsolation: true,
+  nodeIntegration: false,
+  sandbox: true,
+} as const
+
+/** Structural host for detached supplier windows (Electron shell or tests). */
+export type DetachedViewHost = {
+  openDetachedWindow(panelKey: string, options: { label: string; accountName: string; partition: string }): void
+  attachDetachedView(panelKey: string, view: Electron.CrossProcessExports.WebContentsView | null): void
+  detachDetachedView(panelKey: string, view: Electron.CrossProcessExports.WebContentsView | null): void
+  /** Move the tab's OTP/CAPTCHA popups into the detached window with the main view. */
+  attachDetachedPopups(panelKey: string, popups: Array<Electron.CrossProcessExports.WebContentsView>): void
+  /** Remove the tab's popups from the detached window before it closes or docks. */
+  detachDetachedPopups(panelKey: string, popups: Array<Electron.CrossProcessExports.WebContentsView>): void
+  closeDetachedWindow(panelKey: string): void
+  focusDetachedWindow(panelKey: string): void
+  isDetachedWindowOpen(panelKey: string): boolean
+  destroyDetachedWindow(panelKey: string): void
+}
+
+let detachedViewHost: DetachedViewHost | null = null
+
+/** Register (or clear) the detached-window host. Called once by the Electron shell. */
+export function setDetachedViewHost(host: DetachedViewHost | null): void {
+  detachedViewHost = host
+}
+
+const detachedTabPanels = new Set<string>()
+
+/** Whether the tab currently lives in the detached secondary window. */
+export function isSupplierTabDetached(panelKey: string): boolean {
+  const resolved = resolveStoredPanelKey(panelKey)
+  return resolved !== null && detachedTabPanels.has(resolved)
+}
+
+/**
+ * Move a tab's live WebContentsView into the dedicated detached BrowserWindow.
+ * The main-window placeholder flips to mode "detached"; cookies, DOM state,
+ * and the worker lease ride along with the view. Open OTP/CAPTCHA popups move
+ * with it: leaving them attached to the main window would orphan them over the
+ * dashboard while their session lives in the detached window.
+ */
+export function detachSupplierTab(tabId: string): SupplierTabState | null {
+  const resolved = resolveStoredPanelKey(tabId)
+  if (!resolved) return null
+  const known = tabMetadata.has(resolved) || managedSupplierViews.has(resolved)
+  if (!known) return null
+  const panelKey = resolved
+  const meta = metadataFor(panelKey, managedSupplierViews.get(panelKey))
+  openSupplierTab(panelKey)
+  const entry = managedSupplierViews.get(panelKey)
+  if (entry?.visible) {
+    entry.visible = false
+    try {
+      supplierViewHost?.removeView(entry.view as Electron.CrossProcessExports.WebContentsView)
+    } catch {
+      // ignore teardown races
+    }
+    for (const popup of entry.popups) {
+      try {
+        supplierViewHost?.removeView(popup)
+      } catch {
+        // ignore teardown races
+      }
+    }
+  }
+  detachedTabPanels.add(panelKey)
+  try {
+    detachedViewHost?.openDetachedWindow(panelKey, {
+      label: meta.label,
+      accountName: meta.accountName,
+      partition: `${PARTITION_PREFIX}${panelKey}`,
+    })
+    detachedViewHost?.attachDetachedView(panelKey, entry?.view ?? null)
+    detachedViewHost?.attachDetachedPopups(panelKey, entry?.popups ?? [])
+  } catch {
+    // A headless/test shell keeps the detached bookkeeping without a window.
+  }
+  const tab = supplierTabRegistry().find((candidate) => candidate.panelKey === panelKey) || null
+  return tab
+}
+
+/** Focus the detached secondary window. Never touches the main window. */
+export function focusDetachedSupplierTab(tabId: string): boolean {
+  const resolved = resolveStoredPanelKey(tabId)
+  if (!resolved || !detachedTabPanels.has(resolved)) return false
+  const panelKey = resolved
+  try {
+    detachedViewHost?.focusDetachedWindow(panelKey)
+  } catch {
+    return false
+  }
+  return true
+}
+
+/**
+ * Move a tab's live WebContentsView back into the main window's bounded
+ * viewport (mode "active"). The transfer out of the detached window happens
+ * before the secondary window closes, so the session survives the dock.
+ */
+export function dockSupplierTab(tabId: string): SupplierTabState | null {
+  const resolved = resolveStoredPanelKey(tabId)
+  if (!resolved) return null
+  const panelKey = resolved
+  if (!detachedTabPanels.has(panelKey)) return null
+  const liveView = managedSupplierViews.get(panelKey)?.view ?? null
+  const livePopups = managedSupplierViews.get(panelKey)?.popups ?? []
+  try {
+    detachedViewHost?.detachDetachedPopups(panelKey, livePopups)
+  } catch {
+    // ignore teardown races
+  }
+  try {
+    detachedViewHost?.detachDetachedView(panelKey, liveView)
+  } catch {
+    // ignore teardown races
+  }
+  detachedTabPanels.delete(panelKey)
+  try {
+    detachedViewHost?.closeDetachedWindow(panelKey)
+  } catch {
+    // ignore teardown races
+  }
+  const tab = openSupplierTab(panelKey)
+  // Docking returns the tab to the main window as the visible tab: mark the
+  // restored view visible so the registry reports mode "active" even when the
+  // headless/test shell has no live WebContentsView to attach.
+  const entry = managedSupplierViews.get(panelKey)
+  if (entry) entry.visible = true
+  return supplierTabRegistry().find((candidate) => candidate.panelKey === panelKey) || tab
+}
+
+/** Detached-window close path: the window closing docks the tab first. */
+export function handleDetachedWindowClosed(panelKey: string): SupplierTabState | null {
+  const resolved = resolveStoredPanelKey(panelKey)
+  if (!resolved) return null
+  return dockSupplierTab(`tab-${resolved}`)
+}
+
+/** Clean quit: destroy every detached window and hide every main-window view. */
+export function disposeDetachedSupplierViews(): string[] {
+  const disposed = [...detachedTabPanels]
+  for (const panelKey of disposed) {
+    const liveView = managedSupplierViews.get(panelKey)?.view ?? null
+    const livePopups = managedSupplierViews.get(panelKey)?.popups ?? []
+    try {
+      detachedViewHost?.detachDetachedPopups(panelKey, livePopups)
+    } catch {
+      // ignore teardown races
+    }
+    try {
+      detachedViewHost?.detachDetachedView(panelKey, liveView)
+    } catch {
+      // ignore teardown races
+    }
+    try {
+      detachedViewHost?.destroyDetachedWindow(panelKey)
+    } catch {
+      // ignore teardown races
+    }
+    detachedTabPanels.delete(panelKey)
+    const entry = managedSupplierViews.get(panelKey)
+    if (entry?.visible) {
+      entry.visible = false
+      try {
+        supplierViewHost?.removeView(entry.view as Electron.CrossProcessExports.WebContentsView)
+      } catch {
+        // ignore teardown races
+      }
+    }
+  }
+  hideSupplierViews()
+  return disposed
+}
+
+export type WindowLifecycleEvent = "minimize" | "maximize" | "restore" | "hide-to-tray" | "restore-from-tray" | "before-quit"
+
+/**
+ * Window lifecycle transitions preserve every tab session and worker lease.
+ * Minimize/tray-hide keeps the state; restore re-syncs the bounds; quit
+ * disposes detached windows. Never drops a session or leaves stale bounds.
+ */
+export function notifyWindowLifecycle(event: WindowLifecycleEvent): string[] {
+  if (event === "before-quit") return disposeDetachedSupplierViews()
+  if (event === "restore" || event === "restore-from-tray" || event === "maximize") {
+    layoutSupplierViews()
+    if (supplierViewBounds() === null) hideSupplierViews()
+  }
+  return []
+}
+
+/**
+ * Attach a tab for background worker execution without touching OS focus.
+ * Used by claim preparation, follow-up checks, and status polls. Never calls
+ * showWindow() or focusWindow(): the window stays exactly where it is.
+ */
+export function attachSupplierViewForBackground(panelKey: string): boolean {
+  const resolved = resolveStoredPanelKey(panelKey)
+  if (!resolved) return false
+  const normalized = resolved
+  const host = supplierViewHost
+  const entry = managedSupplierViews.get(normalized)
+  if (!host || host.isWindowDestroyed() || !entry || !entry.view) return false
+  if (detachedTabPanels.has(normalized)) return true
+  const bounds = supplierViewBounds()
+  if (bounds === null) return false
+  if (!entry.visible) {
+    try {
+      host.removeView(entry.view)
+    } catch {
+      // ensure a single attach
+    }
+    host.addView(entry.view)
+    entry.view.setBounds(bounds)
+    entry.visible = true
+  } else {
+    try {
+      entry.view.setBounds(bounds)
+    } catch {
+      // ignore teardown races
+    }
+  }
+  return true
+}
+
+/**
+ * Explicit user-initiated show for a tab. Focus only when the caller passes
+ * focus: true (toolbar Detach/Dock, Focus Window, Open in Browsers, Sign in).
+ * Background worker steps must use attachSupplierViewForBackground() instead.
+ */
+export function showSupplierViewForUser(panelKey: string, options?: { focus?: boolean }): boolean {
+  const resolved = resolveStoredPanelKey(panelKey)
+  if (!resolved) return false
+  const normalized = resolved
+  const ok = showSupplierView(normalized)
+  if (!ok) return false
+  if (options?.focus === true) {
+    try {
+      supplierViewHost?.focusWindow()
+    } catch {
+      // ignore teardown races
+    }
+  }
+  return true
+}
+
+function normalizePanelKey(value: string): string {
+  return String(value || "").trim().toLowerCase().replace(/[^a-z0-9_]/g, "_") || "unknown"
+}
+
+/**
+ * Resolve a tab/panel reference to the stored panel key. Panel keys are
+ * stored verbatim (e.g. "SYN-meesho" in tests, "meesho" in production); this
+ * resolves tab ids, exact keys, and normalized keys without renaming the
+ * stored entry, so view registration and tab metadata never diverge.
+ */
+function resolveStoredPanelKey(value: string): string | null {
+  const raw = String(value || "")
+  const withoutTab = raw.startsWith("tab-") ? raw.slice(4) : raw
+  const candidates = [withoutTab, normalizePanelKey(withoutTab)]
+  for (const candidate of candidates) {
+    if (tabMetadata.has(candidate) || managedSupplierViews.has(candidate) || detachedTabPanels.has(candidate)) {
+      return candidate
+    }
+  }
+  // Exact-but-unknown keys are still usable for fresh detach/dock bookkeeping.
+  if (withoutTab && !candidates.includes(withoutTab)) return withoutTab
+  return candidates[0] || null
+}
+
 type ManagedSupplierView = {
-  view: Electron.CrossProcessExports.WebContentsView
+  view: Electron.CrossProcessExports.WebContentsView | null
   visible: boolean
   popups: Electron.CrossProcessExports.WebContentsView[]
 }
 
 const managedSupplierViews = new Map<string, ManagedSupplierView>()
+
+/** Live per-tab metadata snapshot shared with the detach/dock feature. */
+export type SupplierTabMode = "active" | "background" | "detached" | "closed"
+
+export type SupplierTabClaim = {
+  claimId: string
+  orderId?: string
+  awb?: string
+  stage?: string
+  statusText?: string
+  paused: boolean
+} | null
+
+export type SupplierTabState = {
+  tabId: string
+  panelKey: string
+  label: string
+  accountName: string
+  partition: string
+  url: string
+  title: string
+  loading: boolean
+  canGoBack: boolean
+  canGoForward: boolean
+  mode: SupplierTabMode
+  workerOwned: boolean
+  activeClaim: SupplierTabClaim
+}
+
+export const WORKER_ACTIVE_PAUSE_REQUIRED = "WORKER_ACTIVE_PAUSE_REQUIRED" as const
+
+type TabMetadata = {
+  label: string
+  accountName: string
+  url: string
+  title: string
+  loading: boolean
+  canGoBack: boolean
+  canGoForward: boolean
+  workerOwned: boolean
+  activeClaim: SupplierTabClaim
+}
+
+const tabMetadata = new Map<string, TabMetadata>()
+let activeTabPanelKey: string | null = null
+const closedTabStack: string[] = []
+
+/** Deterministic tab id: one isolated tab per supplier panel key. */
+export function tabIdForPanelKey(panelKey: string): string {
+  return `tab-${panelKey}`
+}
+
+/** Display label for a panel key (Meesho, Myntra VB, ...). */
+export function labelForPanelKey(panelKey: string): string {
+  const normalized = String(panelKey || "").toLowerCase()
+  if (normalized === "myntra_vb") return "Myntra VB"
+  if (normalized === "myntra_ej") return "Myntra EJ"
+  if (!normalized) return "Supplier"
+  return normalized
+    .split(/[_-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ")
+}
+
+/** Account identity shown in the URL/account pill. Defaults to the label. */
+function accountNameForPanelKey(panelKey: string): string {
+  return tabMetadata.get(panelKey)?.accountName || labelForPanelKey(panelKey)
+}
+
+function viewMetadata(view: Electron.CrossProcessExports.WebContentsView | null): {
+  url: string
+  title: string
+  loading: boolean
+  canGoBack: boolean
+  canGoForward: boolean
+} {
+  const fallback = { url: "", title: "", loading: false, canGoBack: false, canGoForward: false }
+  if (!view) return fallback
+  try {
+    const contents = view.webContents as unknown as {
+      getURL?: () => string
+      getTitle?: () => string
+      isLoading?: () => boolean
+      navigationHistory?: { canGoBack?: () => boolean; canGoForward?: () => boolean }
+      canGoBack?: () => boolean
+      canGoForward?: () => boolean
+    }
+    const canGoBack =
+      typeof contents.navigationHistory?.canGoBack === "function"
+        ? contents.navigationHistory.canGoBack()
+        : typeof contents.canGoBack === "function"
+          ? contents.canGoBack()
+          : false
+    const canGoForward =
+      typeof contents.navigationHistory?.canGoForward === "function"
+        ? contents.navigationHistory.canGoForward()
+        : typeof contents.canGoForward === "function"
+          ? contents.canGoForward()
+          : false
+    return {
+      url: typeof contents.getURL === "function" ? String(contents.getURL() || "") : fallback.url,
+      title: typeof contents.getTitle === "function" ? String(contents.getTitle() || "") : fallback.title,
+      loading: typeof contents.isLoading === "function" ? Boolean(contents.isLoading()) : fallback.loading,
+      canGoBack: Boolean(canGoBack),
+      canGoForward: Boolean(canGoForward),
+    }
+  } catch {
+    return fallback
+  }
+}
+
+function metadataFor(panelKey: string, entry: ManagedSupplierView | undefined): TabMetadata {
+  const stored = tabMetadata.get(panelKey)
+  if (stored) return stored
+  const fresh: TabMetadata = {
+    label: labelForPanelKey(panelKey),
+    accountName: labelForPanelKey(panelKey),
+    url: "",
+    title: "",
+    loading: false,
+    canGoBack: false,
+    canGoForward: false,
+    workerOwned: false,
+    activeClaim: null,
+  }
+  void entry
+  tabMetadata.set(panelKey, fresh)
+  return fresh
+}
+
+/** Full per-tab registry: every known panel, including closed tabs awaiting reopen. */
+export function supplierTabRegistry(): SupplierTabState[] {
+  const tabs: SupplierTabState[] = []
+  const seen = new Set<string>()
+  for (const [panelKey, entry] of managedSupplierViews) {
+    seen.add(panelKey)
+    const meta = metadataFor(panelKey, entry)
+    const live = viewMetadata(entry.view)
+    const closed = closedTabStack.includes(panelKey)
+    // A detached tab lives in the secondary window: it keeps its live session
+    // but never reports as active/background in the main window.
+    const mode: SupplierTabMode = closed
+      ? "closed"
+      : detachedTabPanels.has(panelKey)
+        ? "detached"
+        : panelKey === activeTabPanelKey
+          ? "active"
+          : entry.visible
+            ? "background"
+            : "background"
+    tabs.push({
+      tabId: tabIdForPanelKey(panelKey),
+      panelKey,
+      label: meta.label,
+      accountName: meta.accountName,
+      partition: `${PARTITION_PREFIX}${panelKey}`,
+      url: live.url || meta.url,
+      title: live.title || meta.title,
+      loading: live.loading || meta.loading,
+      canGoBack: live.canGoBack || meta.canGoBack,
+      canGoForward: live.canGoForward || meta.canGoForward,
+      mode,
+      workerOwned: meta.workerOwned,
+      activeClaim: meta.activeClaim,
+    })
+  }
+  for (const [panelKey, meta] of tabMetadata) {
+    if (seen.has(panelKey)) continue
+    // Headless/test engines open tabs without a live WebContentsView: the tab
+    // is open (active, background, or detached) unless it sits on the closed stack.
+    const reopened = closedTabStack.includes(panelKey)
+    const reopenedMode: SupplierTabMode = reopened
+      ? "closed"
+      : detachedTabPanels.has(panelKey)
+        ? "detached"
+        : panelKey === activeTabPanelKey
+          ? "active"
+          : "background"
+    tabs.push({
+      tabId: tabIdForPanelKey(panelKey),
+      panelKey,
+      label: meta.label,
+      accountName: meta.accountName,
+      partition: `${PARTITION_PREFIX}${panelKey}`,
+      url: meta.url,
+      title: meta.title,
+      loading: meta.loading,
+      canGoBack: meta.canGoBack,
+      canGoForward: meta.canGoForward,
+      mode: reopenedMode,
+      workerOwned: meta.workerOwned,
+      activeClaim: meta.activeClaim,
+    })
+  }
+  tabs.sort((a, b) => (a.panelKey < b.panelKey ? -1 : a.panelKey > b.panelKey ? 1 : 0))
+  return tabs
+}
+
+/** Panel key of the active tab, if any. */
+export function activeSupplierTabPanelKey(): string | null {
+  return activeTabPanelKey
+}
+
+/**
+ * Open (or re-activate) a tab. Creates the metadata row on first open, marks
+ * every other open tab as background, attaches the tab's view inside the
+ * bounded viewport, and never spawns a duplicate worker.
+ */
+export function openSupplierTab(
+  panelKey: string,
+  options?: { label?: string; accountName?: string; url?: string; title?: string },
+): SupplierTabState {
+  const resolvedStored = resolveStoredPanelKey(panelKey)
+  // An empty reference can never be a stored key: resolveStoredPanelKey falls
+  // back to a candidate for bookkeeping, so guard empties explicitly.
+  const rawRef = String(panelKey || "").trim()
+  const normalized = resolvedStored && rawRef ? resolvedStored
+    : (rawRef.toLowerCase().replace(/[^a-z0-9_]/g, "_") || "unknown")
+  const meta = metadataFor(normalized, managedSupplierViews.get(normalized))
+  if (options?.label) meta.label = options.label
+  if (options?.accountName) meta.accountName = options.accountName
+  if (typeof options?.url === "string") meta.url = options.url
+  if (typeof options?.title === "string") meta.title = options.title
+  const reopenIndex = closedTabStack.lastIndexOf(normalized)
+  if (reopenIndex >= 0) closedTabStack.splice(reopenIndex, 1)
+  activeTabPanelKey = normalized
+  // A detached tab stays in its secondary window until it is docked: opening
+  // or switching never yanks the live view back into the main window.
+  if (detachedTabPanels.has(normalized)) {
+    const current = supplierTabRegistry().find((tab) => tab.panelKey === normalized)
+    if (!current) throw new Error(`Could not open the supplier tab for ${normalized}.`)
+    return current
+  }
+  // Background tabs keep their view, cookies, DOM state, and active claims:
+  // only attachment changes, never a close or a reload.
+  for (const [otherKey, otherEntry] of managedSupplierViews) {
+    if (otherKey === normalized || !otherEntry.visible) continue
+    otherEntry.visible = false
+    try {
+      supplierViewHost?.removeView(otherEntry.view as Electron.CrossProcessExports.WebContentsView)
+    } catch {
+      // ignore teardown races
+    }
+  }
+  const entry = managedSupplierViews.get(normalized)
+  if (entry && !detachedTabPanels.has(normalized)) {
+    showSupplierView(normalized)
+  }
+  const current = supplierTabRegistry().find((tab) => tab.panelKey === normalized)
+  if (!current) throw new Error(`Could not open the supplier tab for ${normalized}.`)
+  return current
+}
+
+/** Switch the active tab without destroying any view, session, or worker claim. */
+export function switchSupplierTab(tabId: string): SupplierTabState | null {
+  const panelKey = String(tabId || "").startsWith("tab-") ? String(tabId).slice(4) : String(tabId || "")
+  const known = tabMetadata.has(panelKey) || managedSupplierViews.has(panelKey)
+  if (!known) return null
+  return openSupplierTab(panelKey)
+}
+
+/** Whether the tab's worker currently blocks a close. */
+export function isSupplierTabCloseBlocked(panelKey: string): boolean {
+  const meta = tabMetadata.get(panelKey)
+  if (!meta) return false
+  if (!meta.workerOwned) return false
+  const claim = meta.activeClaim
+  if (claim && claim.paused) return false
+  return true
+}
+
+export type CloseSupplierTabResult =
+  | { ok: true; tab: SupplierTabState }
+  | { ok: false; code: typeof WORKER_ACTIVE_PAUSE_REQUIRED; error: string }
+
+/**
+ * Close a tab. Manual/idle tabs close immediately while the persistent
+ * partition stays on disk for reopen. Worker-owned tabs need a paused worker
+ * first and answer 409 WORKER_ACTIVE_PAUSE_REQUIRED otherwise.
+ */
+export function closeSupplierTab(tabId: string, options?: { force?: boolean }): CloseSupplierTabResult {
+  const panelKey = String(tabId || "").startsWith("tab-") ? String(tabId).slice(4) : String(tabId || "")
+  const meta = metadataFor(panelKey, managedSupplierViews.get(panelKey))
+  const blocked = isSupplierTabCloseBlocked(panelKey)
+  if (blocked && options?.force !== true) {
+    return {
+      ok: false,
+      code: WORKER_ACTIVE_PAUSE_REQUIRED,
+      error: "This tab has an active worker claim. Pause the worker before closing the tab.",
+    }
+  }
+  if (blocked && options?.force === true) {
+    return {
+      ok: false,
+      code: WORKER_ACTIVE_PAUSE_REQUIRED,
+      error: "This tab has an active worker claim. Pause the worker before closing the tab.",
+    }
+  }
+  const entry = managedSupplierViews.get(panelKey)
+  if (entry?.visible) {
+    entry.visible = false
+    try {
+      supplierViewHost?.removeView(entry.view as Electron.CrossProcessExports.WebContentsView)
+    } catch {
+      // ignore teardown races
+    }
+  }
+  // Closing a detached tab retires its secondary window with the tab; the
+  // persistent partition on disk survives for a later reopen.
+  if (detachedTabPanels.has(panelKey)) {
+    detachedTabPanels.delete(panelKey)
+    try {
+      detachedViewHost?.closeDetachedWindow(panelKey)
+    } catch {
+      // ignore teardown races
+    }
+  }
+  if (!closedTabStack.includes(panelKey)) closedTabStack.push(panelKey)
+  if (activeTabPanelKey === panelKey) {
+    const fallback = [...managedSupplierViews.entries()].find(
+      ([otherKey, otherEntry]) => otherKey !== panelKey && otherEntry.view,
+    )
+    activeTabPanelKey = fallback ? fallback[0] : null
+    if (fallback) showSupplierView(fallback[0])
+  }
+  const tabs = supplierTabRegistry()
+  const tab = tabs.find((candidate) => candidate.panelKey === panelKey)
+  if (!tab) throw new Error(`Could not close the supplier tab for ${panelKey}.`)
+  void meta
+  return { ok: true, tab: { ...tab, mode: "closed" } }
+}
+
+/** Reopen the most recently closed tab, preserving its persistent partition. */
+export function reopenClosedSupplierTab(): SupplierTabState | null {
+  const panelKey = closedTabStack.pop()
+  if (!panelKey) return null
+  return openSupplierTab(panelKey)
+}
+
+/** Record worker ownership + active claim metadata for the close guard. */
+export function setSupplierTabWorkerState(
+  panelKey: string,
+  state: { workerOwned: boolean; activeClaim?: SupplierTabClaim; paused?: boolean; label?: string; accountName?: string },
+): SupplierTabState {
+  const meta = metadataFor(panelKey, managedSupplierViews.get(panelKey))
+  meta.workerOwned = state.workerOwned
+  if (state.activeClaim !== undefined) {
+    meta.activeClaim = state.activeClaim
+  } else if (!state.workerOwned) {
+    meta.activeClaim = null
+  }
+  if (typeof state.paused === "boolean") {
+    if (meta.activeClaim) meta.activeClaim = { ...meta.activeClaim, paused: state.paused }
+    else if (state.workerOwned) meta.activeClaim = { claimId: "", paused: state.paused }
+  }
+  if (state.label) meta.label = state.label
+  if (state.accountName) meta.accountName = state.accountName
+  const tab = supplierTabRegistry().find((candidate) => candidate.panelKey === panelKey)
+  if (!tab) throw new Error(`Unknown supplier tab for ${panelKey}.`)
+  return tab
+}
+
+/** Update cached navigation metadata (url/title/loading/history) for a tab. */
+export function noteSupplierTabNavigation(
+  panelKey: string,
+  nav: { url?: string; title?: string; loading?: boolean; canGoBack?: boolean; canGoForward?: boolean },
+): void {
+  const meta = metadataFor(panelKey, managedSupplierViews.get(panelKey))
+  if (typeof nav.url === "string") meta.url = nav.url
+  if (typeof nav.title === "string") meta.title = nav.title
+  if (typeof nav.loading === "boolean") meta.loading = nav.loading
+  if (typeof nav.canGoBack === "boolean") meta.canGoBack = nav.canGoBack
+  if (typeof nav.canGoForward === "boolean") meta.canGoForward = nav.canGoForward
+}
+
+export type SupplierTabNavAction = "back" | "forward" | "reload" | "stop"
+
+/**
+ * Run Back/Forward/Reload/Stop on the active tab's webContents. Reads live
+ * state on Electron; on headless/test engines it records the intent against
+ * the cached metadata so the toolbar stays honest without a window.
+ */
+export function navigateSupplierTab(
+  tabId: string,
+  action: SupplierTabNavAction,
+): { ok: boolean; tab: SupplierTabState | null; error?: string } {
+  const panelKey = String(tabId || "").startsWith("tab-") ? String(tabId).slice(4) : String(tabId || "")
+  const entry = managedSupplierViews.get(panelKey)
+  const meta = metadataFor(panelKey, entry)
+  if (!entry || !entry.view) {
+    if (action === "reload") meta.loading = true
+    if (action === "stop") meta.loading = false
+    const tab = supplierTabRegistry().find((candidate) => candidate.panelKey === panelKey) || null
+    return { ok: true, tab }
+  }
+  try {
+    const contents = entry.view.webContents as unknown as {
+      goBack?: () => void
+      goForward?: () => void
+      reload?: () => void
+      stop?: () => void
+      isLoading?: () => boolean
+      navigationHistory?: { canGoBack?: () => boolean; canGoForward?: () => boolean }
+      canGoBack?: () => boolean
+      canGoForward?: () => boolean
+      getURL?: () => string
+      getTitle?: () => string
+    }
+    if (action === "back") {
+      const canGoBack =
+        typeof contents.navigationHistory?.canGoBack === "function"
+          ? contents.navigationHistory.canGoBack()
+          : typeof contents.canGoBack === "function"
+            ? contents.canGoBack()
+            : true
+      if (!canGoBack) return { ok: false, tab: null, error: "No earlier page in this tab." }
+      contents.goBack?.()
+    } else if (action === "forward") {
+      const canGoForward =
+        typeof contents.navigationHistory?.canGoForward === "function"
+          ? contents.navigationHistory.canGoForward()
+          : typeof contents.canGoForward === "function"
+            ? contents.canGoForward()
+            : true
+      if (!canGoForward) return { ok: false, tab: null, error: "No later page in this tab." }
+      contents.goForward?.()
+    } else if (action === "reload") {
+      contents.reload?.()
+      meta.loading = true
+    } else {
+      contents.stop?.()
+      meta.loading = false
+    }
+    if (typeof contents.getURL === "function") {
+      try {
+        meta.url = String(contents.getURL() || meta.url)
+      } catch {
+        // keep the cached url
+      }
+    }
+    if (typeof contents.getTitle === "function") {
+      try {
+        meta.title = String(contents.getTitle() || meta.title)
+      } catch {
+        // keep the cached title
+      }
+    }
+    if (typeof contents.isLoading === "function") {
+      try {
+        meta.loading = action === "stop" ? false : Boolean(contents.isLoading()) || action === "reload"
+      } catch {
+        // keep the cached flag
+      }
+    }
+    const tab = supplierTabRegistry().find((candidate) => candidate.panelKey === panelKey) || null
+    return { ok: true, tab }
+  } catch (error) {
+    return { ok: false, tab: null, error: error instanceof Error ? error.message : "Navigation failed." }
+  }
+}
+
+/** Reset tab-manager state. Tests only. */
+export function resetSupplierTabsForTests(): void {
+  tabMetadata.clear()
+  closedTabStack.length = 0
+  activeTabPanelKey = null
+  detachedTabPanels.clear()
+}
+
+/** Attach an OTP/CAPTCHA popup to a tab's view entry. Tests only (the shell's adapter does this on window-open). */
+export function addSupplierPopupForTests(
+  panelKey: string,
+  popup: Electron.CrossProcessExports.WebContentsView,
+): boolean {
+  const resolved = resolveStoredPanelKey(panelKey)
+  if (!resolved) return false
+  const entry = managedSupplierViews.get(resolved)
+  if (!entry || entry.popups.includes(popup)) return false
+  entry.popups.push(popup)
+  return true
+}
 
 /** Track a supplier view in the main-window manager. Exported for tests and the shell. */
 export function registerSupplierView(panelKey: string, view: Electron.CrossProcessExports.WebContentsView): void {
@@ -153,8 +953,12 @@ export function layoutSupplierViews(): void {
   const host = supplierViewHost
   if (!host || host.isWindowDestroyed()) return
   const bounds = supplierViewBounds()
+  if (bounds === null) {
+    hideSupplierViews()
+    return
+  }
   for (const entry of managedSupplierViews.values()) {
-    if (!entry.visible) continue
+    if (!entry.visible || !entry.view) continue
     for (const popup of entry.popups) {
       try {
         popup.setBounds(bounds)
@@ -178,7 +982,7 @@ export function hideSupplierViews(): string[] {
     if (!entry.visible) continue
     entry.visible = false
     try {
-      host?.removeView(entry.view)
+      if (entry.view) host?.removeView(entry.view)
     } catch {
       // ignore teardown races
     }
@@ -194,11 +998,28 @@ export function hideSupplierViews(): string[] {
   return hidden
 }
 
-/** Attach a panel's view to the main window (tab-switch back from the dashboard). */
+/** Attach a panel's view to the main window (tab-switch back from the dashboard).
+ *
+ * Focus discipline (VAL-WIN-004): this low-level attach never touches OS
+ * focus. Explicit user actions go through showSupplierViewForUser(..., { focus:
+ * true }); background worker steps use attachSupplierViewForBackground().
+ */
 export function showSupplierView(panelKey: string): boolean {
+  const resolved = resolveStoredPanelKey(panelKey)
+  if (!resolved) return false
+  const normalized = resolved
+  if (detachedTabPanels.has(normalized)) return false
   const host = supplierViewHost
-  const entry = managedSupplierViews.get(panelKey)
-  if (!host || host.isWindowDestroyed() || !entry) return false
+  const entry = managedSupplierViews.get(normalized)
+  if (!host || host.isWindowDestroyed() || !entry || !entry.view) return false
+  // Fail-closed: a null or undersized workspace rect hides the view instead
+  // of covering the window. The session stays alive; returning to Browsers
+  // re-attaches it at the exact bounded coordinates.
+  const bounds = supplierViewBounds()
+  if (bounds === null) {
+    hideSupplierViews()
+    return false
+  }
   if (!entry.visible) {
     try {
       host.removeView(entry.view)
@@ -206,7 +1027,7 @@ export function showSupplierView(panelKey: string): boolean {
       // ensure a single attach
     }
     host.addView(entry.view)
-    entry.view.setBounds(supplierViewBounds())
+    entry.view.setBounds(bounds)
     for (const popup of entry.popups) {
       try {
         host.removeView(popup)
@@ -214,12 +1035,10 @@ export function showSupplierView(panelKey: string): boolean {
         // ensure a single attach
       }
       host.addView(popup)
-      popup.setBounds(supplierViewBounds())
+      popup.setBounds(bounds)
     }
     entry.visible = true
   }
-  host.showWindow()
-  host.focusWindow()
   return true
 }
 
@@ -256,6 +1075,9 @@ class NativeSupplierBrowser implements SupplierBrowserApi {
     const { BrowserWindow, WebContentsView } = this.electron
     requireElectronMain(this.electron)
     const partition = `${PARTITION_PREFIX}${this.options.panelKey}`
+    // One isolated metadata row per panel: reopening the same panel reuses
+    // its tab instead of spawning a duplicate worker or a second view.
+    openSupplierTab(this.options.panelKey)
     const shellHost = supplierViewHost && !supplierViewHost.isWindowDestroyed() ? supplierViewHost : null
     if (shellHost) {
       // Main-window embedding (packaged app): the shell owns the window, so
@@ -302,7 +1124,7 @@ class NativeSupplierBrowser implements SupplierBrowserApi {
   /** Bring the panel on screen so the operator can complete OTP/CAPTCHA by hand. */
   async showForManualStep(): Promise<void> {
     if (this.view && supplierViewHost && !supplierViewHost.isWindowDestroyed()) {
-      showSupplierView(this.options.panelKey)
+      openSupplierTab(this.options.panelKey)
       return
     }
     this.host?.show()
@@ -312,9 +1134,59 @@ class NativeSupplierBrowser implements SupplierBrowserApi {
   /** Popup, download and lifecycle wiring shared by both host paths. */
   private attachViewHandlers(): void {
     if (!this.view) return
+    const panelKey = this.options.panelKey
+    const view = this.view
+    const refreshNav = (): void => {
+      try {
+        const contents = view.webContents as unknown as {
+          getURL?: () => string
+          getTitle?: () => string
+          isLoading?: () => boolean
+          navigationHistory?: { canGoBack?: () => boolean; canGoForward?: () => boolean }
+          canGoBack?: () => boolean
+          canGoForward?: () => boolean
+        }
+        const canGoBack =
+          typeof contents.navigationHistory?.canGoBack === "function"
+            ? contents.navigationHistory.canGoBack()
+            : typeof contents.canGoBack === "function"
+              ? contents.canGoBack()
+              : false
+        const canGoForward =
+          typeof contents.navigationHistory?.canGoForward === "function"
+            ? contents.navigationHistory.canGoForward()
+            : typeof contents.canGoForward === "function"
+              ? contents.canGoForward()
+              : false
+        noteSupplierTabNavigation(panelKey, {
+          url: typeof contents.getURL === "function" ? String(contents.getURL() || "") : undefined,
+          title: typeof contents.getTitle === "function" ? String(contents.getTitle() || "") : undefined,
+          loading: typeof contents.isLoading === "function" ? Boolean(contents.isLoading()) : undefined,
+          canGoBack: Boolean(canGoBack),
+          canGoForward: Boolean(canGoForward),
+        })
+      } catch {
+        // Teardown races keep the last cached metadata.
+      }
+    }
+    const wire = (event: string, handler: () => void): void => {
+      try {
+        ;(view.webContents as unknown as { on: (event: string, handler: () => void) => void }).on(event, handler)
+      } catch {
+        // Sessions without event support (unit tests): navigation stays manual.
+      }
+    }
     // Operator-visible only when manual completion is needed (OTP/CAPTCHA,
     // assisted submit). Automation runs headless-in-window otherwise.
-    this.view.webContents.on("dom-ready", () => undefined)
+    wire("dom-ready", refreshNav)
+    wire("did-navigate", refreshNav)
+    wire("did-navigate-in-page", refreshNav)
+    wire("did-start-loading", () => noteSupplierTabNavigation(panelKey, { loading: true }))
+    wire("did-stop-loading", () => {
+      noteSupplierTabNavigation(panelKey, { loading: false })
+      refreshNav()
+    })
+    refreshNav()
     this.contents.setWindowOpenHandler(({ url }) => {
       // Authenticated popups stay in-app on the panel's own partition: they
       // are attached to the main window, never a system browser and never a
@@ -359,14 +1231,18 @@ class NativeSupplierBrowser implements SupplierBrowserApi {
     await popup.webContents.loadURL(url)
     const host = supplierViewHost
     if (host && !host.isWindowDestroyed()) {
-      try {
-        host.removeView(popup)
-      } catch {
-        // ensure a single attach
+      const bounds = supplierViewBounds()
+      if (bounds !== null) {
+        try {
+          host.removeView(popup)
+        } catch {
+          // ensure a single attach
+        }
+        host.addView(popup)
+        popup.setBounds(bounds)
+        // Focus discipline: a background popup attach never shows or focuses
+        // the OS window. The operator opens it explicitly when needed.
       }
-      host.addView(popup)
-      popup.setBounds(supplierViewBounds())
-      host.showWindow()
     } else if (this.host) {
       this.host.contentView.addChildView(popup)
       popup.setBounds({ x: 0, y: 0, width: 1280, height: 800 })
