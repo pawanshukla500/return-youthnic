@@ -165,12 +165,452 @@ export function setSupplierViewHost(host: SupplierViewHost | null): void {
 }
 
 type ManagedSupplierView = {
-  view: Electron.CrossProcessExports.WebContentsView
+  view: Electron.CrossProcessExports.WebContentsView | null
   visible: boolean
   popups: Electron.CrossProcessExports.WebContentsView[]
 }
 
 const managedSupplierViews = new Map<string, ManagedSupplierView>()
+
+/** Live per-tab metadata snapshot shared with the detach/dock feature. */
+export type SupplierTabMode = "active" | "background" | "detached" | "closed"
+
+export type SupplierTabClaim = {
+  claimId: string
+  orderId?: string
+  awb?: string
+  stage?: string
+  statusText?: string
+  paused: boolean
+} | null
+
+export type SupplierTabState = {
+  tabId: string
+  panelKey: string
+  label: string
+  accountName: string
+  partition: string
+  url: string
+  title: string
+  loading: boolean
+  canGoBack: boolean
+  canGoForward: boolean
+  mode: SupplierTabMode
+  workerOwned: boolean
+  activeClaim: SupplierTabClaim
+}
+
+export const WORKER_ACTIVE_PAUSE_REQUIRED = "WORKER_ACTIVE_PAUSE_REQUIRED" as const
+
+type TabMetadata = {
+  label: string
+  accountName: string
+  url: string
+  title: string
+  loading: boolean
+  canGoBack: boolean
+  canGoForward: boolean
+  workerOwned: boolean
+  activeClaim: SupplierTabClaim
+}
+
+const tabMetadata = new Map<string, TabMetadata>()
+let activeTabPanelKey: string | null = null
+const closedTabStack: string[] = []
+
+/** Deterministic tab id: one isolated tab per supplier panel key. */
+export function tabIdForPanelKey(panelKey: string): string {
+  return `tab-${panelKey}`
+}
+
+/** Display label for a panel key (Meesho, Myntra VB, ...). */
+export function labelForPanelKey(panelKey: string): string {
+  const normalized = String(panelKey || "").toLowerCase()
+  if (normalized === "myntra_vb") return "Myntra VB"
+  if (normalized === "myntra_ej") return "Myntra EJ"
+  if (!normalized) return "Supplier"
+  return normalized
+    .split(/[_-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ")
+}
+
+/** Account identity shown in the URL/account pill. Defaults to the label. */
+function accountNameForPanelKey(panelKey: string): string {
+  return tabMetadata.get(panelKey)?.accountName || labelForPanelKey(panelKey)
+}
+
+function viewMetadata(view: Electron.CrossProcessExports.WebContentsView | null): {
+  url: string
+  title: string
+  loading: boolean
+  canGoBack: boolean
+  canGoForward: boolean
+} {
+  const fallback = { url: "", title: "", loading: false, canGoBack: false, canGoForward: false }
+  if (!view) return fallback
+  try {
+    const contents = view.webContents as unknown as {
+      getURL?: () => string
+      getTitle?: () => string
+      isLoading?: () => boolean
+      navigationHistory?: { canGoBack?: () => boolean; canGoForward?: () => boolean }
+      canGoBack?: () => boolean
+      canGoForward?: () => boolean
+    }
+    const canGoBack =
+      typeof contents.navigationHistory?.canGoBack === "function"
+        ? contents.navigationHistory.canGoBack()
+        : typeof contents.canGoBack === "function"
+          ? contents.canGoBack()
+          : false
+    const canGoForward =
+      typeof contents.navigationHistory?.canGoForward === "function"
+        ? contents.navigationHistory.canGoForward()
+        : typeof contents.canGoForward === "function"
+          ? contents.canGoForward()
+          : false
+    return {
+      url: typeof contents.getURL === "function" ? String(contents.getURL() || "") : fallback.url,
+      title: typeof contents.getTitle === "function" ? String(contents.getTitle() || "") : fallback.title,
+      loading: typeof contents.isLoading === "function" ? Boolean(contents.isLoading()) : fallback.loading,
+      canGoBack: Boolean(canGoBack),
+      canGoForward: Boolean(canGoForward),
+    }
+  } catch {
+    return fallback
+  }
+}
+
+function metadataFor(panelKey: string, entry: ManagedSupplierView | undefined): TabMetadata {
+  const stored = tabMetadata.get(panelKey)
+  if (stored) return stored
+  const fresh: TabMetadata = {
+    label: labelForPanelKey(panelKey),
+    accountName: labelForPanelKey(panelKey),
+    url: "",
+    title: "",
+    loading: false,
+    canGoBack: false,
+    canGoForward: false,
+    workerOwned: false,
+    activeClaim: null,
+  }
+  void entry
+  tabMetadata.set(panelKey, fresh)
+  return fresh
+}
+
+/** Full per-tab registry: every known panel, including closed tabs awaiting reopen. */
+export function supplierTabRegistry(): SupplierTabState[] {
+  const tabs: SupplierTabState[] = []
+  const seen = new Set<string>()
+  for (const [panelKey, entry] of managedSupplierViews) {
+    seen.add(panelKey)
+    const meta = metadataFor(panelKey, entry)
+    const live = viewMetadata(entry.view)
+    const closed = closedTabStack.includes(panelKey)
+    const mode: SupplierTabMode = closed
+      ? "closed"
+      : panelKey === activeTabPanelKey
+        ? "active"
+        : entry.visible
+          ? "background"
+          : "background"
+    tabs.push({
+      tabId: tabIdForPanelKey(panelKey),
+      panelKey,
+      label: meta.label,
+      accountName: meta.accountName,
+      partition: `${PARTITION_PREFIX}${panelKey}`,
+      url: live.url || meta.url,
+      title: live.title || meta.title,
+      loading: live.loading || meta.loading,
+      canGoBack: live.canGoBack || meta.canGoBack,
+      canGoForward: live.canGoForward || meta.canGoForward,
+      mode,
+      workerOwned: meta.workerOwned,
+      activeClaim: meta.activeClaim,
+    })
+  }
+  for (const [panelKey, meta] of tabMetadata) {
+    if (seen.has(panelKey)) continue
+    // Headless/test engines open tabs without a live WebContentsView: the tab
+    // is open (active or background) unless it sits on the closed stack.
+    const reopened = closedTabStack.includes(panelKey)
+    const reopenedMode: SupplierTabMode = reopened
+      ? "closed"
+      : panelKey === activeTabPanelKey
+        ? "active"
+        : "background"
+    tabs.push({
+      tabId: tabIdForPanelKey(panelKey),
+      panelKey,
+      label: meta.label,
+      accountName: meta.accountName,
+      partition: `${PARTITION_PREFIX}${panelKey}`,
+      url: meta.url,
+      title: meta.title,
+      loading: meta.loading,
+      canGoBack: meta.canGoBack,
+      canGoForward: meta.canGoForward,
+      mode: reopenedMode,
+      workerOwned: meta.workerOwned,
+      activeClaim: meta.activeClaim,
+    })
+  }
+  tabs.sort((a, b) => (a.panelKey < b.panelKey ? -1 : a.panelKey > b.panelKey ? 1 : 0))
+  return tabs
+}
+
+/** Panel key of the active tab, if any. */
+export function activeSupplierTabPanelKey(): string | null {
+  return activeTabPanelKey
+}
+
+/**
+ * Open (or re-activate) a tab. Creates the metadata row on first open, marks
+ * every other open tab as background, attaches the tab's view inside the
+ * bounded viewport, and never spawns a duplicate worker.
+ */
+export function openSupplierTab(
+  panelKey: string,
+  options?: { label?: string; accountName?: string; url?: string; title?: string },
+): SupplierTabState {
+  const normalized = String(panelKey || "").trim().toLowerCase().replace(/[^a-z0-9_]/g, "_") || "unknown"
+  const meta = metadataFor(normalized, managedSupplierViews.get(normalized))
+  if (options?.label) meta.label = options.label
+  if (options?.accountName) meta.accountName = options.accountName
+  if (typeof options?.url === "string") meta.url = options.url
+  if (typeof options?.title === "string") meta.title = options.title
+  const reopenIndex = closedTabStack.lastIndexOf(normalized)
+  if (reopenIndex >= 0) closedTabStack.splice(reopenIndex, 1)
+  activeTabPanelKey = normalized
+  // Background tabs keep their view, cookies, DOM state, and active claims:
+  // only attachment changes, never a close or a reload.
+  for (const [otherKey, otherEntry] of managedSupplierViews) {
+    if (otherKey === normalized || !otherEntry.visible) continue
+    otherEntry.visible = false
+    try {
+      supplierViewHost?.removeView(otherEntry.view as Electron.CrossProcessExports.WebContentsView)
+    } catch {
+      // ignore teardown races
+    }
+  }
+  const entry = managedSupplierViews.get(normalized)
+  if (entry) {
+    showSupplierView(normalized)
+  }
+  const current = supplierTabRegistry().find((tab) => tab.panelKey === normalized)
+  if (!current) throw new Error(`Could not open the supplier tab for ${normalized}.`)
+  return current
+}
+
+/** Switch the active tab without destroying any view, session, or worker claim. */
+export function switchSupplierTab(tabId: string): SupplierTabState | null {
+  const panelKey = String(tabId || "").startsWith("tab-") ? String(tabId).slice(4) : String(tabId || "")
+  const known = tabMetadata.has(panelKey) || managedSupplierViews.has(panelKey)
+  if (!known) return null
+  return openSupplierTab(panelKey)
+}
+
+/** Whether the tab's worker currently blocks a close. */
+export function isSupplierTabCloseBlocked(panelKey: string): boolean {
+  const meta = tabMetadata.get(panelKey)
+  if (!meta) return false
+  if (!meta.workerOwned) return false
+  const claim = meta.activeClaim
+  if (claim && claim.paused) return false
+  return true
+}
+
+export type CloseSupplierTabResult =
+  | { ok: true; tab: SupplierTabState }
+  | { ok: false; code: typeof WORKER_ACTIVE_PAUSE_REQUIRED; error: string }
+
+/**
+ * Close a tab. Manual/idle tabs close immediately while the persistent
+ * partition stays on disk for reopen. Worker-owned tabs need a paused worker
+ * first and answer 409 WORKER_ACTIVE_PAUSE_REQUIRED otherwise.
+ */
+export function closeSupplierTab(tabId: string, options?: { force?: boolean }): CloseSupplierTabResult {
+  const panelKey = String(tabId || "").startsWith("tab-") ? String(tabId).slice(4) : String(tabId || "")
+  const meta = metadataFor(panelKey, managedSupplierViews.get(panelKey))
+  const blocked = isSupplierTabCloseBlocked(panelKey)
+  if (blocked && options?.force !== true) {
+    return {
+      ok: false,
+      code: WORKER_ACTIVE_PAUSE_REQUIRED,
+      error: "This tab has an active worker claim. Pause the worker before closing the tab.",
+    }
+  }
+  if (blocked && options?.force === true) {
+    return {
+      ok: false,
+      code: WORKER_ACTIVE_PAUSE_REQUIRED,
+      error: "This tab has an active worker claim. Pause the worker before closing the tab.",
+    }
+  }
+  const entry = managedSupplierViews.get(panelKey)
+  if (entry?.visible) {
+    entry.visible = false
+    try {
+      supplierViewHost?.removeView(entry.view as Electron.CrossProcessExports.WebContentsView)
+    } catch {
+      // ignore teardown races
+    }
+  }
+  if (!closedTabStack.includes(panelKey)) closedTabStack.push(panelKey)
+  if (activeTabPanelKey === panelKey) {
+    const fallback = [...managedSupplierViews.entries()].find(
+      ([otherKey, otherEntry]) => otherKey !== panelKey && otherEntry.view,
+    )
+    activeTabPanelKey = fallback ? fallback[0] : null
+    if (fallback) showSupplierView(fallback[0])
+  }
+  const tabs = supplierTabRegistry()
+  const tab = tabs.find((candidate) => candidate.panelKey === panelKey)
+  if (!tab) throw new Error(`Could not close the supplier tab for ${panelKey}.`)
+  void meta
+  return { ok: true, tab: { ...tab, mode: "closed" } }
+}
+
+/** Reopen the most recently closed tab, preserving its persistent partition. */
+export function reopenClosedSupplierTab(): SupplierTabState | null {
+  const panelKey = closedTabStack.pop()
+  if (!panelKey) return null
+  return openSupplierTab(panelKey)
+}
+
+/** Record worker ownership + active claim metadata for the close guard. */
+export function setSupplierTabWorkerState(
+  panelKey: string,
+  state: { workerOwned: boolean; activeClaim?: SupplierTabClaim; paused?: boolean; label?: string; accountName?: string },
+): SupplierTabState {
+  const meta = metadataFor(panelKey, managedSupplierViews.get(panelKey))
+  meta.workerOwned = state.workerOwned
+  if (state.activeClaim !== undefined) {
+    meta.activeClaim = state.activeClaim
+  } else if (!state.workerOwned) {
+    meta.activeClaim = null
+  }
+  if (typeof state.paused === "boolean") {
+    if (meta.activeClaim) meta.activeClaim = { ...meta.activeClaim, paused: state.paused }
+    else if (state.workerOwned) meta.activeClaim = { claimId: "", paused: state.paused }
+  }
+  if (state.label) meta.label = state.label
+  if (state.accountName) meta.accountName = state.accountName
+  const tab = supplierTabRegistry().find((candidate) => candidate.panelKey === panelKey)
+  if (!tab) throw new Error(`Unknown supplier tab for ${panelKey}.`)
+  return tab
+}
+
+/** Update cached navigation metadata (url/title/loading/history) for a tab. */
+export function noteSupplierTabNavigation(
+  panelKey: string,
+  nav: { url?: string; title?: string; loading?: boolean; canGoBack?: boolean; canGoForward?: boolean },
+): void {
+  const meta = metadataFor(panelKey, managedSupplierViews.get(panelKey))
+  if (typeof nav.url === "string") meta.url = nav.url
+  if (typeof nav.title === "string") meta.title = nav.title
+  if (typeof nav.loading === "boolean") meta.loading = nav.loading
+  if (typeof nav.canGoBack === "boolean") meta.canGoBack = nav.canGoBack
+  if (typeof nav.canGoForward === "boolean") meta.canGoForward = nav.canGoForward
+}
+
+export type SupplierTabNavAction = "back" | "forward" | "reload" | "stop"
+
+/**
+ * Run Back/Forward/Reload/Stop on the active tab's webContents. Reads live
+ * state on Electron; on headless/test engines it records the intent against
+ * the cached metadata so the toolbar stays honest without a window.
+ */
+export function navigateSupplierTab(
+  tabId: string,
+  action: SupplierTabNavAction,
+): { ok: boolean; tab: SupplierTabState | null; error?: string } {
+  const panelKey = String(tabId || "").startsWith("tab-") ? String(tabId).slice(4) : String(tabId || "")
+  const entry = managedSupplierViews.get(panelKey)
+  const meta = metadataFor(panelKey, entry)
+  if (!entry || !entry.view) {
+    if (action === "reload") meta.loading = true
+    if (action === "stop") meta.loading = false
+    const tab = supplierTabRegistry().find((candidate) => candidate.panelKey === panelKey) || null
+    return { ok: true, tab }
+  }
+  try {
+    const contents = entry.view.webContents as unknown as {
+      goBack?: () => void
+      goForward?: () => void
+      reload?: () => void
+      stop?: () => void
+      isLoading?: () => boolean
+      navigationHistory?: { canGoBack?: () => boolean; canGoForward?: () => boolean }
+      canGoBack?: () => boolean
+      canGoForward?: () => boolean
+      getURL?: () => string
+      getTitle?: () => string
+    }
+    if (action === "back") {
+      const canGoBack =
+        typeof contents.navigationHistory?.canGoBack === "function"
+          ? contents.navigationHistory.canGoBack()
+          : typeof contents.canGoBack === "function"
+            ? contents.canGoBack()
+            : true
+      if (!canGoBack) return { ok: false, tab: null, error: "No earlier page in this tab." }
+      contents.goBack?.()
+    } else if (action === "forward") {
+      const canGoForward =
+        typeof contents.navigationHistory?.canGoForward === "function"
+          ? contents.navigationHistory.canGoForward()
+          : typeof contents.canGoForward === "function"
+            ? contents.canGoForward()
+            : true
+      if (!canGoForward) return { ok: false, tab: null, error: "No later page in this tab." }
+      contents.goForward?.()
+    } else if (action === "reload") {
+      contents.reload?.()
+      meta.loading = true
+    } else {
+      contents.stop?.()
+      meta.loading = false
+    }
+    if (typeof contents.getURL === "function") {
+      try {
+        meta.url = String(contents.getURL() || meta.url)
+      } catch {
+        // keep the cached url
+      }
+    }
+    if (typeof contents.getTitle === "function") {
+      try {
+        meta.title = String(contents.getTitle() || meta.title)
+      } catch {
+        // keep the cached title
+      }
+    }
+    if (typeof contents.isLoading === "function") {
+      try {
+        meta.loading = action === "stop" ? false : Boolean(contents.isLoading()) || action === "reload"
+      } catch {
+        // keep the cached flag
+      }
+    }
+    const tab = supplierTabRegistry().find((candidate) => candidate.panelKey === panelKey) || null
+    return { ok: true, tab }
+  } catch (error) {
+    return { ok: false, tab: null, error: error instanceof Error ? error.message : "Navigation failed." }
+  }
+}
+
+/** Reset tab-manager state. Tests only. */
+export function resetSupplierTabsForTests(): void {
+  tabMetadata.clear()
+  closedTabStack.length = 0
+  activeTabPanelKey = null
+}
 
 /** Track a supplier view in the main-window manager. Exported for tests and the shell. */
 export function registerSupplierView(panelKey: string, view: Electron.CrossProcessExports.WebContentsView): void {
@@ -200,7 +640,7 @@ export function layoutSupplierViews(): void {
     return
   }
   for (const entry of managedSupplierViews.values()) {
-    if (!entry.visible) continue
+    if (!entry.visible || !entry.view) continue
     for (const popup of entry.popups) {
       try {
         popup.setBounds(bounds)
@@ -224,7 +664,7 @@ export function hideSupplierViews(): string[] {
     if (!entry.visible) continue
     entry.visible = false
     try {
-      host?.removeView(entry.view)
+      if (entry.view) host?.removeView(entry.view)
     } catch {
       // ignore teardown races
     }
@@ -244,7 +684,7 @@ export function hideSupplierViews(): string[] {
 export function showSupplierView(panelKey: string): boolean {
   const host = supplierViewHost
   const entry = managedSupplierViews.get(panelKey)
-  if (!host || host.isWindowDestroyed() || !entry) return false
+  if (!host || host.isWindowDestroyed() || !entry || !entry.view) return false
   // Fail-closed: a null or undersized workspace rect hides the view instead
   // of covering the window. The session stays alive; returning to Browsers
   // re-attaches it at the exact bounded coordinates.
@@ -310,6 +750,9 @@ class NativeSupplierBrowser implements SupplierBrowserApi {
     const { BrowserWindow, WebContentsView } = this.electron
     requireElectronMain(this.electron)
     const partition = `${PARTITION_PREFIX}${this.options.panelKey}`
+    // One isolated metadata row per panel: reopening the same panel reuses
+    // its tab instead of spawning a duplicate worker or a second view.
+    openSupplierTab(this.options.panelKey)
     const shellHost = supplierViewHost && !supplierViewHost.isWindowDestroyed() ? supplierViewHost : null
     if (shellHost) {
       // Main-window embedding (packaged app): the shell owns the window, so
@@ -356,7 +799,7 @@ class NativeSupplierBrowser implements SupplierBrowserApi {
   /** Bring the panel on screen so the operator can complete OTP/CAPTCHA by hand. */
   async showForManualStep(): Promise<void> {
     if (this.view && supplierViewHost && !supplierViewHost.isWindowDestroyed()) {
-      showSupplierView(this.options.panelKey)
+      openSupplierTab(this.options.panelKey)
       return
     }
     this.host?.show()
@@ -366,9 +809,59 @@ class NativeSupplierBrowser implements SupplierBrowserApi {
   /** Popup, download and lifecycle wiring shared by both host paths. */
   private attachViewHandlers(): void {
     if (!this.view) return
+    const panelKey = this.options.panelKey
+    const view = this.view
+    const refreshNav = (): void => {
+      try {
+        const contents = view.webContents as unknown as {
+          getURL?: () => string
+          getTitle?: () => string
+          isLoading?: () => boolean
+          navigationHistory?: { canGoBack?: () => boolean; canGoForward?: () => boolean }
+          canGoBack?: () => boolean
+          canGoForward?: () => boolean
+        }
+        const canGoBack =
+          typeof contents.navigationHistory?.canGoBack === "function"
+            ? contents.navigationHistory.canGoBack()
+            : typeof contents.canGoBack === "function"
+              ? contents.canGoBack()
+              : false
+        const canGoForward =
+          typeof contents.navigationHistory?.canGoForward === "function"
+            ? contents.navigationHistory.canGoForward()
+            : typeof contents.canGoForward === "function"
+              ? contents.canGoForward()
+              : false
+        noteSupplierTabNavigation(panelKey, {
+          url: typeof contents.getURL === "function" ? String(contents.getURL() || "") : undefined,
+          title: typeof contents.getTitle === "function" ? String(contents.getTitle() || "") : undefined,
+          loading: typeof contents.isLoading === "function" ? Boolean(contents.isLoading()) : undefined,
+          canGoBack: Boolean(canGoBack),
+          canGoForward: Boolean(canGoForward),
+        })
+      } catch {
+        // Teardown races keep the last cached metadata.
+      }
+    }
+    const wire = (event: string, handler: () => void): void => {
+      try {
+        ;(view.webContents as unknown as { on: (event: string, handler: () => void) => void }).on(event, handler)
+      } catch {
+        // Sessions without event support (unit tests): navigation stays manual.
+      }
+    }
     // Operator-visible only when manual completion is needed (OTP/CAPTCHA,
     // assisted submit). Automation runs headless-in-window otherwise.
-    this.view.webContents.on("dom-ready", () => undefined)
+    wire("dom-ready", refreshNav)
+    wire("did-navigate", refreshNav)
+    wire("did-navigate-in-page", refreshNav)
+    wire("did-start-loading", () => noteSupplierTabNavigation(panelKey, { loading: true }))
+    wire("did-stop-loading", () => {
+      noteSupplierTabNavigation(panelKey, { loading: false })
+      refreshNav()
+    })
+    refreshNav()
     this.contents.setWindowOpenHandler(({ url }) => {
       // Authenticated popups stay in-app on the panel's own partition: they
       // are attached to the main window, never a system browser and never a

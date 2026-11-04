@@ -149,7 +149,8 @@ test("the dashboard has a dedicated Browsers sidebar tab with a bounded workspac
   assert.ok(html.includes('id="browser-workspace-viewport"'), "expected the bounded viewport")
   assert.ok(html.includes('id="browser-tab-strip"'), "expected the marketplace tab strip")
   assert.ok(html.includes('id="browser-nav-toolbar"'), "expected the navigation toolbar")
-  assert.ok(html.includes('title="Back navigation arrives with the multi-tab manager"'), "expected the disabled Back button title")
+  assert.ok(html.includes('id="browser-back-btn"'), "expected the Back toolbar button")
+  assert.ok(html.includes('id="browser-partition-badge"'), "expected the session partition badge")
   assert.ok(html.includes('id="browser-claim-control-bar"'), "expected the claim control bar")
   assert.ok(html.includes('id="browser-exit-bar"'), "expected the fullscreen exit bar")
   assert.ok(!html.includes("left: 10px"), "the workspace must not use fixed overlay CSS")
@@ -197,11 +198,15 @@ test("a signed-in operator sees an empty browser registry without opening a wind
   const hide = await engineFetch("/api/portal-browser/hide", { method: "POST" })
   assert.equal(hide.status, 200)
   assert.deepEqual(hide.data.hidden, [])
+  // Showing a panel opens its isolated tab: the engine no longer 404s on
+  // headless/test instances without an attached Electron window. The tab is
+  // open with its persistent session, just not visible on screen.
   const show = await engineFetch("/api/portal-browser/show", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ marketplace: "Meesho" }),
   })
-  assert.equal(show.status, 404)
-  assert.match(String(show.data.error || ""), /no open supplier browser/i)
+  assert.equal(show.status, 200)
+  assert.equal(show.data.panelKey, "meesho")
+  assert.equal(show.data.visible, false)
 })
