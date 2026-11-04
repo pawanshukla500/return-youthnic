@@ -1,3 +1,4 @@
+import fs from "node:fs"
 import path from "node:path"
 import { BaseMarketplaceAutomation, type ClaimStatusCheckResult, type MarketplaceAutomationResult } from "./base-automation.js"
 import { completePortalLogin } from "../portal-login.js"
@@ -82,6 +83,68 @@ export function parseMeeshoTicketRow(
     return normalizedStatus ? { statusText, normalizedStatus } : { statusText }
   }
   return null
+}
+
+/**
+ * Meesho evidence-upload verification (M9 Phase 6).
+ *
+ * Production Claim #1 downloaded 4 files but the native browser failed to
+ * verify attachments on:
+ *   #barcode_image_link_6, #product_image_link_7,
+ *   #product_reverse_way_bill_link_8, #product_openingvideo_link_9, #attachments_12
+ *
+ * The portal replaces or resets its file input after an upload, so
+ * `input.files.length` alone is not proof. A mandatory attachment counts as
+ * verified only when the local file exists AND the portal acknowledges it
+ * (file-name text, thumbnail/preview, or success chip near the input, with
+ * no error text). Anything less keeps the claim out of `prepared` and leaves
+ * the browser open for manual recovery with the exact failed field named.
+ */
+
+/** Evidence field behind a Meesho upload input. `attachments` is the generic fallback box. */
+export type MeeshoUploadField = "barcode_image" | "product_images" | "reverse_waybill" | "unboxing_video" | "attachments"
+
+/** Map a Meesho file-input id to its evidence field. Pure so fixtures can test it without a browser. */
+export function resolveMeeshoUploadField(inputId: string): MeeshoUploadField | null {
+  const id = (inputId || "").toLowerCase()
+  if (!id) return null
+  if (id.includes("barcode")) return "barcode_image"
+  if (id.includes("reverse") || id.includes("waybill") || id.includes("way_bill")) return "reverse_waybill"
+  if (id.includes("openingvideo") || id.includes("opening_video") || (id.includes("video") && !id.includes("product"))) return "unboxing_video"
+  if (id.includes("product_image") || (id.includes("product") && !id.includes("video"))) return "product_images"
+  if (id.includes("attachment")) return "attachments"
+  if (id.includes("video")) return "unboxing_video"
+  return null
+}
+
+/** One verified (or failed) upload box. */
+export type MeeshoUploadVerification = {
+  inputId: string
+  field: MeeshoUploadField | "unknown"
+  ok: boolean
+  reason: string
+  attachedCount: number
+  portalAck: boolean
+}
+
+/** Human-readable summary of failed boxes for the claim panel (exact field + status). */
+export function summarizeMeeshoUploadFailures(failures: MeeshoUploadVerification[]): string {
+  return failures
+    .map((f) => `#${f.inputId} (${f.field}): ${f.reason}; attached=${f.attachedCount}, portalAck=${f.portalAck ? "yes" : "no"}`)
+    .join(" | ")
+}
+
+/** Local pre-flight: the file must exist, be non-empty, and have an accepted MIME by extension. */
+export function checkMeeshoEvidenceFileLocal(filePath: string): { ok: boolean; reason: string } {
+  try {
+    const stat = fs.statSync(filePath)
+    if (!stat.isFile() || stat.size <= 0) return { ok: false, reason: "file missing or empty on disk" }
+    if (stat.size > 50 * 1024 * 1024) return { ok: false, reason: `file too large (${stat.size} bytes, limit 50 MB)` }
+  } catch {
+    return { ok: false, reason: "file missing on disk" }
+  }
+  if (!/\.(jpe?g|png|webp|mp4|webm|mov)$/i.test(filePath)) return { ok: false, reason: "MIME not accepted (need jpg/png/webp/mp4/webm/mov)" }
+  return { ok: true, reason: "local file ok" }
 }
 
 export class MeeshoAutomation extends BaseMarketplaceAutomation {
@@ -333,23 +396,112 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
     const videoFiles = allFiles.filter((f) => /\.(mp4|webm|mov)$/i.test(f))
     const inputIds = await this.browser.evaluate<string[]>(`Array.from(document.querySelectorAll('input[type="file"]')).map((el) => el.id).filter(Boolean)`)
     const attachedFiles = new Set<string>()
-    logger.info(`Attaching evidence to ${inputIds.length} Meesho upload boxes.`)
+    const verifications: MeeshoUploadVerification[] = []
+    logger.info(`Attaching evidence to ${inputIds.length} Meesho upload boxes with portal-ack verification.`)
     for (let index = 0; index < inputIds.length; index++) {
-      const id = inputIds[index].toLowerCase()
-      const chosen = id.includes("video")
+      const rawId = inputIds[index]
+      const id = rawId.toLowerCase()
+      const field = resolveMeeshoUploadField(rawId)
+      // Keep the previous fallback mapping for unknown boxes: prefer the
+      // field-mapped evidence, else an unused image, so no box is skipped silently.
+      const chosen = field === "unboxing_video"
         ? (this.evidenceFilesMap.get("unboxing_video") || videoFiles)
-        : id.includes("waybill") || id.includes("reverse")
+        : field === "reverse_waybill"
           ? (this.evidenceFilesMap.get("reverse_waybill") || imageFiles.filter((file) => file.toLowerCase().includes("waybill")))
-          : id.includes("product")
+          : field === "product_images"
             ? (this.evidenceFilesMap.get("product_images") || imageFiles.filter((file) => file.toLowerCase().includes("product")))
-            : id.includes("barcode")
+            : field === "barcode_image"
               ? (this.evidenceFilesMap.get("barcode_image") || imageFiles.filter((file) => file.toLowerCase().includes("barcode")))
-              : imageFiles.filter((file) => !attachedFiles.has(file)).slice(0, 1)
-      if (!chosen.length) continue
-      const attached = await this.uploadFiles(`#${inputIds[index]}`, chosen)
-      if (attached) chosen.forEach((file) => attachedFiles.add(file))
-      logger.info(`${attached ? "Attached" : "Could not attach"} ${chosen.length} file(s) to ${inputIds[index]}.`)
-      await this.delay(1000)
+              : field === "attachments"
+                ? (this.evidenceFilesMap.get("attachments") || imageFiles.filter((file) => !attachedFiles.has(file)).slice(0, 1))
+                : id.includes("video")
+                  ? (this.evidenceFilesMap.get("unboxing_video") || videoFiles)
+                  : id.includes("waybill") || id.includes("reverse")
+                    ? (this.evidenceFilesMap.get("reverse_waybill") || imageFiles.filter((file) => file.toLowerCase().includes("waybill")))
+                    : id.includes("product")
+                      ? (this.evidenceFilesMap.get("product_images") || imageFiles.filter((file) => file.toLowerCase().includes("product")))
+                      : id.includes("barcode")
+                        ? (this.evidenceFilesMap.get("barcode_image") || imageFiles.filter((file) => file.toLowerCase().includes("barcode")))
+                        : imageFiles.filter((file) => !attachedFiles.has(file)).slice(0, 1)
+      const fail = (reason: string, portalAck = false): void => {
+        verifications.push({ inputId: rawId, field: field ?? "unknown", ok: false, reason, attachedCount: 0, portalAck })
+        logger.warn(`Meesho upload unverified on #${rawId} (${field ?? "unknown"}): ${reason}.`)
+      }
+      if (!chosen.length) {
+        // No evidence mapped to this box: do not guess and do not retry blindly.
+        fail("no evidence file mapped to this upload box")
+        continue
+      }
+      // Local pre-flight: correct file, exists, MIME/size accepted.
+      const localBad = chosen.map((f) => ({ f, check: checkMeeshoEvidenceFileLocal(f) })).find((c) => !c.check.ok)
+      if (localBad) {
+        fail(`local file rejected for ${localBad.f}: ${localBad.check.reason}`)
+        continue
+      }
+      // Single attach attempt: no blind repeats when the outcome is uncertain.
+      const attached = await this.uploadFiles(`#${rawId}`, chosen)
+      if (!attached) {
+        fail("DOM.setFileInputFiles rejected the files")
+        continue
+      }
+      chosen.forEach((file) => attachedFiles.add(file))
+      logger.info(`Attached ${chosen.length} file(s) to ${rawId}; verifying portal acknowledgement…`)
+      await this.delay(1500)
+      // Portal acknowledgement: files.length AND a visible ack near the input
+      // (file name, thumbnail, success chip) with no error text. The portal may
+      // reset the input after upload, so files.length alone never counts.
+      const ack = await this.browser.evaluate<{ files: number; ack: boolean; error: string }>(`
+        (() => {
+          const input = document.querySelector(${JSON.stringify(`#${rawId}`)});
+          if (!input) return { files: 0, ack: false, error: 'input gone after upload' };
+          const files = input.files ? input.files.length : 0;
+          const scope = (input.closest('div, section, li, td') || input.parentElement || document.body);
+          const text = ((scope && scope.innerText) || '').slice(0, 2000);
+          const hasName = /\\.(jpe?g|png|webp|mp4|webm|mov)\\b/i.test(text) || /uploaded|attached|success|preview/i.test(text);
+          const hasThumb = Boolean(scope && scope.querySelector && scope.querySelector('img, video, canvas'));
+          const errEl = scope ? Array.from(scope.querySelectorAll('*')).find((el) => el.childElementCount === 0 && /error|failed|invalid|exceed|limit|required/i.test(el.textContent || '') && (el.textContent || '').trim().length > 8) : null;
+          const error = errEl ? (errEl.textContent || '').trim().slice(0, 200) : '';
+          return { files, ack: Boolean((files > 0 || hasName || hasThumb) && !error), error };
+        })()
+      `).catch(() => ({ files: 0, ack: false, error: "ack read failed" }))
+      if (ack.error) {
+        verifications.push({ inputId: rawId, field: field ?? "unknown", ok: false, reason: `portal reports: ${ack.error}`, attachedCount: ack.files, portalAck: false })
+        logger.warn(`Meesho upload rejected on #${rawId}: ${ack.error}.`)
+        continue
+      }
+      if (!ack.ack) {
+        fail(`no portal acknowledgement (files=${ack.files}, no file name/thumbnail/success chip nearby)`, false)
+        continue
+      }
+      verifications.push({ inputId: rawId, field: field ?? "unknown", ok: true, reason: "portal acknowledged attachment", attachedCount: ack.files, portalAck: true })
+      logger.info(`Verified #${rawId} (${field ?? "unknown"}): portal acknowledged the attachment.`)
+      await this.delay(500)
+    }
+    const failures = verifications.filter((v) => !v.ok)
+    if (failures.length) {
+      // Mandatory attachments unverified: never report `prepared`. Keep the
+      // browser open (manual_intervention_required holds it) for operator recovery.
+      const shot = path.join(this.workDir, `upload-unverified-job-${this.job.jobId}.png`)
+      await this.browser.captureScreenshot(shot)
+      const summary = summarizeMeeshoUploadFailures(failures)
+      const verified = verifications.filter((v) => v.ok).length
+      logger.warn(`Meesho evidence unverified (${failures.length}/${verifications.length} boxes): ${summary}.`)
+      return {
+        success: false,
+        stage: "manual_intervention_required",
+        screenshotPath: shot,
+        manualActionReason: `Meesho did not acknowledge ${failures.length} mandatory attachment(s) (${verified}/${verifications.length} verified). Failed: ${summary}. Finish the uploads in the open browser, then run this claim again — nothing was filed.`,
+      }
+    }
+    if (!verifications.length) {
+      const shot = path.join(this.workDir, `no-upload-boxes-job-${this.job.jobId}.png`)
+      await this.browser.captureScreenshot(shot)
+      return {
+        success: false,
+        stage: "manual_intervention_required",
+        screenshotPath: shot,
+        manualActionReason: "Meesho showed no file-upload boxes on the claim form. Open the form in the browser, then run this claim again.",
+      }
     }
 
     // Description text
