@@ -516,9 +516,8 @@ export type AiMemoryDisableResponse = {
 /* ------------------------------------------------------------------ */
 
 export type EvidenceFile = {
-  fileName: string
+  name: string
   sizeBytes: number
-  mimeType: string | null
-  downloadedAt: string | null
+  mtimeIso: string
   [k: string]: unknown
 }

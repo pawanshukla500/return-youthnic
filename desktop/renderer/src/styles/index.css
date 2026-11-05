@@ -174,3 +174,15 @@ button:disabled {
 ::placeholder {
   color: var(--muted);
 }
+
+/* ------------------------------------------------------------------ */
+/* Browsers page — explicit supplier-browser fullscreen                */
+/* The native WebContentsView is fitted to the full window by the      */
+/* shell only after the operator clicks Expand; the page then hides    */
+/* the app chrome until Esc / Exit Fullscreen (mirrors the old         */
+/* dashboard's body.browser-fullscreen rules).                         */
+/* ------------------------------------------------------------------ */
+body.ra-browser-fullscreen aside[aria-label='Primary'],
+body.ra-browser-fullscreen header {
+  display: none;
+}
