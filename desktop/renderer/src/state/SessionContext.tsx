@@ -14,6 +14,8 @@ type SessionContextValue = {
    * when the error was a session error so callers can avoid double-reporting.
    */
   handleAuthError: (error: unknown) => boolean
+  /** Monotonic counter incremented on every session change to guard against race conditions. */
+  sessionEpoch: number
 }
 
 const SessionContext = createContext<SessionContextValue>({
@@ -21,23 +23,28 @@ const SessionContext = createContext<SessionContextValue>({
   setUser: () => undefined,
   clearSession: () => undefined,
   handleAuthError: () => false,
+  sessionEpoch: 0,
 })
 
 export function SessionProvider({ children }: { children: ReactNode }) {
   const [user, setUserState] = useState<OperatorProfile | null>(null)
+  const [sessionEpoch, setSessionEpoch] = useState(0)
 
   const setUser = useCallback((next: OperatorProfile) => {
     setUserState(next)
+    setSessionEpoch((e) => e + 1)
   }, [])
 
   const clearSession = useCallback(() => {
     setUserState(null)
+    setSessionEpoch((e) => e + 1)
   }, [])
 
   const handleAuthError = useCallback(
     (error: unknown) => {
       if (isSessionError(error)) {
         setUserState(null)
+        setSessionEpoch((e) => e + 1)
         return true
       }
       return false
@@ -46,8 +53,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   )
 
   const value = useMemo(
-    () => ({ user, setUser, clearSession, handleAuthError }),
-    [user, setUser, clearSession, handleAuthError],
+    () => ({ user, setUser, clearSession, handleAuthError, sessionEpoch }),
+    [user, setUser, clearSession, handleAuthError, sessionEpoch],
   )
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>

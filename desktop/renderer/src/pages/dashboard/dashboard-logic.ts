@@ -128,7 +128,9 @@ export function deriveOverallStatus(input: {
     title: 'All panels green',
     detail:
       `Every panel is connected and the bot is ${status.isRunning ? 'running' : 'ready'}. ` +
-      `${summary.active || 0} ticket(s) being followed up${summary.due ? `, ${summary.due} due now` : ''}.`,
+      (followUpSummary === undefined
+        ? 'Updating follow-up status…'
+        : `${summary.active || 0} ticket(s) being followed up${summary.due ? `, ${summary.due} due now` : ''}.`),
     reasons: [],
   }
 }

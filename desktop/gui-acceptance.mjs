@@ -124,10 +124,17 @@ async function main() {
   console.log("TEST 1: OFFLINE / ENGINE UNAVAILABLE RESILIENCE");
   console.log("=======================================================");
   const blocker = net.createServer((socket) => {
-    socket.on("error", () => {});
+    // Reset immediately so HTTP client receives ECONNRESET and fails immediately
+    socket.destroy();
   });
-  blocker.on("error", () => {});
-  await new Promise((resolve) => blocker.listen(3005, "127.0.0.1", resolve));
+  await new Promise((resolve, reject) => {
+    blocker.once("error", reject);
+    blocker.listen(3005, "127.0.0.1", () => {
+      blocker.removeListener("error", reject);
+      blocker.on("error", () => {});
+      resolve();
+    });
+  });
   console.log("✓ Simulated engine unavailable by blocking 127.0.0.1:3005");
 
   let appProc = spawn(exePath, ["--remote-debugging-port=9222"], {
@@ -153,8 +160,11 @@ async function main() {
 
     await sleep(1500);
 
-    const bodySnippet = await cdp.evaluate("document.body.innerText.slice(0, 200)");
+    const bodySnippet = await cdp.evaluate("document.body.innerText.slice(0, 300)");
     console.log("✓ Offline view rendered without crash. Snippet:\n", bodySnippet);
+    if (!bodySnippet || (!bodySnippet.toLowerCase().includes("claim bot") && !bodySnippet.toLowerCase().includes("sign in") && !bodySnippet.toLowerCase().includes("connecting"))) {
+      throw new Error(`Expected offline UI snippet to render, got: ${bodySnippet}`);
+    }
 
     await cdp.captureScreenshot(path.join(screenshotsDir, "gui-01-offline-state.png"));
     cdp.close();
@@ -163,8 +173,11 @@ async function main() {
     spawn("taskkill", ["/PID", String(appProc.pid), "/T", "/F"]);
     await sleep(3000);
   } finally {
+    if (appProc && !appProc.killed) {
+      try { spawn("taskkill", ["/PID", String(appProc.pid), "/T", "/F"]); } catch {}
+    }
     blocker.close();
-    await sleep(2000);
+    await sleep(2500);
   }
 
   console.log("\n=======================================================");
@@ -185,133 +198,95 @@ async function main() {
     await cdp.send("Page.enable");
     await cdp.send("Runtime.enable");
 
+    // Install mock fetch on new documents so online test behavior is 100% deterministic
+    await cdp.send("Page.addScriptToEvaluateOnNewDocument", {
+      source: `
+        (() => {
+          window.__testSignedIn = false;
+          const origFetch = window.fetch;
+          window.fetch = async (resource, init) => {
+            const rawUrl = typeof resource === 'string' ? resource : resource instanceof URL ? resource.href : resource.url;
+            if (rawUrl.includes('/api/operator/login')) {
+              window.__testSignedIn = true;
+              return new Response(JSON.stringify({
+                ok: true,
+                user: { name: "Pawan Shukla", email: "ops@youthnic.shop", role: "Admin" }
+              }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+            }
+            if (rawUrl.includes('/api/operator/session')) {
+              return new Response(JSON.stringify({
+                signedIn: window.__testSignedIn,
+                user: window.__testSignedIn ? { name: "Pawan Shukla", email: "ops@youthnic.shop", role: "Admin" } : null
+              }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+            }
+            if (rawUrl.includes('/api/status')) {
+              return new Response(JSON.stringify({
+                isRunning: true,
+                isCurrentlyProcessing: false,
+                activeJobInfo: null,
+                activeSummary: null,
+                nextPollCountdown: 42,
+                lastHeartbeatTime: new Date().toLocaleTimeString(),
+                lastPollTime: new Date().toLocaleTimeString(),
+                backendUrl: "https://return.youthnic.shop",
+                signedIn: window.__testSignedIn
+              }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+            }
+            if (rawUrl.includes('/api/panels')) {
+              return new Response(JSON.stringify({
+                panels: [
+                  { marketplace: "Meesho", panelKey: "meesho", name: "Meesho", status: "idle", consecutiveFailures: 0, automated: true, state: "idle" },
+                  { marketplace: "Flipkart", panelKey: "flipkart", name: "Flipkart", status: "idle", consecutiveFailures: 0, automated: false, state: "idle" },
+                  { marketplace: "Amazon", panelKey: "amazon", name: "Amazon", status: "idle", consecutiveFailures: 0, automated: false, state: "idle" }
+                ]
+              }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+            }
+            if (rawUrl.includes('/api/jobs')) {
+              return new Response(JSON.stringify([
+                { jobId: 101, claimId: 2001, marketplace: "Meesho", stage: "idle", attemptCount: 1, updatedAt: new Date().toISOString() }
+              ]), { status: 200, headers: { 'Content-Type': 'application/json' } });
+            }
+            if (rawUrl.includes('/api/follow-ups')) {
+              return new Response(JSON.stringify({
+                rows: [],
+                total: 0,
+                summary: { active: 0, due: 0, resolved: 0, withErrors: 0 }
+              }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+            }
+            if (rawUrl.includes('/api/portal-browser')) {
+              return new Response(JSON.stringify({
+                views: [],
+                tabs: [{ tabId: "tab-meesho", panelKey: "meesho", label: "Meesho", mode: "background", title: "Supplier Panel" }]
+              }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+            }
+            if (rawUrl.includes('/api/updates/check')) {
+              return new Response(JSON.stringify({
+                ok: true,
+                currentVersion: "1.3.0",
+                latestTag: "desktop-v1.3.0.1",
+                updateAvailable: false
+              }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+            }
+            return origFetch(resource, init);
+          };
+        })()
+      `
+    });
+
+    await cdp.send("Page.reload");
     const url = await cdp.waitForUrl((u) => u.startsWith("returnapp://desktop/"));
     console.log("✓ Online renderer loaded from returnapp:// scheme:", url);
 
-    await sleep(2500);
+    await sleep(2000);
 
     const hasLoginGate = await cdp.evaluate(`
       Boolean(document.querySelector('form[aria-label="Operator sign-in"]'))
     `);
     console.log("✓ Operator sign-in gate visible:", hasLoginGate);
+    if (!hasLoginGate) throw new Error("Operator sign-in gate was not rendered on initial launch!");
     await cdp.captureScreenshot(path.join(screenshotsDir, "gui-02-login-gate.png"));
 
-    console.log("\n--- Unlocking full application shell for UI verification ---");
-    await cdp.evaluate(`
-      (() => {
-        const origFetch = window.fetch;
-        window.fetch = async (resource, init) => {
-          const rawUrl = typeof resource === 'string' ? resource : resource instanceof URL ? resource.href : resource.url;
-          if (rawUrl.includes('/api/operator/session')) {
-            return new Response(JSON.stringify({
-              signedIn: true,
-              user: { name: "Pawan Shukla", email: "ops@youthnic.shop", role: "Admin" }
-            }), { status: 200, headers: { 'Content-Type': 'application/json' } });
-          }
-          if (rawUrl.includes('/api/status')) {
-            return new Response(JSON.stringify({
-              isRunning: true,
-              isCurrentlyProcessing: false,
-              activeJobInfo: null,
-              activeSummary: null,
-              nextPollCountdown: 42,
-              lastHeartbeatTime: new Date().toLocaleTimeString(),
-              lastPollTime: new Date().toLocaleTimeString(),
-              backendUrl: "https://return.youthnic.shop",
-              signedIn: true
-            }), { status: 200, headers: { 'Content-Type': 'application/json' } });
-          }
-          if (rawUrl.includes('/api/panels')) {
-            return new Response(JSON.stringify({
-              panels: [
-                { marketplace: "Meesho", panelKey: "meesho", status: "idle", consecutiveFailures: 0 },
-                { marketplace: "Flipkart", panelKey: "flipkart", status: "idle", consecutiveFailures: 0 },
-                { marketplace: "Amazon", panelKey: "amazon", status: "idle", consecutiveFailures: 0 }
-              ]
-            }), { status: 200, headers: { 'Content-Type': 'application/json' } });
-          }
-          if (rawUrl.includes('/api/jobs')) {
-            return new Response(JSON.stringify([
-              { jobId: 101, claimId: 2001, marketplace: "Meesho", stage: "idle", attemptCount: 1, updatedAt: new Date().toISOString() }
-            ]), { status: 200, headers: { 'Content-Type': 'application/json' } });
-          }
-          if (rawUrl.includes('/api/follow-ups')) {
-            return new Response(JSON.stringify({
-              rows: [],
-              total: 0,
-              summary: { active: 0, due: 0, resolved: 0, withErrors: 0 }
-            }), { status: 200, headers: { 'Content-Type': 'application/json' } });
-          }
-          if (rawUrl.includes('/api/portal-browser')) {
-            return new Response(JSON.stringify({
-              views: [],
-              tabs: [{ tabId: "tab-meesho", panelKey: "meesho", label: "Meesho", mode: "background", title: "Supplier Panel" }]
-            }), { status: 200, headers: { 'Content-Type': 'application/json' } });
-          }
-          return origFetch(resource, init);
-        };
-      })()
-    `);
-
-    await cdp.send("Page.reload");
-    await sleep(2500);
-
-    await cdp.evaluate(`
-      (() => {
-        const origFetch = window.fetch;
-        window.fetch = async (resource, init) => {
-          const rawUrl = typeof resource === 'string' ? resource : resource instanceof URL ? resource.href : resource.url;
-          if (rawUrl.includes('/api/operator/session')) {
-            return new Response(JSON.stringify({
-              signedIn: true,
-              user: { name: "Pawan Shukla", email: "ops@youthnic.shop", role: "Admin" }
-            }), { status: 200, headers: { 'Content-Type': 'application/json' } });
-          }
-          if (rawUrl.includes('/api/status')) {
-            return new Response(JSON.stringify({
-              isRunning: true,
-              isCurrentlyProcessing: false,
-              activeJobInfo: null,
-              activeSummary: null,
-              nextPollCountdown: 42,
-              lastHeartbeatTime: new Date().toLocaleTimeString(),
-              lastPollTime: new Date().toLocaleTimeString(),
-              backendUrl: "https://return.youthnic.shop",
-              signedIn: true
-            }), { status: 200, headers: { 'Content-Type': 'application/json' } });
-          }
-          if (rawUrl.includes('/api/panels')) {
-            return new Response(JSON.stringify({
-              panels: [
-                { marketplace: "Meesho", panelKey: "meesho", status: "idle", consecutiveFailures: 0 },
-                { marketplace: "Flipkart", panelKey: "flipkart", status: "idle", consecutiveFailures: 0 },
-                { marketplace: "Amazon", panelKey: "amazon", status: "idle", consecutiveFailures: 0 }
-              ]
-            }), { status: 200, headers: { 'Content-Type': 'application/json' } });
-          }
-          if (rawUrl.includes('/api/jobs')) {
-            return new Response(JSON.stringify([
-              { jobId: 101, claimId: 2001, marketplace: "Meesho", stage: "idle", attemptCount: 1, updatedAt: new Date().toISOString() }
-            ]), { status: 200, headers: { 'Content-Type': 'application/json' } });
-          }
-          if (rawUrl.includes('/api/follow-ups')) {
-            return new Response(JSON.stringify({
-              rows: [],
-              total: 0,
-              summary: { active: 0, due: 0, resolved: 0, withErrors: 0 }
-            }), { status: 200, headers: { 'Content-Type': 'application/json' } });
-          }
-          if (rawUrl.includes('/api/portal-browser')) {
-            return new Response(JSON.stringify({
-              views: [],
-              tabs: [{ tabId: "tab-meesho", panelKey: "meesho", label: "Meesho", mode: "background", title: "Supplier Panel" }]
-            }), { status: 200, headers: { 'Content-Type': 'application/json' } });
-          }
-          return origFetch(resource, init);
-        };
-      })()
-    `);
-
+    console.log("\n--- Submitting operator credentials to unlock desktop shell ---");
     await cdp.evaluate(`
       (() => {
         const emailInput = document.getElementById("gate-email");
@@ -327,20 +302,29 @@ async function main() {
       })()
     `);
 
-    await sleep(2000);
+    await sleep(2500);
 
     const navItems = await cdp.evaluate(`
       (() => Array.from(document.querySelectorAll("nav button, nav a")).map(el => el.textContent.trim()))()
     `);
     console.log("✓ Sidebar navigation rendered:", navItems);
+    const expectedTabs = ["Dashboard", "Claims", "Browsers", "Follow-ups", "AI Center", "Settings", "Updates"];
+    for (const expected of expectedTabs) {
+      if (!navItems.includes(expected)) {
+        throw new Error(`Expected sidebar tab '${expected}' was not found in: ${JSON.stringify(navItems)}`);
+      }
+    }
 
-    const userName = await cdp.evaluate(`
+    const headerText = await cdp.evaluate(`
       (() => {
-        const el = document.querySelector("[aria-label='Signed-in operator']") || document.querySelector("aside div");
-        return el ? el.textContent.trim() : "not found";
+        const el = document.querySelector("header") || document.body;
+        return el ? el.innerText : "";
       })()
     `);
-    console.log("✓ Operator identity displayed:", userName);
+    console.log("✓ Header operator greeting:", headerText.slice(0, 80));
+    if (!headerText.includes("Pawan Shukla")) {
+      throw new Error(`Expected header to display operator name 'Pawan Shukla', got: ${headerText}`);
+    }
 
     await cdp.captureScreenshot(path.join(screenshotsDir, "gui-03-dashboard.png"));
 
@@ -364,14 +348,13 @@ async function main() {
       })()
     `);
     console.log("✓ Bounded Browsers workspace viewport:", browsersWorkspace);
-    if (browsersWorkspace.found) {
-      console.log(`✓ Workspace bounds: x=${browsersWorkspace.x}, y=${browsersWorkspace.y}, width=${browsersWorkspace.width}, height=${browsersWorkspace.height}`);
-      if (browsersWorkspace.x < 150) {
-        console.warn("WARNING: Workspace x coordinate is less than sidebar width!");
-      } else {
-        console.log("✓ Verified: Supplier view does NOT overlap sidebar navigation controls!");
-      }
+    if (!browsersWorkspace.found) {
+      throw new Error("Bounded workspace viewport #browser-workspace-viewport was not found in DOM!");
     }
+    if (browsersWorkspace.x < 150) {
+      throw new Error(`Workspace x coordinate (${browsersWorkspace.x}) overlaps sidebar!`);
+    }
+    console.log("✓ Verified: Supplier view is strictly bounded and does NOT overlap sidebar!");
     await cdp.captureScreenshot(path.join(screenshotsDir, "gui-04-browsers-tab.png"));
 
     console.log("Navigating to Claims tab...");
@@ -383,6 +366,16 @@ async function main() {
     `);
     await sleep(1500);
     await cdp.captureScreenshot(path.join(screenshotsDir, "gui-05-claims-tab.png"));
+
+    console.log("Navigating to Follow-ups tab...");
+    await cdp.evaluate(`
+      (() => {
+        const btn = Array.from(document.querySelectorAll("button")).find(b => b.textContent.includes("Follow-ups"));
+        if (btn) btn.click();
+      })()
+    `);
+    await sleep(1500);
+    await cdp.captureScreenshot(path.join(screenshotsDir, "gui-08-follow-ups.png"));
 
     console.log("Navigating to Settings tab...");
     await cdp.evaluate(`
@@ -404,6 +397,16 @@ async function main() {
     await sleep(1500);
     await cdp.captureScreenshot(path.join(screenshotsDir, "gui-07-ai-center.png"));
 
+    console.log("Navigating to Updates tab...");
+    await cdp.evaluate(`
+      (() => {
+        const btn = Array.from(document.querySelectorAll("button")).find(b => b.textContent.includes("Updates"));
+        if (btn) btn.click();
+      })()
+    `);
+    await sleep(1500);
+    await cdp.captureScreenshot(path.join(screenshotsDir, "gui-09-updates.png"));
+
     const memory = await cdp.evaluate(`
       (() => {
         return window.performance && window.performance.memory ? {
@@ -414,6 +417,10 @@ async function main() {
       })()
     `);
     console.log("✓ Renderer V8 Heap Memory:", memory);
+    if (memory && typeof memory === "object" && memory.usedJSHeapSize) {
+      const usedMB = parseFloat(memory.usedJSHeapSize);
+      if (usedMB > 256) throw new Error(`V8 Heap Memory exceeded 256MB limit: ${usedMB} MB`);
+    }
 
     cdp.close();
     console.log("✓ Terminating test application...");
@@ -421,7 +428,7 @@ async function main() {
     await sleep(2000);
 
     console.log("\n=======================================================");
-    console.log("✓ ALL ACCEPTANCE CRITERIA PASSED IN REAL WINDOWS EXE");
+    console.log("✓ ALL 8 ACCEPTANCE CRITERIA PASSED IN REAL WINDOWS EXE");
     console.log("=======================================================");
   } catch (err) {
     if (appProc) {
@@ -435,4 +442,3 @@ main().catch((err) => {
   console.error("FATAL ERROR in GUI test:", err);
   process.exit(1);
 });
-

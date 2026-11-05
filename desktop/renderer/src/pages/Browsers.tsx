@@ -83,14 +83,18 @@ export default function BrowsersPage() {
   // response (the engine embeds the snapshot in every mutation reply). The
   // previous layout is never cleared before a request resolves, so refreshes
   // cannot flash or drop scroll position.
-  const applySnapshot = useCallback((next: BrowserSnapshot) => {
+  const snapshotSeqRef = useRef(0)
+
+  const applySnapshot = useCallback((next: BrowserSnapshot, seq?: number) => {
+    if (seq !== undefined && seq < snapshotSeqRef.current) return
     setSnapshot(next)
   }, [])
 
   const { error: pollError } = useEnginePolling(
     useCallback(async () => {
+      const seq = ++snapshotSeqRef.current
       const next = await apiGet<BrowserSnapshot>('/api/portal-browser')
-      applySnapshot(next)
+      applySnapshot(next, seq)
       return next
     }, [applySnapshot]),
     POLL_MS,
@@ -103,8 +107,9 @@ export default function BrowsersPage() {
       setBusy(true)
       setMessage(null)
       try {
+        const seq = ++snapshotSeqRef.current
         const result = await apiPost<PortalBrowserMutationResponse>(path, body)
-        applySnapshot(result)
+        applySnapshot(result, seq)
         setMessage(okText ? { kind: 'info', text: okText } : null)
       } catch (cause) {
         if (cause instanceof EngineApiError) {

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, type ChangeEvent } from 'react'
 import { apiGet, EngineApiError } from '../services/config'
 import type { UpdateAsset, UpdateCheckResult } from '../types/engine'
 import { Spinner } from '../components/ui/Spinner'
+import { useSession } from '../state/SessionContext'
 
 /**
  * Updates page — detail view for desktop release updates.
@@ -19,9 +20,9 @@ import { Spinner } from '../components/ui/Spinner'
 export const AUTO_UPDATES_STORAGE_KEY = 'ra-auto-updates'
 export const LAST_CHECKED_STORAGE_KEY = 'ra-updates-last-checked'
 
-type StorageLike = Pick<Storage, 'getItem' | 'setItem'> | null
+export type StorageLike = Pick<Storage, 'getItem' | 'setItem'> | null
 
-function safeLocalStorage(): StorageLike {
+export function safeLocalStorage(): StorageLike {
   try {
     return window.localStorage
   } catch {
@@ -94,6 +95,7 @@ export function formatLastChecked(iso: string): string | null {
 }
 
 export default function UpdatesPage() {
+  const { handleAuthError } = useSession()
   const [appVersion, setAppVersion] = useState('unknown')
   const [autoCheck, setAutoCheck] = useState(() => readAutoUpdatesPreference(safeLocalStorage()))
   const [lastCheckedIso, setLastCheckedIso] = useState(() => readLastCheckedIso(safeLocalStorage()))
@@ -125,6 +127,7 @@ export default function UpdatesPage() {
       setResult(data)
       setState(classifyUpdateResult(data))
     } catch (cause) {
+      if (handleAuthError(cause)) return
       setResult(null)
       setCheckError(cause instanceof EngineApiError ? cause.message : cause instanceof Error ? cause.message : String(cause))
       setState('error')
@@ -133,7 +136,7 @@ export default function UpdatesPage() {
       writeLastCheckedIso(safeLocalStorage(), iso)
       setLastCheckedIso(iso)
     }
-  }, [])
+  }, [handleAuthError])
 
   const onAutoCheckChange = (event: ChangeEvent<HTMLInputElement>) => {
     const next = event.target.checked

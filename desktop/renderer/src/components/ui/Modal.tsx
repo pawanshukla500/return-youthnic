@@ -17,6 +17,8 @@ export function Modal({
 }) {
   const panelRef = useRef<HTMLDivElement>(null)
   const previouslyFocused = useRef<Element | null>(null)
+  const onCloseRef = useRef(onClose)
+  onCloseRef.current = onClose
 
   useEffect(() => {
     previouslyFocused.current = document.activeElement
@@ -29,7 +31,7 @@ export function Modal({
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         event.stopPropagation()
-        onClose()
+        onCloseRef.current()
         return
       }
       if (event.key !== 'Tab' || !panel) return
@@ -55,7 +57,7 @@ export function Modal({
       const target = previouslyFocused.current
       if (target instanceof HTMLElement) target.focus()
     }
-  }, [onClose])
+  }, [])
 
   return (
     <div

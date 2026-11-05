@@ -3052,3 +3052,42 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
   - Revert `mainWindow.loadURL` to the engine HTTP dashboard or load `http://127.0.0.1:3005` in `mainWindow`.
   - Remove `holdPortalBrowser(browserRunner)` from the `prepared` stage handler in `desktop-app-server.ts`.
   - Remove `registerRendererProtocol(ses)` from `createMainWindow` in `desktop/main.ts`.
+
+### 2026-11-05, Antigravity Agent: Code Review Resolution & Automated Acceptance Verification (PR #55)
+
+- **Task:** Review and resolve all 20 code review findings and nitpicks surfaced by CodeAnt AI on Pull Request #55. Re-verify with full TypeScript typechecks, automated unit/component test suite, production packaging, and real Windows GUI automated acceptance execution.
+- **Review Findings Addressed & Resolved:**
+  1. App.tsx: Introduced monotonic sessionEpoch in SessionContext to guard against race conditions where a stale in-flight bootstrap request clears a freshly authenticated operator session.
+  2. .github/workflows/desktop-release.yml: Removed redundant desktop:renderer:build and desktop:build steps prior to desktop:dist, accelerating release CI jobs.
+  3. README.md: Aligned line 70 with line 6 regarding native Android client release status (v1.0.63, fallback manifest 1.0.58 / 10058).
+  4. evidence-files.ts: Set EVIDENCE_MAX_FILE_NAME_LENGTH = 255 and filtered listEvidenceFiles via resolveEvidenceFile to ensure complete agreement between listed and downloadable evidence items.
+  5. desktop-app-server.ts: Handled res.on("close") and destroyed ReadStream on aborted requests to prevent stream and file descriptor leaks.
+  6. gui-acceptance.mjs: Simulated offline engine by immediately terminating connection attempts (socket.destroy()), avoiding hung fetches.
+  7. gui-acceptance.mjs: Added error rejection during port 3005 blocker listen to prevent hanging if port is in use.
+  8. gui-acceptance.mjs: Guaranteed process termination in finally blocks to eliminate orphaned test processes.
+  9. gui-acceptance.mjs: Handled /api/operator/login via CDP Page.addScriptToEvaluateOnNewDocument to ensure deterministic sign-in flow.
+  10. gui-acceptance.mjs: Navigated and screenshotted all 7 application tabs (Dashboard, Claims, Browsers, Follow-ups, AI Center, Settings, Updates).
+  11. gui-acceptance.mjs: Replaced inert logging with strict assertions on DOM presence, bounded viewport rect, and memory limits.
+  12. MarketplaceBadge.tsx: Tracked failedKey state instead of boolean imgFailed so new props don't inherit previous logo load failures.
+  13. MarketplaceBadge.tsx: Added 'myntra vb' and 'myntra ej' keys to LETTER_BG for consistent brand styling fallback.
+  14. Modal.tsx: Stabilized onClose callback with useRef and ran focus trap setup once on mount ([]), preventing premature focus reset on parent re-renders.
+  15. Browsers.tsx: Added sequence tracking (snapshotSeqRef) in applySnapshot so slow background polling never overwrites newer user mutations.
+  16. dashboard-logic.ts: Displayed 'Updating follow-up status…' when follow-up summary is loading rather than falsely reporting 0 tracked tickets.
+  17. Dashboard.tsx: Added amber warning badge when live claims polling fails after initial data was received so stale claims aren't masked.
+  18. Dashboard.tsx: Bound supplier panels strip to activePanels (panelsOverride ?? panelsLoaded), making panel Rejoin state visible immediately.
+  19. Updates.tsx: Routed errors through handleAuthError(cause) so a 401 response prompts the operator sign-in gate.
+  20. App.tsx: Respected readAutoUpdatesPreference in UpdateBanner so disabling automatic updates halts periodic background update checks.
+- **Verification Run & Results:**
+  - npm.cmd run typecheck: 0 errors across 4 TypeScript configurations (tsconfig.json, tsconfig.server.json, tsconfig.desktop.json, desktop/renderer/tsconfig.json).
+  - npm.cmd test: All 903 tests executed: 857 passed, 0 failed, 46 skipped (unconfigured test DB, Windows POSIX skips).
+  - npm.cmd run desktop:dist: Packaged dist-electron/Return.App.Setup.1.3.0.exe (116.7 MB) with all renderer updates.
+  - node desktop/gui-acceptance.mjs: All 8 acceptance journey criteria passed live in Return App.exe:
+    - Offline / connecting state validated.
+    - Operator sign-in gate validated.
+    - Full 7-tab sidebar navigation validated.
+    - Bounded Browsers workspace viewport validated (x=216, y=256.8, w=1154.4, h=533.6, zero sidebar overlap).
+    - V8 heap memory measured at 3.95 MB (limit: 256 MB).
+    - 9 verified screenshot artifacts saved in docs/screenshots/.
+- **The next agent must not:**
+  - Remove sessionEpoch from SessionContext or App.tsx.
+  - Remove sequence checking in Browsers.tsx.

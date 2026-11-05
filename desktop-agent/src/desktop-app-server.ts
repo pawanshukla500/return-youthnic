@@ -3474,11 +3474,19 @@ export function startDesktopAppServer(bind: EngineBind = resolveEngineBind()): P
         res.writeHead(200, evidenceStreamHeaders(fileName, stat.size))
         await new Promise<void>((streamDone) => {
           const stream = fs.createReadStream(evidencePath)
+          let settled = false
+          const cleanup = () => {
+            if (settled) return
+            settled = true
+            stream.destroy()
+            streamDone()
+          }
           stream.on("error", () => {
             res.destroy()
-            streamDone()
+            cleanup()
           })
-          res.on("finish", streamDone)
+          res.on("finish", cleanup)
+          res.on("close", cleanup)
           stream.pipe(res)
         })
         return

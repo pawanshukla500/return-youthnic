@@ -87,7 +87,8 @@ export default function DashboardPage() {
 
   const panelsLoaded: PanelStatus[] | null | undefined =
     panelsPoll.data !== null ? panelsPoll.data.panels : panelsPoll.error !== null ? null : undefined
-  const panels = panelsLoaded ?? null
+  const activePanels: PanelStatus[] | null | undefined = panelsOverride ?? panelsLoaded
+  const panels = activePanels ?? null
 
   const followUpSummary: FollowUpsSummary | null | undefined =
     followUpsPoll.data !== null
@@ -97,8 +98,8 @@ export default function DashboardPage() {
         : undefined
 
   const overall = useMemo(
-    () => deriveOverallStatus({ status, panels: panelsLoaded, followUpSummary }),
-    [status, panelsLoaded, followUpSummary],
+    () => deriveOverallStatus({ status, panels: activePanels, followUpSummary }),
+    [status, activePanels, followUpSummary],
   )
   const chips = useMemo(() => derivePanelChips(panels ?? []), [panels])
   const kpis = useMemo(() => countJobStages(jobsPoll.data ?? []), [jobsPoll.data])
@@ -216,12 +217,19 @@ export default function DashboardPage() {
           message={actionErrorMessage(jobsPoll.error)}
         />
       ) : (
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">
+        <div>
+          {jobsPoll.error !== null ? (
+            <div className="mb-2 rounded-lg border border-amber/30 bg-amber-soft px-3 py-1.5 text-xs font-medium text-amber">
+              Could not refresh live claims ({actionErrorMessage(jobsPoll.error)}). Showing last snapshot.
+            </div>
+          ) : null}
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">
           <StatCard label="Total" value={kpis.total} hint="All claims on this PC" />
           <StatCard label="Completed" value={kpis.completed} hint="Stage: completed" />
           <StatCard label="Queued" value={kpis.queued} hint="Waiting for the worker" />
           <StatCard label="In progress" value={kpis.inProgress} hint="Download → portal → form → submit" />
           <StatCard label="Action required" value={kpis.actionRequired} hint="Manual, failed or prepared" />
+          </div>
         </div>
       )}
 
@@ -335,15 +343,15 @@ export default function DashboardPage() {
       {/* 4 — supplier panels strip */}
       <div aria-labelledby="panels-title">
         <h2 id="panels-title" className="font-display text-sm font-bold text-ink">Supplier panels</h2>
-        {panelsLoaded === undefined ? (
+        {activePanels === undefined ? (
           <div className="mt-2 rounded-xl border border-line bg-surface p-6 shadow-card">
             <Spinner label="Loading panels" />
           </div>
-        ) : panelsLoaded === null ? (
+        ) : activePanels === null ? (
           <div className="mt-2">
             <ErrorState title="Could not load panels" message={actionErrorMessage(panelsPoll.error)} />
           </div>
-        ) : panelsLoaded.length === 0 ? (
+        ) : activePanels.length === 0 ? (
           <div className="mt-2">
             <EmptyState
               title="No supplier panels"
@@ -353,7 +361,7 @@ export default function DashboardPage() {
         ) : (
           <>
             <div className="mt-2 flex flex-wrap gap-3">
-              {panelsLoaded.map((panel) => (
+              {activePanels.map((panel) => (
                 <div
                   key={panel.key}
                   className="w-full min-w-[230px] flex-1 rounded-xl border border-line bg-surface p-3 shadow-card sm:w-[calc(50%-0.75rem)] xl:w-[calc(33.333%-0.75rem)]"

@@ -21,7 +21,7 @@ import path from "node:path"
 export const EVIDENCE_CLAIM_ID_PATTERN = /^[a-zA-Z0-9_-]{1,40}$/
 
 /** File names longer than this are rejected before touching the disk. */
-export const EVIDENCE_MAX_FILE_NAME_LENGTH = 128
+export const EVIDENCE_MAX_FILE_NAME_LENGTH = 255
 
 export type EvidenceFileInfo = {
   name: string
@@ -66,6 +66,7 @@ export function listEvidenceFiles(workDir: string, claimId: string): EvidenceFil
   for (const entry of entries) {
     if (!entry.isFile()) continue
     if (entry.name.endsWith(".part")) continue
+    if (!resolveEvidenceFile(workDir, claimId, entry.name)) continue
     let stat: fs.Stats
     try {
       stat = fs.statSync(path.join(claimDir, entry.name))

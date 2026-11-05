@@ -24,7 +24,9 @@ const LETTER_BG: Record<string, string> = {
   amazon: 'bg-orange-soft text-orange',
   myntra: 'bg-red-soft text-red',
   myntra_vb: 'bg-red-soft text-red',
+  'myntra vb': 'bg-red-soft text-red',
   myntra_ej: 'bg-red-soft text-red',
+  'myntra ej': 'bg-red-soft text-red',
   ajio: 'bg-green-soft text-green-dark',
 }
 
@@ -35,7 +37,8 @@ function normalizeKey(marketplace: string): string {
 export function MarketplaceBadge({ marketplace, size = 24 }: { marketplace: string; size?: number }) {
   const key = normalizeKey(marketplace)
   const logo = LOGO_BY_KEY[key]
-  const [imgFailed, setImgFailed] = useState(false)
+  const [failedKey, setFailedKey] = useState<string | null>(null)
+  const imgFailed = failedKey === key
   const letter = (marketplace.trim().charAt(0) || '?').toUpperCase()
 
   if (!logo || imgFailed) {
@@ -62,7 +65,7 @@ export function MarketplaceBadge({ marketplace, size = 24 }: { marketplace: stri
         height={size}
         className="rounded object-contain"
         style={{ width: size, height: size }}
-        onError={() => setImgFailed(true)}
+        onError={() => setFailedKey(key)}
       />
       <span>{marketplace}</span>
     </Badge>

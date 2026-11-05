@@ -5,7 +5,7 @@ import BrowsersPage from './pages/Browsers'
 import FollowUpsPage from './pages/FollowUps'
 import AiCenterPage from './pages/AiCenter'
 import SettingsPage from './pages/Settings'
-import UpdatesPage from './pages/Updates'
+import UpdatesPage, { readAutoUpdatesPreference, safeLocalStorage } from './pages/Updates'
 import { useSession } from './state/SessionContext'
 import { useTheme } from './state/ThemeProvider'
 import { useEngineStatus } from './hooks/useEngineStatus'
@@ -263,6 +263,10 @@ function UpdateBanner() {
     let cancelled = false
     const check = async () => {
       try {
+        if (!readAutoUpdatesPreference(safeLocalStorage())) {
+          if (!cancelled) setUpdate(null)
+          return
+        }
         const result = await apiGet<UpdateCheckResult>('/api/updates/check')
         if (!cancelled) setUpdate(result)
       } catch {
@@ -350,13 +354,18 @@ export default function App() {
     let timer: number | undefined
 
     const check = async () => {
+      const requestEpoch = session.sessionEpoch
       try {
         const result = await apiGet<OperatorSessionResponse>('/api/operator/session')
         if (cancelled) return
         setConnectionError(null)
         setGateKnown(true)
-        if (result.signedIn && result.user) session.setUser(result.user)
-        else session.clearSession()
+        if (result.signedIn && result.user) {
+          session.setUser(result.user)
+        } else if (session.sessionEpoch === requestEpoch) {
+          // If the operator signed in while this check was in flight, do not clear.
+          session.clearSession()
+        }
       } catch (cause) {
         if (cancelled) return
         setConnectionError(asApiError(cause))
