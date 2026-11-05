@@ -1,8 +1,16 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import React from 'react'
 import { renderToString } from 'react-dom/server'
 import SettingsPage, { MARKETPLACES, channelStatusLabel, panelKeyForMarketplaceName, pingLabel } from './Settings'
 import type { PortalChannelStatus, TestConnectionResult } from '../types/engine'
+
+// tsx compiles JSX with the classic React.createElement transform when the
+// suite runs from the repository root (the root tsconfig's include does not
+// cover desktop/renderer), so Settings.tsx and the ui/* components resolve
+// React as a global. Provide it here — this SSR test intentionally uses no
+// DOM (see test-setup/register-dom.ts for the full component-test setup).
+;(globalThis as { React?: typeof React }).React = React
 
 /* Pure helper parity with the engine (desktop-agent/panel-queue.ts,
    desktop-app-server.ts dashboard script). */
