@@ -4,6 +4,7 @@ dist-electron
 dist-electron-login
 dist-electron-ready
 dist-electron-form
+dist-electron-nsis
 desktop/dist
 desktop-agent/dist
 server/dist.js
