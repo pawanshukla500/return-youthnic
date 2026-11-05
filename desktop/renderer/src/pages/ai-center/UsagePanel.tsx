@@ -30,7 +30,12 @@ export function UsagePanel({ active }: { active: boolean }) {
   const fetcher = useCallback(() => {
     const params = new URLSearchParams()
     if (applied.from) params.set('from', applied.from)
-    if (applied.to) params.set('to', applied.to)
+    if (applied.to) {
+      // Backend queries compare against timestamps (created_at < to / r.at <= to).
+      // Append end-of-day so that records on the selected date are included.
+      const toParam = applied.to.length === 10 ? `${applied.to}T23:59:59.999Z` : applied.to
+      params.set('to', toParam)
+    }
     const query = params.toString()
     return apiGet<AiUsage>(`/api/v1/ai-center/usage${query ? `?${query}` : ''}`)
   }, [applied])

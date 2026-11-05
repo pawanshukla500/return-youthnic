@@ -3091,3 +3091,33 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
 - **The next agent must not:**
   - Remove sessionEpoch from SessionContext or App.tsx.
   - Remove sequence checking in Browsers.tsx.
+
+
+### 2026-11-05, Antigravity Agent: Resolution of 10 Detailed CodeAnt PR #55 Findings
+
+- **Task:** Resolve all remaining code review suggestions and potential issues identified in the inline comments of PR #55 (covering authentication handling in polling hooks, remote-engine CSP support, evidence filename percent-decoding, inclusive date ranges in AI Center usage queries, non-destructive routing budget inputs, and claim worker polling continuity on prepared claims).
+- **Review Items Resolved:**
+  1. `desktop/renderer/src/hooks/useEnginePolling.ts`: Hook now imports and calls `useSession().handleAuthError(cause)` on catch so any polled endpoint returning 401 resets the operator session and returns to the login gate.
+  2. `desktop/renderer/index.html`: Content-Security-Policy updated to allow `http: https:` in `connect-src`, `img-src`, and `media-src`, ensuring remote-engine mode (`RETURN_ENGINE_URL`) functions without CSP connection blocks.
+  3. `desktop/renderer/src/pages/FollowUps.tsx`: Follow-ups polling loop now invokes `useSession().handleAuthError(cause)` on 401 responses, immediately rendering the login gate.
+  4. `desktop-agent/src/desktop-app-server.ts`: Safely decodes `rawFileName` via `decodeURIComponent` (with malformed URI handling) prior to `resolveEvidenceFile` so files with spaces or percent-encoded characters are located and served accurately.
+  5. `desktop/renderer/src/pages/ai-center/UsagePanel.tsx` & `desktop-agent/src/ai-center-routes.ts`: Made `to` date boundary inclusive by appending `T23:59:59.999Z` to 10-character date inputs so all usage records on the selected end date are included in results.
+  6. `desktop/renderer/src/pages/ai-center/RoutingPanel.tsx`: Added an `isDirty` state guard on the monthly budget input so 60-second background polling ticks never clobber unsaved operator inputs while typing.
+  7. `desktop/renderer/src/pages/ai-center/RoutingPanel.tsx`: Validated that budget values are strictly positive (`parsed > 0`), aligning client validation with the backend `normalizeRouting` contract.
+  8. `desktop-agent/src/desktop-app-server.ts`: Removed erroneous `holdPortalBrowser(browserRunner)` calls from `prepared` and `manual_intervention_required` handlers, ensuring `portalBrowserHeld` is not set and the worker poller is not blocked from leasing and processing subsequent approved/submitting claims.
+- **Verification Run & Results:**
+  - `npm run typecheck`: 0 errors across 4 projects (`tsconfig.json`, `tsconfig.server.json`, `tsconfig.desktop.json`, `desktop/renderer/tsconfig.json`).
+  - `npm test`: All 903 tests executed: 857 passed, 0 failed, 46 skipped (dedicated `TEST_DATABASE_URL` unset, Windows POSIX skips).
+  - `npm run build`: Web application production build succeeded in 1.73s.
+  - `npm run desktop:renderer:build`: Bundled desktop renderer built in 1.25s.
+  - `npm run desktop:dist`: Packaged and signed `dist-electron/Return.App.Setup.1.3.0.exe` (116.7 MB).
+  - `node desktop/gui-acceptance.mjs`: All 8 acceptance journey criteria passed live against `Return App.exe`:
+    - Offline / connecting state validated.
+    - Operator sign-in gate validated.
+    - Full 7-tab sidebar navigation validated.
+    - Bounded Browsers workspace viewport validated (zero sidebar overlap).
+    - V8 heap memory measured at 3.85 MB.
+    - 9 verified screenshots updated in `docs/screenshots/`.
+- **The next agent must not:**
+  - Remove `decodeURIComponent` from evidence file resolution routes in `desktop-app-server.ts`.
+  - Re-introduce `holdPortalBrowser` into the worker filing pipeline (`prepared` / `manual_intervention_required`).

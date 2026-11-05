@@ -272,7 +272,6 @@ async function pollAndProcessJob(manual = false): Promise<boolean> {
         // when the workspace rect is not measurable, e.g. off the Browsers
         // tab) — the session survives either way.
         keepBrowserOpen = true
-        holdPortalBrowser(browserRunner)
         showSupplierView(panelKey)
         markPanelResult(panelKey, "prepared", "Prepared on the supplier panel. Waiting for approval.")
         await client.updateProgress(jobHeader.jobId, {
@@ -293,7 +292,6 @@ async function pollAndProcessJob(manual = false): Promise<boolean> {
         await client.cleanClaimEvidenceFiles(bundle.claimId, result.screenshotPath ? [result.screenshotPath] : [])
       } else if (result.stage === "manual_intervention_required") {
         keepBrowserOpen = true
-        holdPortalBrowser(browserRunner)
         // Manual intervention needs the operator's eyes on the actual page:
         // every manualActionReason says "in the open browser", so the view
         // must be shown in the bounded workspace here. The background-only
@@ -3446,13 +3444,20 @@ export function startDesktopAppServer(bind: EngineBind = resolveEngineBind()): P
         }
         const segments = url.pathname.slice("/api/evidence/".length).split("/")
         const claimId = segments[0] || ""
-        const fileName = segments.length > 1 ? segments[1] : ""
-        if (segments.length > 2 || !isValidEvidenceClaimId(claimId) || (segments.length > 1 && !fileName)) {
+        const rawFileName = segments.length > 1 ? segments[1] : ""
+        if (segments.length > 2 || !isValidEvidenceClaimId(claimId) || (segments.length > 1 && !rawFileName)) {
           sendJson(res, 400, { error: "Malformed evidence path." })
           return
         }
         if (segments.length === 1) {
           sendJson(res, 200, { claimId, files: listEvidenceFiles(config.workDir, claimId) })
+          return
+        }
+        let fileName = rawFileName
+        try {
+          fileName = decodeURIComponent(rawFileName)
+        } catch {
+          sendJson(res, 400, { error: "Malformed evidence file name." })
           return
         }
         const evidencePath = resolveEvidenceFile(config.workDir, claimId, fileName)

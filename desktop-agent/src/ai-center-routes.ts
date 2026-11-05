@@ -197,7 +197,10 @@ export async function handleAiCenterRoute(
     const to = url.searchParams.get("to") || undefined
     let records = readUsage(dir, 2000)
     if (from) records = records.filter((r) => r.at >= from)
-    if (to) records = records.filter((r) => r.at < to)
+    if (to) {
+      const toBound = to.length === 10 ? `${to}T23:59:59.999Z` : to
+      records = records.filter((r) => r.at <= toBound)
+    }
     ctx.sendJson(res, 200, { summary: summarizeUsage(records), records: records.slice(-200).reverse() })
     return true
   }

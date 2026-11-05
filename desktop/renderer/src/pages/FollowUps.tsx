@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { FollowUpRow, FollowUpsResponse } from '../types/engine'
 import { apiGet, EngineApiError } from '../services/engineApi'
+import { useSession } from '../state/SessionContext'
 import { DataTable, type DataTableColumn } from '../components/ui/DataTable'
 import { MarketplaceBadge } from '../components/ui/MarketplaceBadge'
 import { Badge } from '../components/ui/Badge'
@@ -131,6 +132,7 @@ export default function FollowUpsPage() {
   const [data, setData] = useState<FollowUpsResponse | null>(null)
   const [error, setError] = useState<EngineApiError | null>(null)
   const [refreshKey, setRefreshKey] = useState(0)
+  const { handleAuthError } = useSession()
 
   // Poll the engine directly (mirrors useEngineStatus): useEnginePolling has no
   // manual refresh, and this page's error state must offer a retry that
@@ -147,6 +149,7 @@ export default function FollowUpsPage() {
         setError(null)
       } catch (cause) {
         if (cancelled) return
+        handleAuthError(cause)
         setError(
           cause instanceof EngineApiError
             ? cause
@@ -162,7 +165,7 @@ export default function FollowUpsPage() {
       cancelled = true
       if (timer !== undefined) window.clearTimeout(timer)
     }
-  }, [refreshKey])
+  }, [refreshKey, handleAuthError])
 
   const retry = useCallback(() => setRefreshKey((key) => key + 1), [])
 

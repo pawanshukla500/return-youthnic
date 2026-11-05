@@ -21,15 +21,17 @@ export function RoutingPanel({ active }: { active: boolean }) {
     active,
   )
   const [budget, setBudget] = useState('')
+  const [isDirty, setIsDirty] = useState(false)
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState<{ kind: InlineMessageKind; text: string } | null>(null)
 
   // Sync the input whenever a fresh routing payload lands (first load, poll
-  // tick, post-save refresh) — same behaviour as the old dashboard.
+  // tick, post-save refresh) — but never clobber uncommitted user edits.
   useEffect(() => {
+    if (isDirty) return
     const value = data?.routing.monthlyBudgetUsd
     setBudget(value == null ? '' : String(value))
-  }, [data])
+  }, [data, isDirty])
 
   if (!data && !error) {
     return (
@@ -57,8 +59,8 @@ export function RoutingPanel({ active }: { active: boolean }) {
       monthlyBudgetUsd = null
     } else {
       const parsed = Number(raw)
-      if (!Number.isFinite(parsed) || parsed < 0) {
-        setMessage({ kind: 'error', text: 'Budget must be a non-negative number, or empty for no budget.' })
+      if (!Number.isFinite(parsed) || parsed <= 0) {
+        setMessage({ kind: 'error', text: 'Budget must be a positive number, or empty for no budget.' })
         return
       }
       monthlyBudgetUsd = parsed
@@ -69,6 +71,7 @@ export function RoutingPanel({ active }: { active: boolean }) {
       await apiPost<{ ok: boolean }>('/api/v1/ai-center/routing', {
         routing: { ...routing, monthlyBudgetUsd },
       })
+      setIsDirty(false)
       setMessage({ kind: 'ok', text: 'Routing saved.' })
       refresh()
     } catch (cause) {
@@ -114,7 +117,10 @@ export function RoutingPanel({ active }: { active: boolean }) {
           type="text"
           inputMode="decimal"
           value={budget}
-          onChange={(event) => setBudget(event.target.value)}
+          onChange={(event) => {
+            setIsDirty(true)
+            setBudget(event.target.value)
+          }}
           disabled={!routing}
           className={`${INPUT_CLS} w-28 text-xs`}
         />

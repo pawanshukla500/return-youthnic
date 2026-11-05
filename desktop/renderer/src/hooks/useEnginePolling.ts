@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { apiGet, EngineApiError } from '../services/engineApi'
+import { useSession } from '../state/SessionContext'
 
 /**
  * Generic engine polling hook. Runs `fn` immediately, then every `ms` while
@@ -14,6 +15,11 @@ export function useEnginePolling<T>(
 ): { data: T | null; error: EngineApiError | null } {
   const [data, setData] = useState<T | null>(null)
   const [error, setError] = useState<EngineApiError | null>(null)
+  const { handleAuthError } = useSession()
+  const handleAuthErrorRef = useRef(handleAuthError)
+  useEffect(() => {
+    handleAuthErrorRef.current = handleAuthError
+  }, [handleAuthError])
   const fnRef = useRef(fn)
 
   useEffect(() => {
@@ -33,6 +39,7 @@ export function useEnginePolling<T>(
         setError(null)
       } catch (cause) {
         if (cancelled) return
+        handleAuthErrorRef.current(cause)
         setError(cause instanceof EngineApiError ? cause : new EngineApiError(0, cause instanceof Error ? cause.message : String(cause)))
       } finally {
         if (!cancelled) timer = window.setTimeout(() => void tick(), ms)
