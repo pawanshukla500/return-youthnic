@@ -267,10 +267,12 @@ async function pollAndProcessJob(manual = false): Promise<boolean> {
       if (result.stage === "prepared") {
         // The operator must see the exact prepared form to approve it: keep
         // the browser open and the view shown in the bounded workspace.
+        // holdPortalBrowser() guards the session against other jobs reusing it.
         // showSupplierView never steals OS focus and is fail-closed (false
         // when the workspace rect is not measurable, e.g. off the Browsers
         // tab) — the session survives either way.
         keepBrowserOpen = true
+        holdPortalBrowser(browserRunner)
         showSupplierView(panelKey)
         markPanelResult(panelKey, "prepared", "Prepared on the supplier panel. Waiting for approval.")
         await client.updateProgress(jobHeader.jobId, {

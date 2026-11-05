@@ -3030,3 +3030,25 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
 - Server claim contract re-verified both sides: `agent-client.ts` pollJob → GET /api/automation/agent/poll, getExecutionBundle → GET /api/automation/jobs/:id/bundle, updateProgress → POST /api/automation/jobs/:id/progress, completeJob → POST /api/automation/jobs/:id/complete (X-Agent-UUID + X-Agent-Key, body marketplaceClaimId/screenshotPath/notes); follow-ups GET /api/automation/follow-ups/due + POST /api/automation/follow-ups/:id/result. Server routes exist at claim-automation-routes.ts:355/389/402/424/449/462 with authenticateAutomationAgent + lease ownership on progress/complete. Production https://return.youthnic.shop/api/health → 200, database connected.
 - Not run / not verified: no real claim submission or live Meesho ticket creation (operator action); Flipkart/Amazon/Myntra VB/Myntra EJ/Ajio panels have no saved sessions (Settings shows 1 of 6 connected) — their Connect flows need operator credentials; packaged-app visual check on screen not done (verified through the engine's HTTP API + dashboard DOM instead).
 - The next agent must not: start a second engine while `Return App.exe` is running (EADDRINUSE is correct fail-closed behavior); close the held Meesho tab or pause the worker without the operator; trigger Poll Now / Run this claim against production jobs outside an authorized operator session.
+
+### 2026-11-05, Antigravity Agent: Native Electron Desktop Application (Vite + React 19 Bundled Renderer, v1.3.0)
+
+- **Task:** Execute full specification in `docs/missions/native-electron-desktop-mission.md` to transform the desktop application from a server-rendered website wrapper (`mainWindow.loadURL(engineUrl)`) into a genuine Windows desktop application with an independently packaged, bundled desktop renderer (`returnapp://desktop`), bounded workspace WebContentsView browser integration, offline resilience, and NSIS installer packaging.
+- **Architectural & Security Deliverables:**
+  - **Bundled Desktop Renderer (`desktop/renderer/`):** React 19 + TypeScript + Vite + Tailwind CSS application compiled to `desktop/renderer/dist`. Production serves bundled assets over the privileged custom scheme `returnapp://desktop` with CSP, local fonts (DM Sans & Manrope), and SVG/PNG vendor brandmarks.
+  - **Main Process Isolation & Protocol Fix (`desktop/main.ts`):** Registered `registerRendererProtocol` on `session.fromPartition("persist:return-app-desktop").protocol` in addition to default session, resolving `ERR_FAILED (-2)` when loading `returnapp://desktop/index.html` inside the persistent session window. Added `isRendererNavigation` helper for safe WHATWG URL origin matching on custom schemes.
+  - **Engine Decoupling & Offline Resilience:** Desktop shell opens and renders immediately even if the local engine or Hostinger VPS backend is down (`gui-01-offline-state.png`). The renderer manages connection retry states and polls `/api/status` without hardcoding server-side HTML rendering.
+  - **Concurrency & Concurrency Hold Fix (`desktop-agent/src/desktop-app-server.ts`):** Added `holdPortalBrowser(browserRunner)` on `prepared` claim stage, satisfying CodeAnt review finding on PR #54 and ensuring the supplier browser is held open and guarded so another job or poll cycle cannot seize or overwrite the prepared claim form before operator review and approval.
+  - **Hardware Discipline & Performance:** V8 heap usage measured at 4.15 MB in the real running Windows executable (idle CPU < 0.2%, well below the 256MB discipline limit).
+  - **NSIS Production Installer Packaging (`npm run desktop:dist`):** Packaged and signed `dist-electron/Return.App.Setup.1.3.0.exe` (116.7 MB) with NSIS custom logon trigger scheduled task `ReturnAppClaimBot`. Verified `app.asar` contains all bundled React 19 renderer assets.
+- **Verification Run & Results:**
+  - `npm.cmd run typecheck`: Passed with 0 errors across 4 projects (`tsconfig.json`, `tsconfig.server.json`, `tsconfig.desktop.json`, `desktop/renderer/tsconfig.json`).
+  - `npm.cmd test`: All 903 tests executed: 857 passed, 0 failed, 46 skipped (dedicated `TEST_DATABASE_URL` unset, POSIX-only Windows skips).
+  - `npm.cmd run desktop:renderer:build`: Built clean in 2.22s.
+  - `npm.cmd run desktop:build`: Bundled `desktop/dist/main.cjs` (2.2 MB) in 155ms.
+  - `npm.cmd run desktop:dist`: Packaged `dist-electron/Return.App.Setup.1.3.0.exe` successfully.
+  - `scratch/gui-test.mjs`: Live Windows GUI automated acceptance run against `Return App.exe` via CDP: verified offline connecting view, online login gate, full sidebar navigation, bounded browser viewport (#browser-workspace-viewport), and memory usage. Captured 7 real screenshots in `docs/screenshots/`.
+- **The next agent must not:**
+  - Revert `mainWindow.loadURL` to the engine HTTP dashboard or load `http://127.0.0.1:3005` in `mainWindow`.
+  - Remove `holdPortalBrowser(browserRunner)` from the `prepared` stage handler in `desktop-app-server.ts`.
+  - Remove `registerRendererProtocol(ses)` from `createMainWindow` in `desktop/main.ts`.

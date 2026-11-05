@@ -104,8 +104,10 @@ function rendererNotBuiltResponse(): Response {
  * exist at all (the renderer was never built), every request answers a minimal
  * 503 page so a developer gets a clear message instead of a dead white screen.
  */
-function registerRendererProtocol(): void {
-  protocol.handle(RENDERER_SCHEME, (request) => {
+function registerRendererProtocol(targetSession?: Electron.Session): void {
+  const p = targetSession ? targetSession.protocol : protocol
+  if (p.isProtocolHandled(RENDERER_SCHEME)) return
+  p.handle(RENDERER_SCHEME, (request) => {
     try {
       const dist = path.normalize(rendererDistDir())
       if (!fs.existsSync(dist)) return rendererNotBuiltResponse()
@@ -136,6 +138,18 @@ function registerRendererProtocol(): void {
       return new Response("Internal error", { status: 500 })
     }
   })
+}
+
+function isRendererNavigation(url: string, targetUrl: string): boolean {
+  if (targetUrl.startsWith(`${RENDERER_SCHEME}://`)) {
+    try {
+      const parsed = new URL(url)
+      return parsed.protocol === `${RENDERER_SCHEME}:` && parsed.host === RENDERER_HOST
+    } catch {
+      return false
+    }
+  }
+  return isSameOrigin(url, new URL(targetUrl).origin)
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -595,6 +609,7 @@ function createMainWindow(target: EngineTarget): void {
 
   // Persistent session partition so login ID, password, and session cookies persist forever
   const ses = session.fromPartition("persist:return-app-desktop")
+  registerRendererProtocol(ses)
 
   // Every route except the health probe needs the bearer token whenever the
   // engine has one. That is always the remote engine, but also a *local* engine
@@ -694,7 +709,6 @@ function createMainWindow(target: EngineTarget): void {
   // API (/api/health) through the fetch bridge and renders its
   // offline/connecting state from failed calls.
   const shellUrl = rendererUrl()
-  const shellOrigin = new URL(shellUrl).origin
 
   logger.info(`Opening desktop shell at ${shellUrl} (engine: ${target.url})`)
   mainWindow.loadURL(shellUrl).catch((err) => {
@@ -706,7 +720,7 @@ function createMainWindow(target: EngineTarget): void {
   // fetch/XHR through the preload bridge, never a navigable page in this
   // window — and neither is anything else (file://, https://, data:).
   mainWindow.webContents.on("will-navigate", (event, url) => {
-    if (!isSameOrigin(url, shellOrigin)) {
+    if (!isRendererNavigation(url, shellUrl)) {
       logger.warn(`Blocked navigation away from the desktop renderer origin: ${url}`)
       event.preventDefault()
     }
@@ -719,7 +733,7 @@ function createMainWindow(target: EngineTarget): void {
   let rendererRetryScheduled = false
   mainWindow.webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL) => {
     if (errorCode === -3) return // ERR_ABORTED: navigation cancelled, not a real load failure
-    if (validatedURL && !isSameOrigin(validatedURL, shellOrigin)) return
+    if (validatedURL && !isRendererNavigation(validatedURL, shellUrl)) return
     logger.warn(`Desktop renderer failed to load (${errorCode}: ${errorDescription})`)
     if (rendererRetryScheduled) return
     rendererRetryScheduled = true
