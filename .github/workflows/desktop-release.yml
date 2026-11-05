@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - "desktop/**"
+      - "desktop/renderer/**"
       - "desktop-agent/**"
       - "server/claim*.ts"
       - "server/schema-claims.sql"
@@ -23,6 +24,7 @@ on:
       - main
     paths:
       - "desktop/**"
+      - "desktop/renderer/**"
       - "desktop-agent/**"
       - "server/claim*.ts"
       - "server/schema-claims.sql"
@@ -75,9 +77,6 @@ jobs:
 
       - name: Run Automated Tests
         run: npm test
-
-      - name: Bundle Electron Main
-        run: npm run desktop:build
 
       - name: Build Desktop Setup Installer
         run: npm run desktop:dist

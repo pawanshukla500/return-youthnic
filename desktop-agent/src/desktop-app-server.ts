@@ -37,7 +37,7 @@ import {
   tabIdForPanelKey,
   WORKER_ACTIVE_PAUSE_REQUIRED,
 } from "./native-browser-view.js"
-import { CLAIM_PANELS, clearPanelHold, getPanelStatuses, markPanelBusy, markPanelResult, panelKeyForMarketplace } from "./panel-queue.js"
+import { CLAIM_PANELS, clearPanelHold, getPanelRuntimeState, getPanelStatuses, isPanelHeld, markPanelBusy, markPanelResult, panelKeyForMarketplace } from "./panel-queue.js"
 import { localEncryptionAvailable } from "./local-secrets.js"
 import { checkForUpdates } from "./update-check.js"
 import { followUpExecutionBundle } from "./follow-up-bundle.js"
@@ -53,6 +53,8 @@ import { buildAiMemoryPayload, disableLocalProcedure } from "./ai-memory-panel.j
 import { nightlyFollowUpOnly, nightlyWindowStatus, shouldSkipFollowUpCycle } from "./follow-up-window.js"
 import { runRoutedAssist } from "./ai-center-assist.js"
 import { handleAiCenterRoute } from "./ai-center-routes.js"
+import { corsAllowedOrigin, corsHeadersFor } from "./cors.js"
+import { evidenceStreamHeaders, isValidEvidenceClaimId, listEvidenceFiles, resolveEvidenceFile } from "./evidence-files.js"
 
 /**
  * The engine owns exactly one worker loop. The Electron shell embeds this
@@ -163,10 +165,15 @@ async function pollAndProcessJob(manual = false): Promise<boolean> {
     const poll = await client.pollJob()
     if (!poll.hasJob || !poll.job) return false
 
-    isCurrentlyProcessing = true
     const jobHeader = poll.job
-    activeJobInfo = jobHeader
     const panelKey = panelKeyForMarketplace(String(jobHeader.marketplace || ""))
+    if (jobHeader.stage !== "submitting" && isPanelHeld(panelKey)) {
+      logger.warn(`Panel ${panelKey} is held (${getPanelRuntimeState(panelKey)}). Refusing to process new Job #${jobHeader.jobId} until operator resolves the open form.`)
+      return false
+    }
+
+    isCurrentlyProcessing = true
+    activeJobInfo = jobHeader
 
     logger.info(`=== Received Claim Job #${jobHeader.jobId} (${jobHeader.marketplace} · AWB/Order: ${jobHeader.trackingId || jobHeader.orderNumber} · Stage: ${jobHeader.stage}) ===`)
     await client.sendHeartbeat("busy", { activeJobId: jobHeader.jobId, marketplace: jobHeader.marketplace })
@@ -265,6 +272,7 @@ async function pollAndProcessJob(manual = false): Promise<boolean> {
       if (result.stage === "prepared") {
         // The operator must see the exact prepared form to approve it: keep
         // the browser open and the view shown in the bounded workspace.
+        // markPanelResult(panelKey, "prepared") guards this panel against other jobs leasing it before approval, without blocking other panels.
         // showSupplierView never steals OS focus and is fail-closed (false
         // when the workspace rect is not measurable, e.g. off the Browsers
         // tab) — the session survives either way.
@@ -289,7 +297,6 @@ async function pollAndProcessJob(manual = false): Promise<boolean> {
         await client.cleanClaimEvidenceFiles(bundle.claimId, result.screenshotPath ? [result.screenshotPath] : [])
       } else if (result.stage === "manual_intervention_required") {
         keepBrowserOpen = true
-        holdPortalBrowser(browserRunner)
         // Manual intervention needs the operator's eyes on the actual page:
         // every manualActionReason says "in the open browser", so the view
         // must be shown in the bounded workspace here. The background-only
@@ -1847,7 +1854,7 @@ catch (e) { document.documentElement.setAttribute('data-theme', 'light'); }
           (p.activeJobId ? ' · job #' + p.activeJobId : '') +
           (p.sessionSavedAt ? ' · cookies ✓' : ' · no cookies') + '</div>' +
           (p.lastResult ? '<div style="font-size:11px;color:#a7f3d0;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="' + escapeHtml(p.lastResult) + '">' + escapeHtml(p.lastResult) + '</div>' : '') +
-          ((p.state === 'manual_action' || p.state === 'cooldown') ? '<button class="btn btn-secondary" style="margin-top:6px;" data-key="' + p.key + '" onclick="clearPanelHold(this.dataset.key)">Rejoin rotation</button>' : '') +
+          ((p.state === 'manual_action' || p.state === 'cooldown' || p.state === 'prepared') ? '<button class="btn btn-secondary" style="margin-top:6px;" data-key="' + p.key + '" onclick="clearPanelHold(this.dataset.key)">Rejoin rotation</button>' : '') +
           '</div>'
         ).join('');
         renderOverall();
@@ -3277,6 +3284,28 @@ export function startDesktopAppServer(bind: EngineBind = resolveEngineBind()): P
     const server = http.createServer(async (req, res) => {
       const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`)
 
+      // Cross-origin support for the packaged desktop renderer (origin
+      // returnapp://desktop) and, outside production, the Vite dev server.
+      // Only allowlisted origins get CORS headers; every other request
+      // proceeds exactly as before. Preflights to /api/* are answered here,
+      // ahead of the remote bearer-token gate below, because a preflight
+      // carries no Authorization header; a non-allowed origin still gets a
+      // 204 but no allow headers, so its browser blocks the real call.
+      const corsOrigin = corsAllowedOrigin(req.headers.origin ?? null, {
+        extraOrigins: process.env.ENGINE_CORS_ORIGINS,
+        dev: process.env.NODE_ENV !== "production",
+      })
+      if (corsOrigin) {
+        for (const [header, value] of Object.entries(corsHeadersFor(corsOrigin))) {
+          res.setHeader(header, value)
+        }
+      }
+      if (req.method === "OPTIONS" && url.pathname.startsWith("/api/")) {
+        res.writeHead(204)
+        res.end()
+        return
+      }
+
       // The health probe is the only route that never needs the engine token, so
       // Docker, systemd and load balancers can check liveness without a secret.
       // Keep it to liveness only: on a non-loopback bind anyone who can reach the
@@ -3352,6 +3381,8 @@ export function startDesktopAppServer(bind: EngineBind = resolveEngineBind()): P
           agentUuid: status.agentUuid,
           agentName: status.agentName,
           signedIn: status.signedIn,
+          nightlyWindow: status.nightlyWindow,
+          browserAdapter: status.browserAdapter,
         })
         return
       }
@@ -3403,6 +3434,71 @@ export function startDesktopAppServer(bind: EngineBind = resolveEngineBind()): P
         const jobs = await client.getRecentJobs()
         res.writeHead(200, { "Content-Type": "application/json" })
         res.end(JSON.stringify(jobs))
+        return
+      }
+
+      // Local evidence cache only: these routes read config.workDir/claim-<id>/
+      // straight from disk, so they keep working while the backend is down.
+      // They never call the backend. url.pathname is already percent-decoded
+      // by the WHATWG URL parser, so an encoded traversal arrives decoded and
+      // is rejected by the validators before any disk access.
+      if (url.pathname.startsWith("/api/evidence/") && req.method === "GET") {
+        if (!operatorSignedIn) {
+          sendJson(res, 401, { error: "Sign in before viewing claim evidence." })
+          return
+        }
+        const segments = url.pathname.slice("/api/evidence/".length).split("/")
+        const claimId = segments[0] || ""
+        const rawFileName = segments.length > 1 ? segments[1] : ""
+        if (segments.length > 2 || !isValidEvidenceClaimId(claimId) || (segments.length > 1 && !rawFileName)) {
+          sendJson(res, 400, { error: "Malformed evidence path." })
+          return
+        }
+        if (segments.length === 1) {
+          sendJson(res, 200, { claimId, files: listEvidenceFiles(config.workDir, claimId) })
+          return
+        }
+        let fileName = rawFileName
+        try {
+          fileName = decodeURIComponent(rawFileName)
+        } catch {
+          sendJson(res, 400, { error: "Malformed evidence file name." })
+          return
+        }
+        const evidencePath = resolveEvidenceFile(config.workDir, claimId, fileName)
+        if (!evidencePath) {
+          sendJson(res, 400, { error: "Invalid evidence file name." })
+          return
+        }
+        let stat: fs.Stats
+        try {
+          stat = fs.statSync(evidencePath)
+        } catch {
+          sendJson(res, 404, { error: "That evidence file is not available." })
+          return
+        }
+        if (!stat.isFile()) {
+          sendJson(res, 404, { error: "That evidence file is not available." })
+          return
+        }
+        res.writeHead(200, evidenceStreamHeaders(fileName, stat.size))
+        await new Promise<void>((streamDone) => {
+          const stream = fs.createReadStream(evidencePath)
+          let settled = false
+          const cleanup = () => {
+            if (settled) return
+            settled = true
+            stream.destroy()
+            streamDone()
+          }
+          stream.on("error", () => {
+            res.destroy()
+            cleanup()
+          })
+          res.on("finish", cleanup)
+          res.on("close", cleanup)
+          stream.pipe(res)
+        })
         return
       }
 

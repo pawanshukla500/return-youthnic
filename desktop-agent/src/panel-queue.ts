@@ -25,6 +25,7 @@ export type PanelRuntimeState =
   | "idle"
   | "preparing"
   | "submitting"
+  | "prepared"
   | "manual_action"
   | "cooldown"
   | "disabled"
@@ -66,10 +67,16 @@ export function markPanelResult(panelKey: string, outcome: "completed" | "prepar
   const r = runtimeFor(panelKey)
   r.activeJobId = null
   r.lastResultAt = new Date().toISOString()
-  if (outcome === "completed" || outcome === "prepared" || outcome === "not_eligible") {
+  if (outcome === "completed" || outcome === "not_eligible") {
     r.consecutiveErrors = 0
     r.state = "idle"
     r.lastResult = detail || outcome
+  } else if (outcome === "prepared") {
+    r.consecutiveErrors = 0
+    // Prepared claims wait for operator review and approval on this specific
+    // panel without blocking other panels from filing round-robin.
+    r.state = "prepared"
+    r.lastResult = detail || "Prepared on the supplier panel. Waiting for approval."
   } else if (outcome === "manual_action") {
     r.consecutiveErrors = 0
     r.state = "manual_action"
@@ -83,11 +90,22 @@ export function markPanelResult(panelKey: string, outcome: "completed" | "prepar
   }
 }
 
-/** Operator resolved the manual step — the panel rejoins the rotation. */
+/** Operator resolved the manual step or approved/cleared the claim — the panel rejoins the rotation. */
 export function clearPanelHold(panelKey: string): void {
   const r = runtimeFor(panelKey)
-  if (r.state === "manual_action" || r.state === "cooldown") r.state = "idle"
+  if (r.state === "manual_action" || r.state === "cooldown" || r.state === "prepared") r.state = "idle"
   r.activeJobId = null
+}
+
+/** True when the panel is held waiting for operator action or approval. */
+export function isPanelHeld(panelKey: string): boolean {
+  const r = runtimeFor(panelKey)
+  return r.state === "prepared" || r.state === "manual_action"
+}
+
+/** Current runtime state for a panel. */
+export function getPanelRuntimeState(panelKey: string): PanelRuntimeState {
+  return runtimeFor(panelKey).state
 }
 
 /** Normalize a marketplace/account label from a job to a panel key. */

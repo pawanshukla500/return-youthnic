@@ -1,0 +1,188 @@
+@import 'tailwindcss';
+
+/* Locally bundled fonts (downloaded woff2, latin subset) — no runtime CDN. */
+@font-face {
+  font-family: 'DM Sans';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('../assets/fonts/dm-sans-400.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'DM Sans';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('../assets/fonts/dm-sans-500.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'DM Sans';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('../assets/fonts/dm-sans-700.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('../assets/fonts/manrope-400.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('../assets/fonts/manrope-500.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('../assets/fonts/manrope-700.woff2') format('woff2');
+}
+
+/* ------------------------------------------------------------------ */
+/* Design tokens — light is the default, dark overrides via            */
+/* [data-theme="dark"] on <html>. Palette mirrors the web console      */
+/* (src/index.css) but tuned for a dense desktop shell.                */
+/* ------------------------------------------------------------------ */
+:root {
+  font-family: 'DM Sans', system-ui, sans-serif;
+  color-scheme: light;
+  font-synthesis: none;
+
+  --font-display: 'Manrope', 'DM Sans', system-ui, sans-serif;
+
+  --ink: #18201e;
+  --muted: #697370;
+  --line: #e4e9e7;
+  --bg: #f5f7f6;
+  --surface: #ffffff;
+  --surface-2: #fbfcfb;
+  --sidebar-bg: #103e34;
+  --sidebar-ink: #eaf4f0;
+  --sidebar-muted: #9cc4b7;
+  --topbar-bg: #ffffff;
+  --green: #136c57;
+  --green-dark: #0e5847;
+  --green-soft: #e7f4ef;
+  --orange: #d86d32;
+  --orange-soft: #fff1e8;
+  --purple: #7356a8;
+  --purple-soft: #f0ebf8;
+  --blue: #3978b7;
+  --blue-soft: #e9f2fb;
+  --red: #c34e4e;
+  --red-soft: #fcede9;
+  --shadow: 0 1px 2px rgba(16, 40, 32, .03), 0 8px 25px rgba(16, 40, 32, .035);
+}
+
+[data-theme='dark'] {
+  color-scheme: dark;
+
+  --ink: #e7edeb;
+  --muted: #93a29d;
+  --line: #2b3734;
+  --bg: #0f1514;
+  --surface: #17201e;
+  --surface-2: #1b2623;
+  --sidebar-bg: #0b201b;
+  --sidebar-ink: #dcece6;
+  --sidebar-muted: #7ea294;
+  --topbar-bg: #141c1a;
+  --green: #3aa587;
+  --green-dark: #2c8a70;
+  --green-soft: #12281f;
+  --orange: #e08a55;
+  --orange-soft: #2e1d12;
+  --purple: #a68fd0;
+  --purple-soft: #231b33;
+  --blue: #6ea3d4;
+  --blue-soft: #16222e;
+  --red: #d97a7a;
+  --red-soft: #2c1818;
+  --shadow: 0 1px 2px rgba(0, 0, 0, .25), 0 8px 25px rgba(0, 0, 0, .3);
+}
+
+/* Expose the tokens to Tailwind utilities (bg-surface, text-muted, ...). */
+@theme inline {
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-line: var(--line);
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-green: var(--green);
+  --color-green-dark: var(--green-dark);
+  --color-green-soft: var(--green-soft);
+  --color-orange: var(--orange);
+  --color-orange-soft: var(--orange-soft);
+  --color-purple: var(--purple);
+  --color-purple-soft: var(--purple-soft);
+  --color-blue: var(--blue);
+  --color-blue-soft: var(--blue-soft);
+  --color-red: var(--red);
+  --color-red-soft: var(--red-soft);
+  --font-sans: 'DM Sans', system-ui, sans-serif;
+  --font-display: var(--font-display);
+  --shadow-card: var(--shadow);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  background: var(--bg);
+  color: var(--ink);
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: .55;
+}
+
+/* Accessible focus everywhere in the shell. */
+:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+::placeholder {
+  color: var(--muted);
+}
+
+/* ------------------------------------------------------------------ */
+/* Browsers page — explicit supplier-browser fullscreen                */
+/* The native WebContentsView is fitted to the full window by the      */
+/* shell only after the operator clicks Expand; the page then hides    */
+/* the app chrome until Esc / Exit Fullscreen (mirrors the old         */
+/* dashboard's body.browser-fullscreen rules).                         */
+/* ------------------------------------------------------------------ */
+body.ra-browser-fullscreen aside[aria-label='Primary'],
+body.ra-browser-fullscreen header {
+  display: none;
+}

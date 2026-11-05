@@ -6,13 +6,13 @@ This file is for any agent, human or AI, that starts work on the Return App. Rea
 
 A return-scanning app for VB Exports. Marketplace return reports (Myntra VB and EJ, Flipkart, Meesho, Amazon, Ajio) are loaded as lookup data, one account at a time. A scan records what physically arrived in the return scan register, which is the permanent record. The stack is Express 4 and PostgreSQL on the server, React 19 with Vite on the client, strict TypeScript, and `node:test` through `tsx`. It runs on Windows, and PowerShell is the primary shell.
 
-## Current state (2026-11-03)
+## Current state (2026-11-05)
 
 - The app runs locally and in production on Hostinger VPS (`https://return.youthnic.shop`). On 2026-11-03 local checks passed: `npm run typecheck` (0 errors across three projects), `npm run build`, and `npm test` (767 tests: 721 pass, 0 fail, 46 skipped — 43 need `TEST_DATABASE_URL`, 3 POSIX-only). CI runs all 767 green against its throwaway Postgres.
 - `GET /api/health` returns HTTP 200, database connected, name `return-scan_youthnic`.
 - Merged PR #50 (M9, 2026-11-03): submission-authorization fix (a saved supplier login never authorizes submit), real-DB authorization tests, light-mode dashboard with sidebar tabs + Updates tab, `AUTOMATION_SECRET_KEY` deploy wiring. Operator UAT T1–T5 pass on installed 1.2.0. Live Meesho/mobile/Firebase sessions still pending.
 - Native Kotlin Android client is active in `android/` at latest tag `v1.2.0.82` (server fallback manifest still pins 1.0.58/10058), featuring CameraX barcode scanning, runtime camera permission flow, photo & 480p SD unboxing video evidence capture, visual upload progress dialog, instant form reset ("Start Again with Zero"), unified claim creation (`POST /api/claims/unified-create`), and automated in-app updates (`AppUpdater.kt`) synchronized via GitHub Actions (`.github/workflows/return-scan-apk.yml`). The APK workflow keeps only the newest two `v1.0.*` releases and never touches desktop releases.
-- Windows Desktop application (`desktop/` & `desktop-agent/`) published at GitHub Release `desktop-v1.2.0.82` (Windows NSIS only, unsigned; Linux/macOS desktop targets were removed). It files panel-wise across six isolated supplier panels (Meesho fully automatic, others assisted), guides first-time setup per panel in the dashboard, encrypts local secrets with the OS store, offers the Windows installer download for updates, embeds the supplier browser in the main window, and registers the `ReturnAppClaimBot` Scheduled Task at install for restart-after-crash. Operator guide: `docs/DESKTOP-APP.md`. The desktop workflow keeps only the newest two `desktop-v*` releases (created with `--latest=false` so the APK family keeps the "Latest" badge) and never touches Android releases. A `desktop` branch may hold the next batch of desktop work pending review.
+- Windows Desktop application (`desktop/` & `desktop-agent/`) at version 1.3.0: the app window loads a genuine bundled React 19 renderer (`desktop/renderer/`, strict TypeScript + Vite + Tailwind, served by the Electron main process at the privileged `returnapp://desktop` scheme) with its own offline/connecting state — never the engine's server-rendered dashboard, which remains at engine `GET /` for headless Linux browsers only. The engine stays in-process as the API/worker service (local `127.0.0.1:3005`, or remote via `RETURN_ENGINE_URL`), and the engine CORS allowlist admits exactly `returnapp://desktop` (preflight answered before the bearer gate, never `*`). The remote `ENGINE_TOKEN` never reaches the renderer: the shell injects it on the engine origin. `npm run desktop:dist` builds the renderer, then the main bundle, then the NSIS installer. Renderer architecture: [docs/DESKTOP-RENDERER.md](docs/DESKTOP-RENDERER.md); operator guide: [docs/DESKTOP-APP.md](docs/DESKTOP-APP.md). It still files panel-wise across six isolated supplier panels (Meesho fully automatic, others assisted), guides first-time setup per panel, encrypts local secrets with the OS store, and registers the `ReturnAppClaimBot` Scheduled Task at install. Releases publish as unsigned GitHub `desktop-v*` releases (Windows NSIS only; newest two kept, created with `--latest=false` so the APK family keeps the "Latest" badge) and never touch Android releases. A `desktop` branch may hold the next batch of desktop work pending review.
 - Every console date filter uses the shared `DateField` (`src/date-field.tsx`): it always displays DD/MM/YYYY regardless of the PC's OS locale, still opens the native calendar picker, and keeps the value as ISO `yyyy-mm-dd` for the API. Never add a raw `<input type="date">` to a page.
 - The product master (`product_master`) was cleared on 2026-10-19 (91,696 rows removed) so it can be uploaded again. Batched staged import (`/api/admin/product-master/import/start` and `/batch`) processes up to 500 rows per transaction with progress tracking, pause/retry, and cancellation, verified against the 126,176-row `Book11.xlsx`.
 - Nightly OMSGuru listing-to-master bridge (`server/oms/master-bridge.ts`) runs during `npm run sync:oms`, mapping active channel listings, backfilling catalog images, and resolving unmatched return SKUs.
@@ -55,6 +55,9 @@ Each rule has a check. The handoff lists the checks under [Invariants](docs/note
 14. **One engine, and it owns every loop.** The automation engine (`desktop-agent/src/desktop-app-server.ts`) owns the only claim worker loop and the only ticket follow-up loop. The Electron shell (`desktop/main.ts`) is a client of it and must not hold a second copy of either loop or a second scheduler. The two engine loops never overlap: both drive the same supplier browser profile, so a follow-up check and a filing cycle block each other through `poll-guard.ts`.
 15. **The engine is fail-closed when exposed.** A non-loopback bind requires `ENGINE_TOKEN` (at least 24 characters) and the engine must refuse to start without one. Remote requests carry `Authorization: Bearer <ENGINE_TOKEN>`; the token is compared in constant time, is never logged, and is never accepted from a query string. Never publish the engine port directly to the internet. Everything under `AGENT_DATA_DIR` (browser profiles, operator session, evidence cache) is secret. Create the root with `ensureAgentDataDir()` and write every secret with `writeSecretFile()`; both chmod the directory 0700 and the file 0600 on every call, so a folder or file left loose by an older build is tightened rather than trusted.
 16. **Both deployment modes stay buildable.** Any change to `desktop/` or `desktop-agent/` must keep the Windows desktop and headless Linux server modes working. `npm run typecheck` covers `desktop` and `desktop-agent` through `tsconfig.desktop.json`; a change that only passes `tsconfig.json` is not verified. The deployment artifacts in `deploy/engine/` must match the engine's real routes and environment variables.
+17. **The desktop UI is the bundled renderer.** The app window loads the packaged `desktop/renderer` build at `returnapp://desktop` — it must never `loadURL` the engine dashboard (or any other engine page) into the app window. The engine's `GET /` dashboard HTML stays in place for headless Linux mode; the desktop app simply never loads it. The renderer renders its own offline/connecting state when the engine is unreachable, and the engine token never crosses the preload bridge.
+18. **Engine CORS is an exact allowlist.** Only `returnapp://desktop` is allowed in production, plus the Vite dev origins (`localhost:5180`) outside production and exact http(s) origins from `ENGINE_CORS_ORIGINS`. `OPTIONS` preflights to `/api/*` are answered 204 before the bearer-token gate; the allow-origin is never `*` and never reflects an arbitrary request origin.
+19. **The renderer/shell IPC contract lives in two files.** `desktop/preload.cjs` and `desktop/renderer/src/types/global.d.ts` are one contract — change them together so the bridge and its types never drift. The bridge exposes no `ipcRenderer`, no Node APIs and no secrets; event subscriptions must return an unsubscribe so a renderer reload never leaves duplicate listeners.
 
 ## Commands
 
@@ -72,12 +75,20 @@ npm test
 
 The two database checks run only when `TEST_DATABASE_URL` is set to a dedicated database whose name contains `test`. Without it they are reported as skipped, and a skipped check has not passed.
 
-`npm run typecheck` runs three projects: `tsconfig.json` (`src`), `tsconfig.server.json` (`server`) and `tsconfig.desktop.json` (`desktop`, `desktop-agent`).
+`npm run typecheck` runs four projects: `tsconfig.json` (`src`), `tsconfig.server.json` (`server`), `tsconfig.desktop.json` (`desktop`, `desktop-agent`) and `desktop/renderer/tsconfig.json` (the bundled desktop renderer).
 
 Desktop application and automation engine:
 
 ```bash
 npm run desktop
+```
+
+```bash
+npm run desktop:renderer:build
+```
+
+```bash
+npm run desktop:renderer:dev
 ```
 
 ```bash

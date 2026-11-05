@@ -3,7 +3,9 @@ import assert from "node:assert/strict"
 import {
   CLAIM_PANELS,
   clearPanelHold,
+  getPanelRuntimeState,
   getPanelStatuses,
+  isPanelHeld,
   markPanelBusy,
   markPanelResult,
   nextReadyPanels,
@@ -80,5 +82,23 @@ describe("panel-wise continuous claim queue", () => {
     assert.equal(statuses.find((s) => s.key === "amazon")?.state, "idle")
     assert.equal(statuses.find((s) => s.key === "amazon")?.consecutiveErrors, 0)
     assert.ok(nextReadyPanels(6).includes("amazon"))
+  })
+
+  it("a prepared panel waits for operator approval without blocking other panels", () => {
+    resetPanelRuntime()
+    assert.equal(isPanelHeld("meesho"), false)
+    markPanelBusy("meesho", 99, "preparing")
+    markPanelResult("meesho", "prepared", "Waiting for approval")
+    assert.equal(getPanelRuntimeState("meesho"), "prepared")
+    assert.equal(isPanelHeld("meesho"), true)
+    const statuses = getPanelStatuses("C:/tmp-profiles")
+    assert.equal(statuses.find((s) => s.key === "meesho")?.state, "prepared")
+    const ready = nextReadyPanels(6)
+    assert.ok(!ready.includes("meesho"), "prepared panel must not be leased for new preparing jobs")
+    assert.ok(ready.includes("amazon"), "other panels continue filing round-robin")
+    clearPanelHold("meesho")
+    assert.equal(isPanelHeld("meesho"), false)
+    assert.equal(getPanelRuntimeState("meesho"), "idle")
+    assert.ok(nextReadyPanels(6).includes("meesho"), "clearing hold restores panel to ready rotation")
   })
 })

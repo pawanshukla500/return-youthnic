@@ -3020,3 +3020,142 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
 - Ran: `npm run typecheck` 0 errors x3 (fixed missing `sanitizeWindowTitle`), `npm run build` ok, full `npm test` 779 tests (733 pass, 0 fail, 46 skipped — 43 need `TEST_DATABASE_URL`, 3 POSIX-only), `npm run desktop:build` bundles 2.2mb.
 - Still open on this branch: Phase 9 local-vault migration (wiring verified, migration not started), Phase 10 Brandfetch CDN (local logos only, offline ok), Phase 11 packaged-installer visual test on Windows, Phase 12 docs (ARCH/DESKTOP/MEESHO/API updates), Phase 13 PR from `feature/m9-post50-desktop-reliability`.
 - Update 2026-11-04: CodeAnt's 6 findings fixed (commit 7e28a24: popup ride-along, zero-byte test, temp-dir cleanup, bundle-null worker clear, paused:false, VAL-WIN-005 routes) + both tab/detach test files added to `npm test` (suite 795). Merged as PR #52 (squash `6769e95`); CI, desktop build, and VPS deploy all green on main.
+
+### 2026-11-04, Kimi Code, desktop app + worker + supplier browser + server-contract read-only verification (no code changes)
+- Ran: `npm run typecheck` 0 errors x3; desktop-agent focused suite (23 files, incl. poll-guard/submit-guard/crash-guard/panel-queue/portal-browser-tabs/supplier-view-manager/operator-login-flow) 164 tests / 161 pass / 0 fail / 3 skipped. Second `npm run engine` instance failed with EADDRINUSE — expected: the installed packaged app was already live.
+- Live engine under test: `Return App.exe` (C:\Program Files\Return App\Return App.exe, pid 143524, engine in-process, bind 127.0.0.1:3005, adapter native WebContentsView), signed in as Pawan Shukla, backend https://return.youthnic.shop, worker running. GET /api/health, /api/status, /api/panels (6 panels), /api/v1/engine/info, /api/jobs all correct.
+- Buttons verified: sidebar tabs Dashboard / Claims / Browsers / Follow-ups / AI Center / Settings / Updates all render and switch; `POST /api/scheduler/toggle?action=pause|start` flips `isRunning` false→true (dashboard pill + countdown follow); `/api/test-connection` → backend connected, 24 ms. Poll Now and per-claim "Run this claim" were deliberately NOT triggered (they would lease and file the 2 queued production Meesho claims — real marketplace side effects, operator-gated).
+- Supplier browser: Meesho tab live at supplier.meesho.com support page (saved session, `held: true` for manual completion — issue page for "I have received wrong return" did not open; operator must navigate by hand). Opened + closed a Flipkart tab via `/api/portal-browser/open|close-tab` to prove the multi-tab manager; tab strip, Back/Forward/Reload/Stop/Expand/Detach/Dock/Hide controls all present with correct disabled states.
+- Worker proof from the app's own live log today: agent registered (ID 1, authorized) → Claim Job #2 leased → 5 evidence files downloaded → Meesho automation started. Engine tests + poll-guard/submit-guard cover the loop guards; nightly 01:00–02:00 IST window applies to follow-up checks, filing is server-lease-driven and blocked while the Meesho portal browser is held.
+- Server claim contract re-verified both sides: `agent-client.ts` pollJob → GET /api/automation/agent/poll, getExecutionBundle → GET /api/automation/jobs/:id/bundle, updateProgress → POST /api/automation/jobs/:id/progress, completeJob → POST /api/automation/jobs/:id/complete (X-Agent-UUID + X-Agent-Key, body marketplaceClaimId/screenshotPath/notes); follow-ups GET /api/automation/follow-ups/due + POST /api/automation/follow-ups/:id/result. Server routes exist at claim-automation-routes.ts:355/389/402/424/449/462 with authenticateAutomationAgent + lease ownership on progress/complete. Production https://return.youthnic.shop/api/health → 200, database connected.
+- Not run / not verified: no real claim submission or live Meesho ticket creation (operator action); Flipkart/Amazon/Myntra VB/Myntra EJ/Ajio panels have no saved sessions (Settings shows 1 of 6 connected) — their Connect flows need operator credentials; packaged-app visual check on screen not done (verified through the engine's HTTP API + dashboard DOM instead).
+- The next agent must not: start a second engine while `Return App.exe` is running (EADDRINUSE is correct fail-closed behavior); close the held Meesho tab or pause the worker without the operator; trigger Poll Now / Run this claim against production jobs outside an authorized operator session.
+
+### 2026-11-05, Antigravity Agent: Native Electron Desktop Application (Vite + React 19 Bundled Renderer, v1.3.0)
+
+- **Task:** Execute full specification in `docs/missions/native-electron-desktop-mission.md` to transform the desktop application from a server-rendered website wrapper (`mainWindow.loadURL(engineUrl)`) into a genuine Windows desktop application with an independently packaged, bundled desktop renderer (`returnapp://desktop`), bounded workspace WebContentsView browser integration, offline resilience, and NSIS installer packaging.
+- **Architectural & Security Deliverables:**
+  - **Bundled Desktop Renderer (`desktop/renderer/`):** React 19 + TypeScript + Vite + Tailwind CSS application compiled to `desktop/renderer/dist`. Production serves bundled assets over the privileged custom scheme `returnapp://desktop` with CSP, local fonts (DM Sans & Manrope), and SVG/PNG vendor brandmarks.
+  - **Main Process Isolation & Protocol Fix (`desktop/main.ts`):** Registered `registerRendererProtocol` on `session.fromPartition("persist:return-app-desktop").protocol` in addition to default session, resolving `ERR_FAILED (-2)` when loading `returnapp://desktop/index.html` inside the persistent session window. Added `isRendererNavigation` helper for safe WHATWG URL origin matching on custom schemes.
+  - **Engine Decoupling & Offline Resilience:** Desktop shell opens and renders immediately even if the local engine or Hostinger VPS backend is down (`gui-01-offline-state.png`). The renderer manages connection retry states and polls `/api/status` without hardcoding server-side HTML rendering.
+  - **Concurrency & Concurrency Hold Fix (`desktop-agent/src/desktop-app-server.ts`):** Added `holdPortalBrowser(browserRunner)` on `prepared` claim stage, satisfying CodeAnt review finding on PR #54 and ensuring the supplier browser is held open and guarded so another job or poll cycle cannot seize or overwrite the prepared claim form before operator review and approval.
+  - **Hardware Discipline & Performance:** V8 heap usage measured at 4.15 MB in the real running Windows executable (idle CPU < 0.2%, well below the 256MB discipline limit).
+  - **NSIS Production Installer Packaging (`npm run desktop:dist`):** Packaged and signed `dist-electron/Return.App.Setup.1.3.0.exe` (116.7 MB) with NSIS custom logon trigger scheduled task `ReturnAppClaimBot`. Verified `app.asar` contains all bundled React 19 renderer assets.
+- **Verification Run & Results:**
+  - `npm.cmd run typecheck`: Passed with 0 errors across 4 projects (`tsconfig.json`, `tsconfig.server.json`, `tsconfig.desktop.json`, `desktop/renderer/tsconfig.json`).
+  - `npm.cmd test`: All 903 tests executed: 857 passed, 0 failed, 46 skipped (dedicated `TEST_DATABASE_URL` unset, POSIX-only Windows skips).
+  - `npm.cmd run desktop:renderer:build`: Built clean in 2.22s.
+  - `npm.cmd run desktop:build`: Bundled `desktop/dist/main.cjs` (2.2 MB) in 155ms.
+  - `npm.cmd run desktop:dist`: Packaged `dist-electron/Return.App.Setup.1.3.0.exe` successfully.
+  - `scratch/gui-test.mjs`: Live Windows GUI automated acceptance run against `Return App.exe` via CDP: verified offline connecting view, online login gate, full sidebar navigation, bounded browser viewport (#browser-workspace-viewport), and memory usage. Captured 7 real screenshots in `docs/screenshots/`.
+- **The next agent must not:**
+  - Revert `mainWindow.loadURL` to the engine HTTP dashboard or load `http://127.0.0.1:3005` in `mainWindow`.
+  - Remove `holdPortalBrowser(browserRunner)` from the `prepared` stage handler in `desktop-app-server.ts`.
+  - Remove `registerRendererProtocol(ses)` from `createMainWindow` in `desktop/main.ts`.
+
+### 2026-11-05, Antigravity Agent: Code Review Resolution & Automated Acceptance Verification (PR #55)
+
+- **Task:** Review and resolve all 20 code review findings and nitpicks surfaced by CodeAnt AI on Pull Request #55. Re-verify with full TypeScript typechecks, automated unit/component test suite, production packaging, and real Windows GUI automated acceptance execution.
+- **Review Findings Addressed & Resolved:**
+  1. App.tsx: Introduced monotonic sessionEpoch in SessionContext to guard against race conditions where a stale in-flight bootstrap request clears a freshly authenticated operator session.
+  2. .github/workflows/desktop-release.yml: Removed redundant desktop:renderer:build and desktop:build steps prior to desktop:dist, accelerating release CI jobs.
+  3. README.md: Aligned line 70 with line 6 regarding native Android client release status (v1.0.63, fallback manifest 1.0.58 / 10058).
+  4. evidence-files.ts: Set EVIDENCE_MAX_FILE_NAME_LENGTH = 255 and filtered listEvidenceFiles via resolveEvidenceFile to ensure complete agreement between listed and downloadable evidence items.
+  5. desktop-app-server.ts: Handled res.on("close") and destroyed ReadStream on aborted requests to prevent stream and file descriptor leaks.
+  6. gui-acceptance.mjs: Simulated offline engine by immediately terminating connection attempts (socket.destroy()), avoiding hung fetches.
+  7. gui-acceptance.mjs: Added error rejection during port 3005 blocker listen to prevent hanging if port is in use.
+  8. gui-acceptance.mjs: Guaranteed process termination in finally blocks to eliminate orphaned test processes.
+  9. gui-acceptance.mjs: Handled /api/operator/login via CDP Page.addScriptToEvaluateOnNewDocument to ensure deterministic sign-in flow.
+  10. gui-acceptance.mjs: Navigated and screenshotted all 7 application tabs (Dashboard, Claims, Browsers, Follow-ups, AI Center, Settings, Updates).
+  11. gui-acceptance.mjs: Replaced inert logging with strict assertions on DOM presence, bounded viewport rect, and memory limits.
+  12. MarketplaceBadge.tsx: Tracked failedKey state instead of boolean imgFailed so new props don't inherit previous logo load failures.
+  13. MarketplaceBadge.tsx: Added 'myntra vb' and 'myntra ej' keys to LETTER_BG for consistent brand styling fallback.
+  14. Modal.tsx: Stabilized onClose callback with useRef and ran focus trap setup once on mount ([]), preventing premature focus reset on parent re-renders.
+  15. Browsers.tsx: Added sequence tracking (snapshotSeqRef) in applySnapshot so slow background polling never overwrites newer user mutations.
+  16. dashboard-logic.ts: Displayed 'Updating follow-up status…' when follow-up summary is loading rather than falsely reporting 0 tracked tickets.
+  17. Dashboard.tsx: Added amber warning badge when live claims polling fails after initial data was received so stale claims aren't masked.
+  18. Dashboard.tsx: Bound supplier panels strip to activePanels (panelsOverride ?? panelsLoaded), making panel Rejoin state visible immediately.
+  19. Updates.tsx: Routed errors through handleAuthError(cause) so a 401 response prompts the operator sign-in gate.
+  20. App.tsx: Respected readAutoUpdatesPreference in UpdateBanner so disabling automatic updates halts periodic background update checks.
+- **Verification Run & Results:**
+  - npm.cmd run typecheck: 0 errors across 4 TypeScript configurations (tsconfig.json, tsconfig.server.json, tsconfig.desktop.json, desktop/renderer/tsconfig.json).
+  - npm.cmd test: All 903 tests executed: 857 passed, 0 failed, 46 skipped (unconfigured test DB, Windows POSIX skips).
+  - npm.cmd run desktop:dist: Packaged dist-electron/Return.App.Setup.1.3.0.exe (116.7 MB) with all renderer updates.
+  - node desktop/gui-acceptance.mjs: All 8 acceptance journey criteria passed live in Return App.exe:
+    - Offline / connecting state validated.
+    - Operator sign-in gate validated.
+    - Full 7-tab sidebar navigation validated.
+    - Bounded Browsers workspace viewport validated (x=216, y=256.8, w=1154.4, h=533.6, zero sidebar overlap).
+    - V8 heap memory measured at 3.95 MB (limit: 256 MB).
+    - 9 verified screenshot artifacts saved in docs/screenshots/.
+- **The next agent must not:**
+  - Remove sessionEpoch from SessionContext or App.tsx.
+  - Remove sequence checking in Browsers.tsx.
+
+
+### 2026-11-05, Antigravity Agent: Resolution of 10 Detailed CodeAnt PR #55 Findings
+
+- **Task:** Resolve all remaining code review suggestions and potential issues identified in the inline comments of PR #55 (covering authentication handling in polling hooks, remote-engine CSP support, evidence filename percent-decoding, inclusive date ranges in AI Center usage queries, non-destructive routing budget inputs, and claim worker polling continuity on prepared claims).
+- **Review Items Resolved:**
+  1. `desktop/renderer/src/hooks/useEnginePolling.ts`: Hook now imports and calls `useSession().handleAuthError(cause)` on catch so any polled endpoint returning 401 resets the operator session and returns to the login gate.
+  2. `desktop/renderer/index.html`: Content-Security-Policy updated to allow `http: https:` in `connect-src`, `img-src`, and `media-src`, ensuring remote-engine mode (`RETURN_ENGINE_URL`) functions without CSP connection blocks.
+  3. `desktop/renderer/src/pages/FollowUps.tsx`: Follow-ups polling loop now invokes `useSession().handleAuthError(cause)` on 401 responses, immediately rendering the login gate.
+  4. `desktop-agent/src/desktop-app-server.ts`: Safely decodes `rawFileName` via `decodeURIComponent` (with malformed URI handling) prior to `resolveEvidenceFile` so files with spaces or percent-encoded characters are located and served accurately.
+  5. `desktop/renderer/src/pages/ai-center/UsagePanel.tsx` & `desktop-agent/src/ai-center-routes.ts`: Made `to` date boundary inclusive by appending `T23:59:59.999Z` to 10-character date inputs so all usage records on the selected end date are included in results.
+  6. `desktop/renderer/src/pages/ai-center/RoutingPanel.tsx`: Added an `isDirty` state guard on the monthly budget input so 60-second background polling ticks never clobber unsaved operator inputs while typing.
+  7. `desktop/renderer/src/pages/ai-center/RoutingPanel.tsx`: Validated that budget values are strictly positive (`parsed > 0`), aligning client validation with the backend `normalizeRouting` contract.
+  8. `desktop-agent/src/desktop-app-server.ts`: Removed erroneous `holdPortalBrowser(browserRunner)` calls from `prepared` and `manual_intervention_required` handlers, ensuring `portalBrowserHeld` is not set and the worker poller is not blocked from leasing and processing subsequent approved/submitting claims.
+- **Verification Run & Results:**
+  - `npm run typecheck`: 0 errors across 4 projects (`tsconfig.json`, `tsconfig.server.json`, `tsconfig.desktop.json`, `desktop/renderer/tsconfig.json`).
+  - `npm test`: All 903 tests executed: 857 passed, 0 failed, 46 skipped (dedicated `TEST_DATABASE_URL` unset, Windows POSIX skips).
+  - `npm run build`: Web application production build succeeded in 1.73s.
+  - `npm run desktop:renderer:build`: Bundled desktop renderer built in 1.25s.
+  - `npm run desktop:dist`: Packaged and signed `dist-electron/Return.App.Setup.1.3.0.exe` (116.7 MB).
+  - `node desktop/gui-acceptance.mjs`: All 8 acceptance journey criteria passed live against `Return App.exe`:
+    - Offline / connecting state validated.
+    - Operator sign-in gate validated.
+    - Full 7-tab sidebar navigation validated.
+    - Bounded Browsers workspace viewport validated (zero sidebar overlap).
+    - V8 heap memory measured at 3.85 MB.
+    - 9 verified screenshots updated in `docs/screenshots/`.
+- **The next agent must not:**
+  - Remove `decodeURIComponent` from evidence file resolution routes in `desktop-app-server.ts`.
+  - Re-introduce `holdPortalBrowser` into the worker filing pipeline (`prepared` / `manual_intervention_required`).
+
+
+### 2026-11-05, Antigravity Agent: Per-Panel State Machine & Code Review Hardening (PR #54 & PR #55)
+
+- **Task:** Address the cross-PR CodeAnt/CodeRabbit findings between PR #54 (`fix/meesho-manual-recovery-visible`) and PR #55 (`feature/native-electron-desktop-shell`), eliminating the unheld prepared browser race condition without triggering a global worker deadlock.
+- **Root Cause & Architectural Solution:**
+  - *PR #54 CodeAnt Issue:* Keeping the prepared browser open while resetting `r.state = "idle"` left a race window where subsequent polls could lease the same panel and overwrite the prepared form before operator approval.
+  - *Flawed Mitigation:* Calling the global singleton `holdPortalBrowser()` froze `shouldRunPollCycle` globally, blocking approval leases and stalling the entire filing queue.
+  - *Proper Solution:* Implemented a per-panel state machine.
+    1. Added `"prepared"` state to `PanelRuntimeState` (`panel-queue.ts` and `desktop/renderer/src/types/engine.ts`).
+    2. When `outcome === "prepared"`, `r.state = "prepared"`.
+    3. `nextReadyPanels()` skips panels in `"prepared"` so no new claim can lease that panel or overwrite the open form.
+    4. Other panels (`amazon`, `flipkart`, `myntra`, `ajio`) continue round-robin filing uninterrupted.
+    5. In `desktop-app-server.ts`, added `isPanelHeld(panelKey)` guard before processing jobs: non-submitting jobs on held panels are safely rejected/postponed, while approved submissions (`jobHeader.stage === "submitting"`) proceed directly to submission on the prepared form.
+    6. Added `isPanelHeld` and `getPanelRuntimeState` to `panel-queue.ts` and verified with unit tests in `panel-queue.test.ts`.
+- **UI & Packaging Enhancements (Resolving CodeRabbit Findings):**
+  - `desktop/renderer/src/pages/Browsers.tsx`: Added `!chooserOpen` to `workspaceActive` so the native `WebContentsView` hides while the supplier panel chooser modal is open, preventing it from obscuring action buttons.
+  - `desktop/renderer/src/pages/Dashboard.tsx`: Replaced undefined `amber` CSS classes with standard `orange` design tokens.
+  - `Dashboard.tsx`, `Claims.tsx`, and `desktop-app-server.ts`: Added "Rejoin rotation" button for panels in the `"prepared"` state.
+  - `desktop/renderer/src/components/ui/PanelStateDot.tsx`: Added pulsating orange indicator for `"prepared"` panel state.
+  - `package.json`: Updated `desktop:pack` script to run `desktop:renderer:build` before packaging.
+- **Verification Run & Results:**
+  - `npm.cmd run typecheck`: 0 errors across 4 projects (`tsconfig.json`, `tsconfig.server.json`, `tsconfig.desktop.json`, `desktop/renderer/tsconfig.json`).
+  - `npm.cmd test`: All 904 tests executed: 858 passed, 0 failed, 46 skipped (unconfigured test DB, Windows POSIX skips).
+  - `npm.cmd run desktop:renderer:build`: Bundled desktop renderer built in 1.44s.
+  - `npm.cmd run build`: Main web app build passed in 1.73s.
+  - `node desktop/gui-acceptance.mjs`: All 8 acceptance journey criteria passed live against `Return App.exe`:
+    - Offline / connecting state validated.
+    - Operator sign-in gate validated.
+    - Full 7-tab sidebar navigation validated.
+    - Bounded Browsers workspace viewport validated (zero sidebar overlap).
+    - V8 heap memory measured at 3.91 MB (< 256 MB limit).
+- **Strategic Recommendation on Open PRs:**
+  - PR #55 is a full architectural superset of PR #54 that implements the native Electron desktop shell (v1.3.0) and the per-panel state machine.
+  - Do NOT merge PR #54 into `main`; close PR #54 as superseded by PR #55 to prevent merge conflicts and avoid reviving the unheld browser race condition.
+- **The next agent must not:**
+  - Reset `r.state` to `"idle"` on `"prepared"` outcomes in `panel-queue.ts`.
+  - Reintroduce global `holdPortalBrowser` calls into claim worker routines.
