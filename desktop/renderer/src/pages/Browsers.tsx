@@ -202,7 +202,7 @@ export default function BrowsersPage() {
   // Fail-closed: only report bounds while the Browsers route is active, the
   // engine says the browser is open, and the operator has not expanded to
   // fullscreen. Every other case reports null and the native view hides.
-  const workspaceActive = Boolean(snapshot?.open) && !fullscreen && !isDetached && routeActive
+  const workspaceActive = Boolean(snapshot?.open) && !fullscreen && !isDetached && routeActive && !chooserOpen
   useBrowserWorkspaceRect(viewportRef, workspaceActive)
 
   if (!snapshot && pollError && isSessionError(pollError)) {

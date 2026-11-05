@@ -37,7 +37,7 @@ import {
   tabIdForPanelKey,
   WORKER_ACTIVE_PAUSE_REQUIRED,
 } from "./native-browser-view.js"
-import { CLAIM_PANELS, clearPanelHold, getPanelStatuses, markPanelBusy, markPanelResult, panelKeyForMarketplace } from "./panel-queue.js"
+import { CLAIM_PANELS, clearPanelHold, getPanelRuntimeState, getPanelStatuses, isPanelHeld, markPanelBusy, markPanelResult, panelKeyForMarketplace } from "./panel-queue.js"
 import { localEncryptionAvailable } from "./local-secrets.js"
 import { checkForUpdates } from "./update-check.js"
 import { followUpExecutionBundle } from "./follow-up-bundle.js"
@@ -165,10 +165,15 @@ async function pollAndProcessJob(manual = false): Promise<boolean> {
     const poll = await client.pollJob()
     if (!poll.hasJob || !poll.job) return false
 
-    isCurrentlyProcessing = true
     const jobHeader = poll.job
-    activeJobInfo = jobHeader
     const panelKey = panelKeyForMarketplace(String(jobHeader.marketplace || ""))
+    if (jobHeader.stage !== "submitting" && isPanelHeld(panelKey)) {
+      logger.warn(`Panel ${panelKey} is held (${getPanelRuntimeState(panelKey)}). Refusing to process new Job #${jobHeader.jobId} until operator resolves the open form.`)
+      return false
+    }
+
+    isCurrentlyProcessing = true
+    activeJobInfo = jobHeader
 
     logger.info(`=== Received Claim Job #${jobHeader.jobId} (${jobHeader.marketplace} · AWB/Order: ${jobHeader.trackingId || jobHeader.orderNumber} · Stage: ${jobHeader.stage}) ===`)
     await client.sendHeartbeat("busy", { activeJobId: jobHeader.jobId, marketplace: jobHeader.marketplace })
@@ -267,7 +272,7 @@ async function pollAndProcessJob(manual = false): Promise<boolean> {
       if (result.stage === "prepared") {
         // The operator must see the exact prepared form to approve it: keep
         // the browser open and the view shown in the bounded workspace.
-        // holdPortalBrowser() guards the session against other jobs reusing it.
+        // markPanelResult(panelKey, "prepared") guards this panel against other jobs leasing it before approval, without blocking other panels.
         // showSupplierView never steals OS focus and is fail-closed (false
         // when the workspace rect is not measurable, e.g. off the Browsers
         // tab) — the session survives either way.
@@ -1849,7 +1854,7 @@ catch (e) { document.documentElement.setAttribute('data-theme', 'light'); }
           (p.activeJobId ? ' · job #' + p.activeJobId : '') +
           (p.sessionSavedAt ? ' · cookies ✓' : ' · no cookies') + '</div>' +
           (p.lastResult ? '<div style="font-size:11px;color:#a7f3d0;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="' + escapeHtml(p.lastResult) + '">' + escapeHtml(p.lastResult) + '</div>' : '') +
-          ((p.state === 'manual_action' || p.state === 'cooldown') ? '<button class="btn btn-secondary" style="margin-top:6px;" data-key="' + p.key + '" onclick="clearPanelHold(this.dataset.key)">Rejoin rotation</button>' : '') +
+          ((p.state === 'manual_action' || p.state === 'cooldown' || p.state === 'prepared') ? '<button class="btn btn-secondary" style="margin-top:6px;" data-key="' + p.key + '" onclick="clearPanelHold(this.dataset.key)">Rejoin rotation</button>' : '') +
           '</div>'
         ).join('');
         renderOverall();

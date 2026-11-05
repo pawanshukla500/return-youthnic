@@ -219,7 +219,7 @@ export default function DashboardPage() {
       ) : (
         <div>
           {jobsPoll.error !== null ? (
-            <div className="mb-2 rounded-lg border border-amber/30 bg-amber-soft px-3 py-1.5 text-xs font-medium text-amber">
+            <div className="mb-2 rounded-lg border border-orange/30 bg-orange-soft px-3 py-1.5 text-xs font-medium text-orange">
               Could not refresh live claims ({actionErrorMessage(jobsPoll.error)}). Showing last snapshot.
             </div>
           ) : null}
@@ -381,7 +381,7 @@ export default function DashboardPage() {
                   <div className="mt-2 truncate text-xs text-muted" title={panel.lastResult ?? ''}>
                     {panel.lastResult ? panel.lastResult : 'No result yet'}
                   </div>
-                  {panel.state === 'manual_action' || panel.state === 'cooldown' ? (
+                  {panel.state === 'manual_action' || panel.state === 'cooldown' || panel.state === 'prepared' ? (
                     <button
                       type="button"
                       onClick={() => void rejoinRotation(panel.key)}

@@ -139,6 +139,7 @@ export type PanelRuntimeState =
   | 'idle'
   | 'preparing'
   | 'submitting'
+  | 'prepared'
   | 'manual_action'
   | 'cooldown'
   | 'disabled'

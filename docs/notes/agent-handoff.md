@@ -3121,3 +3121,41 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
 - **The next agent must not:**
   - Remove `decodeURIComponent` from evidence file resolution routes in `desktop-app-server.ts`.
   - Re-introduce `holdPortalBrowser` into the worker filing pipeline (`prepared` / `manual_intervention_required`).
+
+
+### 2026-11-05, Antigravity Agent: Per-Panel State Machine & Code Review Hardening (PR #54 & PR #55)
+
+- **Task:** Address the cross-PR CodeAnt/CodeRabbit findings between PR #54 (`fix/meesho-manual-recovery-visible`) and PR #55 (`feature/native-electron-desktop-shell`), eliminating the unheld prepared browser race condition without triggering a global worker deadlock.
+- **Root Cause & Architectural Solution:**
+  - *PR #54 CodeAnt Issue:* Keeping the prepared browser open while resetting `r.state = "idle"` left a race window where subsequent polls could lease the same panel and overwrite the prepared form before operator approval.
+  - *Flawed Mitigation:* Calling the global singleton `holdPortalBrowser()` froze `shouldRunPollCycle` globally, blocking approval leases and stalling the entire filing queue.
+  - *Proper Solution:* Implemented a per-panel state machine.
+    1. Added `"prepared"` state to `PanelRuntimeState` (`panel-queue.ts` and `desktop/renderer/src/types/engine.ts`).
+    2. When `outcome === "prepared"`, `r.state = "prepared"`.
+    3. `nextReadyPanels()` skips panels in `"prepared"` so no new claim can lease that panel or overwrite the open form.
+    4. Other panels (`amazon`, `flipkart`, `myntra`, `ajio`) continue round-robin filing uninterrupted.
+    5. In `desktop-app-server.ts`, added `isPanelHeld(panelKey)` guard before processing jobs: non-submitting jobs on held panels are safely rejected/postponed, while approved submissions (`jobHeader.stage === "submitting"`) proceed directly to submission on the prepared form.
+    6. Added `isPanelHeld` and `getPanelRuntimeState` to `panel-queue.ts` and verified with unit tests in `panel-queue.test.ts`.
+- **UI & Packaging Enhancements (Resolving CodeRabbit Findings):**
+  - `desktop/renderer/src/pages/Browsers.tsx`: Added `!chooserOpen` to `workspaceActive` so the native `WebContentsView` hides while the supplier panel chooser modal is open, preventing it from obscuring action buttons.
+  - `desktop/renderer/src/pages/Dashboard.tsx`: Replaced undefined `amber` CSS classes with standard `orange` design tokens.
+  - `Dashboard.tsx`, `Claims.tsx`, and `desktop-app-server.ts`: Added "Rejoin rotation" button for panels in the `"prepared"` state.
+  - `desktop/renderer/src/components/ui/PanelStateDot.tsx`: Added pulsating orange indicator for `"prepared"` panel state.
+  - `package.json`: Updated `desktop:pack` script to run `desktop:renderer:build` before packaging.
+- **Verification Run & Results:**
+  - `npm.cmd run typecheck`: 0 errors across 4 projects (`tsconfig.json`, `tsconfig.server.json`, `tsconfig.desktop.json`, `desktop/renderer/tsconfig.json`).
+  - `npm.cmd test`: All 904 tests executed: 858 passed, 0 failed, 46 skipped (unconfigured test DB, Windows POSIX skips).
+  - `npm.cmd run desktop:renderer:build`: Bundled desktop renderer built in 1.44s.
+  - `npm.cmd run build`: Main web app build passed in 1.73s.
+  - `node desktop/gui-acceptance.mjs`: All 8 acceptance journey criteria passed live against `Return App.exe`:
+    - Offline / connecting state validated.
+    - Operator sign-in gate validated.
+    - Full 7-tab sidebar navigation validated.
+    - Bounded Browsers workspace viewport validated (zero sidebar overlap).
+    - V8 heap memory measured at 3.91 MB (< 256 MB limit).
+- **Strategic Recommendation on Open PRs:**
+  - PR #55 is a full architectural superset of PR #54 that implements the native Electron desktop shell (v1.3.0) and the per-panel state machine.
+  - Do NOT merge PR #54 into `main`; close PR #54 as superseded by PR #55 to prevent merge conflicts and avoid reviving the unheld browser race condition.
+- **The next agent must not:**
+  - Reset `r.state` to `"idle"` on `"prepared"` outcomes in `panel-queue.ts`.
+  - Reintroduce global `holdPortalBrowser` calls into claim worker routines.

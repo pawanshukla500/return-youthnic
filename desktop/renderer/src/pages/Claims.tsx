@@ -562,7 +562,7 @@ export default function ClaimsPage() {
                   <div className="truncate text-xs text-muted" title={panel.lastResult ?? undefined}>
                     {panel.lastResult || 'No activity yet'}
                   </div>
-                  {panel.state === 'manual_action' || panel.state === 'cooldown' ? (
+                  {panel.state === 'manual_action' || panel.state === 'cooldown' || panel.state === 'prepared' ? (
                     <button
                       type="button"
                       disabled={clearingPanelKey === panel.key}
