@@ -235,20 +235,41 @@ export async function completePortalLogin(
   }
 }
 
+export function isPortalLoggedIn(marketplace: string, url: string, text: string = "", hasPasswordInput: boolean = false): boolean {
+  const lowerUrl = url.toLowerCase()
+  if (lowerUrl.includes("/login") || lowerUrl.includes("/root/login") || lowerUrl.includes("signin") || lowerUrl.includes("sign-in")) {
+    return false
+  }
+  if (hasPasswordInput) {
+    return false
+  }
+  if (marketplace.toLowerCase().includes("meesho")) {
+    const inPanel = lowerUrl.includes("/growth/") || lowerUrl.includes("/experience/") || lowerUrl.includes("/panel/v3/new/")
+    const welcome = text.includes("Welcome back") || text.includes("Pending Orders") || text.includes("Support") || text.includes("Returns")
+    return inPanel || welcome
+  }
+  return text.length > 80
+}
+
 async function loggedIn(browser: SupplierBrowserApi, marketplace: string): Promise<boolean> {
   const meesho = marketplace.toLowerCase().includes("meesho")
   return browser.evaluate<boolean>(`
     (() => {
       const text = document.body ? document.body.innerText : '';
       const password = Boolean(document.querySelector('input[type="password"], input[name="password"]'));
-      if (${meesho ? "true" : "false"}) {
-        const url = window.location.href.toLowerCase();
-        const inPanel = url.includes("/growth/") && !url.includes("/login");
-        const welcome = text.includes("Welcome back") || text.includes("Pending Orders");
-        return (inPanel || welcome) && !password;
-      }
       const url = window.location.href.toLowerCase();
-      return text.length > 80 && !password && !url.includes('login') && !url.includes('signin') && !url.includes('sign-in');
+      if (url.includes('/login') || url.includes('/root/login') || url.includes('signin') || url.includes('sign-in')) {
+        return false;
+      }
+      if (password) {
+        return false;
+      }
+      if (${meesho ? "true" : "false"}) {
+        const inPanel = url.includes('/growth/') || url.includes('/experience/') || url.includes('/panel/v3/new/');
+        const welcome = text.includes('Welcome back') || text.includes('Pending Orders') || text.includes('Support') || text.includes('Returns');
+        return inPanel || welcome;
+      }
+      return text.length > 80;
     })()
   `)
 }

@@ -63,6 +63,19 @@ describe("crash guards for a long-running engine", () => {
     assert.match(fs.readFileSync(logFile, "utf8"), /SYN-simulated fatal error/)
   })
 
+  it("ignores EPIPE uncaught exceptions gracefully without terminating", () => {
+    const { status, stdout } = runProbe(
+      [
+        `const err = new Error("EPIPE: broken pipe, write")`,
+        `err.code = "EPIPE"`,
+        `setTimeout(() => { process.emit("uncaughtException", err) }, 50)`,
+        `setTimeout(() => { console.log("SYN-EPIPE-SURVIVED"); process.exit(0) }, 300)`,
+      ].join("\n"),
+    )
+    assert.equal(status, 0, "an EPIPE error must not terminate the engine")
+    assert.match(stdout, /SYN-EPIPE-SURVIVED/)
+  })
+
   it("installs the guards only once per process", () => {
     const { status, stdout } = runProbe(
       [

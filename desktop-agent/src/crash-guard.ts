@@ -28,12 +28,26 @@ export function installCrashGuards(options: CrashGuardOptions = {}): void {
   if (installed) return
   installed = true
 
+  // Avoid uncaught EPIPE exceptions when parent process closes stdout/stderr (e.g. Windows task scheduler)
+  try {
+    process.stdout?.on?.("error", (err: unknown) => {
+      if ((err as { code?: string })?.code === "EPIPE") return
+    })
+    process.stderr?.on?.("error", (err: unknown) => {
+      if ((err as { code?: string })?.code === "EPIPE") return
+    })
+  } catch {
+    // ignore
+  }
+
   process.on("unhandledRejection", (reason) => {
     // Almost always one failed request. Log it and keep filing.
     logger.error("Unhandled promise rejection (continuing):", reason)
   })
 
   process.on("uncaughtException", (err) => {
+    // If the process pipe is broken, ignore rather than recursing indefinitely
+    if ((err as { code?: string })?.code === "EPIPE") return
     logger.fatalSync("Uncaught exception (exiting so the supervisor restarts a clean process):", err)
     if (options.onFatal) {
       try {
