@@ -115,6 +115,55 @@ test("secretFromEnvironment resolves Meesho credentials when environment variabl
         delete process.env[key]
       }
     }
+  }
+})
 
+test("secretFromEnvironment respects alias fallback precedence for Meesho credentials", () => {
+  const envKeys = [
+    "MEESHOID",
+    "MEESHO_ID",
+    "MEESHO_USERNAME",
+    "MEESHO_PWD",
+    "MEESHO_PASSWORD",
+    "MEESHO_PASS",
+  ] as const
+  const originalEnv: Record<string, string | undefined> = {}
+  for (const key of envKeys) {
+    originalEnv[key] = process.env[key]
+  }
+
+  try {
+    for (const key of envKeys) {
+      delete process.env[key]
+    }
+
+    // Set fallback aliases
+    process.env.MEESHO_USERNAME = "user_fallback@example.com"
+    process.env.MEESHO_PASS = "pass_fallback"
+    let resolved = secretFromEnvironment("Meesho")
+    assert.equal(resolved?.username, "user_fallback@example.com")
+    assert.equal(resolved?.password, "pass_fallback")
+
+    // Primary alias MEESHO_ID takes precedence over MEESHO_USERNAME
+    process.env.MEESHO_ID = "user_id@example.com"
+    process.env.MEESHO_PASSWORD = "pass_password"
+    resolved = secretFromEnvironment("Meesho")
+    assert.equal(resolved?.username, "user_id@example.com")
+    assert.equal(resolved?.password, "pass_password")
+
+    // MEESHOID takes precedence over MEESHO_ID
+    process.env.MEESHOID = "user_root@example.com"
+    process.env.MEESHO_PWD = "pass_root"
+    resolved = secretFromEnvironment("Meesho")
+    assert.equal(resolved?.username, "user_root@example.com")
+    assert.equal(resolved?.password, "pass_root")
+  } finally {
+    for (const key of envKeys) {
+      if (originalEnv[key] !== undefined) {
+        process.env[key] = originalEnv[key]
+      } else {
+        delete process.env[key]
+      }
+    }
   }
 })

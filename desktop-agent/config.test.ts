@@ -1,6 +1,7 @@
 import { describe, it } from "node:test"
 import assert from "node:assert/strict"
-import { pickIntervalMs } from "./src/config.js"
+import { pickIntervalMs, isTrustedBackendUrl, saveAgentConfig, loadAgentConfig, DEFAULT_PRODUCTION_URL } from "./src/config.js"
+import { isBackendUrlExternallyControlled } from "./src/load-env.js"
 
 /**
  * The engine's timers are built straight from these values. `Number("")` is 0 and
@@ -60,5 +61,33 @@ describe("interval env parsing", () => {
   it("rejects an infinity that would keep a timer from firing", () => {
     assert.equal(pickIntervalMs([Infinity], 15000), 15000)
     assert.equal(pickIntervalMs(["Infinity"], 15000), 15000)
+  })
+})
+
+describe("backend URL configuration and consistency", () => {
+  it("trusted backend URL recognizes production origin and configured overrides", () => {
+    assert.equal(isTrustedBackendUrl(DEFAULT_PRODUCTION_URL), true)
+    assert.equal(isTrustedBackendUrl("https://evil.example.com"), false)
+    assert.equal(isTrustedBackendUrl("invalid-url"), false)
+  })
+
+  it("isBackendUrlExternallyControlled returns a boolean without throwing", () => {
+    assert.equal(typeof isBackendUrlExternallyControlled(), "boolean")
+  })
+
+  it("saveAgentConfig updates process.env.BACKEND_URL to ensure consumers share the same URL", () => {
+    const original = process.env.BACKEND_URL
+    try {
+      const updated = saveAgentConfig({ backendUrl: DEFAULT_PRODUCTION_URL })
+      assert.equal(updated.backendUrl, DEFAULT_PRODUCTION_URL)
+      assert.equal(loadAgentConfig().backendUrl, DEFAULT_PRODUCTION_URL)
+      assert.equal(process.env.BACKEND_URL, DEFAULT_PRODUCTION_URL)
+    } finally {
+      if (original !== undefined) {
+        process.env.BACKEND_URL = original
+      } else {
+        delete process.env.BACKEND_URL
+      }
+    }
   })
 })

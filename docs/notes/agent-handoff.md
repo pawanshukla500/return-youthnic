@@ -3398,14 +3398,21 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
   5. **CodeRabbit Review Findings Resolved:**
      - Updated `desktop-agent/portal-login.test.ts` to clear and restore all 6 credential aliases (`MEESHOID`, `MEESHO_ID`, `MEESHO_USERNAME`, `MEESHO_PWD`, `MEESHO_PASSWORD`, `MEESHO_PASS`).
      - Updated `desktop-agent/meesho-issues.test.ts` with `TestableMeeshoAutomation` subclass asserting `evidenceFilesMap instanceof Map` (size 0) and `workDir === os.tmpdir()`.
+  6. **Alias Precedence & Backend URL Consistency (`desktop-agent/src/load-env.ts`, `desktop-agent/src/config.ts`):**
+     - Tracked `initialEnvKeys` before `dotenv.config()` runs to preserve source priority: if any Meesho credential alias was present in the initial process environment, file-loaded aliases in that group are pruned so process variables always take precedence over `.env` files.
+     - Added `isBackendUrlExternallyControlled()`: rejects changing `backendUrl` when `BACKEND_URL` / `APP_URL` was explicitly supplied in the process environment.
+     - Synchronized `saveAgentConfig` with `process.env.BACKEND_URL`: ensures engine client, `operator-session`, and `portal-login` share the exact same active URL.
+     - Added unit test suites in `desktop-agent/config.test.ts` and `desktop-agent/portal-login.test.ts`.
 - **Files Changed:**
   - `desktop-agent/src/marketplaces/base-automation.ts`
   - `desktop-agent/src/marketplaces/meesho.ts`
   - `desktop-agent/src/portal-login.ts`
   - `desktop-agent/src/desktop-app-server.ts`
   - `desktop-agent/src/load-env.ts`
+  - `desktop-agent/src/config.ts`
   - `desktop/main.ts`
   - `desktop-agent/portal-login.test.ts`
+  - `desktop-agent/config.test.ts`
   - `desktop-agent/meesho-issues.test.ts`
   - `docs/notes/agent-handoff.md`
 - **Verification Results:**
