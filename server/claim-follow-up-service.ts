@@ -471,12 +471,9 @@ export async function recordFollowUpResult(
 
         if (claimStatus === "rejected") {
           const rawNote = input.note || ""
-          const isGenericNote = /Ticket \d+ rejected on/i.test(rawNote)
           let explicitReason = ""
           if (rawNote.startsWith("Rejected:")) {
             explicitReason = rawNote.replace(/^Rejected:\s*/, "").trim()
-          } else if (!isGenericNote && rawNote.trim()) {
-            explicitReason = rawNote.trim()
           }
           const rawReason = explicitReason || statusText || normalizedStatus
           const rejectionReason = rawReason.slice(0, 500)
