@@ -817,6 +817,7 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
       let resolutionNote = `Ticket ${ticketId} read from the Meesho Support page.`
       let statusText = parsed.statusText
 
+      let finalScreenshot = shot
       // If the ticket is rejected, open ticket details to extract the exact reason
       if (parsed.normalizedStatus === "rejected") {
         logger.info(`Ticket ${ticketId} is rejected. Opening ticket details to capture rejection reason...`)
@@ -833,7 +834,9 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
 
         if (openedDetail) {
           await this.delay(2000)
-          await this.browser.captureScreenshot(shot)
+          const detailShot = path.join(this.workDir, `ticket-detail-${safeId}.png`)
+          await this.browser.captureScreenshot(detailShot)
+          finalScreenshot = detailShot
           const detailText = await this.browser.evaluate<string>(`
             (() => {
               const drawer = document.querySelector('[class*="drawer"], [class*="modal"], [role="dialog"], [class*="ticket-detail"], [class*="timeline"]') || document.body;
@@ -863,7 +866,7 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
         supported: true,
         statusText,
         normalizedStatus: parsed.normalizedStatus,
-        screenshotPath: shot,
+        screenshotPath: finalScreenshot,
         note: resolutionNote,
       }
     } catch (error) {

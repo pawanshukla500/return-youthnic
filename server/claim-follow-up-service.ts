@@ -448,7 +448,8 @@ export async function recordFollowUpResult(
 
       if (claimStatus === "rejected") {
         const rawNote = input.note || ""
-        const rejectionReason = (rawNote.startsWith("Rejected:") ? rawNote.replace(/^Rejected:\s*/, "") : rawNote).trim() || statusText || normalizedStatus
+        const rawReason = (rawNote.startsWith("Rejected:") ? rawNote.replace(/^Rejected:\s*/, "") : rawNote).trim() || statusText || normalizedStatus
+        const rejectionReason = rawReason.slice(0, 500)
         historyReason = `Follow-up check: Rejected - Reason: ${rejectionReason}`
         await client.query(
           `UPDATE claims
@@ -460,8 +461,8 @@ export async function recordFollowUpResult(
         )
       } else if (claimStatus === "approved" || claimStatus === "paid") {
         const textToSearch = `${input.note || ""} ${statusText || ""}`
-        const amtMatch = textToSearch.match(/(?:approved\s+amount|refund\s+amount|compensation|credit(?:ed)?)\s*(?:is|of|:)?\s*(?:₹|rs\.?)\s*([\d,]+(?:\.\d+)?)/i)
-          || textToSearch.match(/(?:₹|rs\.?)\s*([\d,]+(?:\.\d+)?)/i)
+        const amtMatch = textToSearch.match(/(?:approved|refund|compensation|credit(?:ed)?)\s*(?:amount\s*)?(?:is|of|:)?\s*(?:₹|rs\.?)\s*([\d,]+(?:\.\d+)?)/i)
+          || textToSearch.match(/(?:₹|rs\.?)\s*([\d,]+(?:\.\d+)?)\s*(?:approved|credited|refunded|compensation)/i)
         const parsedAmount = amtMatch ? parseFloat(amtMatch[1].replace(/,/g, "")) : 0
         if (parsedAmount > 0) {
           historyReason = `Follow-up check: Approved (Amount: ₹${parsedAmount})`

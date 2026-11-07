@@ -378,12 +378,19 @@ export async function signInMarketplace(input: {
       password: input.password,
     }
   } else {
-    secret =
-      (await secretFromAdminApi(row.accountName)) ||
-      (await secretFromJobBundle(row.accountName)) ||
-      secretFromEnvironment(row.accountName)
-    if (secret && !row.usernameMasked) {
-      await saveTypedLogin(row, secret.username, secret.password).catch(() => undefined)
+    const fromApi = (await secretFromAdminApi(row.accountName)) || (await secretFromJobBundle(row.accountName))
+    if (fromApi) {
+      secret = fromApi
+    } else {
+      const fromEnv = secretFromEnvironment(row.accountName)
+      if (fromEnv) {
+        secret = fromEnv
+        if (!row.usernameMasked) {
+          await saveTypedLogin(row, fromEnv.username, fromEnv.password).catch((err) => {
+            logger.warn(`Could not save environment credentials for ${row.accountName} to backend: ${err instanceof Error ? err.message : String(err)}`)
+          })
+        }
+      }
     }
   }
 
