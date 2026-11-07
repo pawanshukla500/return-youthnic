@@ -769,7 +769,8 @@ export async function syncReturnRegisterMasterSkus(db: pg.Pool | pg.PoolClient):
   expectedReturnItemsUpdated?: number
 }> {
   const placeholderRegex = PLACEHOLDER_MASTER_SKU_SQL_REGEX
-  const rsiRes = await db.query(`
+  const rsiRes = await db.query(
+    `
     WITH resolved_masters AS (
       SELECT DISTINCT ON (rsi.id)
         rsi.id AS rsi_id,
@@ -780,11 +781,18 @@ export async function syncReturnRegisterMasterSkus(db: pg.Pool | pg.PoolClient):
       LEFT JOIN marketplaces m ON m.id = er.marketplace_id
       JOIN product_master pm ON replace(LOWER(btrim(rsi.marketplace_sku)), ' ', '') = replace(LOWER(btrim(pm.listing_sku)), ' ', '')
         AND pm.master_sku IS NOT NULL AND btrim(pm.master_sku) <> ''
-        AND pm.master_sku !~* '${placeholderRegex}'
+        AND pm.master_sku !~* $1
+        AND (
+          LOWER(pm.marketplace) = LOWER(COALESCE(m.name, ''))
+          OR (btrim(COALESCE(pm.marketplace, '')) <> '' AND LOWER(COALESCE(m.name, '')) LIKE '%' || LOWER(pm.marketplace) || '%' AND LOWER(pm.marketplace) <> 'all')
+          OR LOWER(pm.marketplace) = 'all'
+          OR btrim(COALESCE(rsi.product_sku, '')) = ''
+          OR rsi.product_sku ~* $1
+        )
       ORDER BY rsi.id,
         CASE 
           WHEN LOWER(pm.marketplace) = LOWER(COALESCE(m.name, '')) THEN 1
-          WHEN LOWER(COALESCE(m.name, '')) LIKE '%' || LOWER(pm.marketplace) || '%' AND pm.marketplace <> 'all' THEN 2
+          WHEN btrim(COALESCE(pm.marketplace, '')) <> '' AND LOWER(COALESCE(m.name, '')) LIKE '%' || LOWER(pm.marketplace) || '%' AND LOWER(pm.marketplace) <> 'all' THEN 2
           WHEN LOWER(pm.marketplace) = 'all' THEN 3
           ELSE 4
         END,
@@ -796,10 +804,13 @@ export async function syncReturnRegisterMasterSkus(db: pg.Pool | pg.PoolClient):
     FROM resolved_masters rm
     WHERE rsi.id = rm.rsi_id
       AND rsi.product_sku IS DISTINCT FROM rm.new_master_sku
-  `)
+  `,
+    [placeholderRegex],
+  )
   const updatedRsi = rsiRes.rowCount ?? 0
 
-  await db.query(`
+  await db.query(
+    `
     INSERT INTO skus (code, name, color_name, color_hex, key_detail, brand_label, set_contents, image_url, brand_badge)
     SELECT DISTINCT ON (pm.master_sku)
       pm.master_sku,
@@ -818,7 +829,7 @@ export async function syncReturnRegisterMasterSkus(db: pg.Pool | pg.PoolClient):
     JOIN product_master pm
       ON replace(LOWER(btrim(COALESCE(NULLIF(eri.channel_listing_id, ''), eri.marketplace_sku_identifier))), ' ', '') = replace(LOWER(btrim(pm.listing_sku)), ' ', '')
      AND pm.master_sku IS NOT NULL AND btrim(pm.master_sku) <> ''
-     AND pm.master_sku !~* '${placeholderRegex}'
+     AND pm.master_sku !~* $1
      AND (
        LOWER(pm.marketplace) = LOWER(m.name)
        OR (LOWER(m.name) LIKE '%' || LOWER(pm.marketplace) || '%' AND LOWER(pm.marketplace) <> 'all')
@@ -827,13 +838,16 @@ export async function syncReturnRegisterMasterSkus(db: pg.Pool | pg.PoolClient):
     WHERE eri.product_sku_source = 'unresolved'
        OR s.code IS NULL
        OR btrim(s.code) = ''
-       OR s.code ~* '${placeholderRegex}'
+       OR s.code ~* $1
     ORDER BY pm.master_sku, CASE WHEN btrim(COALESCE(pm.image_url, '')) <> '' THEN 0 ELSE 1 END
     ON CONFLICT (code) DO UPDATE SET
       image_url = CASE WHEN btrim(COALESCE(skus.image_url, '')) = '' AND EXCLUDED.image_url <> '' THEN EXCLUDED.image_url ELSE skus.image_url END
-  `)
+  `,
+    [placeholderRegex],
+  )
 
-  const eriRes = await db.query(`
+  const eriRes = await db.query(
+    `
     WITH resolved_expected AS (
       SELECT DISTINCT ON (eri.id)
         eri.id AS eri_id,
@@ -845,7 +859,7 @@ export async function syncReturnRegisterMasterSkus(db: pg.Pool | pg.PoolClient):
       JOIN product_master pm
         ON replace(LOWER(btrim(COALESCE(NULLIF(eri.channel_listing_id, ''), eri.marketplace_sku_identifier))), ' ', '') = replace(LOWER(btrim(pm.listing_sku)), ' ', '')
        AND pm.master_sku IS NOT NULL AND btrim(pm.master_sku) <> ''
-       AND pm.master_sku !~* '${placeholderRegex}'
+       AND pm.master_sku !~* $1
        AND (
          LOWER(pm.marketplace) = LOWER(m.name)
          OR (LOWER(m.name) LIKE '%' || LOWER(pm.marketplace) || '%' AND LOWER(pm.marketplace) <> 'all')
@@ -855,11 +869,11 @@ export async function syncReturnRegisterMasterSkus(db: pg.Pool | pg.PoolClient):
       WHERE eri.product_sku_source = 'unresolved'
          OR cur_sku.code IS NULL
          OR btrim(cur_sku.code) = ''
-         OR cur_sku.code ~* '${placeholderRegex}'
+         OR cur_sku.code ~* $1
       ORDER BY eri.id,
         CASE
           WHEN LOWER(pm.marketplace) = LOWER(m.name) THEN 1
-          WHEN LOWER(m.name) LIKE '%' || LOWER(pm.marketplace) || '%' AND LOWER(pm.marketplace) <> 'all' THEN 2
+          WHEN btrim(COALESCE(pm.marketplace, '')) <> '' AND LOWER(m.name) LIKE '%' || LOWER(pm.marketplace) || '%' AND LOWER(pm.marketplace) <> 'all' THEN 2
           ELSE 3
         END,
         CASE WHEN pm.master_sku ~* '(_DIV|_KL|_YOU|_AI[0-9]*|_NEW|_S_S|_[SMLX|2-5XL]+_S)$' THEN 2 ELSE 1 END
@@ -870,7 +884,9 @@ export async function syncReturnRegisterMasterSkus(db: pg.Pool | pg.PoolClient):
     FROM resolved_expected re
     WHERE eri.id = re.eri_id
       AND (eri.sku_id IS DISTINCT FROM re.new_sku_id OR eri.product_sku_source = 'unresolved')
-  `)
+  `,
+    [placeholderRegex],
+  )
   const updatedEri = eriRes.rowCount ?? 0
 
   const stripRes = await db.query(`
