@@ -6,6 +6,11 @@ import { agentDataDir } from "./paths.js"
 // Capture keys that were present in the process environment prior to loading any .env file
 const initialEnvKeys = new Set(Object.keys(process.env))
 
+/**
+ * Returns true if BACKEND_URL or APP_URL was explicitly set in the external
+ * process environment before dotenv loaded any .env files, preventing runtime
+ * configuration changes from overriding immutable environment deployments.
+ */
 export function isBackendUrlExternallyControlled(): boolean {
   return initialEnvKeys.has("BACKEND_URL") || initialEnvKeys.has("APP_URL")
 }
