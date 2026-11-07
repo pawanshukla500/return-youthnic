@@ -231,7 +231,11 @@ export type ScanReceipt = {
 
 // ---- Iron Send tracking (server/iron.ts) ----
 
-export type IronState = "pending" | "partial" | "overdue" | "received" | "cancelled"
+export type IronState = "pending" | "partial" | "overdue" | "received" | "cancelled" | "cleared"
+
+export type IronHandoverStatus = "batch_created" | "ready_for_handover" | "handed_over"
+
+export type IronReturnTeamStatus = "pending" | "completed"
 
 export type IronRecord = {
   id: number
@@ -266,6 +270,7 @@ export type IronBatchState = "open" | "partial" | "overdue" | "received"
 export type IronBatch = {
   id: number
   batchNo: string
+  batchDate: string
   // khaata: sent out on a challan. in_house: high-running pieces ironed at the return desk.
   location: "khaata" | "in_house"
   khaataName: string
@@ -276,6 +281,15 @@ export type IronBatch = {
   createdBy: string
   createdAt: string
   state: IronBatchState
+  returnTeamStatus: IronReturnTeamStatus
+  handoverStatus: IronHandoverStatus
+  readyForHandoverAt: string | null
+  readyForHandoverBy: string
+  handedOverAt: string | null
+  handedOverBy: string
+  handoverTo: string
+  handoverNotes: string
+  trackingIds: string[]
   lines: number
   qtySent: number
   qtyReceived: number
@@ -285,10 +299,19 @@ export type IronBatch = {
 
 export type IronSummary = {
   overdueAfterDays: number
-  records: { open: number; pending: number; partial: number; overdue: number; received: number }
+  records: { open: number; pending: number; partial: number; overdue: number; received: number; cleared?: number }
   units: { sent: number; received: number; pending: number; overdue: number }
   receivedToday: number
-  unbatched?: { lines: number; units: number }
+  unbatched?: { lines: number; units: number; todayLines?: number; todayUnits?: number }
+  batches?: {
+    total: number
+    batchCreated: number
+    readyForHandover: number
+    handedOver: number
+    totalUnits: number
+    todayBatches: number
+  }
+  cleared?: { lines: number; units: number }
 }
 
 // ---- Return analytics (server/analytics.ts) ----

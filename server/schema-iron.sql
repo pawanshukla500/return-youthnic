@@ -146,3 +146,80 @@ CREATE INDEX IF NOT EXISTS iron_send_records_batch_idx ON iron_send_records (bat
 -- the return desk). Receiving stays the same manual Inward Team step for both, and neither touches OMSGuru.
 ALTER TABLE iron_batches ADD COLUMN IF NOT EXISTS iron_location text NOT NULL DEFAULT 'khaata'
   CHECK (iron_location IN ('khaata', 'in_house'));
+
+-- ---------------------------------------------------------------------------------------------------------------
+-- Daily Iron Send Batch Management, Backlog Cutover & Return Team Handover Workflow (2026-11-06)
+-- ---------------------------------------------------------------------------------------------------------------
+-- 1. Allow 'cleared' status on iron_send_records so historical pending records up to the cutover date (or cleared via
+--    admin/team action) are archived non-destructively without deleting scan/return history and without syncing to
+--    OMSGuru inventory.
+ALTER TABLE iron_send_records DROP CONSTRAINT IF EXISTS iron_send_records_status_check;
+ALTER TABLE iron_send_records ADD CONSTRAINT iron_send_records_status_check
+  CHECK (status IN ('open', 'cancelled', 'cleared')) NOT VALID;
+ALTER TABLE iron_send_records ADD COLUMN IF NOT EXISTS cleared_by integer REFERENCES users(id);
+ALTER TABLE iron_send_records ADD COLUMN IF NOT EXISTS cleared_at timestamptz;
+ALTER TABLE iron_send_records ADD COLUMN IF NOT EXISTS clear_reason text NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS iron_send_records_status_batch_idx ON iron_send_records (status, batch_id);
+
+-- 2. Track one-time backlog cutover on iron_settings so re-running applySchema never clears new or synthetic test rows.
+ALTER TABLE iron_settings ADD COLUMN IF NOT EXISTS backlog_cleared_at timestamptz;
+ALTER TABLE iron_settings ADD COLUMN IF NOT EXISTS backlog_cleared_through date;
+
+-- 3. Batch daily date, Return Team completion status, and 3-stage handover workflow
+--    (batch_created -> ready_for_handover -> handed_over) with actor/timestamp accountability.
+ALTER TABLE iron_batches ADD COLUMN IF NOT EXISTS batch_date date NOT NULL DEFAULT (now() AT TIME ZONE 'Asia/Kolkata')::date;
+ALTER TABLE iron_batches ADD COLUMN IF NOT EXISTS return_team_status text NOT NULL DEFAULT 'completed'
+  CHECK (return_team_status IN ('completed'));
+ALTER TABLE iron_batches ADD COLUMN IF NOT EXISTS handover_status text NOT NULL DEFAULT 'batch_created'
+  CHECK (handover_status IN ('batch_created', 'ready_for_handover', 'handed_over'));
+ALTER TABLE iron_batches ADD COLUMN IF NOT EXISTS ready_for_handover_at timestamptz;
+ALTER TABLE iron_batches ADD COLUMN IF NOT EXISTS ready_for_handover_by integer REFERENCES users(id);
+ALTER TABLE iron_batches ADD COLUMN IF NOT EXISTS handed_over_at timestamptz;
+ALTER TABLE iron_batches ADD COLUMN IF NOT EXISTS handed_over_by integer REFERENCES users(id);
+ALTER TABLE iron_batches ADD COLUMN IF NOT EXISTS handover_to text NOT NULL DEFAULT '';
+ALTER TABLE iron_batches ADD COLUMN IF NOT EXISTS handover_notes text NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS iron_batches_batch_date_idx ON iron_batches (batch_date DESC);
+CREATE INDEX IF NOT EXISTS iron_batches_handover_status_idx ON iron_batches (handover_status);
+
+-- 4. One-time idempotent cutover: clear all unbatched pending Iron Send tracking records up to and including today
+--    (excluding synthetic SYN-* test rows), log the cutover in register_audit_log, and mark iron_settings.backlog_cleared_at.
+INSERT INTO register_audit_log (actor_user_id, action, entity_type, entity_id, details)
+SELECT NULL,
+       'iron.clear_pending_backlog',
+       'iron_settings',
+       '1',
+       jsonb_build_object(
+         'clearedRecords', COUNT(r.id)::int,
+         'clearedUnits', COALESCE(SUM(r.qty_sent), 0)::int,
+         'clearedThroughDate', to_char((now() AT TIME ZONE 'Asia/Kolkata')::date, 'YYYY-MM-DD'),
+         'omsguruSync', false,
+         'reason', 'Cleared pending Iron Send tracking records up to today for daily batch management cutover'
+       )
+FROM iron_send_records r
+JOIN receipt_scans rs ON rs.id = r.receipt_scan_id
+WHERE (SELECT backlog_cleared_at FROM iron_settings WHERE id = 1) IS NULL
+  AND r.status = 'open'
+  AND r.batch_id IS NULL
+  AND (r.sent_at AT TIME ZONE 'Asia/Kolkata')::date <= (now() AT TIME ZONE 'Asia/Kolkata')::date
+  AND COALESCE(rs.tracking_id_snapshot, '') NOT LIKE 'SYN-%'
+  AND NOT EXISTS (SELECT 1 FROM iron_receive_events e WHERE e.iron_send_record_id = r.id)
+HAVING COUNT(r.id) > 0;
+
+UPDATE iron_send_records r
+SET status = 'cleared',
+    cleared_at = now(),
+    clear_reason = 'Cleared pending Iron Send tracking records up to today for daily batch management cutover (not synced to OMSGuru)'
+FROM receipt_scans rs
+WHERE rs.id = r.receipt_scan_id
+  AND (SELECT backlog_cleared_at FROM iron_settings WHERE id = 1) IS NULL
+  AND r.status = 'open'
+  AND r.batch_id IS NULL
+  AND (r.sent_at AT TIME ZONE 'Asia/Kolkata')::date <= (now() AT TIME ZONE 'Asia/Kolkata')::date
+  AND COALESCE(rs.tracking_id_snapshot, '') NOT LIKE 'SYN-%'
+  AND NOT EXISTS (SELECT 1 FROM iron_receive_events e WHERE e.iron_send_record_id = r.id);
+
+UPDATE iron_settings
+SET backlog_cleared_at = now(),
+    backlog_cleared_through = (now() AT TIME ZONE 'Asia/Kolkata')::date
+WHERE id = 1 AND backlog_cleared_at IS NULL;
+

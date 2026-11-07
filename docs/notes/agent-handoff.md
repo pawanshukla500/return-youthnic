@@ -3159,3 +3159,62 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
 - **The next agent must not:**
   - Reset `r.state` to `"idle"` on `"prepared"` outcomes in `panel-queue.ts`.
   - Reintroduce global `holdPortalBrowser` calls into claim worker routines.
+
+
+### 2026-11-06, Factory Droid: Iron Send Return Batch Management, Handover Workflow & OMSGuru Excel SKU Mapping Reconciliation
+
+- **Task:** Fix and improve Iron Send Return Batch Management (clear existing pending backlog without OMSGuru sync, implement daily batch management, Batched section with Excel & printable Batch Slip downloads, Return Team handover workflow `batch_created` -> `ready_for_handover` -> `handed_over`, and reconcile the 129,753-row OMSGuru multi-channel Excel export against `product_master`, `expected_return_items`, `receipt_scan_items`, and `unmapped_listing_skus`).
+- **Work Done:**
+  1. **Clear Existing Pending Iron Send Tracking Records (`server/schema-iron.sql`, `server/iron.ts`, `server/iron-routes.ts`, `server/omsguru-daily.ts`)**:
+     - Added `'cleared'` status to `iron_send_records` (`cleared_by`, `cleared_at`, `clear_reason`) and one-time idempotent cutover marker (`backlog_cleared_at`, `backlog_cleared_through`) to `iron_settings`.
+     - Cleared all **1,803** historical unbatched pending Iron Send tracking records (`1,803` units) up to today with full audit logging (`iron.clear_pending_backlog` in `register_audit_log`), leaving `0` pending unbatched records while preserving the existing batch (`500` units) and historical return register data untouched.
+     - Added `POST /api/iron/clear-pending` and `ClearPendingDialog` UI (using `DateField`) for supervisor/admin backlog clearing.
+     - Hardened `calculateGoodReturnsForDay` in `server/omsguru-daily.ts` to join `iron_send_records` (`status IN ('open', 'cleared')`) and exclude `GREATEST(COALESCE(issues.issue_qty, 0), COALESCE(iron_rec.iron_qty, 0))` so pending, batched, and cleared Iron Send records are doubly guaranteed never to sync to OMSGuru inventory.
+  2. **Daily Iron Send Batch Management & Duplicate Prevention (`server/iron.ts`, `src/pages/IronTracking.tsx`)**:
+     - Updated `ironWhere` and `listIronRecords` so `state` values `"pending"`, `"unbatched"`, and `"open"` strictly filter `r.batch_id IS NULL`; once a batch is created for a tracking record, it is automatically removed from the pending list and moved to the **Batched** section (`state = 'batched'`).
+     - Added deduplication by `receipt_scan_item_id` and cross-record batch/clear guards in `createIronBatch` and `syncIronRecordsForScan` so batched or cleared tracking records can never be batched twice or re-opened from the scan bench.
+     - Added top-level **Pending Iron Send** vs **Batched** view switcher, **Create Daily Batch** CTA, and today's unbatched KPI breakdown.
+  3. **Batched Section, Excel & Batch Slip Downloads, and Return Team Handover Workflow (`server/schema-iron.sql`, `server/iron.ts`, `server/iron-routes.ts`, `src/pages/IronBatches.tsx`, `src/features.css`)**:
+     - Added `batch_date`, `return_team_status` (`'completed'`), `handover_status` (`'batch_created' | 'ready_for_handover' | 'handed_over'`), `ready_for_handover_at`, `ready_for_handover_by`, `handed_over_at`, `handed_over_by`, `handover_to`, and `handover_notes` to `iron_batches`.
+     - Populated `trackingIds` per batch in `BATCH_SQL` and displayed Batch ID, Creation Date, Tracking IDs pills, Total Quantity, `Return Team: Completed` badge, and Handover Status badge on every batch row and modal.
+     - Added **Download Excel File** (`GET /api/iron/batches/:id/download?format=xlsx`) and **Download Batch Slip** (`GET /api/iron/batches/:id/download?format=slip`, printable HTML with itemized tracking/SKU table and 3-stage handover signature blocks) on every batch row, detail modal, and post-creation screen.
+     - Added `POST /api/iron/batches/:id/handover` and 3-step handover workflow UI (`Batch Created` -> `Ready for Handover` -> `Handed Over`) with recipient (`handoverTo`), notes (`handoverNotes`), and `iron.batch_handover` audit trail.
+  4. **SKU Mapping & 129,753-Row Excel Validation (`server/marketplace-rules.ts`, `server/sheets.ts`, `server/lookup-import.ts`, `server/product-master.ts`, `server/vms/catalog.ts`, `server/register-service.ts`)**:
+     - Added `isPlaceholderMasterSku` (`B16`, `KD2`, `D6`, `D12`, `INACTIVE*`, `dummy`, `na`, `n/a`, `null`, `none`, `-`) and `normalizeMasterMarketplace` (`Channel Name` normalization).
+     - Updated `parseProductMaster`, `masterSkusForListings`, `upsertProductMaster`, `buildMappingInsertChunks`, `syncReturnRegisterMasterSkus`, `loadShipmentDetail`, and `overlayProductSkus` to prevent placeholder master SKUs from shadowing real active SKUs, cross-heal placeholders across channels, and backfill both `receipt_scan_items` and `expected_return_items`.
+     - Reconciled the attached 129,753-row OMSGuru Excel export against PostgreSQL: upserted `140,250` scoped + fallback mappings (`product_master` grew from `120,967` to `218,727` rows, `40,185` blank images filled), healed `507` placeholder rows in `product_master`, reduced unresolved `expected_return_items` from `38,530` -> `0` (and placeholders from `6,307` -> `0`), reduced blank/placeholder `receipt_scan_items.product_sku` from `563` -> `0`, and resolved all remaining `unmapped_listing_skus` (`0` unmapped remaining).
+- **Files Changed:**
+  - `server/schema-iron.sql`, `server/iron.ts`, `server/iron-routes.ts`, `server/live.ts`, `server/omsguru-daily.ts`
+  - `server/marketplace-rules.ts`, `server/sheets.ts`, `server/lookup-import.ts`, `server/product-master.ts`, `server/vms/catalog.ts`, `server/register-service.ts`
+  - `src/types.ts`, `src/pages/IronTracking.tsx`, `src/pages/IronBatches.tsx`, `src/features.css`
+  - `server/tests/iron.test.ts`, `server/tests/iron-db.test.ts`
+  - `docs/notes/agent-handoff.md`
+- **Verification Run & Results:**
+  - `npm run typecheck`: 0 errors across all 4 TypeScript configurations (`tsconfig.json`, `tsconfig.server.json`, `tsconfig.desktop.json`, `desktop/renderer/tsconfig.json`).
+  - `npm run build`: Vite client bundle and `server/dist.js` built cleanly.
+  - `npm test`: 907 tests executed: 860 passed, 0 failed, 47 skipped (dedicated `TEST_DATABASE_URL` unset, Windows POSIX skips).
+  - Live PostgreSQL verification against `openPool()`: confirmed `unbatched.lines = 0`, `cleared.lines = 1803`, `batches.total = 1` (`500` batched lines intact), valid `.xlsx` and printable HTML Batch Slip generation, and `0` unresolved/placeholder SKUs in `expected_return_items`, `receipt_scan_items`, and `unmapped_listing_skus`.
+- **The next agent must not:**
+  - Remove the `r.batch_id IS NULL` filter from pending/unbatched `ironWhere` states in `server/iron.ts`.
+  - Allow placeholder master SKUs (`B16`, `INACTIVE*`, `KD2`, `D6`, `D12`) to overwrite active master SKUs in `product_master`.
+  - Remove the `iron_send_records` exclusion join from `calculateGoodReturnsForDay` in `server/omsguru-daily.ts`.
+
+<!-- coderabbit-ai-generated:v1 -->
+
+<!-- coderabbit-ai-generated-section:v1:87b0b59579d9ca4c002ebfa4e1e9def0dacc7419e6373e313958c1692d1b413f -->
+
+### 2026-11-07, CodeRabbit Agent, Iron review fixes
+- Changed: server/iron.ts restricts pending clears to Supervisor/Admin; locks handover status before reopening checks and audit; preserves the handover actor on edits and resets timestamps/actors on reopening.
+- Changed: server/lookup-import.ts omits placeholder-only mappings and preserves the previously intended cross-channel healing with best-candidate scoring, marketplace ranks, and deterministic ties.
+- Changed: src/pages/IronBatches.tsx distinguishes successful slip popups from blocked popups with opener isolation and explains restricted handover controls; src/pages/IronTracking.tsx reads clearedRecords/clearedUnits and removes the ignored clientKey.
+- Changed: server/tests/iron-db.test.ts updates the stale 409 assertion and covers authorization, lifecycle resets and concurrent handover state; server/tests/iron.test.ts covers lookup precedence and placeholder healing in both row orders.
+- Ran: npm run typecheck -> passed all four projects; npm run build -> passed (bundle size warning).
+- Ran: npm test -> 908 tests, 864 passed, 0 failed, 44 skipped without test database/provider prerequisites.
+- Ran: local PostgreSQL 18 focused iron.test.ts + iron-db.test.ts -> 30 passed, 0 failed, 0 skipped; initial peer authentication mismatch resolved with the actual OS user's local role.
+- Ran: scratch script importing printBatchSlip -> successful-popup isolation and blocked-popup download/filename checks passed; git diff --check passed.
+- Not verified: interactive browser printing; unrelated database suites skipped in full npm test. The focused Iron database suite ran separately with synthetic fixtures.
+- The next agent must not: broaden clear authorization, drop handover audit history, or remove intentional cross-channel placeholder healing.
+- Open for the user: none.
+
+
+<!-- /coderabbit-ai-generated:v1 -->

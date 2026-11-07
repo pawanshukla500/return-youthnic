@@ -10,11 +10,17 @@
 
 import type pg from "pg"
 import { formatUploadLabel, toIsoTimestamp } from "./format.js"
-import { compactSkuKey, listingSkuCandidates, marketplaceRank } from "./marketplace-rules.js"
+import {
+  PLACEHOLDER_MASTER_SKU_SQL_REGEX,
+  compactSkuKey,
+  isPlaceholderMasterSku,
+  listingSkuCandidates,
+  marketplaceRank,
+} from "./marketplace-rules.js"
 import { bridgeMasterMappings } from "./oms/master-bridge.js"
 import { ServiceError, writeAudit, type Actor } from "./register-service.js"
 import type { MasterRow } from "./sheets.js"
-import { applyVmsCatalogue } from "./vms/catalog.js"
+import { applyVmsCatalogue, syncReturnRegisterMasterSkus } from "./vms/catalog.js"
 import { isVmsConfigured } from "./vms/db.js"
 
 // Candidate-aware unmapped-queue resolution. Mirrors scan-time lookup
@@ -55,9 +61,10 @@ export function unmappedIsResolved(
 // Key format mirrors lookup: `${marketplaceLower}|${compactCandidateLower}` for every
 // candidate of every stored listing.
 export async function loadMasterLookupKeys(db: pg.Pool | pg.PoolClient): Promise<Set<string>> {
-  const res = await db.query("SELECT marketplace, listing_sku FROM product_master")
+  const res = await db.query("SELECT marketplace, listing_sku, master_sku FROM product_master")
   const keys = new Set<string>()
   for (const row of res.rows) {
+    if (row.master_sku !== undefined && isPlaceholderMasterSku(String(row.master_sku ?? ""))) continue
     const scope = String(row.marketplace ?? "").trim().toLowerCase()
     const listing = String(row.listing_sku ?? "")
     for (const candidate of listingSkuCandidates(listing)) {
@@ -275,7 +282,13 @@ export async function upsertProductMaster(
         `INSERT INTO product_master (marketplace, listing_sku, master_sku, category, cogs, weight_slab, image_url, updated_at)
          VALUES ${groups.join(", ")}
          ON CONFLICT (marketplace, listing_sku) DO UPDATE SET
-           master_sku = EXCLUDED.master_sku,
+           master_sku = CASE
+             WHEN EXCLUDED.master_sku ~* '${PLACEHOLDER_MASTER_SKU_SQL_REGEX}'
+              AND product_master.master_sku !~* '${PLACEHOLDER_MASTER_SKU_SQL_REGEX}'
+              AND btrim(COALESCE(product_master.master_sku, '')) <> ''
+             THEN product_master.master_sku
+             ELSE EXCLUDED.master_sku
+           END,
            category = COALESCE(NULLIF(EXCLUDED.category, ''), product_master.category),
            image_url = CASE WHEN EXCLUDED.image_url <> '' THEN EXCLUDED.image_url ELSE product_master.image_url END,
            cogs = COALESCE(EXCLUDED.cogs, product_master.cogs),
@@ -296,6 +309,7 @@ export async function upsertProductMaster(
 
     // Candidate-aware flip: variant rows (spaceless, parent article-suffix) resolve too.
     await flipResolvedUnmappedRows(client)
+    await syncReturnRegisterMasterSkus(client)
 
     await client.query("COMMIT")
     return { inserted: affected, total: rows.length, lastLoadedAt: formatUploadLabel(), imagesFilled }
@@ -349,6 +363,7 @@ export async function replaceProductMaster(
 
     // Candidate-aware flip: variant rows (spaceless, parent article-suffix) resolve too.
     await flipResolvedUnmappedRows(client)
+    await syncReturnRegisterMasterSkus(client)
 
     await client.query("COMMIT")
     return { inserted: rows.length, removed: removed.rowCount ?? 0, lastLoadedAt: formatUploadLabel(), imagesFilled }
@@ -694,7 +709,13 @@ export async function upsertMasterRows(client: pg.PoolClient, rows: MasterRow[])
     `INSERT INTO product_master (marketplace, listing_sku, master_sku, category, cogs, weight_slab, image_url, updated_at)
      VALUES ${groups.join(", ")}
      ON CONFLICT (marketplace, listing_sku) DO UPDATE SET
-       master_sku = EXCLUDED.master_sku,
+       master_sku = CASE
+         WHEN EXCLUDED.master_sku ~* '${PLACEHOLDER_MASTER_SKU_SQL_REGEX}'
+          AND product_master.master_sku !~* '${PLACEHOLDER_MASTER_SKU_SQL_REGEX}'
+          AND btrim(COALESCE(product_master.master_sku, '')) <> ''
+         THEN product_master.master_sku
+         ELSE EXCLUDED.master_sku
+       END,
        category = COALESCE(NULLIF(EXCLUDED.category, ''), product_master.category),
        image_url = CASE WHEN EXCLUDED.image_url <> '' THEN EXCLUDED.image_url ELSE product_master.image_url END,
        cogs = COALESCE(EXCLUDED.cogs, product_master.cogs),
@@ -787,10 +808,11 @@ export async function autoResolveMissingListingSkus(db: pg.Pool): Promise<AutoLi
     summary.errors.push(`Master image propagation: ${err instanceof Error ? err.message : String(err)}`)
   }
 
-  // 4. Mark newly resolved listing SKUs as mapped in unmapped_listing_skus
+  // 4. Mark newly resolved listing SKUs as mapped in unmapped_listing_skus and heal register items
   try {
     const beforeCount = Number((await db.query("SELECT COUNT(*)::int AS count FROM unmapped_listing_skus WHERE status = 'unmapped'")).rows[0]?.count ?? 0)
     await flipResolvedUnmappedRows(db)
+    await syncReturnRegisterMasterSkus(db)
     const afterCount = Number((await db.query("SELECT COUNT(*)::int AS count FROM unmapped_listing_skus WHERE status = 'unmapped'")).rows[0]?.count ?? 0)
     summary.resolvedUnmappedCount = Math.max(0, beforeCount - afterCount)
   } catch (err) {

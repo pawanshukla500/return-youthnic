@@ -14,7 +14,9 @@ import {
   type ImportProfile,
 } from "./import-profiles.js"
 import {
+  isPlaceholderMasterSku,
   normalizeHeader,
+  normalizeMasterMarketplace,
   normalizeReturnType,
   resolveTrackingId,
   returnTypeWarning,
@@ -1192,6 +1194,9 @@ export function parseProductMaster(buffer: Buffer, filename: string, marketplace
   )
   const cogsHeader = headers.find((h) => h.startsWith("cogs"))
   const weightHeader = headers.find((h) => h.startsWith("weight_slab") || h === "weight")
+  const marketplaceHeader = headers.find((h) =>
+    ["marketplace", "channel_name", "channel", "account", "account_name", "portal"].includes(h),
+  )
 
   if (!listingHeader || !masterHeader || listingHeader === masterHeader) {
     return {
@@ -1218,26 +1223,73 @@ export function parseProductMaster(buffer: Buffer, filename: string, marketplace
     const rawImage = imageHeader ? (fields.get(imageHeader) || "").trim() : ""
     const imageUrl = normalizeImageUrl(rawImage)
     if (rawImage && !imageUrl) invalidImages++
-    const marketplace = forced || (fields.get("marketplace") || "").trim().toLowerCase() || "all"
+    const rawMp = marketplaceHeader ? (fields.get(marketplaceHeader) || "") : ""
+    const marketplace = forced || normalizeMasterMarketplace(rawMp)
     const key = `${marketplace}|${listingSku}`
-    // The same listing SKU with a different product SKU is a conflict in the file. The last row wins, as before, but
-    // the conflict is reported so a wrong mapping is never silent.
+    // The same listing SKU with a different product SKU is a conflict in the file. The last valid row wins,
+    // while dummy/placeholder codes (B16, KD2, D6, D12, INACTIVE*) never overwrite a real active product SKU.
     const previous = byKey.get(key)
     if (previous && previous.masterSku !== masterSku) {
       const set = conflictMasters.get(key) ?? new Set([previous.masterSku])
       set.add(masterSku)
       conflictMasters.set(key, set)
     }
+    const category = categoryHeader ? (fields.get(categoryHeader) || "").trim() : ""
+    const cogs = toMoney(cogsHeader ? fields.get(cogsHeader) : undefined)
+    const weightSlab = toMoney(weightHeader ? fields.get(weightHeader) : undefined)
+    const keepPreviousMaster =
+      Boolean(previous) && !isPlaceholderMasterSku(previous!.masterSku) && isPlaceholderMasterSku(masterSku)
     byKey.set(key, {
       listingSku,
       marketplace,
-      masterSku,
-      category: categoryHeader ? (fields.get(categoryHeader) || "").trim() : "",
-      cogs: toMoney(cogsHeader ? fields.get(cogsHeader) : undefined),
-      weightSlab: toMoney(weightHeader ? fields.get(weightHeader) : undefined),
-      imageUrl,
+      masterSku: keepPreviousMaster ? previous!.masterSku : masterSku,
+      category: category || previous?.category || "",
+      cogs: cogs ?? previous?.cogs ?? null,
+      weightSlab: weightSlab ?? previous?.weightSlab ?? null,
+      imageUrl: imageUrl || previous?.imageUrl || "",
     })
   }
+
+  // Cross-channel healing: if a multi-channel export mapped a listing SKU to a placeholder (e.g. B16 or INACTIVE*)
+  // on one channel while another channel in the same file has a real master SKU for that listing SKU, heal the
+  // placeholder and also populate the "all" fallback when the file used a Channel Name column without a forced scope.
+  const bestRealByListing = new Map<string, MasterRow>()
+  for (const row of byKey.values()) {
+    if (!isPlaceholderMasterSku(row.masterSku)) {
+      const lKey = row.listingSku.toLowerCase()
+      const existing = bestRealByListing.get(lKey)
+      if (!existing || (!existing.imageUrl && row.imageUrl) || (!existing.category && row.category)) {
+        bestRealByListing.set(lKey, row)
+      }
+    }
+  }
+  for (const [key, row] of byKey.entries()) {
+    if (isPlaceholderMasterSku(row.masterSku)) {
+      const donor = bestRealByListing.get(row.listingSku.toLowerCase())
+      if (donor) {
+        byKey.set(key, {
+          ...row,
+          masterSku: donor.masterSku,
+          category: row.category || donor.category,
+          imageUrl: row.imageUrl || donor.imageUrl,
+          cogs: row.cogs ?? donor.cogs,
+          weightSlab: row.weightSlab ?? donor.weightSlab,
+        })
+      } else {
+        byKey.delete(key)
+        skipped++
+      }
+    }
+  }
+  if (marketplaceHeader && marketplaceHeader !== "marketplace" && !forced) {
+    for (const donor of bestRealByListing.values()) {
+      const allKey = `all|${donor.listingSku}`
+      if (!byKey.has(allKey)) {
+        byKey.set(allKey, { ...donor, marketplace: "all" })
+      }
+    }
+  }
+
   const conflicts = [...conflictMasters].slice(0, CONFLICT_LIMIT).map(([key, masterSkus]) => {
     const [marketplace, listingSku] = key.split("|")
     return { listingSku, marketplace, masterSkus: [...masterSkus] }

@@ -9,7 +9,7 @@
 
 import type pg from "pg"
 import { applyPartners, type Queryable } from "./logistics.js"
-import { compactSkuKey, listingSkuCandidates, marketplaceRank } from "./marketplace-rules.js"
+import { compactSkuKey, isPlaceholderMasterSku, listingSkuCandidates, marketplaceRank } from "./marketplace-rules.js"
 import { normalizeSkuKey } from "./oms/client.js"
 import type { PartnerMatch } from "./marketplace-rules.js"
 import { isScannableRow, rowStatus, type DisplayIdentifierKind, type MarketplaceSkuIdentifierKind, type ParsedRow } from "./sheets.js"
@@ -36,8 +36,11 @@ export function identifierFor(row: ParsedRow): string {
   return (row.marketplaceSkuIdentifier ?? "").trim()
 }
 
-// One product-master row for a listing SKU. An exact compact match beats the parent listing
-// (the form without a trailing article suffix). A row for this account beats an "all" row.
+/**
+ * Resolves each `(listing, marketplace)` pair against `product_master`.
+ * Exact listing match beats the spaceless form, which beats the parent listing (without trailing article suffix).
+ * Account-specific rows beat `'all'` rows, and real master SKUs always beat placeholder codes (`B16`, `KD2`, `INACTIVE*`).
+ */
 export async function masterSkusForListings(
   db: Queryable,
   pairs: { listing: string; marketplace: string }[],
@@ -65,14 +68,37 @@ export async function masterSkusForListings(
       const stored = compactSkuKey(String(row.listing_sku))
       const place = candidates.indexOf(stored)
       if (place < 0) continue
-      const score = (candidates.length - place) * 10 + rank
+      const rawMaster = String(row.master_sku || "").trim()
+      const penalty = isPlaceholderMasterSku(rawMaster) ? -1000 : 0
+      const score = (candidates.length - place) * 10 + rank + penalty
       const current = best.get(key)
       if (!current || score > current.score) {
-        best.set(key, { masterSku: String(row.master_sku), imageUrl: String(row.image_url || ""), score })
+        best.set(key, { masterSku: rawMaster, imageUrl: String(row.image_url || ""), score })
       }
     }
+    // Legacy placeholder mappings may heal from another channel, as during master import.
+    const chosen = best.get(key)
+    if (chosen && isPlaceholderMasterSku(chosen.masterSku)) {
+      let donor: { masterSku: string; imageUrl: string; score: number } | undefined
+      for (const row of found.rows) {
+        const masterSku = String(row.master_sku || "").trim()
+        if (isPlaceholderMasterSku(masterSku)) continue
+        const place = candidates.indexOf(compactSkuKey(String(row.listing_sku)))
+        if (place < 0) continue
+        const score = (candidates.length - place) * 10 + marketplaceRank(String(row.marketplace), pair.marketplace)
+        const imageUrl = String(row.image_url || "") || chosen.imageUrl
+        if (!donor || score > donor.score ||
+            (score === donor.score && (masterSku < donor.masterSku ||
+              (masterSku === donor.masterSku && imageUrl < donor.imageUrl)))) {
+          donor = { masterSku, imageUrl, score }
+        }
+      }
+      if (donor) best.set(key, donor)
+    }
   }
-  for (const [key, hit] of best) result.set(key, { masterSku: hit.masterSku, imageUrl: hit.imageUrl })
+  for (const [key, hit] of best) {
+    if (!isPlaceholderMasterSku(hit.masterSku)) result.set(key, { masterSku: hit.masterSku, imageUrl: hit.imageUrl })
+  }
   return result
 }
 

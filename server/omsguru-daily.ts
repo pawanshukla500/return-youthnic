@@ -347,13 +347,13 @@ export async function calculateGoodReturnsForDay(
       COALESCE(rsi.marketplace_sku, '') AS marketplace_sku,
       COALESCE(rsi.product_sku, '') AS product_sku,
       rsi.received_qty,
-      COALESCE(issues.issue_qty, 0)::int AS issue_qty
+      GREATEST(COALESCE(issues.issue_qty, 0), COALESCE(iron_rec.iron_qty, 0))::int AS issue_qty
     FROM receipt_scans rs
     JOIN receipt_scan_items rsi ON rsi.receipt_scan_id = rs.id
     LEFT JOIN expected_returns er ON er.id = rs.expected_return_id
     LEFT JOIN marketplaces m ON m.id = er.marketplace_id
     -- Missing-item issues are left out of this count, because a missing unit is already absent from received_qty.
-    -- Every other mark, including Iron Send, blocks the whole order from the inventory file.
+    -- Every other mark, including Iron Send (whether pending, batched, or cleared), blocks the whole order from the inventory file.
     LEFT JOIN (
       SELECT x.receipt_scan_item_id, SUM(x.qty)::int AS issue_qty
       FROM receipt_scan_issues x
@@ -361,6 +361,12 @@ export async function calculateGoodReturnsForDay(
       WHERE NOT COALESCE(c.is_missing, false)
       GROUP BY x.receipt_scan_item_id
     ) issues ON issues.receipt_scan_item_id = rsi.id
+    LEFT JOIN (
+      SELECT r.receipt_scan_item_id, SUM(r.qty_sent)::int AS iron_qty
+      FROM iron_send_records r
+      WHERE r.status IN ('open', 'cleared')
+      GROUP BY r.receipt_scan_item_id
+    ) iron_rec ON iron_rec.receipt_scan_item_id = rsi.id
     WHERE rs.scanned_at >= $1::timestamptz AND rs.scanned_at <= $2::timestamptz
     ORDER BY rs.scanned_at ASC, rsi.id ASC
   `
