@@ -75,6 +75,7 @@ export function mountIronRoutes(app: Express, requireUser: RequestHandler): void
       const result = await clearPendingIronRecords(getPool(), { ...actorOf(req), role: user.role }, scopeOf(req), {
         upToDate: text(body.upToDate) || undefined,
         reason: text(body.reason) || undefined,
+        includeBatched: Boolean(body.includeBatched),
       })
       res.json(result)
       if (result.clearedRecords > 0) publishChange({ kind: "iron.cleared", marketplaceId: null, actorId: user.id })

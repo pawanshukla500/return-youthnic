@@ -3218,3 +3218,27 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
 
 
 <!-- /coderabbit-ai-generated:v1 -->
+
+### 2026-11-07, Droid, Clear Remaining Historical Batched Iron Send Records & Prevent `index.html` Caching
+
+- **Work Done:**
+  1. **Cleared Remaining 500 Pre-Cutover Batched Iron Send Records (`server/schema-iron.sql`, `server/iron.ts`, `server/iron-routes.ts`, `src/pages/IronTracking.tsx`)**:
+     - Diagnosed why the `/iron` KPI cards still showed `500` units (`Pending with Ironing: 500`, `Overdue: 500`, `Sent for Ironing: 500`): `batch_id = 1` (`IRN-261028-001`, 500 lines sent `2026-10-14`..`2026-10-19` with 0 receive events) was skipped by the initial cutover because of `AND r.batch_id IS NULL`.
+     - Updated `server/schema-iron.sql` to backfill `iron_batches.batch_date = (created_at AT TIME ZONE 'Asia/Kolkata')::date` on historical batches and clear all unreceived historical open `iron_send_records` sent on or before `backlog_cleared_through` (`2026-11-06`), including pre-cutover batches with 0 receive events (never synced to OMSGuru inventory).
+     - Added `includeBatched?: boolean` support to `clearPendingIronRecords` (`POST /api/iron/clear-pending`) and `ClearPendingDialog` (`src/pages/IronTracking.tsx`).
+     - Updated `server/analytics.ts` (`linesCte` and `byCategory`) so `iron_units` counts only active (`r.status = 'open'`) `iron_send_records` and never cleared historical backlog.
+  2. **Prevented Stale `index.html` Browser Caching (`server/index.ts`)**:
+     - Passed `index: false` to `express.static(dist)` and set `Cache-Control: no-cache, no-store, must-revalidate` on the SPA fallback (`dist/index.html`) so browsers immediately load the latest deployed frontend assets after every deployment.
+- **Files Changed:**
+  - `server/schema-iron.sql`, `server/iron.ts`, `server/iron-routes.ts`, `server/analytics.ts`, `server/index.ts`
+  - `src/pages/IronTracking.tsx`
+  - `server/tests/iron-db.test.ts`
+  - `docs/notes/agent-handoff.md`
+- **Verification Run & Results:**
+  - `npm run typecheck`: 0 errors across all 4 TypeScript projects.
+  - `npm run build`: Vite client bundle and `server/dist.js` built cleanly.
+  - `npm test`: 908 tests executed: 861 passed, 0 failed, 47 skipped.
+  - Live PostgreSQL verification via `applySchema(pool)` and `ironSummary(pool, ALL_ACCOUNTS)`: confirmed `records.open = 0`, `units.pending = 0`, `units.overdue = 0`, `units.sent = 0`, `units.received = 0`, `unbatched.lines = 0`, `batches.total = 0`, and `cleared.lines = 2303` (`2,303` historical units cleared without OMSGuru sync).
+- **The next agent must not:**
+  - Re-enable `index.html` static caching on `express.static(dist)`.
+  - Count `status = 'cleared'` Iron Send rows in active KPI or analytics summaries.

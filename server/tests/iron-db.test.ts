@@ -704,5 +704,9 @@ test("Clearing pending Iron Send records removes them from pending, preserves ba
   const day = await calculateGoodReturnsForDay(pool, todayIst())
   const kurta = day.skus.find((entry) => entry.sku === `SYN-${run}-KURTA-BLUE_M`)
   assert.equal(kurta?.qty, 2, "cleared Iron Send records remain excluded from OMSGuru daily inventory sync")
+
+  const sumAfter = await ironSummary(pool, allScope, accountId)
+  assert.equal(sumAfter.unbatched.lines, 0, "cleared Iron Send records do not appear in unbatched pending lines")
+  assert.equal(sumAfter.cleared.lines >= 1, true, "cleared Iron Send records are tracked in cleared summary")
 })
 

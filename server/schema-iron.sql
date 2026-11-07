@@ -181,8 +181,14 @@ ALTER TABLE iron_batches ADD COLUMN IF NOT EXISTS handover_notes text NOT NULL D
 CREATE INDEX IF NOT EXISTS iron_batches_batch_date_idx ON iron_batches (batch_date DESC);
 CREATE INDEX IF NOT EXISTS iron_batches_handover_status_idx ON iron_batches (handover_status);
 
--- 4. One-time idempotent cutover: clear all unbatched pending Iron Send tracking records up to and including today
---    (excluding synthetic SYN-* test rows), log the cutover in register_audit_log, and mark iron_settings.backlog_cleared_at.
+-- 4. Backfill batch_date on historical iron_batches to match their true IST creation date.
+UPDATE iron_batches
+SET batch_date = (created_at AT TIME ZONE 'Asia/Kolkata')::date
+WHERE batch_date > (created_at AT TIME ZONE 'Asia/Kolkata')::date;
+
+-- 5. One-time idempotent cutover: clear all historical pending Iron Send tracking records up to the cutover date
+--    (both unbatched and pre-cutover batches with 0 receive events, excluding synthetic SYN-* test rows),
+--    log the cutover in register_audit_log, and mark iron_settings.backlog_cleared_at.
 INSERT INTO register_audit_log (actor_user_id, action, entity_type, entity_id, details)
 SELECT NULL,
        'iron.clear_pending_backlog',
@@ -191,16 +197,14 @@ SELECT NULL,
        jsonb_build_object(
          'clearedRecords', COUNT(r.id)::int,
          'clearedUnits', COALESCE(SUM(r.qty_sent), 0)::int,
-         'clearedThroughDate', to_char((now() AT TIME ZONE 'Asia/Kolkata')::date, 'YYYY-MM-DD'),
+         'clearedThroughDate', to_char(COALESCE((SELECT backlog_cleared_through FROM iron_settings WHERE id = 1), (now() AT TIME ZONE 'Asia/Kolkata')::date - 1), 'YYYY-MM-DD'),
          'omsguruSync', false,
-         'reason', 'Cleared pending Iron Send tracking records up to today for daily batch management cutover'
+         'reason', 'Cleared historical Iron Send tracking records before daily batch management cutover'
        )
 FROM iron_send_records r
 JOIN receipt_scans rs ON rs.id = r.receipt_scan_id
-WHERE (SELECT backlog_cleared_at FROM iron_settings WHERE id = 1) IS NULL
-  AND r.status = 'open'
-  AND r.batch_id IS NULL
-  AND (r.sent_at AT TIME ZONE 'Asia/Kolkata')::date <= (now() AT TIME ZONE 'Asia/Kolkata')::date
+WHERE r.status = 'open'
+  AND (r.sent_at AT TIME ZONE 'Asia/Kolkata')::date <= COALESCE((SELECT backlog_cleared_through FROM iron_settings WHERE id = 1), (now() AT TIME ZONE 'Asia/Kolkata')::date - 1)
   AND COALESCE(rs.tracking_id_snapshot, '') NOT LIKE 'SYN-%'
   AND NOT EXISTS (SELECT 1 FROM iron_receive_events e WHERE e.iron_send_record_id = r.id)
 HAVING COUNT(r.id) > 0;
@@ -208,18 +212,16 @@ HAVING COUNT(r.id) > 0;
 UPDATE iron_send_records r
 SET status = 'cleared',
     cleared_at = now(),
-    clear_reason = 'Cleared pending Iron Send tracking records up to today for daily batch management cutover (not synced to OMSGuru)'
+    clear_reason = 'Cleared historical Iron Send tracking records before daily batch management cutover (not synced to OMSGuru)'
 FROM receipt_scans rs
 WHERE rs.id = r.receipt_scan_id
-  AND (SELECT backlog_cleared_at FROM iron_settings WHERE id = 1) IS NULL
   AND r.status = 'open'
-  AND r.batch_id IS NULL
-  AND (r.sent_at AT TIME ZONE 'Asia/Kolkata')::date <= (now() AT TIME ZONE 'Asia/Kolkata')::date
+  AND (r.sent_at AT TIME ZONE 'Asia/Kolkata')::date <= COALESCE((SELECT backlog_cleared_through FROM iron_settings WHERE id = 1), (now() AT TIME ZONE 'Asia/Kolkata')::date - 1)
   AND COALESCE(rs.tracking_id_snapshot, '') NOT LIKE 'SYN-%'
   AND NOT EXISTS (SELECT 1 FROM iron_receive_events e WHERE e.iron_send_record_id = r.id);
 
 UPDATE iron_settings
-SET backlog_cleared_at = now(),
-    backlog_cleared_through = (now() AT TIME ZONE 'Asia/Kolkata')::date
-WHERE id = 1 AND backlog_cleared_at IS NULL;
+SET backlog_cleared_at = COALESCE(backlog_cleared_at, now()),
+    backlog_cleared_through = COALESCE(backlog_cleared_through, (now() AT TIME ZONE 'Asia/Kolkata')::date - 1)
+WHERE id = 1 AND (backlog_cleared_at IS NULL OR backlog_cleared_through IS NULL);
 

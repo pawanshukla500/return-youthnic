@@ -423,9 +423,8 @@ function linesCte(where: string): string {
              COALESCE((SELECT SUM(x.qty) FROM receipt_scan_issues x
                         LEFT JOIN receipt_issue_categories c ON c.code = x.category_code
                         WHERE x.receipt_scan_item_id = i.id AND NOT COALESCE(c.is_operational, false)), 0)::int AS issue_units,
-             COALESCE((SELECT SUM(x.qty) FROM receipt_scan_issues x
-                        JOIN receipt_issue_categories c ON c.code = x.category_code AND c.is_operational
-                        WHERE x.receipt_scan_item_id = i.id), 0)::int AS iron_units
+             COALESCE((SELECT SUM(r.qty_sent) FROM iron_send_records r
+                        WHERE r.receipt_scan_item_id = i.id AND r.status = 'open'), 0)::int AS iron_units
       FROM receipt_scans rs
       JOIN expected_returns er ON er.id = rs.expected_return_id
       JOIN marketplaces m ON m.id = er.marketplace_id
@@ -515,6 +514,8 @@ export async function loadAnalytics(
        FROM lines
        JOIN receipt_scan_issues x ON x.receipt_scan_item_id = lines.item_id
        LEFT JOIN receipt_issue_categories c ON c.code = x.category_code
+       WHERE NOT COALESCE(c.is_operational, false)
+          OR EXISTS (SELECT 1 FROM iron_send_records r WHERE r.receipt_scan_item_id = lines.item_id AND r.status = 'open')
        GROUP BY x.category_code, c.label, c.is_operational
        ORDER BY operational, units DESC`,
       cur.params,

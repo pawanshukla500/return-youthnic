@@ -188,12 +188,12 @@ export function IronTracking() {
             <button
               type="button"
               className="btn"
-              disabled={!mayClear || !unbatched?.lines}
+              disabled={!mayClear || !(unbatched?.lines || units?.pending)}
               title={
                 !mayClear
                   ? "Only a Supervisor or an Admin can clear pending Iron Send records."
-                  : !unbatched?.lines
-                    ? "No unbatched pending Iron Send lines to clear."
+                  : !(unbatched?.lines || units?.pending)
+                    ? "No pending Iron Send lines to clear."
                     : "Clear pending Iron Send tracking records up to today without syncing to OMSGuru"
               }
               onClick={() => setClearingOpen(true)}
@@ -684,6 +684,7 @@ function ClearPendingDialog({
   onCleared: (clearedCount: number, unitsCleared: number, upToDate: string) => void
 }) {
   const [upToDate, setUpToDate] = useState(todayIstIso)
+  const [includeBatched, setIncludeBatched] = useState(false)
   const [reason, setReason] = useState("Cleared pending Iron Send tracking records up to today for daily batch cutover")
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState("")
@@ -697,6 +698,7 @@ function ClearPendingDialog({
         method: "POST",
         body: JSON.stringify({
           upToDate: upToDate || undefined,
+          includeBatched,
           reason: reason.trim(),
         }),
       })
@@ -716,7 +718,7 @@ function ClearPendingDialog({
             <small>Daily Batch Cutover · Zero OMSGuru Sync</small>
             <h2 className="plain">Clear pending Iron Send records</h2>
             <p>
-              Marks unbatched pending Iron Send tracking records up to the selected date as <b>Cleared</b> ({pendingLines} line
+              Marks pending Iron Send tracking records up to the selected date as <b>Cleared</b> ({pendingLines} line
               {pendingLines === 1 ? "" : "s"} · {pendingUnits} unit{pendingUnits === 1 ? "" : "s"} currently unbatched). Cleared
               records are never synced with OMSGuru inventory and historical scan/return records remain untouched.
             </p>
@@ -729,6 +731,14 @@ function ClearPendingDialog({
           <span>Clear pending records sent up to (IST)</span>
           <DateField value={upToDate} onChange={setUpToDate} label="Clear through" title="Clear pending records through date (IST)" />
         </div>
+        <label className="iron-field" style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+          <input
+            type="checkbox"
+            checked={includeBatched}
+            onChange={(event) => setIncludeBatched(event.target.checked)}
+          />
+          <span>Also clear unreceived batched records sent up to this date</span>
+        </label>
         <label className="iron-field">
           Audit note
           <input value={reason} maxLength={500} onChange={(event) => setReason(event.target.value)} />
