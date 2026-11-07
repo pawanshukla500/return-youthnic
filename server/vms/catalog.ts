@@ -283,6 +283,9 @@ export function buildMappingInsertChunks(
            master_sku = CASE 
              WHEN btrim(COALESCE(EXCLUDED.master_sku, '')) = '' THEN product_master.master_sku
              WHEN btrim(COALESCE(product_master.master_sku, '')) = '' THEN EXCLUDED.master_sku
+             WHEN EXCLUDED.master_sku ~* '^(B16|KD2|D6|D12|INACTIVE([_\\-\\s].*|[0-9]+)?|DUMMY|NA|N/A|NULL|NONE|-)$'
+              AND product_master.master_sku !~* '^(B16|KD2|D6|D12|INACTIVE([_\\-\\s].*|[0-9]+)?|DUMMY|NA|N/A|NULL|NONE|-)$'
+             THEN product_master.master_sku
              WHEN product_master.master_sku ~* '(_DIV|_KL|_YOU|_AI[0-9]*|_NEW|_S_S|_[SMLX|2-5XL]+_S|\\s+KL|_Y)$' THEN EXCLUDED.master_sku
              WHEN product_master.master_sku = upper(product_master.master_sku) AND EXCLUDED.master_sku <> upper(EXCLUDED.master_sku) THEN EXCLUDED.master_sku
              ELSE EXCLUDED.master_sku
@@ -759,7 +762,9 @@ export async function dryRunVmsCatalogue(db: pg.Pool): Promise<VmsDryRun> {
 // 2. Strips noise suffixes on any remaining receipt_scan_items.product_sku.
 export async function syncReturnRegisterMasterSkus(db: pg.Pool | pg.PoolClient): Promise<{
   receiptScanItemsUpdated: number
+  expectedReturnItemsUpdated?: number
 }> {
+  const placeholderRegex = "^(B16|KD2|D6|D12|INACTIVE([_\\-\\s].*|[0-9]+)?|DUMMY|NA|N/A|NULL|NONE|-)$"
   const rsiRes = await db.query(`
     WITH resolved_masters AS (
       SELECT DISTINCT ON (rsi.id)
@@ -769,13 +774,15 @@ export async function syncReturnRegisterMasterSkus(db: pg.Pool | pg.PoolClient):
       LEFT JOIN receipt_scans rs ON rs.id = rsi.receipt_scan_id
       LEFT JOIN expected_returns er ON er.id = rs.expected_return_id
       LEFT JOIN marketplaces m ON m.id = er.marketplace_id
-      JOIN product_master pm ON LOWER(btrim(rsi.marketplace_sku)) = LOWER(btrim(pm.listing_sku))
+      JOIN product_master pm ON replace(LOWER(btrim(rsi.marketplace_sku)), ' ', '') = replace(LOWER(btrim(pm.listing_sku)), ' ', '')
         AND pm.master_sku IS NOT NULL AND btrim(pm.master_sku) <> ''
+        AND pm.master_sku !~* '${placeholderRegex}'
       ORDER BY rsi.id,
         CASE 
           WHEN LOWER(pm.marketplace) = LOWER(COALESCE(m.name, '')) THEN 1
-          WHEN LOWER(pm.marketplace) = 'all' THEN 2
-          ELSE 3
+          WHEN LOWER(COALESCE(m.name, '')) LIKE '%' || LOWER(pm.marketplace) || '%' AND pm.marketplace <> 'all' THEN 2
+          WHEN LOWER(pm.marketplace) = 'all' THEN 3
+          ELSE 4
         END,
         CASE WHEN pm.master_sku ~* '(_DIV|_KL|_YOU|_AI[0-9]*|_NEW|_S_S|_[SMLX|2-5XL]+_S)$' THEN 2 ELSE 1 END
     )
@@ -787,6 +794,69 @@ export async function syncReturnRegisterMasterSkus(db: pg.Pool | pg.PoolClient):
       AND rsi.product_sku IS DISTINCT FROM rm.new_master_sku
   `)
   const updatedRsi = rsiRes.rowCount ?? 0
+
+  await db.query(`
+    INSERT INTO skus (code, name, color_name, color_hex, key_detail, brand_label, set_contents, image_url, brand_badge)
+    SELECT DISTINCT ON (pm.master_sku)
+      pm.master_sku,
+      pm.master_sku,
+      '',
+      '',
+      '',
+      '',
+      '',
+      COALESCE(pm.image_url, ''),
+      ''
+    FROM expected_return_items eri
+    JOIN skus s ON s.id = eri.sku_id
+    JOIN product_master pm
+      ON replace(LOWER(btrim(COALESCE(NULLIF(eri.channel_listing_id, ''), eri.marketplace_sku_identifier))), ' ', '') = replace(LOWER(btrim(pm.listing_sku)), ' ', '')
+     AND pm.master_sku IS NOT NULL AND btrim(pm.master_sku) <> ''
+     AND pm.master_sku !~* '${placeholderRegex}'
+    WHERE eri.product_sku_source = 'unresolved'
+       OR s.code IS NULL
+       OR btrim(s.code) = ''
+       OR s.code ~* '${placeholderRegex}'
+    ORDER BY pm.master_sku, CASE WHEN btrim(COALESCE(pm.image_url, '')) <> '' THEN 0 ELSE 1 END
+    ON CONFLICT (code) DO UPDATE SET
+      image_url = CASE WHEN btrim(COALESCE(skus.image_url, '')) = '' AND EXCLUDED.image_url <> '' THEN EXCLUDED.image_url ELSE skus.image_url END
+  `)
+
+  const eriRes = await db.query(`
+    WITH resolved_expected AS (
+      SELECT DISTINCT ON (eri.id)
+        eri.id AS eri_id,
+        target_sku.id AS new_sku_id
+      FROM expected_return_items eri
+      JOIN skus cur_sku ON cur_sku.id = eri.sku_id
+      JOIN expected_returns er ON er.id = eri.expected_return_id
+      JOIN marketplaces m ON m.id = er.marketplace_id
+      JOIN product_master pm
+        ON replace(LOWER(btrim(COALESCE(NULLIF(eri.channel_listing_id, ''), eri.marketplace_sku_identifier))), ' ', '') = replace(LOWER(btrim(pm.listing_sku)), ' ', '')
+       AND pm.master_sku IS NOT NULL AND btrim(pm.master_sku) <> ''
+       AND pm.master_sku !~* '${placeholderRegex}'
+      JOIN skus target_sku ON target_sku.code = pm.master_sku
+      WHERE eri.product_sku_source = 'unresolved'
+         OR cur_sku.code IS NULL
+         OR btrim(cur_sku.code) = ''
+         OR cur_sku.code ~* '${placeholderRegex}'
+      ORDER BY eri.id,
+        CASE
+          WHEN LOWER(pm.marketplace) = LOWER(m.name) THEN 1
+          WHEN LOWER(m.name) LIKE '%' || LOWER(pm.marketplace) || '%' AND pm.marketplace <> 'all' THEN 2
+          WHEN LOWER(pm.marketplace) = 'all' THEN 3
+          ELSE 4
+        END,
+        CASE WHEN pm.master_sku ~* '(_DIV|_KL|_YOU|_AI[0-9]*|_NEW|_S_S|_[SMLX|2-5XL]+_S)$' THEN 2 ELSE 1 END
+    )
+    UPDATE expected_return_items eri
+    SET sku_id = re.new_sku_id,
+        product_sku_source = 'product_master'
+    FROM resolved_expected re
+    WHERE eri.id = re.eri_id
+      AND (eri.sku_id IS DISTINCT FROM re.new_sku_id OR eri.product_sku_source = 'unresolved')
+  `)
+  const updatedEri = eriRes.rowCount ?? 0
 
   const stripRes = await db.query(`
     UPDATE receipt_scan_items
@@ -808,6 +878,7 @@ export async function syncReturnRegisterMasterSkus(db: pg.Pool | pg.PoolClient):
 
   return {
     receiptScanItemsUpdated: updatedRsi + (stripRes.rowCount ?? 0),
+    expectedReturnItemsUpdated: updatedEri,
   }
 }
 

@@ -9,19 +9,19 @@ import { Icon, MarketplaceBadge, Modal } from "../ui"
 import { useWorkspace } from "../workspace"
 
 // Iron Send tracking. The Return Team taps "Iron Send" at the scan bench; each scanned line sent for ironing appears
-// here. The Inward Team records what came back, by hand, when the ironed units return (about 2-3 days). Nothing on this
-// page or on the server marks a unit received on its own. Iron Send is never a return issue and is never sent to OMSGuru.
-// The Return Team groups pending lines into numbered batches for the khaata challan (src/pages/IronBatches.tsx).
+// in Pending Iron Send until a daily batch is created. Once a batch is created, its tracking records automatically leave
+// the pending list, move to the Batched section, and Return Team responsibility is marked Completed. The Inward Team
+// records what came back when the ironed units return. Iron Send is never a return issue and is never sent to OMSGuru.
 
-type StateFilter = "open" | "unbatched" | "pending" | "overdue" | "partial" | "received" | "cancelled" | "all"
+type StateFilter = "open" | "unbatched" | "pending" | "batched" | "overdue" | "partial" | "received" | "cleared" | "cancelled" | "all"
 
 const STATE_TABS: { id: StateFilter; label: string }[] = [
-  { id: "open", label: "All open" },
-  { id: "unbatched", label: "Not in a batch" },
-  { id: "pending", label: "Pending" },
+  { id: "open", label: "Pending (Unbatched)" },
+  { id: "batched", label: "Batched lines" },
   { id: "overdue", label: "Overdue" },
   { id: "partial", label: "Part received" },
   { id: "received", label: "Received" },
+  { id: "cleared", label: "Cleared" },
   { id: "cancelled", label: "Cancelled" },
 ]
 
@@ -31,6 +31,7 @@ const STATE_LABEL: Record<IronState, string> = {
   overdue: "Overdue",
   received: "Received",
   cancelled: "Cancelled",
+  cleared: "Cleared",
 }
 
 const IST_DATE_TIME = new Intl.DateTimeFormat("en-IN", {
@@ -64,6 +65,7 @@ export function IronTracking() {
     new URLSearchParams(window.location.search).get("view") === "batches" ? "batches" : "lines",
   )
   const [creating, setCreating] = useState(false)
+  const [clearingOpen, setClearingOpen] = useState(false)
   const [state, setState] = useState<StateFilter>("open")
   const [accountId, setAccountId] = useState("")
   const [search, setSearch] = useState("")
@@ -126,33 +128,63 @@ export function IronTracking() {
 
   const units = summary?.units
   const unbatched = summary?.unbatched
+  const batchesSummary = summary?.batches
   return (
     <div className="page-content iron-page">
       <div className="iron-explainer">
         <Icon name="iron" size={20} />
         <div>
-          <strong>Iron Send is an operational step, not a return issue.</strong>
+          <strong>Daily Iron Send Batch Workflow · Excluded from OMSGuru Inventory Sync</strong>
           <span>
-            It is never counted in issue reports and never sent to OMSGuru. The Return Team records it at the scan bench; the
-            Inward Team records the units that come back. Nothing is marked received automatically.
+            Only tracking records without a batch appear in <b>Pending Iron Send</b>. Once a daily batch is created, its tracking
+            records leave Pending, move to <b>Batched</b>, and Return Team responsibility is marked <b>Completed</b>. Iron Send
+            records (pending, batched, or cleared) never sync to OMSGuru inventory.
           </span>
         </div>
       </div>
 
       <div className="iron-batch-bar">
         <div className="iron-view-switch" role="tablist" aria-label="View">
-          <button type="button" role="tab" aria-selected={view === "lines"} className={view === "lines" ? "active" : ""} onClick={() => changeView("lines")}>
-            Lines
+          <button
+            type="button"
+            role="tab"
+            aria-selected={view === "lines"}
+            className={view === "lines" ? "active" : ""}
+            onClick={() => changeView("lines")}
+          >
+            Pending Iron Send ({unbatched ? unbatched.lines : "—"})
           </button>
-          <button type="button" role="tab" aria-selected={view === "batches"} className={view === "batches" ? "active" : ""} onClick={() => changeView("batches")}>
-            Batches
+          <button
+            type="button"
+            role="tab"
+            aria-selected={view === "batches"}
+            className={view === "batches" ? "active" : ""}
+            onClick={() => changeView("batches")}
+          >
+            Batched ({batchesSummary ? batchesSummary.total : "—"})
           </button>
         </div>
         <div className="iron-batch-callout">
           <span>
-            <strong>{unbatched ? unbatched.lines : "—"}</strong> line{unbatched?.lines === 1 ? "" : "s"} ·{" "}
-            <strong>{unbatched ? unbatched.units : "—"}</strong> unit{unbatched?.units === 1 ? "" : "s"} not in a batch yet
+            <strong>{unbatched ? unbatched.lines : "—"}</strong> pending line{unbatched?.lines === 1 ? "" : "s"} ·{" "}
+            <strong>{unbatched ? unbatched.units : "—"}</strong> unit{unbatched?.units === 1 ? "" : "s"} awaiting daily batch
+            {unbatched?.todayLines !== undefined ? ` (${unbatched.todayLines} today)` : ""}
           </span>
+          {mayDispatch && (
+            <button
+              type="button"
+              className="btn"
+              disabled={!unbatched?.lines}
+              title={
+                !unbatched?.lines
+                  ? "No unbatched pending Iron Send lines to clear."
+                  : "Clear pending Iron Send tracking records up to today without syncing to OMSGuru"
+              }
+              onClick={() => setClearingOpen(true)}
+            >
+              Clear Pending
+            </button>
+          )}
           <button
             type="button"
             className="btn primary"
@@ -162,11 +194,11 @@ export function IronTracking() {
                 ? "The Return Team makes batches. The Inward Team records what comes back."
                 : !unbatched?.lines
                   ? "Every pending Iron Send line is already in a batch."
-                  : "Group the pending lines into a numbered batch for the khaata challan"
+                  : "Group the pending lines into a numbered daily batch and move them to Batched"
             }
             onClick={() => setCreating(true)}
           >
-            <Icon name="iron" size={16} /> Create batch
+            <Icon name="iron" size={16} /> Create Daily Batch
           </button>
         </div>
       </div>
@@ -177,35 +209,51 @@ export function IronTracking() {
       <>
 
       <div className="iron-stats">
-        <button type="button" className={`iron-stat tone-pending ${state === "pending" ? "active" : ""}`} onClick={() => setState("pending")}>
-          <span>Pending with ironing</span>
-          <strong>{units ? units.pending.toLocaleString("en-IN") : "—"}</strong>
-          <small>units · {summary ? summary.records.pending + summary.records.partial : 0} lines within {summary?.overdueAfterDays ?? 3} days</small>
+        <button type="button" className={`iron-stat tone-pending ${state === "open" ? "active" : ""}`} onClick={() => setState("open")}>
+          <span>Pending (Not Batched)</span>
+          <strong>{unbatched ? unbatched.units.toLocaleString("en-IN") : "—"}</strong>
+          <small>units · {unbatched?.lines ?? 0} tracking lines awaiting daily batch</small>
+        </button>
+        <button type="button" className={`iron-stat tone-sent ${state === "batched" ? "active" : ""}`} onClick={() => changeView("batches")}>
+          <span>Batched Section</span>
+          <strong>{batchesSummary ? batchesSummary.total.toLocaleString("en-IN") : "—"}</strong>
+          <small>
+            batches · {batchesSummary?.readyForHandover ?? 0} ready · {batchesSummary?.handedOver ?? 0} handed over
+          </small>
         </button>
         <button type="button" className={`iron-stat tone-overdue ${state === "overdue" ? "active" : ""}`} onClick={() => setState("overdue")}>
           <span>Overdue</span>
           <strong>{units ? units.overdue.toLocaleString("en-IN") : "—"}</strong>
-          <small>units · {summary?.records.overdue ?? 0} lines past their batch date (or {summary?.overdueAfterDays ?? 3} days if not batched)</small>
+          <small>
+            units · {summary?.records.overdue ?? 0} lines past due ·{" "}
+            {isAdminUser(user) ? (
+              <span
+                role="button"
+                tabIndex={0}
+                className="link-button"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  setSettingsOpen(true)
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.stopPropagation()
+                    setSettingsOpen(true)
+                  }
+                }}
+              >
+                {summary?.overdueAfterDays ?? 3}d threshold
+              </span>
+            ) : (
+              <>{summary?.overdueAfterDays ?? 3}d threshold</>
+            )}
+          </small>
         </button>
         <button type="button" className={`iron-stat tone-received ${state === "received" ? "active" : ""}`} onClick={() => setState("received")}>
-          <span>Received back</span>
+          <span>Received Back</span>
           <strong>{units ? units.received.toLocaleString("en-IN") : "—"}</strong>
           <small>units · {summary?.receivedToday ?? 0} received today</small>
         </button>
-        <div className="iron-stat tone-sent">
-          <span>Sent for ironing</span>
-          <strong>{units ? units.sent.toLocaleString("en-IN") : "—"}</strong>
-          <small>
-            units in all ·{" "}
-            {isAdminUser(user) ? (
-              <button type="button" className="link-button" onClick={() => setSettingsOpen(true)}>
-                overdue after {summary?.overdueAfterDays ?? 3} days
-              </button>
-            ) : (
-              <>overdue after {summary?.overdueAfterDays ?? 3} days</>
-            )}
-          </small>
-        </div>
       </div>
 
       <div className="card iron-panel">
@@ -264,8 +312,12 @@ export function IronTracking() {
         ) : rows.length === 0 ? (
           <div className="iron-empty">
             <Icon name="iron" size={28} />
-            <strong>Nothing here</strong>
-            <span>No Iron Send matches these filters.</span>
+            <strong>{state === "open" ? "No pending unbatched Iron Send records" : "Nothing here"}</strong>
+            <span>
+              {state === "open"
+                ? "All Iron Send tracking records up to today have been cleared or moved to the Batched section."
+                : "No Iron Send matches these filters."}
+            </span>
           </div>
         ) : (
           <div className="iron-list">
@@ -286,13 +338,22 @@ export function IronTracking() {
                     <span>Order {row.orderId || "—"}</span>
                     {row.productSku && row.marketplaceSku && row.productSku !== row.marketplaceSku && <span>Listing {row.marketplaceSku}</span>}
                     {row.batchNo ? (
-                      <span className="iron-batch-chip" title="Batch number on the khaata challan">
-                        {row.batchNo}
-                      </span>
+                      <button
+                        type="button"
+                        className="iron-batch-chip clickable"
+                        title="Open the Batched section to view or download this batch"
+                        onClick={() => changeView("batches")}
+                      >
+                        {row.batchNo} · Return Team Completed
+                      </button>
                     ) : (
-                      row.state !== "received" && row.state !== "cancelled" && <span className="iron-batch-chip none">Not in a batch</span>
+                      row.state !== "received" &&
+                      row.state !== "cancelled" &&
+                      row.state !== "cleared" && <span className="iron-batch-chip none">Pending Daily Batch</span>
                     )}
-                    {row.dueAt && row.state !== "received" && row.state !== "cancelled" && <span>Due back {istDateTime(row.dueAt)}</span>}
+                    {row.dueAt && row.state !== "received" && row.state !== "cancelled" && row.state !== "cleared" && (
+                      <span>Due back {istDateTime(row.dueAt)}</span>
+                    )}
                   </div>
                   <div className="iron-meta subtle">
                     <span>
@@ -317,7 +378,7 @@ export function IronTracking() {
                   </div>
                 </div>
                 <div className="iron-action">
-                  {row.state !== "received" && row.state !== "cancelled" ? (
+                  {row.state !== "received" && row.state !== "cancelled" && row.state !== "cleared" ? (
                     <button
                       type="button"
                       className="btn primary"
@@ -344,12 +405,29 @@ export function IronTracking() {
       {creating && (
         <CreateBatchDialog
           onClose={() => setCreating(false)}
-          onCreated={() => {
+          onCreated={(batch) => {
+            setFlash(`Batch ${batch.batchNo} created (${batch.lines} lines, ${batch.qtySent} units). Records moved to Batched.`)
+            window.setTimeout(() => setFlash(""), 6000)
             void load(true)
           }}
           onOpenBatches={() => {
             setCreating(false)
             changeView("batches")
+          }}
+        />
+      )}
+      {clearingOpen && (
+        <ClearPendingDialog
+          pendingLines={unbatched?.lines ?? 0}
+          pendingUnits={unbatched?.units ?? 0}
+          onClose={() => setClearingOpen(false)}
+          onCleared={(count, unitsCleared, upToDate) => {
+            setClearingOpen(false)
+            setFlash(
+              `Cleared ${count} pending Iron Send tracking record${count === 1 ? "" : "s"} (${unitsCleared} units) through ${upToDate}. Excluded from OMSGuru sync.`,
+            )
+            window.setTimeout(() => setFlash(""), 6000)
+            void load(true)
           }}
         />
       )}
@@ -408,7 +486,7 @@ export function ReceiveDialog({
       .catch(() => {})
   }, [record.id, record.qtyPending])
 
-  const open = detail.state !== "received" && detail.state !== "cancelled"
+  const open = detail.state !== "received" && detail.state !== "cancelled" && detail.state !== "cleared"
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
@@ -569,3 +647,85 @@ function OverdueSettings({ current, onClose, onSaved }: { current: number; onClo
     </Modal>
   )
 }
+
+function todayIstIso(): string {
+  return new Intl.DateTimeFormat("sv-SE", { timeZone: "Asia/Kolkata" }).format(new Date())
+}
+
+function ClearPendingDialog({
+  pendingLines,
+  pendingUnits,
+  onClose,
+  onCleared,
+}: {
+  pendingLines: number
+  pendingUnits: number
+  onClose: () => void
+  onCleared: (clearedCount: number, unitsCleared: number, upToDate: string) => void
+}) {
+  const [upToDate, setUpToDate] = useState(todayIstIso)
+  const [reason, setReason] = useState("Cleared pending Iron Send tracking records up to today for daily batch cutover")
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState("")
+  const [clientKey] = useState(newKey)
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault()
+    setSaving(true)
+    setError("")
+    try {
+      const result = await api<{ clearedCount: number; unitsCleared: number; upToDate: string }>("/api/iron/clear-pending", {
+        method: "POST",
+        body: JSON.stringify({
+          upToDate: upToDate || undefined,
+          reason: reason.trim(),
+          clientKey,
+        }),
+      })
+      onCleared(result.clearedCount, result.unitsCleared, result.upToDate)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not clear pending records")
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Modal onClose={onClose}>
+      <form className="iron-dialog" onSubmit={submit}>
+        <div className="iron-dialog-head">
+          <div>
+            <small>Daily Batch Cutover · Zero OMSGuru Sync</small>
+            <h2 className="plain">Clear pending Iron Send records</h2>
+            <p>
+              Marks unbatched pending Iron Send tracking records up to the selected date as <b>Cleared</b> ({pendingLines} line
+              {pendingLines === 1 ? "" : "s"} · {pendingUnits} unit{pendingUnits === 1 ? "" : "s"} currently unbatched). Cleared
+              records are never synced with OMSGuru inventory and historical scan/return records remain untouched.
+            </p>
+          </div>
+          <button type="button" className="icon-button" onClick={onClose} aria-label="Close">
+            <Icon name="close" />
+          </button>
+        </div>
+        <div className="iron-field">
+          <span>Clear pending records sent up to (IST)</span>
+          <DateField value={upToDate} onChange={setUpToDate} label="Clear through" title="Clear pending records through date (IST)" />
+        </div>
+        <label className="iron-field">
+          Audit note
+          <input value={reason} maxLength={500} onChange={(event) => setReason(event.target.value)} />
+        </label>
+        {error && <div className="form-error">{error}</div>}
+        <div className="iron-dialog-actions">
+          <button type="button" className="btn" onClick={onClose}>
+            Cancel
+          </button>
+          <button type="submit" className="btn primary" disabled={saving}>
+            {saving ? "Clearing…" : "Confirm Clear Pending"}
+          </button>
+        </div>
+      </form>
+    </Modal>
+  )
+}
+

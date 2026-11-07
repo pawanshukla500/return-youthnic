@@ -21,10 +21,12 @@ import { loadReasons } from "../dashboard.js"
 import { applySchema, connectionSettingsFor } from "../db.js"
 import { generateDailyReportData, generateWeeklyReportData, renderWeeklyEmail } from "../email-reports.js"
 import {
+  clearPendingIronRecords,
   createIronBatch,
   getIronBatch,
   getIronRecord,
   ironBatchSheetRows,
+  ironBatchSlipHtml,
   ironBatchXlsx,
   ironSummary,
   listIronBatches,
@@ -32,6 +34,7 @@ import {
   receiveIron,
   receiveIronBatch,
   updateIronBatch,
+  updateIronBatchHandover,
 } from "../iron.js"
 import { currentCursor } from "../live.js"
 import { commitLookupUpload } from "../lookup-import.js"
@@ -66,6 +69,7 @@ const AWB = {
   batchA: `SYN-${run}-BATA`,
   batchB: `SYN-${run}-BATB`,
   inHouse: `SYN-${run}-BATC`,
+  clearable: `SYN-${run}-CLR1`,
 }
 
 let pool: pg.Pool
@@ -172,6 +176,7 @@ before(async () => {
       row({ trackingId: AWB.batchA, orderLineId: `SYN-${run}-L6`, qty: 2 }),
       row({ trackingId: AWB.batchB, orderLineId: `SYN-${run}-L7`, qty: 1, channelListingId: `SYN-${run}-TOP-RED_L`, sku: `SYN-${run}-TOP-RED_L` }),
       row({ trackingId: AWB.inHouse, orderLineId: `SYN-${run}-L8`, qty: 1 }),
+      row({ trackingId: AWB.clearable, orderLineId: `SYN-${run}-L9`, qty: 2 }),
     ],
     images: new Map(),
     sources: new Map(),
@@ -544,6 +549,43 @@ test("Iron batches: the Return Team batches pending lines for the khaata challan
   assert.equal(sheet[4][1], "SYN-CH-1")
   assert.equal(sheet[sheet.length - 1][8], 3, "the total sent")
   assert.equal(ironBatchXlsx(late.batch, late.rows).subarray(0, 2).toString(), "PK", "a real .xlsx file")
+  const slipHtml = ironBatchSlipHtml(late.batch, late.rows)
+  assert.match(slipHtml, new RegExp(made.batch.batchNo))
+  assert.match(slipHtml, new RegExp(AWB.batchA))
+  assert.match(slipHtml, new RegExp(AWB.batchB))
+  assert.match(slipHtml, /Return Team: Completed/)
+
+  // Return Team Handover Workflow: batch_created -> ready_for_handover -> handed_over
+  assert.equal(late.batch.returnTeamStatus, "completed")
+  assert.equal(late.batch.handoverStatus, "batch_created")
+  assert.deepEqual(late.batch.trackingIds, [AWB.batchA, AWB.batchB].sort())
+  const pendingSearch = await listIronRecords(pool, allScope, { state: "pending", search: AWB.batchA })
+  assert.equal(pendingSearch.rows.length, 0, "once batched, tracking record is removed from pending list")
+  const batchedSearch = await listIronRecords(pool, allScope, { state: "batched", search: AWB.batchA })
+  assert.equal(batchedSearch.rows.length, 1, "batched tracking record appears in Batched section")
+
+  const readyBatch = await updateIronBatchHandover(pool, scanner, allScope, made.batch.id, {
+    handoverStatus: "ready_for_handover",
+    handoverTo: "SYN Ironing Unit",
+    handoverNotes: "SYN packed for handover",
+  })
+  assert.equal(readyBatch.handoverStatus, "ready_for_handover")
+  assert.equal(readyBatch.readyForHandoverBy, scanner.name)
+  assert.ok(readyBatch.readyForHandoverAt)
+  assert.equal(readyBatch.handoverTo, "SYN Ironing Unit")
+
+  const handedOverBatch = await updateIronBatchHandover(pool, scanner, allScope, made.batch.id, {
+    handoverStatus: "handed_over",
+    handoverTo: "SYN Ironing Supervisor",
+    handoverNotes: "SYN handed over with slip",
+  })
+  assert.equal(handedOverBatch.handoverStatus, "handed_over")
+  assert.equal(handedOverBatch.handedOverBy, scanner.name)
+  assert.ok(handedOverBatch.handedOverAt)
+  assert.equal(handedOverBatch.handoverTo, "SYN Ironing Supervisor")
+  assert.equal(handedOverBatch.handoverNotes, "SYN handed over with slip")
+  const handedOverList = await listIronBatches(pool, allScope, { state: "all", handoverStatus: "handed_over", search: made.batch.batchNo })
+  assert.equal(handedOverList.length, 1)
 
   // Only the Inward Team receives, by hand; a retried receive counts once.
   await expectError(receiveIronBatch(pool, scanner, allScope, made.batch.id, { notes: "", clientKey: null }), 403, /Inward Team/)
@@ -578,3 +620,41 @@ test("Iron batches: high-running pieces ironed at the return desk; the Inward Te
   assert.equal(received.unitsReceived, 1)
   assert.equal(received.batch.state, "received")
 })
+
+test("Clearing pending Iron Send records removes them from pending, preserves batches, and never syncs to OMSGuru", { skip: skip || false }, async () => {
+  const clearRecId = await ironScan(AWB.clearable, `SYN-${run}-CLR-1`)
+  const beforePending = await listIronRecords(pool, allScope, { state: "pending", search: AWB.clearable })
+  assert.equal(beforePending.rows.length, 1)
+
+  const clearedRes = await clearPendingIronRecords(pool, admin, allScope, {
+    upToDate: todayIst(),
+    reason: "SYN daily cutover clear",
+  })
+  assert.ok(clearedRes.clearedRecords >= 1)
+  assert.ok(clearedRes.clearedUnits >= 2)
+
+  const afterPending = await listIronRecords(pool, allScope, { state: "pending", search: AWB.clearable })
+  assert.equal(afterPending.rows.length, 0, "cleared record is removed from pending list")
+  const clearedList = await listIronRecords(pool, allScope, { state: "cleared", search: AWB.clearable })
+  assert.equal(clearedList.rows.length, 1)
+  assert.equal(clearedList.rows[0].id, clearRecId)
+  assert.equal(clearedList.rows[0].state, "cleared")
+
+  await expectError(
+    createIronBatch(pool, scanner, allScope, {
+      recordIds: [clearRecId],
+      khaataName: "SYN Khaata",
+      challanNo: "",
+      expectedDays: 3,
+      notes: "",
+      clientKey: `SYN-${run}-CLR-BATCH`,
+    }),
+    409,
+    /no longer open/,
+  )
+
+  const day = await calculateGoodReturnsForDay(pool, todayIst())
+  const kurta = day.skus.find((entry) => entry.sku === `SYN-${run}-KURTA-BLUE_M`)
+  assert.equal(kurta?.qty, 2, "cleared Iron Send records remain excluded from OMSGuru daily inventory sync")
+})
+

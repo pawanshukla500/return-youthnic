@@ -4,9 +4,24 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { buildDetailedInsights, buildInsights, normalizeFilters, pct, sizeOfLine, sizeRank } from "../analytics.js"
 import { computeVolumeRatios } from "../dashboard.js"
-import { canDispatchIron, canReceiveIron, ironBatchNumber, ironBatchStateOf, ironLocationOf, ironStateOf, receiveProblem } from "../iron.js"
+import {
+  canDispatchIron,
+  canReceiveIron,
+  ironBatchNumber,
+  ironBatchSlipHtml,
+  ironBatchStateOf,
+  ironHandoverStatusLabel,
+  ironHandoverStatusOf,
+  ironLocationOf,
+  ironStateOf,
+  receiveProblem,
+  type IronBatchView,
+  type IronRecordView,
+} from "../iron.js"
 import { changeVisibleTo } from "../live.js"
+import { isPlaceholderMasterSku, normalizeMasterMarketplace } from "../marketplace-rules.js"
 import { countsAsReturnIssue, scanStatusFor } from "../register-rules.js"
+import { parseProductMaster } from "../sheets.js"
 
 const now = new Date("2026-10-14T12:00:00Z")
 const daysAgo = (n: number) => new Date(now.getTime() - n * 24 * 3600_000)
@@ -26,6 +41,7 @@ test("an Iron Send is pending until the Inward Team records it; nothing is recei
   assert.equal(ironStateOf({ ...base, qtyReceived: 1, sentAt: daysAgo(4) }), "overdue")
   assert.equal(ironStateOf({ ...base, qtyReceived: 2, sentAt: daysAgo(10) }), "received")
   assert.equal(ironStateOf({ ...base, status: "cancelled", qtyReceived: 0, sentAt: daysAgo(1) }), "cancelled")
+  assert.equal(ironStateOf({ ...base, status: "cleared", qtyReceived: 0, sentAt: daysAgo(1) }), "cleared")
 })
 
 test("only the Inward Team (or an Admin) may record ironed units as received", () => {
@@ -253,3 +269,104 @@ test("[synthetic] computeVolumeRatios handles empty periods gracefully without d
   assert.equal(summary.customerRatioPct, 0)
   assert.equal(summary.rtoRatioPct, 0)
 })
+
+test("[synthetic] handover status helpers and printable Batch Slip HTML include full batch and tracking details", () => {
+  assert.equal(ironHandoverStatusOf("batch_created"), "batch_created")
+  assert.equal(ironHandoverStatusOf("ready_for_handover"), "ready_for_handover")
+  assert.equal(ironHandoverStatusOf("handed_over"), "handed_over")
+  assert.equal(ironHandoverStatusOf("invalid"), "batch_created")
+  assert.equal(ironHandoverStatusLabel("batch_created"), "Batch Created")
+  assert.equal(ironHandoverStatusLabel("ready_for_handover"), "Ready for Handover")
+  assert.equal(ironHandoverStatusLabel("handed_over"), "Handed Over")
+
+  const batch: IronBatchView = {
+    id: 42,
+    batchNo: "IRN-261106-001",
+    batchDate: "2026-11-06",
+    location: "khaata",
+    khaataName: "SYN Khaata Unit 1",
+    challanNo: "SYN-CH-42",
+    expectedDays: 3,
+    expectedReturnAt: "2026-11-09T12:00:00.000Z",
+    notes: "SYN urgent batch",
+    createdBy: "SYN Scanner",
+    createdAt: "2026-11-06T09:30:00.000Z",
+    lines: 2,
+    qtySent: 3,
+    qtyReceived: 0,
+    qtyPending: 3,
+    lastReceivedAt: null,
+    state: "open",
+    returnTeamStatus: "completed",
+    handoverStatus: "ready_for_handover",
+    readyForHandoverAt: "2026-11-06T09:45:00.000Z",
+    readyForHandoverBy: "SYN Supervisor",
+    handedOverAt: null,
+    handedOverBy: "",
+    handoverTo: "SYN Ironing Team",
+    handoverNotes: "SYN 3 pieces verified",
+    trackingIds: ["SYN-AWB-1001", "SYN-AWB-1002"],
+  }
+  const rows: IronRecordView[] = [
+    {
+      id: 1,
+      scanId: 10,
+      state: "pending",
+      trackingId: "SYN-AWB-1001",
+      orderId: "SYN-ORD-1001",
+      marketplace: "Myntra VB",
+      marketplaceId: 1,
+      marketplaceSku: "SYN-KURTA-BLUE_M",
+      productSku: "SYN-KURTA-BLUE_M",
+      productName: "SYN Blue Kurta",
+      size: "M",
+      imageUrl: "",
+      qtySent: 2,
+      qtyReceived: 0,
+      qtyPending: 2,
+      ageDays: 0,
+      batchId: 42,
+      batchNo: "IRN-261106-001",
+      dueAt: "2026-11-09T12:00:00.000Z",
+      sentBy: "SYN Scanner",
+      sentAt: "2026-11-06T09:30:00.000Z",
+      lastReceivedAt: null,
+      notes: "SYN line 1",
+      receipts: [],
+    },
+  ]
+
+  const html = ironBatchSlipHtml(batch, rows)
+  assert.match(html, /IRN-261106-001/)
+  assert.match(html, /SYN-AWB-1001/)
+  assert.match(html, /SYN-AWB-1002/)
+  assert.match(html, /Return Team: Completed/)
+  assert.match(html, /Ready for Handover/)
+  assert.match(html, /SYN Khaata Unit 1/)
+  assert.match(html, /SYN-KURTA-BLUE_M/)
+})
+
+test("[synthetic] placeholder master SKU guard and Channel Name multi-channel Excel parser heal dummy mappings", () => {
+  assert.equal(isPlaceholderMasterSku("B16"), true)
+  assert.equal(isPlaceholderMasterSku("INACTIVE_SYN_123"), true)
+  assert.equal(isPlaceholderMasterSku("SYN-REAL-MASTER_M"), false)
+  assert.equal(normalizeMasterMarketplace("Myntra-VB"), "myntra vb")
+  assert.equal(normalizeMasterMarketplace("Myntra-EJ"), "myntra ej")
+  assert.equal(normalizeMasterMarketplace("Flipkart_Store"), "flipkart")
+
+  const csv = [
+    "Channel Name,Channel Listing SKU Code,Master SKU Code,Product Category",
+    "Meesho,SYN-KURTA-ROSE_M,B16,Kurta",
+    "Myntra-VB,SYN-KURTA-ROSE_M,SYN-MASTER-ROSE_M,Kurta Set",
+    "Flipkart,SYN-UNLINKED-ONLY_L,B16,Kurta",
+  ].join("\n")
+  const parsed = parseProductMaster(Buffer.from(csv, "utf8"), "SYN-master.csv")
+  assert.equal(parsed.fatal, "")
+  const meeshoRow = parsed.rows.find((r) => r.marketplace === "meesho" && r.listingSku === "SYN-KURTA-ROSE_M")
+  assert.equal(meeshoRow?.masterSku, "SYN-MASTER-ROSE_M", "cross-channel donor heals B16 placeholder")
+  const allRow = parsed.rows.find((r) => r.marketplace === "all" && r.listingSku === "SYN-KURTA-ROSE_M")
+  assert.equal(allRow?.masterSku, "SYN-MASTER-ROSE_M", "populates all-marketplace fallback")
+  const unlinkedRow = parsed.rows.find((r) => r.listingSku === "SYN-UNLINKED-ONLY_L")
+  assert.equal(unlinkedRow, undefined, "pure placeholder row with no real donor is skipped")
+})
+

@@ -19,10 +19,12 @@ import { analyticsCsv, loadAnalytics } from "./analytics.js"
 import { getPool } from "./db.js"
 import { actorOf, requireAdmin, scopeOf, sendError, userOf } from "./http.js"
 import {
+  clearPendingIronRecords,
   createIronBatch,
   getIronBatch,
   getIronRecord,
   ironBatchCsv,
+  ironBatchSlipHtml,
   ironBatchXlsx,
   ironLocationOf,
   ironRecordAccount,
@@ -33,6 +35,7 @@ import {
   receiveIronBatch,
   setOverdueDays,
   updateIronBatch,
+  updateIronBatchHandover,
 } from "./iron.js"
 import { currentCursor, liveClientCount, publishChange } from "./live.js"
 import { ServiceError } from "./register-service.js"
@@ -65,10 +68,33 @@ export function mountIronRoutes(app: Express, requireUser: RequestHandler): void
     }
   })
 
+  app.post("/api/iron/clear-pending", requireUser, async (req, res, next) => {
+    try {
+      const body = (req.body ?? {}) as Record<string, unknown>
+      const user = userOf(req)
+      const result = await clearPendingIronRecords(getPool(), { ...actorOf(req), role: user.role }, scopeOf(req), {
+        upToDate: text(body.upToDate) || undefined,
+        reason: text(body.reason) || undefined,
+      })
+      res.json(result)
+      if (result.clearedRecords > 0) publishChange({ kind: "iron.cleared", marketplaceId: null, actorId: user.id })
+    } catch (error) {
+      sendError(res, error, next)
+    }
+  })
+
   app.get("/api/iron/batches", requireUser, async (req, res, next) => {
     try {
       const q = req.query as Record<string, unknown>
-      res.json({ batches: await listIronBatches(getPool(), scopeOf(req), { state: text(q.state) || "open", search: text(q.search).slice(0, 80) }) })
+      res.json({
+        batches: await listIronBatches(getPool(), scopeOf(req), {
+          state: text(q.state) || "all",
+          handoverStatus: text(q.handoverStatus) || "all",
+          search: text(q.search).slice(0, 80),
+          dateFrom: text(q.dateFrom),
+          dateTo: text(q.dateTo),
+        }),
+      })
     } catch (error) {
       sendError(res, error, next)
     }
@@ -100,15 +126,42 @@ export function mountIronRoutes(app: Express, requireUser: RequestHandler): void
       const id = positiveId(req.params.id)
       if (!id) throw new ServiceError(404, "Iron batch not found")
       const { batch, rows } = await getIronBatch(getPool(), scopeOf(req), id)
-      if (text((req.query as Record<string, unknown>).format) === "csv") {
+      const q = req.query as Record<string, unknown>
+      const format = text(q.format).toLowerCase()
+      if (format === "csv") {
         res.setHeader("Content-Type", "text/csv; charset=utf-8")
         res.setHeader("Content-Disposition", `attachment; filename="${batch.batchNo}.csv"`)
         res.send(`\uFEFF${ironBatchCsv(batch, rows)}`)
         return
       }
+      if (format === "slip") {
+        const disposition = text(q.inline) === "1" ? "inline" : "attachment"
+        res.setHeader("Content-Type", "text/html; charset=utf-8")
+        res.setHeader("Content-Disposition", `${disposition}; filename="${batch.batchNo}-slip.html"`)
+        res.send(ironBatchSlipHtml(batch, rows))
+        return
+      }
       res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
       res.setHeader("Content-Disposition", `attachment; filename="${batch.batchNo}.xlsx"`)
       res.send(ironBatchXlsx(batch, rows))
+    } catch (error) {
+      sendError(res, error, next)
+    }
+  })
+
+  app.post("/api/iron/batches/:id/handover", requireUser, async (req, res, next) => {
+    try {
+      const id = positiveId(req.params.id)
+      if (!id) throw new ServiceError(404, "Iron batch not found")
+      const body = (req.body ?? {}) as Record<string, unknown>
+      const user = userOf(req)
+      const batch = await updateIronBatchHandover(getPool(), { ...actorOf(req), role: user.role }, scopeOf(req), id, {
+        handoverStatus: body.handoverStatus,
+        handoverTo: body.handoverTo,
+        handoverNotes: body.handoverNotes,
+      })
+      res.json({ batch })
+      publishChange({ kind: "iron.batch", marketplaceId: null, actorId: user.id })
     } catch (error) {
       sendError(res, error, next)
     }

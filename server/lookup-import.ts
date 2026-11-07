@@ -9,7 +9,7 @@
 
 import type pg from "pg"
 import { applyPartners, type Queryable } from "./logistics.js"
-import { compactSkuKey, listingSkuCandidates, marketplaceRank } from "./marketplace-rules.js"
+import { compactSkuKey, isPlaceholderMasterSku, listingSkuCandidates, marketplaceRank } from "./marketplace-rules.js"
 import { normalizeSkuKey } from "./oms/client.js"
 import type { PartnerMatch } from "./marketplace-rules.js"
 import { isScannableRow, rowStatus, type DisplayIdentifierKind, type MarketplaceSkuIdentifierKind, type ParsedRow } from "./sheets.js"
@@ -65,10 +65,26 @@ export async function masterSkusForListings(
       const stored = compactSkuKey(String(row.listing_sku))
       const place = candidates.indexOf(stored)
       if (place < 0) continue
-      const score = (candidates.length - place) * 10 + rank
+      const rawMaster = String(row.master_sku || "").trim()
+      const penalty = isPlaceholderMasterSku(rawMaster) ? -1000 : 0
+      const score = (candidates.length - place) * 10 + rank + penalty
       const current = best.get(key)
       if (!current || score > current.score) {
-        best.set(key, { masterSku: String(row.master_sku), imageUrl: String(row.image_url || ""), score })
+        best.set(key, { masterSku: rawMaster, imageUrl: String(row.image_url || ""), score })
+      }
+    }
+    const chosen = best.get(key)
+    if (chosen && isPlaceholderMasterSku(chosen.masterSku)) {
+      for (const row of found.rows) {
+        const rawMaster = String(row.master_sku || "").trim()
+        if (isPlaceholderMasterSku(rawMaster)) continue
+        const stored = compactSkuKey(String(row.listing_sku))
+        const place = candidates.indexOf(stored)
+        if (place < 0) continue
+        const score = (candidates.length - place) * 10
+        if (score > chosen.score) {
+          best.set(key, { masterSku: rawMaster, imageUrl: String(row.image_url || "") || chosen.imageUrl, score })
+        }
       }
     }
   }

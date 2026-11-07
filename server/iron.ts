@@ -23,11 +23,26 @@ import { ServiceError, type Actor } from "./register-service.js"
 export const DEFAULT_OVERDUE_DAYS = 3
 export const MAX_IRON_NOTES = 500
 
-export type IronState = "pending" | "partial" | "overdue" | "received" | "cancelled"
+export type IronState = "pending" | "partial" | "overdue" | "received" | "cancelled" | "cleared"
+export type IronHandoverStatus = "batch_created" | "ready_for_handover" | "handed_over"
+export type IronReturnTeamStatus = "completed"
+
+export function ironHandoverStatusOf(value: unknown): IronHandoverStatus {
+  const clean = String(value ?? "").trim().toLowerCase()
+  if (clean === "ready_for_handover") return "ready_for_handover"
+  if (clean === "handed_over") return "handed_over"
+  return "batch_created"
+}
+
+export function ironHandoverStatusLabel(status: IronHandoverStatus): string {
+  if (status === "ready_for_handover") return "Ready for Handover"
+  if (status === "handed_over") return "Handed Over"
+  return "Batch Created"
+}
 
 // The state of one record. Pure, so the screen, the email and the tests agree.
 export function ironStateOf(input: {
-  status: "open" | "cancelled"
+  status: "open" | "cancelled" | "cleared"
   qtySent: number
   qtyReceived: number
   sentAt: Date
@@ -37,6 +52,7 @@ export function ironStateOf(input: {
   dueAt?: Date | null
 }): IronState {
   if (input.status === "cancelled") return "cancelled"
+  if (input.status === "cleared") return "cleared"
   const pending = Math.max(0, input.qtySent - input.qtyReceived)
   if (pending === 0) return "received"
   const overdue = input.dueAt
@@ -107,21 +123,25 @@ export async function syncIronRecordsForScan(
     [scanId],
   )
   const open = await client.query(
-    `SELECT r.id, r.receipt_scan_item_id, r.qty_sent, r.batch_id,
+    `SELECT r.id, r.receipt_scan_item_id, r.qty_sent, r.status, r.batch_id,
             (SELECT b.batch_no FROM iron_batches b WHERE b.id = r.batch_id) AS batch_no,
             COALESCE((SELECT SUM(e.qty) FROM iron_receive_events e WHERE e.iron_send_record_id = r.id), 0)::int AS received
      FROM iron_send_records r
-     WHERE r.receipt_scan_id = $1 AND r.status = 'open'
+     WHERE r.receipt_scan_id = $1 AND r.status IN ('open', 'cleared')
+     ORDER BY CASE WHEN r.status = 'open' THEN 0 ELSE 1 END, r.id DESC
      FOR UPDATE OF r`,
     [scanId],
   )
-  const openByItem = new Map<number, { id: number; qty: number; received: number; batchNo: string | null }>()
+  const openByItem = new Map<number, { id: number; qty: number; received: number; batchNo: string | null; status: string }>()
   for (const row of open.rows) {
-    openByItem.set(Number(row.receipt_scan_item_id), {
+    const itemId = Number(row.receipt_scan_item_id)
+    if (openByItem.has(itemId)) continue
+    openByItem.set(itemId, {
       id: Number(row.id),
       qty: Number(row.qty_sent),
       received: Number(row.received),
       batchNo: row.batch_id === null ? null : String(row.batch_no),
+      status: String(row.status || "open"),
     })
   }
 
@@ -133,6 +153,12 @@ export async function syncIronRecordsForScan(
     const current = openByItem.get(itemId)
     if (current && current.qty === qty) continue
     if (current) {
+      if (current.status === "cleared") {
+        throw new ServiceError(
+          409,
+          "This Iron Send record was already cleared in a daily batch cutover and cannot be changed from the scan bench.",
+        )
+      }
       if (current.batchNo) {
         throw new ServiceError(
           409,
@@ -251,7 +277,16 @@ export type IronSummary = {
   units: { sent: number; received: number; pending: number; overdue: number }
   receivedToday: number
   // Pending lines and units that are not in a batch yet (the Return Team still has to send them out).
-  unbatched: { lines: number; units: number }
+  unbatched: { lines: number; units: number; todayLines: number; todayUnits: number }
+  batches: {
+    total: number
+    batchCreated: number
+    readyForHandover: number
+    handedOver: number
+    totalUnits: number
+    todayBatches: number
+  }
+  cleared: { lines: number; units: number }
 }
 
 const RECORD_SQL = `
@@ -279,6 +314,7 @@ const RECORD_SQL = `
 function ironWhere(scope: AccountScope, filters: IronFilters, params: unknown[]): string {
   const parts = [accountCondition(scope, "COALESCE(r.marketplace_id, er.marketplace_id)", params)]
   if (filters.state === "cancelled") parts.push("r.status = 'cancelled'")
+  else if (filters.state === "cleared") parts.push("r.status = 'cleared'")
   else if (filters.state !== "all") parts.push("r.status = 'open'")
   if (filters.marketplaceId) {
     params.push(filters.marketplaceId)
@@ -287,8 +323,13 @@ function ironWhere(scope: AccountScope, filters: IronFilters, params: unknown[])
   if (filters.batchId) {
     params.push(filters.batchId)
     parts.push(`r.batch_id = $${params.length}`)
+  } else if (filters.state === "batched") {
+    parts.push("r.batch_id IS NOT NULL")
+  } else if (filters.state === "unbatched" || filters.state === "pending" || filters.state === "open") {
+    // Only tracking records for which a batch has NOT yet been created appear in the pending/open Iron Send list.
+    // Once a batch is created for a tracking record, it moves to the Batched section.
+    parts.push("r.batch_id IS NULL")
   }
-  if (filters.state === "unbatched") parts.push("r.batch_id IS NULL")
   const search = (filters.search || "").trim()
   if (search) {
     params.push(`%${search.toUpperCase()}%`)
@@ -317,11 +358,12 @@ function toView(row: Record<string, unknown>, now: Date, overdueDays: number): I
   const qtyReceived = Number(row.received)
   const marketplaceSku = String(row.marketplace_sku || "")
   const productSku = String(row.product_sku || "")
+  const rowStatus = row.status === "cancelled" ? "cancelled" : row.status === "cleared" ? "cleared" : "open"
   return {
     id: Number(row.id),
     scanId: Number(row.receipt_scan_id),
     state: ironStateOf({
-      status: row.status === "cancelled" ? "cancelled" : "open",
+      status: rowStatus,
       qtySent,
       qtyReceived,
       sentAt,
@@ -361,15 +403,23 @@ export async function listIronRecords(
 ): Promise<{ rows: IronRecordView[]; summary: IronSummary }> {
   const overdueDays = await getOverdueDays(db)
   const now = new Date()
+  const state = filters.state || "open"
   const params: unknown[] = []
-  const where = ironWhere(
-    scope,
-    { ...filters, state: filters.state === "cancelled" ? "cancelled" : filters.state === "all" ? "all" : filters.state === "unbatched" ? "unbatched" : "open-or-done" },
-    params,
-  )
+  const whereState =
+    state === "cancelled"
+      ? "cancelled"
+      : state === "cleared"
+        ? "cleared"
+        : state === "all"
+          ? "all"
+          : state === "batched"
+            ? "batched"
+            : state === "unbatched" || state === "pending" || state === "open"
+              ? state
+              : "open-or-done"
+  const where = ironWhere(scope, { ...filters, state: whereState }, params)
   const result = await db.query(`${RECORD_SQL} WHERE ${where} ORDER BY r.sent_at ASC, r.id ASC LIMIT 5000`, params)
   let rows = result.rows.map((row) => toView(row, now, overdueDays))
-  const state = filters.state || "open"
   if (state === "open") rows = rows.filter((row) => row.state !== "received")
   else if (state === "unbatched") rows = rows.filter((row) => row.state !== "received" && row.qtyReceived === 0)
   else if (["pending", "partial", "overdue", "received"].includes(state)) rows = rows.filter((row) => row.state === state)
@@ -402,6 +452,10 @@ export async function ironSummary(db: pg.Pool, scope: AccountScope, marketplaceI
        COUNT(*) FILTER (WHERE qty_sent > received AND due_at < now())::int AS overdue_records,
        COUNT(*) FILTER (WHERE qty_sent > received AND received = 0 AND batch_id IS NULL)::int AS unbatched_records,
        COALESCE(SUM(qty_sent) FILTER (WHERE qty_sent > received AND received = 0 AND batch_id IS NULL), 0)::int AS unbatched_units,
+       COUNT(*) FILTER (WHERE qty_sent > received AND received = 0 AND batch_id IS NULL
+                         AND (sent_at AT TIME ZONE 'Asia/Kolkata')::date = (now() AT TIME ZONE 'Asia/Kolkata')::date)::int AS unbatched_today_records,
+       COALESCE(SUM(qty_sent) FILTER (WHERE qty_sent > received AND received = 0 AND batch_id IS NULL
+                         AND (sent_at AT TIME ZONE 'Asia/Kolkata')::date = (now() AT TIME ZONE 'Asia/Kolkata')::date), 0)::int AS unbatched_today_units,
        COUNT(*) FILTER (WHERE qty_sent <= received)::int AS received_records,
        COALESCE(SUM(qty_sent), 0)::int AS units_sent,
        COALESCE(SUM(received), 0)::int AS units_received,
@@ -414,6 +468,49 @@ export async function ironSummary(db: pg.Pool, scope: AccountScope, marketplaceI
     params,
   )
   const row = result.rows[0] ?? {}
+
+  const batchParams: unknown[] = []
+  const batchScope = accountCondition(scope, "COALESCE(r.marketplace_id, er.marketplace_id)", batchParams)
+  const batchMpSql = marketplaceId
+    ? (() => {
+        batchParams.push(marketplaceId)
+        return `AND COALESCE(r.marketplace_id, er.marketplace_id) = $${batchParams.length}`
+      })()
+    : ""
+  const batchRes = await db.query(
+    `WITH visible_batches AS (
+       SELECT b.id, b.handover_status, b.batch_date, COALESCE(SUM(r.qty_sent), 0)::int AS qty_sent
+       FROM iron_batches b
+       JOIN iron_send_records r ON r.batch_id = b.id AND r.status = 'open'
+       JOIN receipt_scans rs ON rs.id = r.receipt_scan_id
+       JOIN expected_returns er ON er.id = rs.expected_return_id
+       WHERE ${batchScope} ${batchMpSql}
+       GROUP BY b.id, b.handover_status, b.batch_date
+     )
+     SELECT
+       COUNT(*)::int AS total_batches,
+       COUNT(*) FILTER (WHERE handover_status = 'batch_created')::int AS batch_created,
+       COUNT(*) FILTER (WHERE handover_status = 'ready_for_handover')::int AS ready_for_handover,
+       COUNT(*) FILTER (WHERE handover_status = 'handed_over')::int AS handed_over,
+       COALESCE(SUM(qty_sent), 0)::int AS total_units,
+       COUNT(*) FILTER (WHERE batch_date = (now() AT TIME ZONE 'Asia/Kolkata')::date)::int AS today_batches
+     FROM visible_batches`,
+    batchParams,
+  )
+  const bRow = batchRes.rows[0] ?? {}
+
+  const clearedParams: unknown[] = []
+  const clearedWhere = ironWhere(scope, { state: "cleared", marketplaceId }, clearedParams)
+  const clearedRes = await db.query(
+    `SELECT COUNT(*)::int AS lines, COALESCE(SUM(r.qty_sent), 0)::int AS units
+     FROM iron_send_records r
+     JOIN receipt_scans rs ON rs.id = r.receipt_scan_id
+     JOIN expected_returns er ON er.id = rs.expected_return_id
+     WHERE ${clearedWhere}`,
+    clearedParams,
+  )
+  const cRow = clearedRes.rows[0] ?? {}
+
   return {
     overdueAfterDays: overdueDays,
     records: {
@@ -430,7 +527,103 @@ export async function ironSummary(db: pg.Pool, scope: AccountScope, marketplaceI
       overdue: Number(row.units_overdue || 0),
     },
     receivedToday: Number(row.received_today || 0),
-    unbatched: { lines: Number(row.unbatched_records || 0), units: Number(row.unbatched_units || 0) },
+    unbatched: {
+      lines: Number(row.unbatched_records || 0),
+      units: Number(row.unbatched_units || 0),
+      todayLines: Number(row.unbatched_today_records || 0),
+      todayUnits: Number(row.unbatched_today_units || 0),
+    },
+    batches: {
+      total: Number(bRow.total_batches || 0),
+      batchCreated: Number(bRow.batch_created || 0),
+      readyForHandover: Number(bRow.ready_for_handover || 0),
+      handedOver: Number(bRow.handed_over || 0),
+      totalUnits: Number(bRow.total_units || 0),
+      todayBatches: Number(bRow.today_batches || 0),
+    },
+    cleared: {
+      lines: Number(cRow.lines || 0),
+      units: Number(cRow.units || 0),
+    },
+  }
+}
+
+// Clears pending unbatched Iron Send tracking records up to and including upToDate (defaulting to today IST).
+// Cleared records are marked status='cleared' (never deleted), never synced with OMSGuru inventory, and audited.
+export async function clearPendingIronRecords(
+  db: pg.Pool,
+  actor: Actor & { role: string },
+  scope: AccountScope,
+  input: { upToDate?: string; reason?: string } = {},
+): Promise<{ clearedRecords: number; clearedUnits: number; upToDate: string }> {
+  if (!canDispatchIron(actor.role)) {
+    throw new ServiceError(403, "Only the Return Team, a Supervisor, or an Admin can clear pending Iron Send records.")
+  }
+  const client = await db.connect()
+  let open = false
+  try {
+    await client.query("BEGIN")
+    open = true
+    const istToday = String(
+      (await client.query("SELECT to_char((now() AT TIME ZONE 'Asia/Kolkata')::date, 'YYYY-MM-DD') AS d")).rows[0].d,
+    )
+    const upToDate =
+      input.upToDate && /^\d{4}-\d{2}-\d{2}$/.test(input.upToDate.trim()) ? input.upToDate.trim() : istToday
+    const reason =
+      String(input.reason || "").trim().slice(0, MAX_IRON_NOTES) ||
+      `Cleared pending Iron Send tracking records up to ${upToDate} (not synced with OMSGuru inventory)`
+
+    const params: unknown[] = []
+    const scopeSql = accountCondition(scope, "COALESCE(r.marketplace_id, er.marketplace_id)", params)
+    params.push(upToDate)
+    const dateParam = `$${params.length}`
+
+    const locked = await client.query(
+      `SELECT r.id, r.qty_sent
+       FROM iron_send_records r
+       JOIN receipt_scans rs ON rs.id = r.receipt_scan_id
+       JOIN expected_returns er ON er.id = rs.expected_return_id
+       WHERE r.status = 'open'
+         AND r.batch_id IS NULL
+         AND (r.sent_at AT TIME ZONE 'Asia/Kolkata')::date <= ${dateParam}::date
+         AND ${scopeSql}
+         AND NOT EXISTS (SELECT 1 FROM iron_receive_events e WHERE e.iron_send_record_id = r.id)
+       FOR UPDATE OF r`,
+      params,
+    )
+    const ids = locked.rows.map((row) => Number(row.id))
+    const clearedUnits = locked.rows.reduce((sum, row) => sum + Number(row.qty_sent || 0), 0)
+    if (ids.length > 0) {
+      await client.query(
+        `UPDATE iron_send_records
+         SET status = 'cleared', cleared_by = $2, cleared_at = now(), clear_reason = $3
+         WHERE id = ANY($1::integer[])`,
+        [ids, actor.id, reason],
+      )
+      await client.query(
+        `INSERT INTO register_audit_log (actor_user_id, action, entity_type, entity_id, details)
+         VALUES ($1, 'iron.clear_pending', 'iron_send_record', $2, $3::jsonb)`,
+        [
+          actor.id,
+          upToDate,
+          JSON.stringify({
+            clearedRecords: ids.length,
+            clearedUnits,
+            upToDate,
+            reason,
+            omsguruSync: false,
+          }),
+        ],
+      )
+    }
+    await client.query("COMMIT")
+    open = false
+    return { clearedRecords: ids.length, clearedUnits, upToDate }
+  } catch (error) {
+    if (open) await client.query("ROLLBACK")
+    throw error
+  } finally {
+    client.release()
   }
 }
 
@@ -505,7 +698,14 @@ export async function receiveIron(
     if (!locked || (locked.marketplace_id !== null && !allowsAccount(scope, Number(locked.marketplace_id)))) {
       throw new ServiceError(404, "Iron Send record not found")
     }
-    if (locked.status !== "open") throw new ServiceError(409, "This Iron Send was cancelled at the scan bench.")
+    if (locked.status !== "open") {
+      throw new ServiceError(
+        409,
+        locked.status === "cleared"
+          ? "This Iron Send record was cleared during the daily batch cutover and is closed."
+          : "This Iron Send was cancelled at the scan bench.",
+      )
+    }
     const received = Number(
       (
         await client.query(
@@ -568,6 +768,7 @@ export type IronBatchState = "open" | "partial" | "overdue" | "received"
 export type IronBatchView = {
   id: number
   batchNo: string
+  batchDate: string
   location: IronLocation
   khaataName: string
   challanNo: string
@@ -577,6 +778,15 @@ export type IronBatchView = {
   createdBy: string
   createdAt: string
   state: IronBatchState
+  returnTeamStatus: IronReturnTeamStatus
+  handoverStatus: IronHandoverStatus
+  readyForHandoverAt: string | null
+  readyForHandoverBy: string
+  handedOverAt: string | null
+  handedOverBy: string
+  handoverTo: string
+  handoverNotes: string
+  trackingIds: string[]
   lines: number
   qtySent: number
   qtyReceived: number
@@ -595,25 +805,42 @@ export function ironBatchStateOf(input: { qtySent: number; qtyReceived: number; 
 }
 
 const BATCH_SQL = `
-  SELECT b.id, b.batch_no, b.iron_location, b.khaata_name, b.challan_no, b.expected_days, b.expected_return_at, b.notes, b.created_at,
+  SELECT b.id, b.batch_no,
+         to_char(COALESCE(b.batch_date, (b.created_at AT TIME ZONE 'Asia/Kolkata')::date), 'YYYY-MM-DD') AS batch_date,
+         b.iron_location, b.khaata_name, b.challan_no, b.expected_days, b.expected_return_at, b.notes, b.created_at,
+         COALESCE(b.return_team_status, 'completed') AS return_team_status,
+         COALESCE(b.handover_status, 'batch_created') AS handover_status,
+         b.ready_for_handover_at,
+         COALESCE(rfh_u.name, '') AS ready_for_handover_by,
+         b.handed_over_at,
+         COALESCE(ho_u.name, '') AS handed_over_by,
+         COALESCE(b.handover_to, '') AS handover_to,
+         COALESCE(b.handover_notes, '') AS handover_notes,
          COALESCE(u.name, '') AS created_by,
+         ARRAY_REMOVE(ARRAY_AGG(DISTINCT NULLIF(TRIM(COALESCE(rs.tracking_id_snapshot, er.tracking_id, '')), '')), NULL) AS tracking_ids,
          COUNT(r.id)::int AS lines,
          COALESCE(SUM(r.qty_sent), 0)::int AS qty_sent,
          COALESCE(SUM((SELECT COALESCE(SUM(e.qty), 0) FROM iron_receive_events e WHERE e.iron_send_record_id = r.id)), 0)::int AS qty_received,
          MAX((SELECT MAX(e.received_at) FROM iron_receive_events e WHERE e.iron_send_record_id = r.id)) AS last_received_at
   FROM iron_batches b
   LEFT JOIN users u ON u.id = b.created_by
+  LEFT JOIN users rfh_u ON rfh_u.id = b.ready_for_handover_by
+  LEFT JOIN users ho_u ON ho_u.id = b.handed_over_by
   JOIN iron_send_records r ON r.batch_id = b.id AND r.status = 'open'
   JOIN receipt_scans rs ON rs.id = r.receipt_scan_id
   JOIN expected_returns er ON er.id = rs.expected_return_id`
 
 function toBatchView(row: Record<string, unknown>, now: Date): IronBatchView {
   const expectedReturnAt = new Date(row.expected_return_at as string)
+  const createdAt = new Date(row.created_at as string)
   const qtySent = Number(row.qty_sent || 0)
   const qtyReceived = Number(row.qty_received || 0)
+  const rawTrackings = Array.isArray(row.tracking_ids) ? (row.tracking_ids as unknown[]) : []
+  const trackingIds = rawTrackings.map((t) => String(t ?? "").trim()).filter(Boolean)
   return {
     id: Number(row.id),
     batchNo: String(row.batch_no),
+    batchDate: String(row.batch_date || createdAt.toISOString().slice(0, 10)),
     location: ironLocationOf(row.iron_location),
     khaataName: String(row.khaata_name || ""),
     challanNo: String(row.challan_no || ""),
@@ -621,8 +848,17 @@ function toBatchView(row: Record<string, unknown>, now: Date): IronBatchView {
     expectedReturnAt: expectedReturnAt.toISOString(),
     notes: String(row.notes || ""),
     createdBy: String(row.created_by || ""),
-    createdAt: new Date(row.created_at as string).toISOString(),
+    createdAt: createdAt.toISOString(),
     state: ironBatchStateOf({ qtySent, qtyReceived, expectedReturnAt, now }),
+    returnTeamStatus: "completed",
+    handoverStatus: ironHandoverStatusOf(row.handover_status),
+    readyForHandoverAt: row.ready_for_handover_at ? new Date(row.ready_for_handover_at as string).toISOString() : null,
+    readyForHandoverBy: String(row.ready_for_handover_by || ""),
+    handedOverAt: row.handed_over_at ? new Date(row.handed_over_at as string).toISOString() : null,
+    handedOverBy: String(row.handed_over_by || ""),
+    handoverTo: String(row.handover_to || ""),
+    handoverNotes: String(row.handover_notes || ""),
+    trackingIds,
     lines: Number(row.lines || 0),
     qtySent,
     qtyReceived,
@@ -631,23 +867,60 @@ function toBatchView(row: Record<string, unknown>, now: Date): IronBatchView {
   }
 }
 
+export type IronBatchFilters = {
+  state?: string // open | partial | overdue | received | all
+  handoverStatus?: string // batch_created | ready_for_handover | handed_over | all
+  search?: string
+  dateFrom?: string
+  dateTo?: string
+}
+
 // Batches with at least one line the user may see. state: open (not fully received) | received | overdue | partial | all.
 export async function listIronBatches(
   db: pg.Pool,
   scope: AccountScope,
-  filters: { state?: string; search?: string } = {},
+  filters: IronBatchFilters = {},
 ): Promise<IronBatchView[]> {
   const params: unknown[] = []
   const parts = [accountCondition(scope, "COALESCE(r.marketplace_id, er.marketplace_id)", params)]
+  const handover = (filters.handoverStatus || "").trim().toLowerCase()
+  if (handover && handover !== "all" && ["batch_created", "ready_for_handover", "handed_over"].includes(handover)) {
+    params.push(handover)
+    parts.push(`COALESCE(b.handover_status, 'batch_created') = $${params.length}`)
+  }
+  if (filters.dateFrom && /^\d{4}-\d{2}-\d{2}$/.test(filters.dateFrom)) {
+    params.push(filters.dateFrom)
+    parts.push(`COALESCE(b.batch_date, (b.created_at AT TIME ZONE 'Asia/Kolkata')::date) >= $${params.length}::date`)
+  }
+  if (filters.dateTo && /^\d{4}-\d{2}-\d{2}$/.test(filters.dateTo)) {
+    params.push(filters.dateTo)
+    parts.push(`COALESCE(b.batch_date, (b.created_at AT TIME ZONE 'Asia/Kolkata')::date) <= $${params.length}::date`)
+  }
   const search = (filters.search || "").trim()
   if (search) {
     params.push(`%${search.toUpperCase()}%`)
     const p = `$${params.length}`
-    parts.push(`(UPPER(b.batch_no) LIKE ${p} OR UPPER(b.khaata_name) LIKE ${p} OR UPPER(b.challan_no) LIKE ${p})`)
+    parts.push(
+      `(UPPER(b.batch_no) LIKE ${p}
+        OR UPPER(b.khaata_name) LIKE ${p}
+        OR UPPER(b.challan_no) LIKE ${p}
+        OR UPPER(COALESCE(b.handover_to, '')) LIKE ${p}
+        OR EXISTS (
+          SELECT 1 FROM iron_send_records r2
+          JOIN receipt_scans rs2 ON rs2.id = r2.receipt_scan_id
+          JOIN expected_returns er2 ON er2.id = rs2.expected_return_id
+          JOIN receipt_scan_items i2 ON i2.id = r2.receipt_scan_item_id
+          WHERE r2.batch_id = b.id AND r2.status = 'open'
+            AND (UPPER(COALESCE(rs2.tracking_id_snapshot, er2.tracking_id, '')) LIKE ${p}
+                 OR UPPER(COALESCE(rs2.order_number_snapshot, er2.order_number, '')) LIKE ${p}
+                 OR UPPER(i2.marketplace_sku) LIKE ${p}
+                 OR UPPER(i2.product_sku) LIKE ${p})
+        ))`,
+    )
   }
   const result = await db.query(
     `${BATCH_SQL} WHERE ${parts.join(" AND ")}
-     GROUP BY b.id, u.name
+     GROUP BY b.id, u.name, rfh_u.name, ho_u.name
      ORDER BY b.created_at DESC
      LIMIT 500`,
     params,
@@ -667,10 +940,13 @@ export async function getIronBatch(
 ): Promise<{ batch: IronBatchView; rows: IronRecordView[] }> {
   const params: unknown[] = [id]
   const scopeSql = accountCondition(scope, "COALESCE(r.marketplace_id, er.marketplace_id)", params)
-  const result = await db.query(`${BATCH_SQL} WHERE b.id = $1 AND ${scopeSql} GROUP BY b.id, u.name`, params)
+  const result = await db.query(`${BATCH_SQL} WHERE b.id = $1 AND ${scopeSql} GROUP BY b.id, u.name, rfh_u.name, ho_u.name`, params)
   if (!result.rows[0]) throw new ServiceError(404, "Iron batch not found")
   const { rows } = await listIronRecords(db, scope, { state: "all", batchId: id }, 2000)
-  return { batch: toBatchView(result.rows[0], new Date()), rows: rows.filter((row) => row.state !== "cancelled") }
+  return {
+    batch: toBatchView(result.rows[0], new Date()),
+    rows: rows.filter((row) => row.state !== "cancelled" && row.state !== "cleared"),
+  }
 }
 
 function cleanText(value: unknown, label: string, max = MAX_BATCH_TEXT): string {
@@ -732,17 +1008,31 @@ export async function createIronBatch(
       idSql = `AND r.id = ANY($${params.length}::integer[])`
     }
     const eligible = await client.query(
-      `SELECT r.id
+      `SELECT r.id, r.receipt_scan_item_id, COALESCE(rs.tracking_id_snapshot, er.tracking_id, '') AS tracking_id
        FROM iron_send_records r
        JOIN receipt_scans rs ON rs.id = r.receipt_scan_id
        JOIN expected_returns er ON er.id = rs.expected_return_id
        WHERE r.status = 'open' AND r.batch_id IS NULL ${idSql} AND ${scopeSql}
          AND NOT EXISTS (SELECT 1 FROM iron_receive_events e WHERE e.iron_send_record_id = r.id)
+         AND NOT EXISTS (
+           SELECT 1 FROM iron_send_records r2
+           WHERE r2.id <> r.id
+             AND r2.receipt_scan_item_id = r.receipt_scan_item_id
+             AND (r2.batch_id IS NOT NULL OR r2.status = 'cleared')
+         )
        ORDER BY r.sent_at, r.id
        FOR UPDATE OF r`,
       params,
     )
-    const ids = eligible.rows.map((row) => Number(row.id))
+    // Deduplicate by receipt_scan_item_id so the same tracking/item can never be batched twice.
+    const seenItems = new Set<number>()
+    const ids: number[] = []
+    for (const row of eligible.rows) {
+      const itemId = Number(row.receipt_scan_item_id)
+      if (seenItems.has(itemId)) continue
+      seenItems.add(itemId)
+      ids.push(Number(row.id))
+    }
     if (wanted && ids.length !== wanted.length) {
       throw new ServiceError(409, "Some chosen lines are already in a batch or were received. Refresh and choose again.")
     }
@@ -761,17 +1051,34 @@ export async function createIronBatch(
     )
     const batchNo = ironBatchNumber(istToday, sequence)
     const inserted = await client.query(
-      `INSERT INTO iron_batches (batch_no, iron_location, khaata_name, challan_no, expected_days, expected_return_at, notes, created_by, client_key)
-       VALUES ($1, $8, $2, $3, $4::int, now() + make_interval(days => $4::int), $5, $6, $7)
+      `INSERT INTO iron_batches (
+         batch_no, batch_date, iron_location, khaata_name, challan_no, expected_days, expected_return_at,
+         notes, created_by, client_key, return_team_status, handover_status
+       )
+       VALUES ($1, $9::date, $8, $2, $3, $4::int, now() + make_interval(days => $4::int), $5, $6, $7, 'completed', 'batch_created')
        RETURNING id`,
-      [batchNo, khaataName, challanNo, expectedDays, notes, actor.id, clientKey, location],
+      [batchNo, khaataName, challanNo, expectedDays, notes, actor.id, clientKey, location, istToday],
     )
     const batchId = Number(inserted.rows[0].id)
     await client.query("UPDATE iron_send_records SET batch_id = $1 WHERE id = ANY($2::integer[])", [batchId, ids])
     await client.query(
       `INSERT INTO register_audit_log (actor_user_id, action, entity_type, entity_id, details)
        VALUES ($1, 'iron.batch_create', 'iron_batch', $2, $3::jsonb)`,
-      [actor.id, String(batchId), JSON.stringify({ batchNo, lines: ids.length, location, khaataName, challanNo, expectedDays })],
+      [
+        actor.id,
+        String(batchId),
+        JSON.stringify({
+          batchNo,
+          batchDate: istToday,
+          lines: ids.length,
+          location,
+          khaataName,
+          challanNo,
+          expectedDays,
+          returnTeamStatus: "completed",
+          handoverStatus: "batch_created",
+        }),
+      ],
     )
     await client.query("COMMIT")
     open = false
@@ -783,6 +1090,111 @@ export async function createIronBatch(
       const replay = (await db.query("SELECT id FROM iron_batches WHERE client_key = $1", [clientKey])).rows[0]
       if (replay) return { batch: (await getIronBatch(db, scope, Number(replay.id))).batch, replayed: true }
     }
+    throw error
+  } finally {
+    client.release()
+  }
+}
+
+// Updates a batch's handover workflow status (batch_created -> ready_for_handover -> handed_over)
+// and records actor, timestamp, receiving team/person, and handover notes for full accountability.
+export async function updateIronBatchHandover(
+  db: pg.Pool,
+  actor: Actor & { role: string },
+  scope: AccountScope,
+  id: number,
+  input: { handoverStatus: unknown; handoverTo?: unknown; handoverNotes?: unknown },
+): Promise<IronBatchView> {
+  if (!canDispatchIron(actor.role) && !canReceiveIron(actor.role)) {
+    throw new ServiceError(403, "You do not have permission to update batch handover status.")
+  }
+  const rawStatus = String(input.handoverStatus ?? "").trim().toLowerCase()
+  if (!["batch_created", "ready_for_handover", "handed_over"].includes(rawStatus)) {
+    throw new ServiceError(400, "Handover status must be batch_created, ready_for_handover, or handed_over.")
+  }
+  const targetStatus = rawStatus as IronHandoverStatus
+  const current = (await getIronBatch(db, scope, id)).batch
+
+  if (current.handoverStatus === "handed_over" && targetStatus !== "handed_over" && !isAdminRole(actor.role)) {
+    throw new ServiceError(409, "This batch has already been handed over. Only an Admin can reopen its handover status.")
+  }
+
+  const handoverTo =
+    input.handoverTo === undefined
+      ? current.handoverTo || (targetStatus === "handed_over" ? current.khaataName : "")
+      : cleanText(input.handoverTo, "Handed over to")
+  const handoverNotes =
+    input.handoverNotes === undefined
+      ? current.handoverNotes
+      : cleanText(input.handoverNotes, "Handover notes", MAX_IRON_NOTES)
+
+  if (targetStatus === "handed_over" && !handoverTo) {
+    throw new ServiceError(400, "Enter the receiving team or person name before marking the batch as Handed Over.")
+  }
+
+  const client = await db.connect()
+  let open = false
+  try {
+    await client.query("BEGIN")
+    open = true
+    if (targetStatus === "ready_for_handover") {
+      await client.query(
+        `UPDATE iron_batches
+         SET handover_status = 'ready_for_handover',
+             ready_for_handover_at = COALESCE(ready_for_handover_at, now()),
+             ready_for_handover_by = COALESCE(ready_for_handover_by, $2),
+             handover_to = $3,
+             handover_notes = $4,
+             updated_at = now()
+         WHERE id = $1`,
+        [id, actor.id, handoverTo, handoverNotes],
+      )
+    } else if (targetStatus === "handed_over") {
+      await client.query(
+        `UPDATE iron_batches
+         SET handover_status = 'handed_over',
+             ready_for_handover_at = COALESCE(ready_for_handover_at, now()),
+             ready_for_handover_by = COALESCE(ready_for_handover_by, $2),
+             handed_over_at = COALESCE(handed_over_at, now()),
+             handed_over_by = $2,
+             handover_to = $3,
+             handover_notes = $4,
+             updated_at = now()
+         WHERE id = $1`,
+        [id, actor.id, handoverTo, handoverNotes],
+      )
+    } else {
+      await client.query(
+        `UPDATE iron_batches
+         SET handover_status = 'batch_created',
+             handover_to = $2,
+             handover_notes = $3,
+             updated_at = now()
+         WHERE id = $1`,
+        [id, handoverTo, handoverNotes],
+      )
+    }
+
+    await client.query(
+      `INSERT INTO register_audit_log (actor_user_id, action, entity_type, entity_id, details)
+       VALUES ($1, 'iron.batch_handover', 'iron_batch', $2, $3::jsonb)`,
+      [
+        actor.id,
+        String(id),
+        JSON.stringify({
+          batchNo: current.batchNo,
+          fromStatus: current.handoverStatus,
+          toStatus: targetStatus,
+          handoverTo,
+          handoverNotes,
+        }),
+      ],
+    )
+    await client.query("COMMIT")
+    open = false
+    return (await getIronBatch(db, scope, id)).batch
+  } catch (error) {
+    if (open) await client.query("ROLLBACK")
     throw error
   } finally {
     client.release()
@@ -878,8 +1290,13 @@ export function ironBatchSheetRows(batch: IronBatchView, rows: IronRecordView[])
     ["Ironed at", batch.location === "in_house" ? "Return desk (in-house, high-running pieces)" : "Khaata (sent out)"],
     ["Khaata (ironing unit)", batch.khaataName],
     ["Challan No", batch.challanNo || (batch.location === "in_house" ? "(not needed for in-house ironing)" : "(write the challan number here)")],
+    ["Batch Date (IST)", batch.batchDate],
     ["Sent on (IST)", IST_DATE_TIME.format(new Date(batch.createdAt))],
     ["Expected back by (IST)", IST_DATE_TIME.format(new Date(batch.expectedReturnAt))],
+    ["Return Team Status", "Completed"],
+    ["Handover Status", ironHandoverStatusLabel(batch.handoverStatus)],
+    ["Handed Over To", batch.handoverTo || "-"],
+    ["Handover Notes", batch.handoverNotes || "-"],
     ["Made by", batch.createdBy],
     ["Notes", batch.notes],
     [],
@@ -920,3 +1337,342 @@ export function ironBatchCsv(batch: IronBatchView, rows: IronRecordView[]): stri
   }
   return ironBatchSheetRows(batch, rows).map((row) => row.map(cell).join(",")).join("\n") + "\n"
 }
+
+function escapeHtml(value: unknown): string {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;")
+}
+
+// Printable / downloadable Batch Slip for handover and warehouse tracking.
+export function ironBatchSlipHtml(batch: IronBatchView, rows: IronRecordView[]): string {
+  const createdLabel = IST_DATE_TIME.format(new Date(batch.createdAt))
+  const expectedLabel = IST_DATE_TIME.format(new Date(batch.expectedReturnAt))
+  const handoverLabel = ironHandoverStatusLabel(batch.handoverStatus)
+  const readyAtLabel = batch.readyForHandoverAt ? IST_DATE_TIME.format(new Date(batch.readyForHandoverAt)) : "—"
+  const handedAtLabel = batch.handedOverAt ? IST_DATE_TIME.format(new Date(batch.handedOverAt)) : "—"
+  const locationLabel = batch.location === "in_house" ? "Return desk (in-house)" : "Khaata (sent out)"
+  const trackingList = batch.trackingIds.length
+    ? batch.trackingIds
+    : [...new Set(rows.map((r) => r.trackingId).filter(Boolean))]
+
+  const lineRowsHtml = rows
+    .map(
+      (row, idx) => `
+      <tr>
+        <td class="num">${idx + 1}</td>
+        <td class="mono">${escapeHtml(row.trackingId || "—")}</td>
+        <td class="mono">${escapeHtml(row.orderId || "—")}</td>
+        <td>${escapeHtml(row.marketplace || "—")}</td>
+        <td class="mono">${escapeHtml(row.productSku || row.marketplaceSku || "—")}</td>
+        <td class="mono">${escapeHtml(row.marketplaceSku || "—")}</td>
+        <td>${escapeHtml(row.size || "—")}</td>
+        <td>${escapeHtml(row.productName || "—")}</td>
+        <td class="num"><strong>${row.qtySent}</strong></td>
+      </tr>`,
+    )
+    .join("")
+
+  const trackingPillsHtml = trackingList.length
+    ? trackingList.map((t) => `<span class="awb-pill">${escapeHtml(t)}</span>`).join(" ")
+    : "<span>—</span>"
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Iron Send Batch Slip · ${escapeHtml(batch.batchNo)}</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      color: #0f172a;
+      background: #f8fafc;
+      margin: 0;
+      padding: 24px;
+      font-size: 13px;
+      line-height: 1.45;
+    }
+    .toolbar {
+      max-width: 960px;
+      margin: 0 auto 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: #0f172a;
+      color: #fff;
+      padding: 10px 16px;
+      border-radius: 8px;
+    }
+    .toolbar button {
+      background: #2563eb;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      padding: 8px 14px;
+      font-weight: 600;
+      cursor: pointer;
+      font-size: 13px;
+    }
+    .slip {
+      max-width: 960px;
+      margin: 0 auto;
+      background: #fff;
+      border: 1px solid #cbd5e1;
+      border-radius: 10px;
+      padding: 24px;
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      border-bottom: 2px solid #0f172a;
+      padding-bottom: 14px;
+      margin-bottom: 16px;
+    }
+    .brand {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #475569;
+    }
+    .title {
+      font-size: 22px;
+      font-weight: 800;
+      margin: 2px 0 4px;
+    }
+    .subtitle {
+      color: #475569;
+      font-size: 12px;
+    }
+    .badges {
+      text-align: right;
+    }
+    .badge {
+      display: inline-block;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      margin-left: 6px;
+      border: 1px solid #cbd5e1;
+      background: #f1f5f9;
+    }
+    .badge.done { background: #dcfce7; border-color: #86efac; color: #166534; }
+    .badge.handover { background: #dbeafe; border-color: #93c5fd; color: #1e40af; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 10px;
+      margin-bottom: 16px;
+    }
+    .cell {
+      border: 1px solid #e2e8f0;
+      border-radius: 6px;
+      padding: 8px 10px;
+      background: #f8fafc;
+    }
+    .cell .k {
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #64748b;
+      margin-bottom: 2px;
+    }
+    .cell .v {
+      font-size: 13px;
+      font-weight: 700;
+      color: #0f172a;
+      word-break: break-word;
+    }
+    .awb-box {
+      border: 1px solid #e2e8f0;
+      border-radius: 6px;
+      padding: 10px 12px;
+      margin-bottom: 16px;
+      background: #fff;
+    }
+    .awb-box .k {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      color: #475569;
+      margin-bottom: 6px;
+    }
+    .awb-pill {
+      display: inline-block;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 11px;
+      background: #f1f5f9;
+      border: 1px solid #cbd5e1;
+      border-radius: 4px;
+      padding: 2px 6px;
+      margin: 2px 4px 2px 0;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 20px;
+      font-size: 12px;
+    }
+    th, td {
+      border: 1px solid #cbd5e1;
+      padding: 6px 8px;
+      text-align: left;
+      vertical-align: top;
+    }
+    th {
+      background: #f1f5f9;
+      font-weight: 700;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    td.num, th.num { text-align: right; }
+    td.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11.5px; }
+    tfoot td {
+      background: #f8fafc;
+      font-weight: 700;
+    }
+    .signatures {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 16px;
+      margin-top: 24px;
+      padding-top: 12px;
+    }
+    .sig-box {
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      padding: 10px 12px;
+      min-height: 92px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+    .sig-title {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      color: #475569;
+    }
+    .sig-meta {
+      font-size: 11.5px;
+      color: #334155;
+      margin-top: 4px;
+    }
+    .sig-line {
+      border-top: 1px dashed #94a3b8;
+      padding-top: 4px;
+      font-size: 11px;
+      color: #64748b;
+      margin-top: 24px;
+    }
+    @media print {
+      body { background: #fff; padding: 0; }
+      .toolbar { display: none !important; }
+      .slip { border: none; padding: 0; max-width: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="toolbar">
+    <span><strong>Iron Send Batch Slip</strong> · ${escapeHtml(batch.batchNo)} (${rows.length} lines · ${batch.qtySent} units)</span>
+    <button type="button" onclick="window.print()">Print / Save as PDF</button>
+  </div>
+  <div class="slip">
+    <div class="header">
+      <div>
+        <div class="brand">VB Exports · Youthnic Return Operations</div>
+        <div class="title">Batch Slip · ${escapeHtml(batch.batchNo)}</div>
+        <div class="subtitle">Batch Date: ${escapeHtml(batch.batchDate)} · Created: ${escapeHtml(createdLabel)} · Excluded from OMSGuru Inventory Sync</div>
+      </div>
+      <div class="badges">
+        <span class="badge done">Return Team: Completed</span>
+        <span class="badge handover">Handover: ${escapeHtml(handoverLabel)}</span>
+        <span class="badge">Inward: ${escapeHtml(batch.state.toUpperCase())}</span>
+      </div>
+    </div>
+
+    <div class="grid">
+      <div class="cell"><div class="k">Batch ID</div><div class="v">${escapeHtml(batch.batchNo)}</div></div>
+      <div class="cell"><div class="k">Creation Date</div><div class="v">${escapeHtml(batch.batchDate)}</div></div>
+      <div class="cell"><div class="k">Total Tracking IDs</div><div class="v">${trackingList.length}</div></div>
+      <div class="cell"><div class="k">Total Quantity</div><div class="v">${batch.qtySent} units (${batch.lines} lines)</div></div>
+      <div class="cell"><div class="k">Ironed At</div><div class="v">${escapeHtml(locationLabel)}</div></div>
+      <div class="cell"><div class="k">Khaata / Unit</div><div class="v">${escapeHtml(batch.khaataName || "—")}</div></div>
+      <div class="cell"><div class="k">Challan No</div><div class="v">${escapeHtml(batch.challanNo || "—")}</div></div>
+      <div class="cell"><div class="k">Expected Return</div><div class="v">${escapeHtml(expectedLabel)}</div></div>
+      <div class="cell"><div class="k">Created By</div><div class="v">${escapeHtml(batch.createdBy || "—")}</div></div>
+      <div class="cell"><div class="k">Ready for Handover</div><div class="v">${escapeHtml(batch.readyForHandoverBy ? `${batch.readyForHandoverBy} (${readyAtLabel})` : readyAtLabel)}</div></div>
+      <div class="cell"><div class="k">Handed Over To</div><div class="v">${escapeHtml(batch.handoverTo || "—")}</div></div>
+      <div class="cell"><div class="k">Handed Over At</div><div class="v">${escapeHtml(batch.handedOverBy ? `${batch.handedOverBy} (${handedAtLabel})` : handedAtLabel)}</div></div>
+    </div>
+
+    <div class="awb-box">
+      <div class="k">Tracking IDs in Batch (${trackingList.length})</div>
+      <div>${trackingPillsHtml}</div>
+    </div>
+
+    <table>
+      <thead>
+        <tr>
+          <th class="num">#</th>
+          <th>Tracking ID (AWB)</th>
+          <th>Order ID</th>
+          <th>Marketplace</th>
+          <th>Product SKU</th>
+          <th>Listing SKU</th>
+          <th>Size</th>
+          <th>Product</th>
+          <th class="num">Qty</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${lineRowsHtml}
+      </tbody>
+      <tfoot>
+        <tr>
+          <td colspan="8">Total (${rows.length} lines · ${trackingList.length} tracking IDs)</td>
+          <td class="num">${batch.qtySent}</td>
+        </tr>
+      </tfoot>
+    </table>
+
+    ${batch.notes || batch.handoverNotes ? `<div class="awb-box"><div class="k">Batch & Handover Notes</div><div>${escapeHtml([batch.notes, batch.handoverNotes].filter(Boolean).join(" · "))}</div></div>` : ""}
+
+    <div class="signatures">
+      <div class="sig-box">
+        <div>
+          <div class="sig-title">1. Return Team (Completed)</div>
+          <div class="sig-meta">Prepared by: ${escapeHtml(batch.createdBy || "Return Team")}<br/>Date: ${escapeHtml(createdLabel)}</div>
+        </div>
+        <div class="sig-line">Return Team Signature</div>
+      </div>
+      <div class="sig-box">
+        <div>
+          <div class="sig-title">2. Handover Verification</div>
+          <div class="sig-meta">Status: ${escapeHtml(handoverLabel)}<br/>By: ${escapeHtml(batch.handedOverBy || batch.readyForHandoverBy || "—")}</div>
+        </div>
+        <div class="sig-line">Handover Dispatcher Signature</div>
+      </div>
+      <div class="sig-box">
+        <div>
+          <div class="sig-title">3. Received By (Next Team / Khaata)</div>
+          <div class="sig-meta">Receiver: ${escapeHtml(batch.handoverTo || batch.khaataName || "—")}<br/>Date: ${escapeHtml(batch.handedOverAt ? handedAtLabel : "____________________")}</div>
+        </div>
+        <div class="sig-line">Receiver Name &amp; Signature</div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>`
+}
+

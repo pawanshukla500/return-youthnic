@@ -164,6 +164,46 @@ export function listingSkuCandidates(listing: string): string[] {
   return [...new Set(keys)]
 }
 
+const PLACEHOLDER_MASTER_SKUS = new Set([
+  "b16",
+  "kd2",
+  "d6",
+  "d12",
+  "inactive",
+  "dummy",
+  "na",
+  "n/a",
+  "null",
+  "none",
+  "-",
+])
+
+// Identifies dummy/parking master SKU codes (e.g. OMSGuru's B16, KD2, D6, D12, or INACTIVE*)
+// that must never overwrite or shadow a real active product master SKU.
+export function isPlaceholderMasterSku(sku: string): boolean {
+  const clean = (sku || "").trim().toLowerCase()
+  if (!clean) return true
+  if (PLACEHOLDER_MASTER_SKUS.has(clean)) return true
+  if (/^inactive([_\-\s].*|\d+)?$/i.test(clean)) return true
+  return false
+}
+
+// Normalizes a marketplace or OMSGuru channel label into the lowercase scope stored in product_master.
+export function normalizeMasterMarketplace(raw: string): string {
+  const cleaned = (raw || "").trim().toLowerCase().replace(/[\s_-]+/g, " ")
+  if (!cleaned || cleaned === "all" || cleaned === "global") return "all"
+  if (cleaned.includes("myntra vb")) return "myntra vb"
+  if (cleaned.includes("myntra ej")) return "myntra ej"
+  if (cleaned === "myntra" || cleaned.startsWith("myntra ")) return "myntra"
+  if (cleaned === "amazon" || cleaned.startsWith("amazon ") || cleaned === "amazon.in") return "amazon"
+  if (cleaned === "flipkart" || cleaned.startsWith("flipkart ")) return "flipkart"
+  if (cleaned === "meesho" || cleaned.startsWith("meesho ")) return "meesho"
+  if (cleaned === "ajio" || cleaned.startsWith("ajio ")) return "ajio"
+  if (cleaned === "shopify" || cleaned.startsWith("shopify ")) return "shopify"
+  if (cleaned === "snapdeal" || cleaned.startsWith("snapdeal ")) return "snapdeal"
+  return cleaned
+}
+
 // ---------------------------------------------------------------------------------------------------------------
 // Carrier tracking links
 // ---------------------------------------------------------------------------------------------------------------
