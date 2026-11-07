@@ -1446,6 +1446,10 @@ class NativeSupplierBrowser implements SupplierBrowserApi {
     return true
   }
 
+  /**
+   * Generates a client-side JavaScript evaluation script that searches for clickable elements
+   * matching the provided text and invokes a click on the closest interactable ancestor or element.
+   */
   private buildClickByTextScript(text: string, exact: boolean): string {
     return `
       (() => {
@@ -1469,9 +1473,15 @@ class NativeSupplierBrowser implements SupplierBrowserApi {
     `
   }
 
+  /**
+   * Simulates a human click on a DOM selector. Dispatches physical coordinate mouse events
+   * only when the window hosting this web contents is active and focused, cleanly falling back
+   * to in-page DOM element clicks when the view is detached, unfocused, or running in background.
+   */
   async humanClick(selector: string): Promise<boolean> {
     const focusedWindow = this.electron?.BrowserWindow?.getFocusedWindow?.()
-    if (focusedWindow) {
+    const ownerWindow = this.electron?.BrowserWindow?.fromWebContents?.(this.contents)
+    if (focusedWindow && ownerWindow && focusedWindow === ownerWindow) {
       const center = await elementCenter(this.contents, selector)
       if (center && center.x > 0 && center.y > 0) {
         this.contents.sendInputEvent({ type: "mouseDown", x: center.x, y: center.y, button: "left", clickCount: 1 } as never)
