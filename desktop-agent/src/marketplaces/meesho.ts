@@ -94,8 +94,8 @@ export function extractMeeshoResolution(text: string): { rejectionReason?: strin
   const result: { rejectionReason?: string; approvedAmount?: number } = {}
 
   // Approved amount detection
-  const amtMatch = text.match(/(?:approved\s+amount|refund\s+amount|compensation|credit(?:ed)?)\s*(?:is|of|:)?\s*(?:₹|rs\.?)\s*([\d,]+(?:\.\d+)?)/i)
-    || text.match(/(?:₹|rs\.?)\s*([\d,]+(?:\.\d+)?)\s*(?:approved|credited|refunded)/i)
+  const amtMatch = text.match(/(?:approved(?:\s+(?:for|amount))?|refund\s+amount|compensation|credit(?:ed)?)\s*(?:is|of|:)?\s*(?:₹|rs\.?)\s*([\d,]+(?:\.\d+)?)/i)
+    || text.match(/(?:₹|rs\.?)\s*([\d,]+(?:\.\d+)?)\s*(?:approved|credited|refunded|compensation)/i)
   if (amtMatch) {
     const num = parseFloat(amtMatch[1].replace(/,/g, ""))
     if (!isNaN(num) && num > 0) result.approvedAmount = num
@@ -188,6 +188,10 @@ export function checkMeeshoEvidenceFileLocal(filePath: string): { ok: boolean; r
 export class MeeshoAutomation extends BaseMarketplaceAutomation {
   readonly marketplaceName = "Meesho"
 
+  /**
+   * Executes claim automation for Meesho (prepare evidence files, navigate support categories,
+   * verify uploads, and optionally submit the claim ticket).
+   */
   async execute(action: "prepare" | "submit"): Promise<MarketplaceAutomationResult> {
     // Fail fast: never substitute a wrong-return claim and never infer the parcel condition.
     const issueLabel = resolveMeeshoIssueLabel(this.job.claim.marketplaceIssueCode)
@@ -277,7 +281,18 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
     openedIssue = await issueOpen()
     if (!openedIssue) {
       // Determine return type (Courier Return / RTO vs Customer Return)
-      const isRto = /rto|courier/i.test(this.job.claim.returnType || "") || this.job.claim.marketplaceIssueCode === "wrong_barcode_rto"
+      const isWrongBarcodeRto = this.job.claim.marketplaceIssueCode === "wrong_barcode_rto"
+      const rawReturnType = (this.job.claim.returnType || "").trim()
+      const isRto = isWrongBarcodeRto || /rto|courier/i.test(rawReturnType)
+      const isCustomerReturn = !isRto && /customer/i.test(rawReturnType)
+
+      if (!isRto && !isCustomerReturn) {
+        return {
+          success: false,
+          stage: "manual_intervention_required",
+          manualActionReason: `Return type for claim ${this.job.claimId} is unverified ("${rawReturnType || "unspecified"}"). Operator review is required to select between Customer Return and Courier Return / RTO before filing.`,
+        }
+      }
 
       // Check if target issue label is visible directly on current view
       const hasDirectIssue = await this.browser.evaluate<boolean>(`
@@ -777,9 +792,8 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
   }
 
   /**
-   * Reads a filed ticket state from the Meesho Support ticket table.
-   * Live-portal verification is still pending: the reader is DOM-driven, returns
-   * the raw portal text, and infers nothing when the row is absent.
+   * Checks the resolution and status of an existing Meesho support ticket on the Support page.
+   * If rejected, opens the ticket detail drawer to extract the specific rejection reason.
    */
   async checkClaimStatus(marketplaceClaimId: string): Promise<ClaimStatusCheckResult> {
     const ticketId = (marketplaceClaimId || "").trim()
@@ -858,7 +872,7 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
         const res = extractMeeshoResolution(rowText)
         if (res.approvedAmount) {
           statusText = `${parsed.statusText} | Approved Amount: ₹${res.approvedAmount}`
-          resolutionNote = `Approved: ₹${res.approvedAmount} compensation credited.`
+          resolutionNote = `Claim approved for ₹${res.approvedAmount}.`
         }
       }
 

@@ -55,6 +55,10 @@ const STATUS_PATTERNS: ReadonlyArray<{ key: string; test: RegExp }> = [
   { key: "submitted", test: /\bsubmitted|\braised|\bcreated|ticket\s+open|\bopen\b/i },
 ]
 
+/**
+ * Normalizes raw portal ticket status text into a standard lifecycle status key.
+ * Evaluates terminal, review, and progress states using pattern matching.
+ */
 export function normalizeFollowUpStatus(raw: string): string {
   const value = String(raw || "").trim()
   if (!value) return "unknown"
@@ -64,6 +68,9 @@ export function normalizeFollowUpStatus(raw: string): string {
   return "unknown"
 }
 
+/**
+ * Evaluates whether a normalized follow-up status represents a terminal state (approved, rejected, paid, reconciled).
+ */
 export function isTerminalFollowUpStatus(normalized: string): boolean {
   return (FOLLOW_UP_TERMINAL_STATUSES as readonly string[]).includes(String(normalized || "").trim())
 }
@@ -93,6 +100,9 @@ export function claimStatusForFollowUp(normalized: string): string | null {
   }
 }
 
+/**
+ * Generates an operator-facing message describing why a follow-up stopped checking.
+ */
 export function stopReasonMessage(stopReason: string, marketplace: string): string {
   switch (stopReason) {
     case "ticket_resolved":
@@ -151,6 +161,9 @@ export function decideFollowUpStep(input: {
   return { stopReason: "", countAsCheck: true, countAsError: true }
 }
 
+/**
+ * Calculates the next check timestamp by advancing from a given date by a number of hours.
+ */
 export function nextCheckAtFrom(from: Date, hours = FOLLOW_UP_INTERVAL_HOURS): Date {
   return new Date(from.getTime() + hours * 60 * 60 * 1000)
 }
@@ -441,57 +454,81 @@ export async function recordFollowUpResult(
       ],
     )
 
-    // Advance the claim when the ticket state maps to a lifecycle status and the claim is not already there.
+    // Advance the claim when the ticket state maps to a lifecycle status.
     const claimStatus = input.outcome === "status_read" ? claimStatusForFollowUp(normalizedStatus) : null
-    if (claimStatus && claimStatus !== String(row.claim_status || "")) {
-      let historyReason = `Follow-up check: ${statusText || normalizedStatus}`
+    if (claimStatus) {
+      // Lock the claim row and read its live status and remarks directly from the DB
+      const claimRes = await client.query<{ status: string; remarks: string }>(
+        `SELECT status, remarks FROM claims WHERE id = $1 FOR UPDATE`,
+        [row.claim_id],
+      )
+      const currentClaimStatus = claimRes.rows[0]?.status || ""
+      const currentRemarks = (claimRes.rows[0]?.remarks || "").trim()
 
-      if (claimStatus === "rejected") {
-        const rawNote = input.note || ""
-        const rawReason = (rawNote.startsWith("Rejected:") ? rawNote.replace(/^Rejected:\s*/, "") : rawNote).trim() || statusText || normalizedStatus
-        const rejectionReason = rawReason.slice(0, 500)
-        historyReason = `Follow-up check: Rejected - Reason: ${rejectionReason}`
-        await client.query(
-          `UPDATE claims
-           SET status = $2,
-               remarks = CASE WHEN $3::text <> '' THEN $3::text ELSE remarks END,
-               updated_at = now()
-           WHERE id = $1 AND status <> $2`,
-          [row.claim_id, claimStatus, `Rejection reason: ${rejectionReason}`],
-        )
-      } else if (claimStatus === "approved" || claimStatus === "paid") {
-        const textToSearch = `${input.note || ""} ${statusText || ""}`
-        const amtMatch = textToSearch.match(/(?:approved|refund|compensation|credit(?:ed)?)\s*(?:amount\s*)?(?:is|of|:)?\s*(?:₹|rs\.?)\s*([\d,]+(?:\.\d+)?)/i)
-          || textToSearch.match(/(?:₹|rs\.?)\s*([\d,]+(?:\.\d+)?)\s*(?:approved|credited|refunded|compensation)/i)
-        const parsedAmount = amtMatch ? parseFloat(amtMatch[1].replace(/,/g, "")) : 0
-        if (parsedAmount > 0) {
-          historyReason = `Follow-up check: Approved (Amount: ₹${parsedAmount})`
-          await client.query(
+      if (claimStatus !== currentClaimStatus) {
+        let updateRes: { rowCount: number | null } = { rowCount: 0 }
+        let historyReason = `Follow-up check: ${statusText || normalizedStatus}`
+
+        if (claimStatus === "rejected") {
+          const rawNote = input.note || ""
+          const isGenericNote = /Ticket \d+ rejected on/i.test(rawNote)
+          let explicitReason = ""
+          if (rawNote.startsWith("Rejected:")) {
+            explicitReason = rawNote.replace(/^Rejected:\s*/, "").trim()
+          } else if (!isGenericNote && rawNote.trim()) {
+            explicitReason = rawNote.trim()
+          }
+          const rawReason = explicitReason || statusText || normalizedStatus
+          const rejectionReason = rawReason.slice(0, 500)
+          historyReason = `Follow-up check: Rejected - Reason: ${rejectionReason}`
+          const newRemarks = currentRemarks
+            ? (currentRemarks.includes(rejectionReason) ? currentRemarks : `${currentRemarks} | Rejection reason: ${rejectionReason}`.slice(0, 1000))
+            : `Rejection reason: ${rejectionReason}`.slice(0, 1000)
+
+          updateRes = await client.query(
             `UPDATE claims
              SET status = $2,
-                 approved_amount = CASE WHEN $3::numeric > 0 THEN $3::numeric ELSE approved_amount END,
+                 remarks = $3,
                  updated_at = now()
              WHERE id = $1 AND status <> $2`,
-            [row.claim_id, claimStatus, parsedAmount],
+            [row.claim_id, claimStatus, newRemarks],
           )
+        } else if (claimStatus === "approved" || claimStatus === "paid") {
+          const textToSearch = `${input.note || ""} ${statusText || ""}`
+          const amtMatch = textToSearch.match(/(?:approved(?:\s+(?:for|amount))?|refund\s+amount|compensation|credit(?:ed)?)\s*(?:is|of|:)?\s*(?:₹|rs\.?)\s*([\d,]+(?:\.\d+)?)/i)
+            || textToSearch.match(/(?:₹|rs\.?)\s*([\d,]+(?:\.\d+)?)\s*(?:approved|credited|refunded|compensation)/i)
+          const parsedAmount = amtMatch ? parseFloat(amtMatch[1].replace(/,/g, "")) : 0
+          if (parsedAmount > 0) {
+            historyReason = `Follow-up check: Approved (Amount: ₹${parsedAmount})`
+            updateRes = await client.query(
+              `UPDATE claims
+               SET status = $2,
+                   approved_amount = CASE WHEN $3::numeric > 0 THEN $3::numeric ELSE approved_amount END,
+                   updated_at = now()
+               WHERE id = $1 AND status <> $2`,
+              [row.claim_id, claimStatus, parsedAmount],
+            )
+          } else {
+            updateRes = await client.query(
+              `UPDATE claims SET status = $2, updated_at = now() WHERE id = $1 AND status <> $2`,
+              [row.claim_id, claimStatus],
+            )
+          }
         } else {
-          await client.query(
+          updateRes = await client.query(
             `UPDATE claims SET status = $2, updated_at = now() WHERE id = $1 AND status <> $2`,
             [row.claim_id, claimStatus],
           )
         }
-      } else {
-        await client.query(
-          `UPDATE claims SET status = $2, updated_at = now() WHERE id = $1 AND status <> $2`,
-          [row.claim_id, claimStatus],
-        )
-      }
 
-      await client.query(
-        `INSERT INTO claim_status_history (claim_id, from_status, to_status, reason, changed_by)
-         VALUES ($1, $2, $3, $4, NULL)`,
-        [row.claim_id, row.claim_status, claimStatus, historyReason],
-      )
+        if (updateRes && (updateRes.rowCount ?? 0) > 0) {
+          await client.query(
+            `INSERT INTO claim_status_history (claim_id, from_status, to_status, reason, changed_by)
+             VALUES ($1, $2, $3, $4, NULL)`,
+            [row.claim_id, currentClaimStatus, claimStatus, historyReason],
+          )
+        }
+      }
     }
 
     await client.query(
@@ -540,6 +577,9 @@ export type FollowUpSummary = {
   withErrors: number
 }
 
+/**
+ * Lists follow-ups with account scoping, filtering, pagination, and dashboard summary aggregates.
+ */
 export async function listFollowUps(
   db: pg.Pool,
   scope: AccountScope,

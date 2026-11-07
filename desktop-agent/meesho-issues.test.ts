@@ -184,6 +184,10 @@ describe("Meesho ticket resolution and rejection reason extraction", () => {
     const text3 = "Claim Approved. ₹850 credited to supplier balance."
     const res3 = extractMeeshoResolution(text3)
     assert.equal(res3.approvedAmount, 850)
+
+    const text4 = "Claim approved for ₹749."
+    const res4 = extractMeeshoResolution(text4)
+    assert.equal(res4.approvedAmount, 749)
   })
 
   it("handles empty or uninformative resolution text gracefully", () => {

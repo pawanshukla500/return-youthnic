@@ -323,6 +323,9 @@ export async function savePortalLogin(
   return { ok: true, status: 200, message: `${name} bot login saved.` }
 }
 
+/**
+ * Tests supplier portal login in the background using saved, bundled, or environment credentials.
+ */
 export async function testPortalLogin(
   marketplace: string,
   username: string,
@@ -347,6 +350,9 @@ export async function testPortalLogin(
   return { ok: false, message: result.message }
 }
 
+/**
+ * Retries a single claim job by queuing it back for processing.
+ */
 export async function queueOneClaim(jobId: number): Promise<{ ok: boolean; status: number; message: string }> {
   if (!jobId) return { ok: false, status: 400, message: "Choose a claim." }
   const headers = await authHeaders()
@@ -358,6 +364,9 @@ export async function queueOneClaim(jobId: number): Promise<{ ok: boolean; statu
   return { ok: true, status: 200, message: "That claim is back in the queue." }
 }
 
+/**
+ * Signs into a marketplace supplier panel using saved, job bundle, or environment credentials.
+ */
 export async function signInMarketplace(input: {
   accountName: string
   username?: string
@@ -369,6 +378,7 @@ export async function signInMarketplace(input: {
   if (!row) return { ok: false, message: `No marketplace account named ${input.accountName}.` }
 
   let secret: PortalSecret | null = null
+  let envSyncWarning = ""
   if (input.username && input.password) {
     await saveTypedLogin(row, input.username, input.password)
     secret = {
@@ -386,9 +396,13 @@ export async function signInMarketplace(input: {
       if (fromEnv) {
         secret = fromEnv
         if (!row.usernameMasked) {
-          await saveTypedLogin(row, fromEnv.username, fromEnv.password).catch((err) => {
-            logger.warn(`Could not save environment credentials for ${row.accountName} to backend: ${err instanceof Error ? err.message : String(err)}`)
-          })
+          try {
+            await saveTypedLogin(row, fromEnv.username, fromEnv.password)
+          } catch (err) {
+            const reason = err instanceof Error ? err.message : String(err)
+            logger.warn(`Could not save environment credentials for ${row.accountName} to backend: ${reason}`)
+            envSyncWarning = `Environment credentials for ${row.accountName} were used for browser sign-in but remain unsaved on the backend (${reason}). An administrator can persist them under Marketplace Logins.`
+          }
         }
       }
     }
@@ -426,12 +440,18 @@ export async function signInMarketplace(input: {
     if (!result.ok && input.holdOnPrompt) {
       heldBrowser = browser
     }
+    if (result.ok && envSyncWarning) {
+      result.message = `${result.message} Note: ${envSyncWarning}`
+    }
     return result
   } finally {
     if (heldBrowser !== browser) await handle.close()
   }
 }
 
+/**
+ * Retries failed or paused automation jobs for a specific marketplace account.
+ */
 export async function requeueMarketplaceJobs(accountName: string): Promise<number> {
   const headers = await authHeaders()
   const config = loadAgentConfig()
