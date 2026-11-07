@@ -1,5 +1,5 @@
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react"
-import { canDispatchIron, canReceiveIron, isAdminUser } from "../access"
+import { canClearIron, canDispatchIron, canReceiveIron, isAdminUser } from "../access"
 import { ApiError, api } from "../api"
 import { DateField } from "../date-field"
 import { useLiveChanges } from "../live"
@@ -43,24 +43,38 @@ const IST_DATE_TIME = new Intl.DateTimeFormat("en-IN", {
   timeZone: "Asia/Kolkata",
 })
 
+/**
+ * Formats an ISO timestamp string in IST (`Asia/Kolkata`) for Iron Send tables and dialogs.
+ */
 export function istDateTime(iso: string | null): string {
   if (!iso) return "—"
   return IST_DATE_TIME.format(new Date(iso))
 }
 
+/**
+ * Proxies external `http(s)` image URLs through `/api/catalog-image`.
+ */
 export function imageSrc(url: string): string {
   return /^https?:\/\//i.test(url) ? `/api/catalog-image?url=${encodeURIComponent(url)}` : ""
 }
 
+/**
+ * Generates an idempotent client key for Iron Send batch and receive mutations.
+ */
 export function newKey(): string {
   const random = Math.random().toString(36).slice(2, 10)
   return `iron-${Date.now().toString(36)}-${random}`
 }
 
+/**
+ * Main Iron Send workspace page with Pending Iron Send and Batched section switcher,
+ * daily batch creation, backlog clearing, and inward receive tracking.
+ */
 export function IronTracking() {
   const { user } = useWorkspace()
   const mayReceive = canReceiveIron(user)
   const mayDispatch = canDispatchIron(user)
+  const mayClear = canClearIron(user)
   const [view, setView] = useState<"lines" | "batches">(() =>
     new URLSearchParams(window.location.search).get("view") === "batches" ? "batches" : "lines",
   )
@@ -174,11 +188,13 @@ export function IronTracking() {
             <button
               type="button"
               className="btn"
-              disabled={!unbatched?.lines}
+              disabled={!mayClear || !unbatched?.lines}
               title={
-                !unbatched?.lines
-                  ? "No unbatched pending Iron Send lines to clear."
-                  : "Clear pending Iron Send tracking records up to today without syncing to OMSGuru"
+                !mayClear
+                  ? "Only a Supervisor or an Admin can clear pending Iron Send records."
+                  : !unbatched?.lines
+                    ? "No unbatched pending Iron Send lines to clear."
+                    : "Clear pending Iron Send tracking records up to today without syncing to OMSGuru"
               }
               onClick={() => setClearingOpen(true)}
             >
@@ -652,6 +668,10 @@ function todayIstIso(): string {
   return new Intl.DateTimeFormat("sv-SE", { timeZone: "Asia/Kolkata" }).format(new Date())
 }
 
+/**
+ * Confirmation modal to clear unbatched pending Iron Send tracking records up to a selected date
+ * without deleting historical data or syncing to OMSGuru inventory.
+ */
 function ClearPendingDialog({
   pendingLines,
   pendingUnits,

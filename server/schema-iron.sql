@@ -155,7 +155,7 @@ ALTER TABLE iron_batches ADD COLUMN IF NOT EXISTS iron_location text NOT NULL DE
 --    OMSGuru inventory.
 ALTER TABLE iron_send_records DROP CONSTRAINT IF EXISTS iron_send_records_status_check;
 ALTER TABLE iron_send_records ADD CONSTRAINT iron_send_records_status_check
-  CHECK (status IN ('open', 'cancelled', 'cleared'));
+  CHECK (status IN ('open', 'cancelled', 'cleared')) NOT VALID;
 ALTER TABLE iron_send_records ADD COLUMN IF NOT EXISTS cleared_by integer REFERENCES users(id);
 ALTER TABLE iron_send_records ADD COLUMN IF NOT EXISTS cleared_at timestamptz;
 ALTER TABLE iron_send_records ADD COLUMN IF NOT EXISTS clear_reason text NOT NULL DEFAULT '';

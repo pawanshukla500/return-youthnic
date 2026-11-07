@@ -16,7 +16,14 @@
 
 import type pg from "pg"
 import * as XLSX from "xlsx"
-import { accountCondition, allowsAccount, isAdminRole, isInwardRole, isSupervisorOrAdminRole, type AccountScope } from "./access.js"
+import {
+  accountCondition,
+  allowsAccount,
+  isAdminRole,
+  isInwardRole,
+  isSupervisorOrAdminRole,
+  type AccountScope,
+} from "./access.js"
 import { extractGarmentSize } from "./return-reasons.js"
 import { ServiceError, type Actor } from "./register-service.js"
 
@@ -27,6 +34,9 @@ export type IronState = "pending" | "partial" | "overdue" | "received" | "cancel
 export type IronHandoverStatus = "batch_created" | "ready_for_handover" | "handed_over"
 export type IronReturnTeamStatus = "completed"
 
+/**
+ * Normalizes an arbitrary value into a valid `IronHandoverStatus` (`batch_created`, `ready_for_handover`, or `handed_over`).
+ */
 export function ironHandoverStatusOf(value: unknown): IronHandoverStatus {
   const clean = String(value ?? "").trim().toLowerCase()
   if (clean === "ready_for_handover") return "ready_for_handover"
@@ -34,13 +44,18 @@ export function ironHandoverStatusOf(value: unknown): IronHandoverStatus {
   return "batch_created"
 }
 
+/**
+ * Returns the human-readable UI/sheet label for an `IronHandoverStatus`.
+ */
 export function ironHandoverStatusLabel(status: IronHandoverStatus): string {
   if (status === "ready_for_handover") return "Ready for Handover"
   if (status === "handed_over") return "Handed Over"
   return "Batch Created"
 }
 
-// The state of one record. Pure, so the screen, the email and the tests agree.
+/**
+ * Computes the operational lifecycle state of one Iron Send record (`pending`, `partial`, `overdue`, `received`, `cancelled`, or `cleared`).
+ */
 export function ironStateOf(input: {
   status: "open" | "cancelled" | "cleared"
   qtySent: number
@@ -62,14 +77,25 @@ export function ironStateOf(input: {
   return input.qtyReceived > 0 ? "partial" : "pending"
 }
 
-// Only the Inward Team (and an Admin) may record ironed units as received. The Return Team only sends.
+/**
+ * Checks whether the role belongs to the Inward Team or an Admin (allowed to record ironed units received).
+ */
 export function canReceiveIron(role: string): boolean {
   return isInwardRole(role) || isAdminRole(role)
 }
 
-// The Return Team (and Supervisors and Admins) make batches. The Inward Team only receives.
+/**
+ * Checks whether the role belongs to the Return Team, a Supervisor, or an Admin (allowed to create and hand over batches).
+ */
 export function canDispatchIron(role: string): boolean {
   return !isInwardRole(role) && String(role || "").trim() !== ""
+}
+
+/**
+ * Checks whether the role is a Supervisor or an Admin (allowed to clear unbatched pending Iron Send backlogs).
+ */
+export function canClearIron(role: string): boolean {
+  return isSupervisorOrAdminRole(role)
 }
 
 // Where a batch is ironed: sent out to a khaata on a challan, or (high-running pieces) ironed at the return desk.
@@ -311,6 +337,9 @@ const RECORD_SQL = `
   LEFT JOIN users sender ON sender.id = r.sent_by
   LEFT JOIN iron_batches b ON b.id = r.batch_id`
 
+/**
+ * Builds the parameterized SQL `WHERE` clause for `iron_send_records` queries based on account scope and filters.
+ */
 function ironWhere(scope: AccountScope, filters: IronFilters, params: unknown[]): string {
   const parts = [accountCondition(scope, "COALESCE(r.marketplace_id, er.marketplace_id)", params)]
   if (filters.state === "cancelled") parts.push("r.status = 'cancelled'")
@@ -351,6 +380,9 @@ function ironWhere(scope: AccountScope, filters: IronFilters, params: unknown[])
   return parts.join(" AND ")
 }
 
+/**
+ * Maps a raw database row from `RECORD_SQL` into an `IronRecordView`.
+ */
 function toView(row: Record<string, unknown>, now: Date, overdueDays: number): IronRecordView {
   const sentAt = new Date(row.sent_at as string)
   const dueAt = row.expected_return_at ? new Date(row.expected_return_at as string) : null
@@ -395,6 +427,9 @@ function toView(row: Record<string, unknown>, now: Date, overdueDays: number): I
   }
 }
 
+/**
+ * Lists Iron Send records and computes the aggregated `IronSummary` for the caller's account scope.
+ */
 export async function listIronRecords(
   db: pg.Pool,
   scope: AccountScope,
@@ -548,15 +583,17 @@ export async function ironSummary(db: pg.Pool, scope: AccountScope, marketplaceI
   }
 }
 
-// Clears pending unbatched Iron Send tracking records up to and including upToDate (defaulting to today IST).
-// Cleared records are marked status='cleared' (never deleted), never synced with OMSGuru inventory, and audited.
+/**
+ * Clears pending unbatched Iron Send tracking records up to and including `upToDate` (defaulting to today IST).
+ * Cleared records are marked `status = 'cleared'` (never deleted), never synced with OMSGuru inventory, and audited.
+ */
 export async function clearPendingIronRecords(
   db: pg.Pool,
   actor: Actor & { role: string },
   scope: AccountScope,
   input: { upToDate?: string; reason?: string } = {},
 ): Promise<{ clearedRecords: number; clearedUnits: number; upToDate: string }> {
-  if (!isSupervisorOrAdminRole(actor.role)) {
+  if (!canClearIron(actor.role)) {
     throw new ServiceError(403, "Only a Supervisor or an Admin can clear pending Iron Send records.")
   }
   const client = await db.connect()
@@ -830,6 +867,9 @@ const BATCH_SQL = `
   JOIN receipt_scans rs ON rs.id = r.receipt_scan_id
   JOIN expected_returns er ON er.id = rs.expected_return_id`
 
+/**
+ * Maps a raw database row from `BATCH_SQL` into an `IronBatchView`.
+ */
 function toBatchView(row: Record<string, unknown>, now: Date): IronBatchView {
   const expectedReturnAt = new Date(row.expected_return_at as string)
   const createdAt = new Date(row.created_at as string)
@@ -875,7 +915,9 @@ export type IronBatchFilters = {
   dateTo?: string
 }
 
-// Batches with at least one line the user may see. state: open (not fully received) | received | overdue | partial | all.
+/**
+ * Lists Iron Send batches that contain at least one line visible to the caller's account scope.
+ */
 export async function listIronBatches(
   db: pg.Pool,
   scope: AccountScope,
@@ -933,6 +975,9 @@ export async function listIronBatches(
   return all.filter((batch) => batch.state === state)
 }
 
+/**
+ * Loads a single Iron Send batch and its open lines for the caller's account scope.
+ */
 export async function getIronBatch(
   db: pg.Pool,
   scope: AccountScope,
@@ -955,8 +1000,10 @@ function cleanText(value: unknown, label: string, max = MAX_BATCH_TEXT): string 
   return text
 }
 
-// Makes a batch from pending lines that are not in a batch and have nothing received yet. With no record ids, every
-// such line the user may see goes in. The batch number is made under a lock, so two benches never get the same one.
+/**
+ * Creates a numbered daily Iron Send batch (`IRN-YYMMDD-NNN`) from unbatched pending lines,
+ * preventing duplicate tracking/item batching and marking Return Team responsibility as completed.
+ */
 export async function createIronBatch(
   db: pg.Pool,
   actor: Actor & { role: string },
@@ -1098,6 +1145,10 @@ export async function createIronBatch(
 
 // Updates a batch's handover workflow status (batch_created -> ready_for_handover -> handed_over)
 // and records actor, timestamp, receiving team/person, and handover notes for full accountability.
+/**
+ * Transitions or updates a batch's Return Team Handover Workflow status
+ * (`batch_created` -> `ready_for_handover` -> `handed_over`) with row-level locking and audit logging.
+ */
 export async function updateIronBatchHandover(
   db: pg.Pool,
   actor: Actor & { role: string },
@@ -1133,20 +1184,29 @@ export async function updateIronBatchHandover(
   try {
     await client.query("BEGIN")
     open = true
-    const locked = await client.query("SELECT handover_status FROM iron_batches WHERE id = $1 FOR UPDATE", [id])
-    if (!locked.rows.length) throw new ServiceError(404, "Iron Send batch not found.")
-    const fromStatus = ironHandoverStatusOf(locked.rows[0].handover_status)
-    if (fromStatus === "handed_over" && targetStatus !== "handed_over" && !isAdminRole(actor.role)) {
-      throw new ServiceError(409, "This batch has already been handed over. Only an Admin can reopen its handover status.")
+    const lockedRow = (
+      await client.query<{ handover_status: string }>(
+        "SELECT handover_status FROM iron_batches WHERE id = $1 FOR UPDATE",
+        [id],
+      )
+    ).rows[0]
+    if (!lockedRow) throw new ServiceError(404, "Iron Send batch not found.")
+    const lockedStatus = ironHandoverStatusOf(lockedRow.handover_status)
+    if (lockedStatus === "handed_over" && targetStatus !== "handed_over" && !isAdminRole(actor.role)) {
+      throw new ServiceError(
+        409,
+        "This batch has already been handed over. Only an Admin can reopen its handover status.",
+      )
     }
+
     if (targetStatus === "ready_for_handover") {
       await client.query(
         `UPDATE iron_batches
          SET handover_status = 'ready_for_handover',
-             handed_over_at = NULL,
-             handed_over_by = NULL,
              ready_for_handover_at = COALESCE(ready_for_handover_at, now()),
              ready_for_handover_by = COALESCE(ready_for_handover_by, $2),
+             handed_over_at = NULL,
+             handed_over_by = NULL,
              handover_to = $3,
              handover_notes = $4,
              updated_at = now()
@@ -1191,7 +1251,7 @@ export async function updateIronBatchHandover(
         String(id),
         JSON.stringify({
           batchNo: current.batchNo,
-          fromStatus,
+          fromStatus: lockedStatus,
           toStatus: targetStatus,
           handoverTo,
           handoverNotes,
@@ -1290,7 +1350,9 @@ const IST_DATE_TIME = new Intl.DateTimeFormat("en-IN", {
   timeZone: "Asia/Kolkata",
 })
 
-// The batch sheet that goes with the khaata challan: a header block, then one row per line, then the total.
+/**
+ * Builds the 2D array of rows for the downloadable Excel/CSV batch sheet.
+ */
 export function ironBatchSheetRows(batch: IronBatchView, rows: IronRecordView[]): (string | number)[][] {
   const out: (string | number)[][] = [
     ["Youthnic · Iron Send batch"],
@@ -1346,6 +1408,9 @@ export function ironBatchCsv(batch: IronBatchView, rows: IronRecordView[]): stri
   return ironBatchSheetRows(batch, rows).map((row) => row.map(cell).join(",")).join("\n") + "\n"
 }
 
+/**
+ * Escapes unsafe HTML characters for printable slip generation.
+ */
 function escapeHtml(value: unknown): string {
   return String(value ?? "")
     .replace(/&/g, "&amp;")
@@ -1355,7 +1420,9 @@ function escapeHtml(value: unknown): string {
     .replace(/'/g, "&#39;")
 }
 
-// Printable / downloadable Batch Slip for handover and warehouse tracking.
+/**
+ * Generates a self-contained printable/downloadable HTML Batch Slip for handover and warehouse tracking.
+ */
 export function ironBatchSlipHtml(batch: IronBatchView, rows: IronRecordView[]): string {
   const createdLabel = IST_DATE_TIME.format(new Date(batch.createdAt))
   const expectedLabel = IST_DATE_TIME.format(new Date(batch.expectedReturnAt))

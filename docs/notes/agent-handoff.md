@@ -3196,14 +3196,12 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
   - Live PostgreSQL verification against `openPool()`: confirmed `unbatched.lines = 0`, `cleared.lines = 1803`, `batches.total = 1` (`500` batched lines intact), valid `.xlsx` and printable HTML Batch Slip generation, and `0` unresolved/placeholder SKUs in `expected_return_items`, `receipt_scan_items`, and `unmapped_listing_skus`.
 - **The next agent must not:**
   - Remove the `r.batch_id IS NULL` filter from pending/unbatched `ironWhere` states in `server/iron.ts`.
-<!-- coderabbit-ai-generated:v1 -->
-
-<!-- coderabbit-ai-generated-section:v1:87b0b59579d9ca4c002ebfa4e1e9def0dacc7419e6373e313958c1692d1b413f -->
-
   - Allow placeholder master SKUs (`B16`, `INACTIVE*`, `KD2`, `D6`, `D12`) to overwrite active master SKUs in `product_master`.
   - Remove the `iron_send_records` exclusion join from `calculateGoodReturnsForDay` in `server/omsguru-daily.ts`.
 
+<!-- coderabbit-ai-generated:v1 -->
 
+<!-- coderabbit-ai-generated-section:v1:87b0b59579d9ca4c002ebfa4e1e9def0dacc7419e6373e313958c1692d1b413f -->
 
 ### 2026-11-07, CodeRabbit Agent, Iron review fixes
 - Changed: server/iron.ts restricts pending clears to Supervisor/Admin; locks handover status before reopening checks and audit; preserves the handover actor on edits and resets timestamps/actors on reopening.

@@ -14,6 +14,7 @@
 //   npm run sync:vms-catalog -- --probe
 
 import type pg from "pg"
+import { PLACEHOLDER_MASTER_SKU_SQL_REGEX } from "../marketplace-rules.js"
 import { isVmsConfigured, queryVmsReadOnly } from "./db.js"
 
 export type VmsTableInfo = {
@@ -757,14 +758,17 @@ export async function dryRunVmsCatalogue(db: pg.Pool): Promise<VmsDryRun> {
   }
 }
 
-// Synchronizes corrected canonical master SKUs into the return register:
-// 1. Updates receipt_scan_items.product_sku where it differs from product_master.
-// 2. Strips noise suffixes on any remaining receipt_scan_items.product_sku.
+/**
+ * Synchronizes corrected canonical master SKUs into the return register:
+ * 1. Updates `receipt_scan_items.product_sku` where it differs from `product_master`.
+ * 2. Backfills unresolved or placeholder `expected_return_items` from `product_master`.
+ * 3. Strips noise suffixes on any remaining `receipt_scan_items.product_sku`.
+ */
 export async function syncReturnRegisterMasterSkus(db: pg.Pool | pg.PoolClient): Promise<{
   receiptScanItemsUpdated: number
   expectedReturnItemsUpdated?: number
 }> {
-  const placeholderRegex = "^(B16|KD2|D6|D12|INACTIVE([_\\-\\s].*|[0-9]+)?|DUMMY|NA|N/A|NULL|NONE|-)$"
+  const placeholderRegex = PLACEHOLDER_MASTER_SKU_SQL_REGEX
   const rsiRes = await db.query(`
     WITH resolved_masters AS (
       SELECT DISTINCT ON (rsi.id)

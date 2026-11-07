@@ -33,3 +33,11 @@ export function canDispatchIron(user: Pick<SessionUser, "role">): boolean {
   const role = String(user.role || "").trim()
   return role !== "" && !isInwardUser(user)
 }
+
+/**
+ * Only a Supervisor or an Admin may clear unbatched pending Iron Send records.
+ */
+export function canClearIron(user: Pick<SessionUser, "role">): boolean {
+  return isSupervisorOrAdminUser(user)
+}
+

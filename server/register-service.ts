@@ -14,6 +14,7 @@ import { formatCount, formatDay, formatScanTime, headerDateLabel, percentOf } fr
 import { syncIronRecordsForScan } from "./iron.js"
 import { syncScanToReturnTracking } from "./return-tracking.js"
 import { masterSkusForListings } from "./lookup-import.js"
+import { isPlaceholderMasterSku } from "./marketplace-rules.js"
 import {
   ALL_ACCOUNTS,
   NO_ACCESS_MESSAGE,
@@ -568,7 +569,7 @@ async function loadShipmentDetail(client: pg.PoolClient, shipmentId: number, sca
       item.marketplaceSku &&
       (!item.productSku ||
         !item.imageUrl ||
-        /^(B16|KD2|D6|D12|INACTIVE([_\-\s].*|[0-9]+)?|DUMMY|NA|N\/A|NULL|NONE|-)$/i.test(item.productSku) ||
+        isPlaceholderMasterSku(item.productSku) ||
         /(_DIV|_KL|_YOU|_AI[0-9]*|_NEW|_S_S|_[SMLX|2-5XL]+_S|\s+KL|_Y)$/i.test(item.productSku)),
   )
   if (needsMaster.length) {
@@ -581,7 +582,7 @@ async function loadShipmentDetail(client: pg.PoolClient, shipmentId: number, sca
       if (!hit) continue
       if (
         !item.productSku ||
-        /^(B16|KD2|D6|D12|INACTIVE([_\-\s].*|[0-9]+)?|DUMMY|NA|N\/A|NULL|NONE|-)$/i.test(item.productSku) ||
+        isPlaceholderMasterSku(item.productSku) ||
         /(_DIV|_KL|_YOU|_AI[0-9]*|_NEW|_S_S|_[SMLX|2-5XL]+_S|\s+KL|_Y)$/i.test(item.productSku)
       ) {
         item.productSku = hit.masterSku
@@ -1757,11 +1758,11 @@ export const MAX_EXPORT_ROWS = 50000
 
 export type RegisterSort = { sort?: string; direction?: string }
 
-// A scan saved before the product master was loaded keeps an empty product SKU. The master is read once
-// for the rows on screen, including the parent listing when the file added an article suffix.
+/**
+ * Overlays canonical master SKUs from `product_master` onto register rows whose stored `productSku` is blank or a placeholder.
+ */
 async function overlayProductSkus(db: { query: pg.PoolClient["query"] }, rows: RegisterRow[]) {
-  const isPlaceholder = (sku: string) =>
-    !sku || /^(B16|KD2|D6|D12|INACTIVE([_\-\s].*|[0-9]+)?|DUMMY|NA|N\/A|NULL|NONE|-)$/i.test(sku.trim())
+  const isPlaceholder = (sku: string) => isPlaceholderMasterSku(sku)
   const pairs = rows
     .filter((row) => isPlaceholder(row.productSku) && row.marketplaceSku)
     .map((row) => ({ listing: row.marketplaceSku, marketplace: row.marketplace }))

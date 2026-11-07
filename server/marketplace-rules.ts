@@ -178,8 +178,17 @@ const PLACEHOLDER_MASTER_SKUS = new Set([
   "-",
 ])
 
-// Identifies dummy/parking master SKU codes (e.g. OMSGuru's B16, KD2, D6, D12, or INACTIVE*)
-// that must never overwrite or shadow a real active product master SKU.
+/**
+ * PostgreSQL POSIX regular expression matching placeholder/dummy master SKU codes
+ * (`B16`, `KD2`, `D6`, `D12`, `INACTIVE*`, `DUMMY`, `NA`, `N/A`, `NULL`, `NONE`, `-`).
+ */
+export const PLACEHOLDER_MASTER_SKU_SQL_REGEX =
+  "^(B16|KD2|D6|D12|INACTIVE([_\\-\\s].*|[0-9]+)?|DUMMY|NA|N/A|NULL|NONE|-)$"
+
+/**
+ * Identifies dummy/parking master SKU codes (e.g. OMSGuru's `B16`, `KD2`, `D6`, `D12`, or `INACTIVE*`)
+ * that must never overwrite or shadow a real active product master SKU.
+ */
 export function isPlaceholderMasterSku(sku: string): boolean {
   const clean = (sku || "").trim().toLowerCase()
   if (!clean) return true
@@ -188,7 +197,9 @@ export function isPlaceholderMasterSku(sku: string): boolean {
   return false
 }
 
-// Normalizes a marketplace or OMSGuru channel label into the lowercase scope stored in product_master.
+/**
+ * Normalizes a marketplace or OMSGuru channel label into the lowercase scope stored in `product_master`.
+ */
 export function normalizeMasterMarketplace(raw: string): string {
   const cleaned = (raw || "").trim().toLowerCase().replace(/[\s_-]+/g, " ")
   if (!cleaned || cleaned === "all" || cleaned === "global") return "all"

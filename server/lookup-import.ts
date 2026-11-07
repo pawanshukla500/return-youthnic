@@ -36,8 +36,11 @@ export function identifierFor(row: ParsedRow): string {
   return (row.marketplaceSkuIdentifier ?? "").trim()
 }
 
-// One product-master row for a listing SKU. An exact compact match beats the parent listing
-// (the form without a trailing article suffix). A row for this account beats an "all" row.
+/**
+ * Resolves each `(listing, marketplace)` pair against `product_master`.
+ * Exact listing match beats the spaceless form, which beats the parent listing (without trailing article suffix).
+ * Account-specific rows beat `'all'` rows, and real master SKUs always beat placeholder codes (`B16`, `KD2`, `INACTIVE*`).
+ */
 export async function masterSkusForListings(
   db: Queryable,
   pairs: { listing: string; marketplace: string }[],

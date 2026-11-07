@@ -66,11 +66,17 @@ const DAY_CHOICES = [2, 3, 4, 5, 6, 7]
 // High-running pieces ironed at the return desk come back the same or the next days.
 const IN_HOUSE_DAY_CHOICES = [1, 2, 3]
 
+/**
+ * Downloads an Iron Send batch file (`xlsx`, `csv`, or `slip` HTML).
+ */
 export function downloadBatch(batch: IronBatch, format: "xlsx" | "csv" | "slip"): Promise<void> {
   const filename = format === "slip" ? `${batch.batchNo}-slip.html` : `${batch.batchNo}.${format}`
   return downloadFile(`/api/iron/batches/${batch.id}/download?format=${format}`, filename)
 }
 
+/**
+ * Fetches the printable HTML Batch Slip for `batch` and opens it in a new browser tab, falling back to a file download if pop-ups are blocked.
+ */
 export async function printBatchSlip(batch: IronBatch): Promise<void> {
   const response = await fetch(`/api/iron/batches/${batch.id}/download?format=slip`, {
     credentials: "include",
@@ -96,6 +102,10 @@ export async function printBatchSlip(batch: IronBatch): Promise<void> {
   window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
 }
 
+/**
+ * Displays the Batched section of Iron Send, including handover status KPI filters, date range filters,
+ * Excel & Batch Slip downloads, and the Return Team Handover Workflow modal.
+ */
 export function IronBatches({
   mayReceive,
   mayDispatch,
@@ -432,6 +442,9 @@ export function IronBatches({
   )
 }
 
+/**
+ * Modal displaying full batch details, Return Team Handover Workflow controls, tracking IDs, and download actions.
+ */
 function BatchDialog({
   id,
   mayReceive,
@@ -850,6 +863,9 @@ function BatchDialog({
   )
 }
 
+/**
+ * Modal for selecting pending unbatched Iron Send tracking records and creating a daily batch.
+ */
 export function CreateBatchDialog({
   onClose,
   onCreated,

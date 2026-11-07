@@ -10,7 +10,13 @@
 
 import type pg from "pg"
 import { formatUploadLabel, toIsoTimestamp } from "./format.js"
-import { compactSkuKey, isPlaceholderMasterSku, listingSkuCandidates, marketplaceRank } from "./marketplace-rules.js"
+import {
+  PLACEHOLDER_MASTER_SKU_SQL_REGEX,
+  compactSkuKey,
+  isPlaceholderMasterSku,
+  listingSkuCandidates,
+  marketplaceRank,
+} from "./marketplace-rules.js"
 import { bridgeMasterMappings } from "./oms/master-bridge.js"
 import { ServiceError, writeAudit, type Actor } from "./register-service.js"
 import type { MasterRow } from "./sheets.js"
@@ -277,8 +283,8 @@ export async function upsertProductMaster(
          VALUES ${groups.join(", ")}
          ON CONFLICT (marketplace, listing_sku) DO UPDATE SET
            master_sku = CASE
-             WHEN EXCLUDED.master_sku ~* '^(B16|KD2|D6|D12|INACTIVE([_\\-\\s].*|[0-9]+)?|DUMMY|NA|N/A|NULL|NONE|-)$'
-              AND product_master.master_sku !~* '^(B16|KD2|D6|D12|INACTIVE([_\\-\\s].*|[0-9]+)?|DUMMY|NA|N/A|NULL|NONE|-)$'
+             WHEN EXCLUDED.master_sku ~* '${PLACEHOLDER_MASTER_SKU_SQL_REGEX}'
+              AND product_master.master_sku !~* '${PLACEHOLDER_MASTER_SKU_SQL_REGEX}'
               AND btrim(COALESCE(product_master.master_sku, '')) <> ''
              THEN product_master.master_sku
              ELSE EXCLUDED.master_sku
@@ -704,8 +710,8 @@ export async function upsertMasterRows(client: pg.PoolClient, rows: MasterRow[])
      VALUES ${groups.join(", ")}
      ON CONFLICT (marketplace, listing_sku) DO UPDATE SET
        master_sku = CASE
-         WHEN EXCLUDED.master_sku ~* '^(B16|KD2|D6|D12|INACTIVE([_\\-\\s].*|[0-9]+)?|DUMMY|NA|N/A|NULL|NONE|-)$'
-          AND product_master.master_sku !~* '^(B16|KD2|D6|D12|INACTIVE([_\\-\\s].*|[0-9]+)?|DUMMY|NA|N/A|NULL|NONE|-)$'
+         WHEN EXCLUDED.master_sku ~* '${PLACEHOLDER_MASTER_SKU_SQL_REGEX}'
+          AND product_master.master_sku !~* '${PLACEHOLDER_MASTER_SKU_SQL_REGEX}'
           AND btrim(COALESCE(product_master.master_sku, '')) <> ''
          THEN product_master.master_sku
          ELSE EXCLUDED.master_sku
