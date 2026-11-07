@@ -1082,13 +1082,19 @@ if (fs.existsSync(dist)) {
   }
   app.use(
     express.static(dist, {
+      index: false,
       maxAge: "1h",
       etag: true,
+      setHeaders: (res, filePath) => {
+        if (filePath.endsWith(".html")) {
+          res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate")
+        }
+      },
     }),
   )
   app.get("*", (req, res, next) => {
     if (req.path.startsWith("/api")) return next()
-    res.setHeader("Cache-Control", "no-cache")
+    res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate")
     res.sendFile(path.join(dist, "index.html"))
   })
 }

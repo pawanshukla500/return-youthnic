@@ -462,6 +462,10 @@ export async function listIronRecords(
   return { rows: rows.slice(0, Math.max(1, Math.min(limit, 2000))), summary }
 }
 
+/**
+ * Computes account-scoped summary KPI figures for Iron Send records, unbatched pending lines,
+ * active batches, and cleared records.
+ */
 export async function ironSummary(db: pg.Pool, scope: AccountScope, marketplaceId: number | null = null): Promise<IronSummary> {
   const overdueDays = await getOverdueDays(db)
   const params: unknown[] = []
@@ -584,14 +588,16 @@ export async function ironSummary(db: pg.Pool, scope: AccountScope, marketplaceI
 }
 
 /**
- * Clears pending unbatched Iron Send tracking records up to and including `upToDate` (defaulting to today IST).
+ * Clears pending Iron Send tracking records up to and including `upToDate` (defaulting to today IST).
+ * By default clears unbatched records (`r.batch_id IS NULL`); when `includeBatched` is true, also clears
+ * unreceived batched records sent on or before `upToDate`.
  * Cleared records are marked `status = 'cleared'` (never deleted), never synced with OMSGuru inventory, and audited.
  */
 export async function clearPendingIronRecords(
   db: pg.Pool,
   actor: Actor & { role: string },
   scope: AccountScope,
-  input: { upToDate?: string; reason?: string } = {},
+  input: { upToDate?: string; reason?: string; includeBatched?: boolean } = {},
 ): Promise<{ clearedRecords: number; clearedUnits: number; upToDate: string }> {
   if (!canClearIron(actor.role)) {
     throw new ServiceError(403, "Only a Supervisor or an Admin can clear pending Iron Send records.")
@@ -606,6 +612,7 @@ export async function clearPendingIronRecords(
     )
     const upToDate =
       input.upToDate && /^\d{4}-\d{2}-\d{2}$/.test(input.upToDate.trim()) ? input.upToDate.trim() : istToday
+    const includeBatched = Boolean(input.includeBatched)
     const reason =
       String(input.reason || "").trim().slice(0, MAX_IRON_NOTES) ||
       `Cleared pending Iron Send tracking records up to ${upToDate} (not synced with OMSGuru inventory)`
@@ -614,6 +621,7 @@ export async function clearPendingIronRecords(
     const scopeSql = accountCondition(scope, "COALESCE(r.marketplace_id, er.marketplace_id)", params)
     params.push(upToDate)
     const dateParam = `$${params.length}`
+    const batchClause = includeBatched ? "" : "AND r.batch_id IS NULL"
 
     const locked = await client.query(
       `SELECT r.id, r.qty_sent
@@ -621,7 +629,7 @@ export async function clearPendingIronRecords(
        JOIN receipt_scans rs ON rs.id = r.receipt_scan_id
        JOIN expected_returns er ON er.id = rs.expected_return_id
        WHERE r.status = 'open'
-         AND r.batch_id IS NULL
+         ${batchClause}
          AND (r.sent_at AT TIME ZONE 'Asia/Kolkata')::date <= ${dateParam}::date
          AND ${scopeSql}
          AND NOT EXISTS (SELECT 1 FROM iron_receive_events e WHERE e.iron_send_record_id = r.id)
@@ -647,6 +655,7 @@ export async function clearPendingIronRecords(
             clearedRecords: ids.length,
             clearedUnits,
             upToDate,
+            includeBatched,
             reason,
             omsguruSync: false,
           }),
