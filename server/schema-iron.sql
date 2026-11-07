@@ -205,6 +205,14 @@ FROM iron_send_records r
 JOIN receipt_scans rs ON rs.id = r.receipt_scan_id
 WHERE r.status = 'open'
   AND (r.sent_at AT TIME ZONE 'Asia/Kolkata')::date <= COALESCE((SELECT backlog_cleared_through FROM iron_settings WHERE id = 1), (now() AT TIME ZONE 'Asia/Kolkata')::date - 1)
+  AND (
+    r.batch_id IS NULL
+    OR EXISTS (
+      SELECT 1 FROM iron_batches b
+      WHERE b.id = r.batch_id
+        AND (b.created_at AT TIME ZONE 'Asia/Kolkata')::date <= COALESCE((SELECT backlog_cleared_through FROM iron_settings WHERE id = 1), (now() AT TIME ZONE 'Asia/Kolkata')::date - 1)
+    )
+  )
   AND COALESCE(rs.tracking_id_snapshot, '') NOT LIKE 'SYN-%'
   AND NOT EXISTS (SELECT 1 FROM iron_receive_events e WHERE e.iron_send_record_id = r.id)
 HAVING COUNT(r.id) > 0;
@@ -217,6 +225,14 @@ FROM receipt_scans rs
 WHERE rs.id = r.receipt_scan_id
   AND r.status = 'open'
   AND (r.sent_at AT TIME ZONE 'Asia/Kolkata')::date <= COALESCE((SELECT backlog_cleared_through FROM iron_settings WHERE id = 1), (now() AT TIME ZONE 'Asia/Kolkata')::date - 1)
+  AND (
+    r.batch_id IS NULL
+    OR EXISTS (
+      SELECT 1 FROM iron_batches b
+      WHERE b.id = r.batch_id
+        AND (b.created_at AT TIME ZONE 'Asia/Kolkata')::date <= COALESCE((SELECT backlog_cleared_through FROM iron_settings WHERE id = 1), (now() AT TIME ZONE 'Asia/Kolkata')::date - 1)
+    )
+  )
   AND COALESCE(rs.tracking_id_snapshot, '') NOT LIKE 'SYN-%'
   AND NOT EXISTS (SELECT 1 FROM iron_receive_events e WHERE e.iron_send_record_id = r.id);
 

@@ -404,7 +404,10 @@ function scanWhere(scope: AccountScope, filters: AnalyticsFilters, from: string,
   return { sql: parts.join(" AND "), params }
 }
 
-// One row per scanned line, with its issue and Iron Send quantities. Every figure below is a sum over these lines.
+/**
+ * Builds the `lines` CTE yielding one row per scanned line with its non-operational issue units
+ * and active (`status = 'open'`) Iron Send quantities.
+ */
 function linesCte(where: string): string {
   return `
     lines AS (
@@ -459,6 +462,9 @@ function counts(row: Record<string, unknown>): AnalyticsCounts {
   }
 }
 
+/**
+ * Loads the complete account-scoped return analytics report for the given filters.
+ */
 export async function loadAnalytics(
   db: pg.Pool,
   scope: AccountScope,

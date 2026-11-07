@@ -672,6 +672,9 @@ function todayIstIso(): string {
  * Confirmation modal to clear unbatched pending Iron Send tracking records up to a selected date
  * without deleting historical data or syncing to OMSGuru inventory.
  */
+/**
+ * Modal dialog allowing a Supervisor or Admin to clear pending Iron Send records up to a selected IST date.
+ */
 function ClearPendingDialog({
   pendingLines,
   pendingUnits,
@@ -688,6 +691,7 @@ function ClearPendingDialog({
   const [reason, setReason] = useState("Cleared pending Iron Send tracking records up to today for daily batch cutover")
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState("")
+  const canConfirm = pendingLines > 0 || includeBatched
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
@@ -748,7 +752,16 @@ function ClearPendingDialog({
           <button type="button" className="btn" onClick={onClose}>
             Cancel
           </button>
-          <button type="submit" className="btn primary" disabled={saving}>
+          <button
+            type="submit"
+            className="btn primary"
+            disabled={saving || !canConfirm}
+            title={
+              !canConfirm
+                ? "There are no unbatched pending lines. Check 'Also clear unreceived batched records' to clear batched records."
+                : "Clear selected pending Iron Send records"
+            }
+          >
             {saving ? "Clearing…" : "Confirm Clear Pending"}
           </button>
         </div>

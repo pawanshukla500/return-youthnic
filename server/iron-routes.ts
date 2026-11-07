@@ -49,6 +49,9 @@ function positiveId(value: unknown): number | null {
   return Number.isInteger(id) && id > 0 ? id : null
 }
 
+/**
+ * Mounts all Iron Send tracking, batch management, analytics, and sync cursor HTTP routes.
+ */
 export function mountIronRoutes(app: Express, requireUser: RequestHandler): void {
   app.get("/api/iron", requireUser, async (req, res, next) => {
     try {
@@ -71,11 +74,14 @@ export function mountIronRoutes(app: Express, requireUser: RequestHandler): void
   app.post("/api/iron/clear-pending", requireUser, async (req, res, next) => {
     try {
       const body = (req.body ?? {}) as Record<string, unknown>
+      if (body.includeBatched !== undefined && typeof body.includeBatched !== "boolean") {
+        throw new ServiceError(400, "includeBatched must be a boolean.")
+      }
       const user = userOf(req)
       const result = await clearPendingIronRecords(getPool(), { ...actorOf(req), role: user.role }, scopeOf(req), {
         upToDate: text(body.upToDate) || undefined,
         reason: text(body.reason) || undefined,
-        includeBatched: Boolean(body.includeBatched),
+        includeBatched: body.includeBatched === true,
       })
       res.json(result)
       if (result.clearedRecords > 0) publishChange({ kind: "iron.cleared", marketplaceId: null, actorId: user.id })

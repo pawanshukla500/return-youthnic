@@ -462,6 +462,10 @@ export async function listIronRecords(
   return { rows: rows.slice(0, Math.max(1, Math.min(limit, 2000))), summary }
 }
 
+/**
+ * Computes account-scoped summary KPI figures for Iron Send records, unbatched pending lines,
+ * active batches, and cleared records.
+ */
 export async function ironSummary(db: pg.Pool, scope: AccountScope, marketplaceId: number | null = null): Promise<IronSummary> {
   const overdueDays = await getOverdueDays(db)
   const params: unknown[] = []

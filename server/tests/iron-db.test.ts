@@ -70,6 +70,8 @@ const AWB = {
   batchB: `SYN-${run}-BATB`,
   inHouse: `SYN-${run}-BATC`,
   clearable: `SYN-${run}-CLR1`,
+  clearBatchedOpen: `SYN-${run}-CLR2`,
+  clearBatchedRecv: `SYN-${run}-CLR3`,
 }
 
 let pool: pg.Pool
@@ -177,6 +179,8 @@ before(async () => {
       row({ trackingId: AWB.batchB, orderLineId: `SYN-${run}-L7`, qty: 1, channelListingId: `SYN-${run}-TOP-RED_L`, sku: `SYN-${run}-TOP-RED_L` }),
       row({ trackingId: AWB.inHouse, orderLineId: `SYN-${run}-L8`, qty: 1 }),
       row({ trackingId: AWB.clearable, orderLineId: `SYN-${run}-L9`, qty: 2 }),
+      row({ trackingId: AWB.clearBatchedOpen, orderLineId: `SYN-${run}-L10`, qty: 2 }),
+      row({ trackingId: AWB.clearBatchedRecv, orderLineId: `SYN-${run}-L11`, qty: 2 }),
     ],
     images: new Map(),
     sources: new Map(),
@@ -667,6 +671,23 @@ test("Iron batches: high-running pieces ironed at the return desk; the Inward Te
 
 test("Clearing pending Iron Send records removes them from pending, preserves batches, and never syncs to OMSGuru", { skip: skip || false }, async () => {
   const clearRecId = await ironScan(AWB.clearable, `SYN-${run}-CLR-1`)
+  const batchedOpenId = await ironScan(AWB.clearBatchedOpen, `SYN-${run}-CLR-2`)
+  const batchedRecvId = await ironScan(AWB.clearBatchedRecv, `SYN-${run}-CLR-3`)
+  await createIronBatch(pool, scanner, allScope, {
+    recordIds: [batchedOpenId, batchedRecvId],
+    khaataName: "SYN Clear Batch Khaata",
+    challanNo: "SYN-CH-CLR",
+    expectedDays: 3,
+    notes: "SYN",
+    clientKey: `SYN-${run}-CLR-BAT-1`,
+  })
+  await receiveIron(pool, inward, allScope, {
+    recordId: batchedRecvId,
+    qty: 1,
+    notes: "SYN partial receive",
+    clientKey: `SYN-${run}-CLR-RCV-1`,
+  })
+
   const beforePending = await listIronRecords(pool, allScope, { state: "pending", search: AWB.clearable })
   assert.equal(beforePending.rows.length, 1)
 
@@ -677,9 +698,19 @@ test("Clearing pending Iron Send records removes them from pending, preserves ba
   const clearedRes = await clearPendingIronRecords(pool, admin, allScope, {
     upToDate: todayIst(),
     reason: "SYN daily cutover clear",
+    includeBatched: false,
   })
   assert.ok(clearedRes.clearedRecords >= 1)
   assert.ok(clearedRes.clearedUnits >= 2)
+
+  const defaultStatuses = await pool.query<{ id: number; status: string }>(
+    "SELECT id, status FROM iron_send_records WHERE id = ANY($1::int[]) ORDER BY id",
+    [[clearRecId, batchedOpenId, batchedRecvId]],
+  )
+  const statusMapDefault = new Map(defaultStatuses.rows.map((r) => [Number(r.id), r.status]))
+  assert.equal(statusMapDefault.get(clearRecId), "cleared", "unbatched pending record is cleared when includeBatched is false")
+  assert.equal(statusMapDefault.get(batchedOpenId), "open", "batched unreceived record remains open when includeBatched is false")
+  assert.equal(statusMapDefault.get(batchedRecvId), "open", "batched partially received record remains open when includeBatched is false")
 
   const afterPending = await listIronRecords(pool, allScope, { state: "pending", search: AWB.clearable })
   assert.equal(afterPending.rows.length, 0, "cleared record is removed from pending list")
@@ -701,12 +732,27 @@ test("Clearing pending Iron Send records removes them from pending, preserves ba
     /Some chosen lines are already in a batch or were received/,
   )
 
+  const clearedBatchedRes = await clearPendingIronRecords(pool, admin, allScope, {
+    upToDate: todayIst(),
+    reason: "SYN batched cutover clear",
+    includeBatched: true,
+  })
+  assert.ok(clearedBatchedRes.clearedRecords >= 1)
+
+  const optInStatuses = await pool.query<{ id: number; status: string }>(
+    "SELECT id, status FROM iron_send_records WHERE id = ANY($1::int[]) ORDER BY id",
+    [[batchedOpenId, batchedRecvId]],
+  )
+  const statusMapOptIn = new Map(optInStatuses.rows.map((r) => [Number(r.id), r.status]))
+  assert.equal(statusMapOptIn.get(batchedOpenId), "cleared", "unreceived batched record is cleared when includeBatched is true")
+  assert.equal(statusMapOptIn.get(batchedRecvId), "open", "batched record with receive events remains open even when includeBatched is true")
+
   const day = await calculateGoodReturnsForDay(pool, todayIst())
   const kurta = day.skus.find((entry) => entry.sku === `SYN-${run}-KURTA-BLUE_M`)
   assert.equal(kurta?.qty, 2, "cleared Iron Send records remain excluded from OMSGuru daily inventory sync")
 
   const sumAfter = await ironSummary(pool, allScope, accountId)
   assert.equal(sumAfter.unbatched.lines, 0, "cleared Iron Send records do not appear in unbatched pending lines")
-  assert.equal(sumAfter.cleared.lines >= 1, true, "cleared Iron Send records are tracked in cleared summary")
+  assert.equal(sumAfter.cleared.lines >= 2, true, "cleared Iron Send records are tracked in cleared summary")
 })
 

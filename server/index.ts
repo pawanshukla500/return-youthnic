@@ -1085,6 +1085,11 @@ if (fs.existsSync(dist)) {
       index: false,
       maxAge: "1h",
       etag: true,
+      setHeaders: (res, filePath) => {
+        if (filePath.endsWith(".html")) {
+          res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate")
+        }
+      },
     }),
   )
   app.get("*", (req, res, next) => {
