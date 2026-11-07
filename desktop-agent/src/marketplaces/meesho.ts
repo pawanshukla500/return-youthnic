@@ -260,6 +260,7 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
 
     logger.info("Clicking 'Raise a Ticket'...")
     let openedForm = false
+    const subOrderInputSelector = 'input[placeholder*="Sub Order" i], input[placeholder*="suborder" i], input[name*="suborder" i], input[name*="sub_order" i], input[id*="suborder" i], input[id*="sub_order" i]'
     for (let attempt = 0; attempt < 6 && !openedForm; attempt++) {
       if (attempt % 2 === 0) {
         await this.browser.clickVisibleLabel("Raise a Ticket")
@@ -267,7 +268,7 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
         await this.browser.clickLabelInDom("Raise a Ticket")
       }
       await this.delay(2000)
-      openedForm = await this.browser.evaluate<boolean>(`Boolean(document.querySelector('input[placeholder="Sub Order Number"]'))`)
+      openedForm = await this.browser.evaluate<boolean>(`Boolean(document.querySelector(${JSON.stringify(subOrderInputSelector)}))`)
     }
     if (!openedForm) {
       return {
@@ -282,7 +283,6 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
     logger.info(`Filling claim details for Sub-Order: ${subOrderId}...`)
 
     // Sub-order ID / Order ID input
-    const subOrderInputSelector = 'input[placeholder="Sub Order Number"]'
     const hasSubOrderInput = await this.waitForSelector(subOrderInputSelector, 12000)
     if (!hasSubOrderInput) {
       const blockedScreenshot = path.join(this.workDir, `login-required-job-${this.job.jobId}.png`)
@@ -299,16 +299,18 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
     await this.delay(1000)
 
     if (this.job.claim.trackingId) {
-      const hasAwb = await this.browser.evaluate<boolean>(`Boolean(document.querySelector('input[placeholder="AWB Number"]'))`)
+      const awbSelector = 'input[placeholder*="AWB" i], input[name*="awb" i], input[id*="awb" i]'
+      const hasAwb = await this.browser.evaluate<boolean>(`Boolean(document.querySelector(${JSON.stringify(awbSelector)}))`)
       if (hasAwb) {
-        await this.humanType('input[placeholder="AWB Number"]', this.job.claim.trackingId)
+        await this.humanType(awbSelector, this.job.claim.trackingId)
         await this.delay(1000)
       }
     }
     if (this.job.claim.packetId) {
-      const hasPacket = await this.browser.evaluate<boolean>(`Boolean(document.querySelector('input[placeholder="Packet ID"]'))`)
+      const packetSelector = 'input[placeholder*="Packet" i], input[name*="packet" i], input[id*="packet" i]'
+      const hasPacket = await this.browser.evaluate<boolean>(`Boolean(document.querySelector(${JSON.stringify(packetSelector)}))`)
       if (hasPacket) {
-        await this.humanType('input[placeholder="Packet ID"]', this.job.claim.packetId)
+        await this.humanType(packetSelector, this.job.claim.packetId)
         await this.delay(1000)
       }
     }
@@ -621,7 +623,7 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
       extractedTicketId = (shown || []).find((id) => !known.has(id)) || ""
       if (!extractedTicketId) await this.delay(1500)
     }
-    const formStillOpen = await this.browser.evaluate<boolean>(`Boolean(document.querySelector('input[placeholder="Sub Order Number"]'))`)
+    const formStillOpen = await this.browser.evaluate<boolean>(`Boolean(document.querySelector(${JSON.stringify(subOrderInputSelector)}))`)
     if (formErrors.length && formStillOpen) {
       return {
         success: false,

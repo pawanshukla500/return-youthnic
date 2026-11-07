@@ -9,7 +9,7 @@ import {
   resumeClaimBotIfSignedIn,
   startDesktopAppServer,
 } from "../desktop-agent/src/desktop-app-server.js"
-import { notifyWindowGeometryChanged, setBrowserWorkspaceRect, setDetachedViewHost, setFullscreenSupplierView, setSupplierViewHost, handleDetachedWindowClosed, disposeDetachedSupplierViews, notifyWindowLifecycle, DETACHED_WINDOW_WEB_PREFERENCES, type WindowLifecycleEvent } from "../desktop-agent/src/native-browser-view.js"
+import { notifyWindowGeometryChanged, setBrowserWorkspaceRect, setDetachedViewHost, setFullscreenSupplierView, setSupplierViewHost, handleDetachedWindowClosed, disposeDetachedSupplierViews, notifyWindowLifecycle, DETACHED_WINDOW_WEB_PREFERENCES, STANDARD_CHROME_USER_AGENT, type WindowLifecycleEvent } from "../desktop-agent/src/native-browser-view.js"
 import { isInsecureRemoteUrl, isSameOrigin, localEngineUrl, resolveEngineBind, type EngineBind } from "../desktop-agent/src/engine-config.js"
 import { logger } from "../desktop-agent/src/logger.js"
 
@@ -18,6 +18,10 @@ app.commandLine.appendSwitch("js-flags", "--max-old-space-size=256")
 app.commandLine.appendSwitch("renderer-process-limit", "2")
 app.commandLine.appendSwitch("disable-features", "CalculateNativeWinOcclusion")
 app.commandLine.appendSwitch("disable-background-timer-throttling", "false")
+// Prevent supplier anti-bot WAFs (e.g. Akamai on Meesho) from flagging the embedded browser as automated
+app.commandLine.appendSwitch("disable-blink-features", "AutomationControlled")
+
+app.userAgentFallback = STANDARD_CHROME_USER_AGENT
 
 let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null

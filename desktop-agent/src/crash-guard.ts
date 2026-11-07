@@ -24,17 +24,16 @@ export type CrashGuardOptions = {
   onFatal?: (err: unknown) => void
 }
 
+/**
+ * Installs global uncaughtException, unhandledRejection, and stream error listeners
+ * to protect engine continuity and ensure clean non-zero exits on fatal crashes.
+ */
 export function installCrashGuards(options: CrashGuardOptions = {}): void {
   if (installed) return
   installed = true
 
-  process.on("unhandledRejection", (reason) => {
-    // Almost always one failed request. Log it and keep filing.
-    logger.error("Unhandled promise rejection (continuing):", reason)
-  })
-
-  process.on("uncaughtException", (err) => {
-    logger.fatalSync("Uncaught exception (exiting so the supervisor restarts a clean process):", err)
+  function handleFatal(context: string, err: unknown): void {
+    logger.fatalSync(`${context} (exiting so the supervisor restarts a clean process):`, err)
     if (options.onFatal) {
       try {
         options.onFatal(err)
@@ -44,6 +43,32 @@ export function installCrashGuards(options: CrashGuardOptions = {}): void {
       return
     }
     process.exit(1)
+  }
+
+  // Avoid uncaught EPIPE exceptions when parent process closes stdout/stderr (e.g. Windows task scheduler),
+  // while forwarding non-EPIPE stream failures to the fatal error handler.
+  try {
+    process.stdout?.on?.("error", (err: unknown) => {
+      if ((err as { code?: string })?.code === "EPIPE") return
+      handleFatal("stdout error", err)
+    })
+    process.stderr?.on?.("error", (err: unknown) => {
+      if ((err as { code?: string })?.code === "EPIPE") return
+      handleFatal("stderr error", err)
+    })
+  } catch {
+    // ignore
+  }
+
+  process.on("unhandledRejection", (reason) => {
+    // Almost always one failed request. Log it and keep filing.
+    logger.error("Unhandled promise rejection (continuing):", reason)
+  })
+
+  process.on("uncaughtException", (err) => {
+    // If the process pipe is broken, ignore rather than recursing indefinitely
+    if ((err as { code?: string })?.code === "EPIPE") return
+    handleFatal("Uncaught exception", err)
   })
 }
 

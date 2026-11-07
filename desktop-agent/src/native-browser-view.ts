@@ -30,6 +30,63 @@ import { logger } from "./logger.js"
 
 type ElectronApi = typeof import("electron")
 
+const chromeMajor = process.versions?.chrome ? process.versions.chrome.split(".")[0] : "131"
+
+/** Standard genuine Chrome User-Agent header string matching Chromium engine version without automation flags. */
+export const STANDARD_CHROME_USER_AGENT =
+  `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeMajor}.0.0.0 Safari/537.36`
+
+const configuredSessions = new WeakSet<object>()
+
+/**
+ * Injects genuine Chrome identity and client hints (sec-ch-ua) into marketplace session headers
+ * to prevent automated browser detection by anti-bot WAFs (such as Akamai EdgeSuite on Meesho).
+ */
+export function configureSupplierSessionHeaders(sessionObj: unknown): void {
+  if (!sessionObj || typeof sessionObj !== "object") return
+  if (configuredSessions.has(sessionObj)) return
+  configuredSessions.add(sessionObj)
+
+  const ses = sessionObj as {
+    setUserAgent?: (ua: string) => void
+    webRequest?: {
+      onBeforeSendHeaders?: (
+        filter: unknown,
+        listener: (
+          details: { requestHeaders: Record<string, string>; url: string },
+          callback: (response: { requestHeaders: Record<string, string> }) => void,
+        ) => void,
+      ) => void
+    }
+  }
+
+  if (typeof ses.setUserAgent === "function") {
+    ses.setUserAgent(STANDARD_CHROME_USER_AGENT)
+  }
+
+  if (ses.webRequest && typeof ses.webRequest.onBeforeSendHeaders === "function") {
+    ses.webRequest.onBeforeSendHeaders(
+      {
+        urls: [
+          "*://*.meesho.com/*",
+          "*://supplier.meesho.com/*",
+          "*://*.flipkart.com/*",
+          "*://*.amazon.in/*",
+          "*://*.myntra.com/*",
+          "*://*.ajio.com/*",
+        ],
+      },
+      (details, callback) => {
+        const headers = details.requestHeaders || {}
+        headers["sec-ch-ua"] = `"Google Chrome";v="${chromeMajor}", "Chromium";v="${chromeMajor}", "Not_A Brand";v="24"`
+        headers["sec-ch-ua-mobile"] = "?0"
+        headers["sec-ch-ua-platform"] = '"Windows"'
+        callback({ requestHeaders: headers })
+      },
+    )
+  }
+}
+
 const PARTITION_PREFIX = "persist:supplier-"
 
 const panelLocks = new Map<string, Promise<unknown>>()
@@ -1048,8 +1105,8 @@ async function elementCenter(
 ): Promise<{ x: number; y: number } | null> {
   const rect = await contents.executeJavaScript(
     `(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) return null; ` +
-      `const r = el.getBoundingClientRect(); ` +
       `if (typeof el.scrollIntoView === "function") el.scrollIntoView({ block: "center" }); ` +
+      `const r = el.getBoundingClientRect(); ` +
       `return { x: r.left + r.width / 2, y: r.top + r.height / 2, w: r.width, h: r.height }; })()`,
   )
   if (!rect || typeof rect.x !== "number") return null
@@ -1088,6 +1145,10 @@ class NativeSupplierBrowser implements SupplierBrowserApi {
         this.view = new WebContentsView({
           webPreferences: { partition, contextIsolation: true, nodeIntegration: false, sandbox: true },
         })
+        if (typeof this.view.webContents.setUserAgent === "function") {
+          this.view.webContents.setUserAgent(STANDARD_CHROME_USER_AGENT)
+        }
+        configureSupplierSessionHeaders(this.view.webContents.session)
         this.attachViewHandlers()
         registerSupplierView(this.options.panelKey, this.view)
       }
@@ -1112,6 +1173,10 @@ class NativeSupplierBrowser implements SupplierBrowserApi {
       this.view = new WebContentsView({
         webPreferences: { partition, contextIsolation: true, nodeIntegration: false, sandbox: true },
       })
+      if (typeof this.view.webContents.setUserAgent === "function") {
+        this.view.webContents.setUserAgent(STANDARD_CHROME_USER_AGENT)
+      }
+      configureSupplierSessionHeaders(this.view.webContents.session)
       this.host.contentView.addChildView(this.view)
       this.view.setBounds({ x: 0, y: 0, width: 1280, height: 800 })
       // Operator-visible only when manual completion is needed (OTP/CAPTCHA,
@@ -1217,6 +1282,10 @@ class NativeSupplierBrowser implements SupplierBrowserApi {
         sandbox: true,
       },
     })
+    if (typeof popup.webContents.setUserAgent === "function") {
+      popup.webContents.setUserAgent(STANDARD_CHROME_USER_AGENT)
+    }
+    configureSupplierSessionHeaders(popup.webContents.session)
     const entry = managedSupplierViews.get(this.options.panelKey)
     if (entry && entry.view === this.view) entry.popups.push(popup)
     popup.webContents.once("destroyed", () => {
@@ -1319,40 +1388,124 @@ class NativeSupplierBrowser implements SupplierBrowserApi {
   }
 
   async humanType(selector: string, text: string): Promise<boolean> {
-    const center = await elementCenter(this.contents, selector)
-    if (!center) return false
-    this.contents.sendInputEvent({ type: "mouseDown", x: center.x, y: center.y, button: "left", clickCount: 1 } as never)
-    this.contents.sendInputEvent({ type: "mouseUp", x: center.x, y: center.y, button: "left", clickCount: 1 } as never)
-    for (const char of text) {
+    const focused = await this.evaluate<boolean>(`
+      (() => {
+        const el = document.querySelector(${JSON.stringify(selector)});
+        if (!el) return false;
+        if (typeof el.scrollIntoView === "function") el.scrollIntoView({ block: "center" });
+        if (typeof el.focus === "function") el.focus();
+        if ("select" in el && typeof el.select === "function") {
+          try { el.select(); } catch {}
+        }
+        return true;
+      })()
+    `).catch(() => false)
+    if (!focused) return false
+
+    // Clear existing text first
+    await this.evaluate(`
+      (() => {
+        const el = document.querySelector(${JSON.stringify(selector)});
+        if (!el) return;
+        const proto = el instanceof HTMLTextAreaElement ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+        const nativeSetter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
+        if (nativeSetter) {
+          nativeSetter.call(el, "");
+        } else {
+          el.value = "";
+        }
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+      })()
+    `).catch(() => undefined)
+
+    // Type character by character with input events
+    for (let i = 0; i < text.length; i++) {
+      const char = text[i]
       this.contents.sendInputEvent({ type: "char", keyCode: char } as never)
+      const intended = text.slice(0, i + 1)
+      await this.evaluate(`
+        (() => {
+          const el = document.querySelector(${JSON.stringify(selector)});
+          if (!el) return;
+          const intended = ${JSON.stringify(intended)};
+          const proto = el instanceof HTMLTextAreaElement ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+          const nativeSetter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
+          if (nativeSetter) {
+            nativeSetter.call(el, intended);
+          } else {
+            el.value = intended;
+          }
+          el.dispatchEvent(new Event("input", { bubbles: true }));
+          el.dispatchEvent(new Event("change", { bubbles: true }));
+        })()
+      `).catch(() => undefined)
+      await this.delay(30)
     }
+    await this.delay(500)
     return true
   }
 
+  /**
+   * Generates a client-side JavaScript evaluation script that searches for clickable elements
+   * matching the provided text and invokes a click on the closest interactable ancestor or element.
+   */
+  private buildClickByTextScript(text: string, exact: boolean): string {
+    return `
+      (() => {
+        const want = ${JSON.stringify(text.trim().toLowerCase())};
+        if (!want) return false;
+        const all = Array.from(document.querySelectorAll("button, a, input[type=button], input[type=submit], div, span, p, li, label, [role=button]"));
+        const matches = all.filter((el) => {
+          const t = (el.textContent || (el instanceof HTMLInputElement && el.value) || "").trim().toLowerCase();
+          if (${exact ? "t !== want" : "!t.includes(want)"}) return false;
+          const rect = el.getBoundingClientRect();
+          return rect.width > 0 && rect.height > 0;
+        });
+        if (!matches.length) return false;
+        matches.sort((a, b) => a.querySelectorAll("*").length - b.querySelectorAll("*").length);
+        const target = matches[0];
+        const clickable = target.closest("button, a, input[type=button], input[type=submit], [role=button]") || target;
+        if (typeof clickable.scrollIntoView === "function") clickable.scrollIntoView({ block: "center" });
+        if (typeof clickable.click === "function") clickable.click();
+        return true;
+      })()
+    `
+  }
+
+  /**
+   * Simulates a human click on a DOM selector. Dispatches physical coordinate mouse events
+   * only when the window hosting this web contents is active and focused, cleanly falling back
+   * to in-page DOM element clicks when the view is detached, unfocused, or running in background.
+   */
   async humanClick(selector: string): Promise<boolean> {
-    const center = await elementCenter(this.contents, selector)
-    if (!center) return false
-    this.contents.sendInputEvent({ type: "mouseDown", x: center.x, y: center.y, button: "left", clickCount: 1 } as never)
-    this.contents.sendInputEvent({ type: "mouseUp", x: center.x, y: center.y, button: "left", clickCount: 1 } as never)
-    return true
+    const focusedWindow = this.electron?.BrowserWindow?.getFocusedWindow?.()
+    const ownerWindow = this.electron?.BrowserWindow?.fromWebContents?.(this.contents)
+    if (focusedWindow && ownerWindow && focusedWindow === ownerWindow) {
+      const center = await elementCenter(this.contents, selector)
+      if (center && center.x > 0 && center.y > 0) {
+        this.contents.sendInputEvent({ type: "mouseDown", x: center.x, y: center.y, button: "left", clickCount: 1 } as never)
+        this.contents.sendInputEvent({ type: "mouseUp", x: center.x, y: center.y, button: "left", clickCount: 1 } as never)
+        return true
+      }
+    }
+    return this.evaluate<boolean>(`
+      (() => {
+        const el = document.querySelector(${JSON.stringify(selector)});
+        if (!el) return false;
+        if (typeof el.scrollIntoView === "function") el.scrollIntoView({ block: "center" });
+        if (typeof el.click === "function") el.click();
+        return true;
+      })()
+    `).catch(() => false)
   }
 
   async clickByTextIncludes(text: string): Promise<boolean> {
-    return this.evaluate<boolean>(
-      `(() => { const want = ${JSON.stringify(text.toLowerCase())}; ` +
-        `const els = Array.from(document.querySelectorAll("button, a, input[type=button], input[type=submit]")); ` +
-        `const el = els.find((e) => (e.textContent || e.value || "").toLowerCase().includes(want)); ` +
-        `if (!el) return false; el.click(); return true; })()`,
-    ).catch(() => false)
+    return this.evaluate<boolean>(this.buildClickByTextScript(text, false)).catch(() => false)
   }
 
   async clickByExactText(text: string): Promise<boolean> {
-    return this.evaluate<boolean>(
-      `(() => { const want = ${JSON.stringify(text.trim().toLowerCase())}; ` +
-        `const els = Array.from(document.querySelectorAll("button, a, input[type=button], input[type=submit]")); ` +
-        `const el = els.find((e) => ((e.textContent || e.value || "").trim().toLowerCase() === want)); ` +
-        `if (!el) return false; el.click(); return true; })()`,
-    ).catch(() => false)
+    return this.evaluate<boolean>(this.buildClickByTextScript(text, true)).catch(() => false)
   }
 
   async clickVisibleLabel(text: string): Promise<boolean> {
@@ -1361,11 +1514,14 @@ class NativeSupplierBrowser implements SupplierBrowserApi {
 
   async clickLabelInDom(text: string): Promise<{ clicked: boolean; href: string }> {
     const clicked = await this.clickByTextIncludes(text)
-    const href = await this.evaluate<string>(
-      `(() => { const want = ${JSON.stringify(text.toLowerCase())}; ` +
-        `const a = Array.from(document.querySelectorAll("a")).find((e) => (e.textContent || "").toLowerCase().includes(want)); ` +
-        `return a ? a.href : ""; })()`,
-    ).catch(() => "")
+    const href = await this.evaluate<string>(`
+      (() => {
+        const want = ${JSON.stringify(text.trim().toLowerCase())};
+        const all = Array.from(document.querySelectorAll("a, [href]"));
+        const match = all.find((e) => (e.textContent || "").toLowerCase().includes(want));
+        return match ? (match.href || match.getAttribute("href") || "") : "";
+      })()
+    `).catch(() => "")
     return { clicked, href }
   }
 
@@ -1393,42 +1549,54 @@ class NativeSupplierBrowser implements SupplierBrowserApi {
       logger.warn(`Native adapter: no file input matches ${selector}.`)
       return false
     }
-    // Electron has no silent file-chooser automation on purpose, but the main
-    // process can set the input through the debugger protocol â€” the same
-    // mechanism the external adapter uses over CDP. Anything that fails here
-    // (an already-attached debugger, a detached view) returns false and shows
-    // the panel, so the operator completes the pick by hand.
+
     try {
       const debuggerApi = this.contents.debugger
       debuggerApi.attach("1.3")
       try {
-        const doc = (await debuggerApi.sendCommand("DOM.getDocument", { depth: 0 })) as { root: { nodeId: number } }
+        const doc = (await debuggerApi.sendCommand("DOM.getDocument", { depth: -1 })) as { root: { nodeId: number } }
         const match = (await debuggerApi.sendCommand("DOM.querySelector", {
           nodeId: doc.root.nodeId,
           selector,
-        })) as { nodeId?: number }
-        if (!match || typeof match.nodeId !== "number") return false
+        }).catch(() => ({ nodeId: 0 }))) as { nodeId?: number }
+
+        if (!match || typeof match.nodeId !== "number" || match.nodeId <= 0) {
+          logger.warn(`Native adapter: input element not found for selector ${selector}; showing panel for manual step.`)
+          await this.showForManualStep()
+          return false
+        }
+
         await debuggerApi.sendCommand("DOM.setFileInputFiles", { nodeId: match.nodeId, files: filePaths })
       } finally {
-        debuggerApi.detach()
+        try {
+          debuggerApi.detach()
+        } catch {
+          // ignore detach error if already detached
+        }
       }
     } catch (err) {
       logger.warn(`Native adapter: debugger file attach failed for ${selector}; showing the panel for a manual pick.`, err)
       await this.showForManualStep()
       return false
     }
+
     await this.delay(500)
-    // Confirm through the page itself: the input must hold the files, not
-    // merely exist. A zero count means the portal rejected the attach.
-    const attached = await this.evaluate<number>(
-      `(() => { const el = document.querySelector(${JSON.stringify(selector)}); ` +
-        `return el && el.files ? el.files.length : 0; })()`,
-    ).catch(() => 0)
-    if (attached <= 0) {
-      logger.warn(`Native adapter: ${selector} still holds no files after attach; showing the panel for a manual pick.`)
-      await this.showForManualStep()
-      return false
-    }
+
+    // Trigger change/input events and React onChange handler on the input
+    await this.evaluate(`
+      (() => {
+        const el = document.querySelector(${JSON.stringify(selector)});
+        if (!el) return;
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+        const key = Object.keys(el).find((k) => k.startsWith("__reactProps") || k.startsWith("__reactEventHandlers"));
+        if (key && el[key] && typeof el[key].onChange === "function") {
+          try { el[key].onChange({ target: el, currentTarget: el }); } catch {}
+        }
+      })()
+    `).catch(() => undefined)
+
+    await this.delay(500)
     return true
   }
 

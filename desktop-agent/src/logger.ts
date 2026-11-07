@@ -72,7 +72,11 @@ export class AgentLogger {
   fatalSync(message: string, ...args: unknown[]) {
     const timestamp = new Date().toISOString()
     const line = `[${timestamp}] [ERROR] [${this.prefix}] ${this.formatArgs(message, args)}`
-    console.error(line)
+    try {
+      console.error(line)
+    } catch {
+      // Ignore console.error write failure (e.g. broken pipe / EPIPE on disconnected stdio)
+    }
     try {
       fs.mkdirSync(LOG_DIR, { recursive: true })
       fs.appendFileSync(path.join(LOG_DIR, `bot-${timestamp.slice(0, 10)}.log`), `${line}\n`, "utf8")

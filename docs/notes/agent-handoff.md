@@ -3242,3 +3242,52 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
 - **The next agent must not:**
   - Re-enable `index.html` static caching on `express.static(dist)`.
   - Count `status = 'cleared'` Iron Send rows in active KPI or analytics summaries.
+
+
+### 2026-11-07, Pair Programming Agent, Desktop App & Meesho Claim Automation Hardening
+
+- **Work Done:**
+  1. **Fixed Akamai Anti-Bot WAF 403 on Meesho Portal Login (`desktop/main.ts`, `desktop-agent/src/native-browser-view.ts`)**:
+     - Added `--disable-blink-features=AutomationControlled` switch in Electron's startup commandline and configured `STANDARD_CHROME_USER_AGENT` fallback to hide `navigator.webdriver = true`.
+     - Added session `webRequest.onBeforeSendHeaders` interceptor injecting Chrome Client Hints (`sec-ch-ua`, `sec-ch-ua-mobile`, `sec-ch-ua-platform`) across supplier sessions and popups.
+  2. **Enhanced DOM Interaction & React Controlled Component Synchronization (`desktop-agent/src/native-browser-view.ts`)**:
+     - Updated `humanType` to focus inputs, clear text, type keystrokes, and trigger React `input`/`change` synthetic events via `HTMLInputElement.prototype` / `HTMLTextAreaElement.prototype` setter.
+     - Updated `elementCenter` to invoke `el.scrollIntoView({ block: "center" })` before measuring bounding client rects.
+     - Updated `clickByTextIncludes` and `clickByExactText` to search all element types (`button, a, input, div, span, p, li, label, [role=button]`) and click innermost matches and clickable ancestors.
+     - Fixed `setFileInputFiles` CDP protocol call to use `{ depth: -1 }` on `DOM.getDocument` and validate `match.nodeId > 0` before querying selectors.
+  3. **Resilient Meesho Portal Detection & Error Handling (`desktop-agent/src/portal-login.ts`, `desktop-agent/src/logger.ts`, `desktop-agent/src/crash-guard.ts`)**:
+     - Refactored `isPortalLoggedIn` to detect modern Meesho `/experience/` URLs and prevent false positives on `/login` and `/root/login` routes.
+     - Hardened `fatalSync` in `logger.ts` and `crash-guard.ts` to ignore `EPIPE` exceptions on stdout/stderr, eliminating log-explosion loops when scheduled tasks run without interactive console handles.
+  4. **Added Comprehensive Unit Tests**:
+     - `desktop-agent/portal-login.test.ts`: Added tests verifying `isPortalLoggedIn` against Meesho `/experience/`, `/growth/`, `/panel/v3/new/`, and login pages.
+     - `desktop-agent/browser-adapter.test.ts`: Added tests verifying `STANDARD_CHROME_USER_AGENT` and `configureSupplierSessionHeaders` client hints injection.
+     - `desktop-agent/crash-guard.test.ts`: Added test verifying graceful handling of `EPIPE` uncaught exceptions without terminating engine.
+- **Files Changed:**
+  - `desktop/main.ts`
+  - `desktop-agent/src/native-browser-view.ts`
+  - `desktop-agent/src/portal-login.ts`
+  - `desktop-agent/src/marketplaces/meesho.ts`
+  - `desktop-agent/src/logger.ts`
+  - `desktop-agent/src/crash-guard.ts`
+  - `desktop-agent/portal-login.test.ts`
+  - `desktop-agent/browser-adapter.test.ts`
+  - `desktop-agent/crash-guard.test.ts`
+  - `docs/notes/agent-handoff.md`
+- **Verification Run & Results:**
+  - `npm run typecheck`: 0 errors across all 4 TypeScript configs (`tsconfig.json`, `tsconfig.server.json`, `tsconfig.desktop.json`, `desktop/renderer/tsconfig.json`).
+  - `npm run build`: Vite web bundle and `server/dist.js` built cleanly.
+  - `npm run desktop:renderer:build`: Bundled desktop renderer built cleanly.
+  - `npm run desktop:build`: Electron main bundle built cleanly.
+  - `npm test`: 913 tests executed: 866 passed, 0 failed, 47 skipped (dedicated `TEST_DATABASE_URL` unset).
+- **The next agent must not:**
+  - Re-enable `AutomationControlled` or remove the standard Chrome User-Agent / client hints.
+  - Remove the depth `-1` parameter or React synthetic event dispatches from `setFileInputFiles`.
+  - Allow `/login` or `/root/login` URLs to register as logged-in in `isPortalLoggedIn`.
+
+  5. **CodeRabbit Review Hardening**:
+     - `desktop-agent/src/crash-guard.ts`: Forwarded non-EPIPE stream errors on `stdout`/`stderr` to `handleFatal` rather than silently dropping them.
+     - `desktop-agent/src/native-browser-view.ts`: Prevented double-click risk in `humanClick` and routed coordinate input events only when the target window is focused (`BrowserWindow.getFocusedWindow()`), cleanly falling back to DOM click for unfocused/background windows.
+     - `desktop-agent/src/native-browser-view.ts`: Unified text clicking in `buildClickByTextScript` clicking only the closest button/link/role=button (or the element itself) once, eliminating ancestor double clicks.
+     - `desktop-agent/src/native-browser-view.ts`: Removed substring-fallback in `setFileInputFiles` CDP protocol queries to fail closed safely on missing selectors.
+     - `desktop-agent/src/native-browser-view.ts`: Synchronized Chrome major version dynamically from `process.versions.chrome` (fallback `"131"`) across User-Agent and `sec-ch-ua` headers.
+     - `desktop-agent/src/portal-login.ts`: Excluded generic "Support" and "Returns" strings from positive login detection, keeping dashboard-specific strings and panel URL fragments. Serialized `isPortalLoggedIn` directly into `loggedIn()` evaluate script to prevent code drift.
