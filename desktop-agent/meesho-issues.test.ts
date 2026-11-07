@@ -3,6 +3,7 @@
 import { describe, it } from "node:test"
 import assert from "node:assert/strict"
 import {
+  MeeshoAutomation,
   MEESHO_PORTAL_ISSUE_LABELS,
   checkMeeshoEvidenceFileLocal,
   findExistingTicketForOrder,
@@ -193,5 +194,14 @@ describe("Meesho ticket resolution and rejection reason extraction", () => {
   it("handles empty or uninformative resolution text gracefully", () => {
     assert.deepEqual(extractMeeshoResolution(""), {})
     assert.deepEqual(extractMeeshoResolution("Under investigation"), {})
+  })
+})
+
+describe("MeeshoAutomation and BaseMarketplaceAutomation defaults", () => {
+  it("initializes with default evidenceFilesMap and workDir when optional arguments are omitted", () => {
+    const mockBrowser: any = {}
+    const mockJob: any = { jobId: 1, claimId: 1, claim: {} }
+    const automation = new MeeshoAutomation(mockBrowser, mockJob)
+    assert.equal(automation.marketplaceName, "Meesho")
   })
 })

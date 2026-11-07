@@ -275,7 +275,7 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
       const raiseVisible = await this.browser.evaluate<boolean>(
         `Array.from(document.querySelectorAll('button, a, div, span')).some((el) => (el.textContent || '').trim() === 'Raise a Ticket' && el.getBoundingClientRect().width > 0)`,
       )
-      return href.includes("/support/1/") || Boolean(raiseVisible)
+      return (href.includes("/support/1/") && !href.endsWith("/support/1") && !href.endsWith("/support/1/")) || Boolean(raiseVisible)
     }
 
     openedIssue = await issueOpen()
@@ -303,7 +303,11 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
       `).catch(() => false)
 
       if (!hasDirectIssue) {
-        logger.info(`"${issueLabel}" not directly visible on Support root; looking for Returns / RTO category...`)
+        logger.info(`"${issueLabel}" not directly visible on Support root; opening Returns / RTO category...`)
+        const returnsCategoryUrl = `https://supplier.meesho.com/panel/v3/new/experience/${slug}/support/1`
+        await this.browser.navigate(returnsCategoryUrl)
+        await this.waitForContent()
+        await this.delay(1500)
         const parentCategories = [
           "Returns/RTO & Exchange",
           "Returns & RTO",

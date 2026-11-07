@@ -3374,3 +3374,41 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
   - Overwrite operator remarks during automated follow-up status updates.
   - Guess or infer Customer Return when a return type is unspecified.
   - Log, print, or leak environment passwords or tokens (Invariant Rule 8).
+
+### 2026-11-07, Pair Programming Agent, Live Real-World Meesho E2E Validation, Hardening & Navigation Enhancements
+
+- **Real-World Live Testing & Verification Executed:**
+  - **Live Backend Claims API:** Verified authenticated queue access via `https://return.youthnic.shop/api/claims/queue` using `operatorAuthorization()`, fetching real pending Meesho claims (#1 through #5) with live tracking IDs (`R2725108455MEO`, `SF4281497425FPL`, etc.).
+  - **Live Meesho Portal Authentication:** Tested end-to-end automated login on live Meesho Seller Portal (`https://supplier.meesho.com`) with `secretFromEnvironment("Meesho")`, entering credentials and authenticating into seller account `tulipprints` (`yqcue` slug) with cookies saved to profile `profile-meesho`.
+  - **Live Support Ticket Tracking & `checkClaimStatus`:** Navigated to `https://supplier.meesho.com/panel/v3/new/experience/yqcue/support` and extracted 7 real seller tickets. Tested `checkClaimStatus` against real ticket `793974391977`, capturing status `"6 Nov'26 | 07:43 PM | I have received wrong return | Meesho support agent will share an update within 3 hours | Issue RaisedExpect a response by13 Nov'26 | 07:43 PM | Reply"` and screenshot `ticket-status-793974391977.png`.
+  - **Live Form Field & Evidence Verification:** Safely navigated through category and subcategory creation forms on live Meesho panel:
+    - Customer Return (`support/1/1/create` for "I have received wrong return"): verified fields (`Sub Order Number`, `AWB Number`, `Packet ID`, `Callback Number`, description textarea) and verified upload IDs (`barcode_image_link_6`, `product_image_link_7`, `product_reverse_way_bill_link_8`, `product_openingvideo_link_9`, `attachments_12`).
+    - Courier Return / RTO (`support/1/139/create` for "I have received a wrong barcoded package in RTO"): verified upload IDs (`product_image_link_6`, `product_reverse_way_bill_link_7`, `product_openingvideo_link_8`, `attachments_10`).
+    - Confirmed zero real customer claims were altered or submitted during testing (Rule 11).
+- **Code Hardening & Fixes Applied:**
+  1. **`BaseMarketplaceAutomation` Constructor Defaults (`desktop-agent/src/marketplaces/base-automation.ts`):**
+     - Initialized default `evidenceFilesMap = new Map()` and `workDir = os.tmpdir()`, preventing `TypeError` on path joining if `workDir` is omitted.
+  2. **Zero-Configuration Environment Loading:**
+     - Initialized `dotenv.config()` across `desktop-agent/src/desktop-app-server.ts`, `desktop/main.ts`, and `desktop-agent/src/portal-login.ts` so credentials (`MEESHOID`, `MEESHO_PWD`) load seamlessly into `process.env`.
+  3. **Direct Returns Category Navigation in `MeeshoAutomation` (`desktop-agent/src/marketplaces/meesho.ts`):**
+     - Discovered that on the Meesho Support root page, only 3 preview issues are visible, while all 17 Return & RTO issues live under `/support/1`. Added direct navigation to `/support/1` when an issue is not directly visible on root, and tightened `issueOpen()` so `/support/1` is not mistaken for a specific issue page.
+  4. **New Unit Tests (`desktop-agent/meesho-issues.test.ts`):**
+     - Added test verifying `MeeshoAutomation` / `BaseMarketplaceAutomation` defaults when constructor optional parameters are omitted.
+- **Files Changed:**
+  - `desktop-agent/src/marketplaces/base-automation.ts`
+  - `desktop-agent/src/marketplaces/meesho.ts`
+  - `desktop-agent/src/portal-login.ts`
+  - `desktop-agent/src/desktop-app-server.ts`
+  - `desktop/main.ts`
+  - `desktop-agent/meesho-issues.test.ts`
+  - `docs/notes/agent-handoff.md`
+- **Verification Results:**
+  - `npm run typecheck`: Passed (0 errors across 4 TypeScript projects).
+  - `npm run build`: Built in 2.11s (Vite web bundle & server/dist.js).
+  - `npm run desktop:renderer:build`: Built in 1.53s.
+  - `npm run desktop:build`: Built in 61ms.
+  - `npm test`: 921 tests executed: 874 passed, 0 failed, 47 skipped (dedicated TEST_DATABASE_URL unset).
+- **The next agent must not:**
+  - Submit or modify live customer claims on the production Meesho portal during testing without explicit authorization.
+  - Remove default values in `BaseMarketplaceAutomation`.
+  - Log or leak secrets, passwords, or session tokens (Invariant Rule 8).

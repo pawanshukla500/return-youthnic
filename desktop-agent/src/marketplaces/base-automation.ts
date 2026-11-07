@@ -1,3 +1,4 @@
+import os from "node:os"
 import type { SupplierBrowserApi } from "../browser-adapter.js"
 import type { JobExecutionBundle } from "../agent-client.js"
 import { logger } from "../logger.js"
@@ -38,9 +39,12 @@ export abstract class BaseMarketplaceAutomation {
   constructor(
     protected browser: SupplierBrowserApi,
     protected job: JobExecutionBundle,
-    protected evidenceFilesMap: Map<string, string[]>,
-    protected workDir: string,
-  ) {}
+    protected evidenceFilesMap: Map<string, string[]> = new Map(),
+    protected workDir: string = os.tmpdir(),
+  ) {
+    if (!this.workDir) this.workDir = os.tmpdir()
+    if (!this.evidenceFilesMap) this.evidenceFilesMap = new Map()
+  }
 
   abstract execute(action: "prepare" | "submit"): Promise<MarketplaceAutomationResult>
 

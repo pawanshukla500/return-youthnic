@@ -1,3 +1,9 @@
+import dotenv from "dotenv"
+try {
+  dotenv.config()
+} catch {
+  // Ignore in bundled environments
+}
 import { loadAgentConfig } from "./config.js"
 import { operatorAuthorization } from "./operator-session.js"
 import { openSupplierBrowser, resolveBrowserAdapterKind, type SupplierBrowserApi } from "./browser-adapter.js"
