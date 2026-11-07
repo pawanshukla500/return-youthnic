@@ -3,6 +3,7 @@ import os from "node:os"
 import path from "node:path"
 import { protectSecret, revealSecret } from "./local-secrets.js"
 import { agentDataDir, ensureAgentDataDir, writeSecretFile } from "./paths.js"
+import { isBackendUrlExternallyControlled } from "./load-env.js"
 
 export type AgentConfig = {
   agentUuid: string
@@ -113,6 +114,12 @@ export function loadAgentConfig(): AgentConfig {
 export function saveAgentConfig(updates: Partial<AgentConfig>): AgentConfig {
   if (updates.backendUrl && !isTrustedBackendUrl(updates.backendUrl)) {
     throw new Error("Use the configured Return App server URL.")
+  }
+  if (updates.backendUrl) {
+    if (isBackendUrlExternallyControlled() && updates.backendUrl !== (process.env.BACKEND_URL || process.env.APP_URL)) {
+      throw new Error("BACKEND_URL is controlled by the external environment and cannot be modified.")
+    }
+    process.env.BACKEND_URL = updates.backendUrl
   }
   const current = loadAgentConfig()
   const updated: AgentConfig = { ...current, ...updates }

@@ -1,3 +1,4 @@
+import "./load-env.js"
 import { loadAgentConfig } from "./config.js"
 import { operatorAuthorization } from "./operator-session.js"
 import { openSupplierBrowser, resolveBrowserAdapterKind, type SupplierBrowserApi } from "./browser-adapter.js"
