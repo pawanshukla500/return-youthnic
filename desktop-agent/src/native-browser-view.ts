@@ -1470,11 +1470,14 @@ class NativeSupplierBrowser implements SupplierBrowserApi {
   }
 
   async humanClick(selector: string): Promise<boolean> {
-    const center = await elementCenter(this.contents, selector)
-    if (center && center.x > 0 && center.y > 0) {
-      this.contents.sendInputEvent({ type: "mouseDown", x: center.x, y: center.y, button: "left", clickCount: 1 } as never)
-      this.contents.sendInputEvent({ type: "mouseUp", x: center.x, y: center.y, button: "left", clickCount: 1 } as never)
-      return true
+    const focusedWindow = this.electron?.BrowserWindow?.getFocusedWindow?.()
+    if (focusedWindow) {
+      const center = await elementCenter(this.contents, selector)
+      if (center && center.x > 0 && center.y > 0) {
+        this.contents.sendInputEvent({ type: "mouseDown", x: center.x, y: center.y, button: "left", clickCount: 1 } as never)
+        this.contents.sendInputEvent({ type: "mouseUp", x: center.x, y: center.y, button: "left", clickCount: 1 } as never)
+        return true
+      }
     }
     return this.evaluate<boolean>(`
       (() => {

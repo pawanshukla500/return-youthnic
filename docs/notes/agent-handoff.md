@@ -3286,7 +3286,7 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
 
   5. **CodeRabbit Review Hardening**:
      - `desktop-agent/src/crash-guard.ts`: Forwarded non-EPIPE stream errors on `stdout`/`stderr` to `handleFatal` rather than silently dropping them.
-     - `desktop-agent/src/native-browser-view.ts`: Prevented double-click risk in `humanClick` by returning immediately when mouse coordinate clicks succeed, falling back to DOM click only when coordinate resolution fails.
+     - `desktop-agent/src/native-browser-view.ts`: Prevented double-click risk in `humanClick` and routed coordinate input events only when the target window is focused (`BrowserWindow.getFocusedWindow()`), cleanly falling back to DOM click for unfocused/background windows.
      - `desktop-agent/src/native-browser-view.ts`: Unified text clicking in `buildClickByTextScript` clicking only the closest button/link/role=button (or the element itself) once, eliminating ancestor double clicks.
      - `desktop-agent/src/native-browser-view.ts`: Removed substring-fallback in `setFileInputFiles` CDP protocol queries to fail closed safely on missing selectors.
      - `desktop-agent/src/native-browser-view.ts`: Synchronized Chrome major version dynamically from `process.versions.chrome` (fallback `"131"`) across User-Agent and `sec-ch-ua` headers.
