@@ -77,11 +77,24 @@ test("isPortalLoggedIn handles non-Meesho generic portals", () => {
 })
 
 test("secretFromEnvironment resolves Meesho credentials when environment variables are set", () => {
-  const origId = process.env.MEESHOID
-  const origPwd = process.env.MEESHO_PWD
+  const envKeys = [
+    "MEESHOID",
+    "MEESHO_ID",
+    "MEESHO_USERNAME",
+    "MEESHO_PWD",
+    "MEESHO_PASSWORD",
+    "MEESHO_PASS",
+  ] as const
+  const originalEnv: Record<string, string | undefined> = {}
+  for (const key of envKeys) {
+    originalEnv[key] = process.env[key]
+  }
+
   try {
-    delete process.env.MEESHOID
-    delete process.env.MEESHO_PWD
+    for (const key of envKeys) {
+      delete process.env[key]
+    }
+
     assert.equal(secretFromEnvironment("Meesho"), null)
 
     process.env.MEESHOID = "seller@example.com"
@@ -95,7 +108,13 @@ test("secretFromEnvironment resolves Meesho credentials when environment variabl
     // Non-meesho marketplace returns null
     assert.equal(secretFromEnvironment("Amazon"), null)
   } finally {
-    if (origId) process.env.MEESHOID = origId; else delete process.env.MEESHOID
-    if (origPwd) process.env.MEESHO_PWD = origPwd; else delete process.env.MEESHO_PWD
+    for (const key of envKeys) {
+      if (originalEnv[key] !== undefined) {
+        process.env[key] = originalEnv[key]
+      } else {
+        delete process.env[key]
+      }
+    }
+
   }
 })

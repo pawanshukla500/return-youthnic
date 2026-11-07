@@ -3392,22 +3392,29 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
      - Initialized `dotenv.config()` across `desktop-agent/src/desktop-app-server.ts`, `desktop/main.ts`, and `desktop-agent/src/portal-login.ts` so credentials (`MEESHOID`, `MEESHO_PWD`) load seamlessly into `process.env`.
   3. **Direct Returns Category Navigation in `MeeshoAutomation` (`desktop-agent/src/marketplaces/meesho.ts`):**
      - Discovered that on the Meesho Support root page, only 3 preview issues are visible, while all 17 Return & RTO issues live under `/support/1`. Added direct navigation to `/support/1` when an issue is not directly visible on root, and tightened `issueOpen()` so `/support/1` is not mistaken for a specific issue page.
-  4. **New Unit Tests (`desktop-agent/meesho-issues.test.ts`):**
-     - Added test verifying `MeeshoAutomation` / `BaseMarketplaceAutomation` defaults when constructor optional parameters are omitted.
+  4. **Dedicated Environment Loading Module (`desktop-agent/src/load-env.ts`):**
+     - Consolidated dotenv configuration into `desktop-agent/src/load-env.ts` imported ahead of `logger.js` in `desktop-app-server.ts` and `desktop/main.ts`.
+     - Supports `AGENT_DATA_DIR/.env` fallback for persistent warehouse PC watchdog restarts without overwriting existing environment variables.
+  5. **CodeRabbit Review Findings Resolved:**
+     - Updated `desktop-agent/portal-login.test.ts` to clear and restore all 6 credential aliases (`MEESHOID`, `MEESHO_ID`, `MEESHO_USERNAME`, `MEESHO_PWD`, `MEESHO_PASSWORD`, `MEESHO_PASS`).
+     - Updated `desktop-agent/meesho-issues.test.ts` with `TestableMeeshoAutomation` subclass asserting `evidenceFilesMap instanceof Map` (size 0) and `workDir === os.tmpdir()`.
 - **Files Changed:**
   - `desktop-agent/src/marketplaces/base-automation.ts`
   - `desktop-agent/src/marketplaces/meesho.ts`
   - `desktop-agent/src/portal-login.ts`
   - `desktop-agent/src/desktop-app-server.ts`
+  - `desktop-agent/src/load-env.ts`
   - `desktop/main.ts`
+  - `desktop-agent/portal-login.test.ts`
   - `desktop-agent/meesho-issues.test.ts`
   - `docs/notes/agent-handoff.md`
 - **Verification Results:**
   - `npm run typecheck`: Passed (0 errors across 4 TypeScript projects).
-  - `npm run build`: Built in 2.11s (Vite web bundle & server/dist.js).
-  - `npm run desktop:renderer:build`: Built in 1.53s.
-  - `npm run desktop:build`: Built in 61ms.
+  - `npm run build`: Built in 2.08s (Vite web bundle & server/dist.js).
+  - `npm run desktop:renderer:build`: Built in 1.51s.
+  - `npm run desktop:build`: Built in 57ms.
   - `npm test`: 921 tests executed: 874 passed, 0 failed, 47 skipped (dedicated TEST_DATABASE_URL unset).
+  - CI & CodeRabbit: PR #60 passed all checks (Verify Web & API: pass, Build Desktop Setup: pass, CodeRabbit: pass).
 - **The next agent must not:**
   - Submit or modify live customer claims on the production Meesho portal during testing without explicit authorization.
   - Remove default values in `BaseMarketplaceAutomation`.

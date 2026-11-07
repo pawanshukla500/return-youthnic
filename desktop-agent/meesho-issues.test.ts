@@ -2,6 +2,7 @@
 // can test them without a browser. SYN data only.
 import { describe, it } from "node:test"
 import assert from "node:assert/strict"
+import os from "node:os"
 import {
   MeeshoAutomation,
   MEESHO_PORTAL_ISSUE_LABELS,
@@ -197,11 +198,23 @@ describe("Meesho ticket resolution and rejection reason extraction", () => {
   })
 })
 
+class TestableMeeshoAutomation extends MeeshoAutomation {
+  getExposedEvidenceMap(): Map<string, string[]> {
+    return this.evidenceFilesMap
+  }
+  getExposedWorkDir(): string {
+    return this.workDir
+  }
+}
+
 describe("MeeshoAutomation and BaseMarketplaceAutomation defaults", () => {
   it("initializes with default evidenceFilesMap and workDir when optional arguments are omitted", () => {
     const mockBrowser: any = {}
     const mockJob: any = { jobId: 1, claimId: 1, claim: {} }
-    const automation = new MeeshoAutomation(mockBrowser, mockJob)
+    const automation = new TestableMeeshoAutomation(mockBrowser, mockJob)
     assert.equal(automation.marketplaceName, "Meesho")
+    assert.ok(automation.getExposedEvidenceMap() instanceof Map)
+    assert.equal(automation.getExposedEvidenceMap().size, 0)
+    assert.equal(automation.getExposedWorkDir(), os.tmpdir())
   })
 })

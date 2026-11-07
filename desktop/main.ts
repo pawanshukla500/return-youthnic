@@ -1,9 +1,4 @@
-import dotenv from "dotenv"
-try {
-  dotenv.config()
-} catch {
-  // Ignore in bundled environments
-}
+import "../desktop-agent/src/load-env.js"
 import path from "node:path"
 import fs from "node:fs"
 import { app, BrowserWindow, Menu, Tray, nativeImage, Notification, ipcMain, protocol, screen, session, type NativeImage } from "electron"

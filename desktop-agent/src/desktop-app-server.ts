@@ -1,9 +1,4 @@
-import dotenv from "dotenv"
-try {
-  dotenv.config()
-} catch {
-  // Ignore in bundled environments
-}
+import "./load-env.js"
 import http from "node:http"
 import fs from "node:fs"
 import path from "node:path"
