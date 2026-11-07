@@ -3196,6 +3196,27 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
   - Live PostgreSQL verification against `openPool()`: confirmed `unbatched.lines = 0`, `cleared.lines = 1803`, `batches.total = 1` (`500` batched lines intact), valid `.xlsx` and printable HTML Batch Slip generation, and `0` unresolved/placeholder SKUs in `expected_return_items`, `receipt_scan_items`, and `unmapped_listing_skus`.
 - **The next agent must not:**
   - Remove the `r.batch_id IS NULL` filter from pending/unbatched `ironWhere` states in `server/iron.ts`.
+<!-- coderabbit-ai-generated:v1 -->
+
+<!-- coderabbit-ai-generated-section:v1:87b0b59579d9ca4c002ebfa4e1e9def0dacc7419e6373e313958c1692d1b413f -->
+
   - Allow placeholder master SKUs (`B16`, `INACTIVE*`, `KD2`, `D6`, `D12`) to overwrite active master SKUs in `product_master`.
   - Remove the `iron_send_records` exclusion join from `calculateGoodReturnsForDay` in `server/omsguru-daily.ts`.
 
+
+
+### 2026-11-07, CodeRabbit Agent, Iron review fixes
+- Changed: server/iron.ts restricts pending clears to Supervisor/Admin; locks handover status before reopening checks and audit; preserves the handover actor on edits and resets timestamps/actors on reopening.
+- Changed: server/lookup-import.ts omits placeholder-only mappings and preserves the previously intended cross-channel healing with best-candidate scoring, marketplace ranks, and deterministic ties.
+- Changed: src/pages/IronBatches.tsx distinguishes successful slip popups from blocked popups with opener isolation and explains restricted handover controls; src/pages/IronTracking.tsx reads clearedRecords/clearedUnits and removes the ignored clientKey.
+- Changed: server/tests/iron-db.test.ts updates the stale 409 assertion and covers authorization, lifecycle resets and concurrent handover state; server/tests/iron.test.ts covers lookup precedence and placeholder healing in both row orders.
+- Ran: npm run typecheck -> passed all four projects; npm run build -> passed (bundle size warning).
+- Ran: npm test -> 908 tests, 864 passed, 0 failed, 44 skipped without test database/provider prerequisites.
+- Ran: local PostgreSQL 18 focused iron.test.ts + iron-db.test.ts -> 30 passed, 0 failed, 0 skipped; initial peer authentication mismatch resolved with the actual OS user's local role.
+- Ran: scratch script importing printBatchSlip -> successful-popup isolation and blocked-popup download/filename checks passed; git diff --check passed.
+- Not verified: interactive browser printing; unrelated database suites skipped in full npm test. The focused Iron database suite ran separately with synthetic fixtures.
+- The next agent must not: broaden clear authorization, drop handover audit history, or remove intentional cross-channel placeholder healing.
+- Open for the user: none.
+
+
+<!-- /coderabbit-ai-generated:v1 -->

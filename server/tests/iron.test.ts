@@ -18,6 +18,7 @@ import {
   type IronBatchView,
   type IronRecordView,
 } from "../iron.js"
+import { masterSkusForListings } from "../lookup-import.js"
 import { changeVisibleTo } from "../live.js"
 import { isPlaceholderMasterSku, normalizeMasterMarketplace } from "../marketplace-rules.js"
 import { countsAsReturnIssue, scanStatusFor } from "../register-rules.js"
@@ -370,3 +371,25 @@ test("[synthetic] placeholder master SKU guard and Channel Name multi-channel Ex
   assert.equal(unlinkedRow, undefined, "pure placeholder row with no real donor is skipped")
 })
 
+
+
+test("[synthetic] listing lookup omits placeholders and respects marketplace and listing precedence", async () => {
+  const rows = [
+    { listing_sku: "SYN-ONLY", marketplace: "Ajio", master_sku: "B16", image_url: "" },
+    { listing_sku: "SYN-CROSS", marketplace: "Ajio", master_sku: "B16", image_url: "" },
+    { listing_sku: "SYN-CROSS", marketplace: "Amazon", master_sku: "SYN-DONOR-A", image_url: "" },
+    { listing_sku: "SYN-CROSS", marketplace: "Meesho", master_sku: "SYN-DONOR-B", image_url: "" },
+    { listing_sku: "SYN-VALID", marketplace: "all", master_sku: "SYN-ALL", image_url: "" },
+    { listing_sku: "SYN-VALID", marketplace: "Ajio", master_sku: "SYN-ACCOUNT", image_url: "SYN-image" },
+    { listing_sku: "SYN-HEAL", marketplace: "Ajio", master_sku: "B16", image_url: "" },
+    { listing_sku: "SYN-HEAL", marketplace: "all", master_sku: "SYN-REAL", image_url: "" },
+  ]
+  for (const ordered of [rows, [...rows].reverse()]) {
+    const result = await masterSkusForListings({ query: async () => ({ rows: ordered }) },
+      ["SYN-ONLY", "SYN-VALID", "SYN-HEAL", "SYN-CROSS"].map((listing) => ({ listing, marketplace: "Ajio" })))
+    assert.equal(result.has("ajio|SYN-ONLY"), false)
+    assert.deepEqual(result.get("ajio|SYN-CROSS"), { masterSku: "SYN-DONOR-A", imageUrl: "" })
+    assert.deepEqual(result.get("ajio|SYN-VALID"), { masterSku: "SYN-ACCOUNT", imageUrl: "SYN-image" })
+    assert.deepEqual(result.get("ajio|SYN-HEAL"), { masterSku: "SYN-REAL", imageUrl: "" })
+  }
+})

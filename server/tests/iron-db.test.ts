@@ -587,6 +587,50 @@ test("Iron batches: the Return Team batches pending lines for the khaata challan
   const handedOverList = await listIronBatches(pool, allScope, { state: "all", handoverStatus: "handed_over", search: made.batch.batchNo })
   assert.equal(handedOverList.length, 1)
 
+  const editedHandover = await updateIronBatchHandover(pool, admin, allScope, made.batch.id, {
+    handoverStatus: "handed_over", handoverNotes: "SYN corrected notes",
+  })
+  assert.equal(editedHandover.handedOverBy, scanner.name, "editing details preserves the original actor")
+  assert.equal(editedHandover.handedOverAt, handedOverBatch.handedOverAt)
+  await expectError(updateIronBatchHandover(pool, scanner, allScope, made.batch.id, {
+    handoverStatus: "batch_created",
+  }), 409, /Only an Admin/)
+
+  const reopened = await updateIronBatchHandover(pool, admin, allScope, made.batch.id, {
+    handoverStatus: "ready_for_handover",
+  })
+  assert.equal(reopened.handedOverAt, null)
+  assert.equal(reopened.handedOverBy, "")
+  assert.ok(reopened.readyForHandoverAt)
+  const reset = await updateIronBatchHandover(pool, admin, allScope, made.batch.id, {
+    handoverStatus: "batch_created",
+  })
+  assert.equal(reset.readyForHandoverAt, null)
+  assert.equal(reset.readyForHandoverBy, "")
+  assert.equal(reset.handedOverAt, null)
+  assert.equal(reset.handedOverBy, "")
+
+  // A concurrent handover lands after the service snapshot but before its transaction.
+  const racedPool = {
+    query: pool.query.bind(pool),
+    connect: async () => {
+      await pool.query("UPDATE iron_batches SET handover_status = 'handed_over' WHERE id = $1", [made.batch.id])
+      return pool.connect()
+    },
+  } as unknown as pg.Pool
+  await expectError(updateIronBatchHandover(racedPool, scanner, allScope, made.batch.id, {
+    handoverStatus: "ready_for_handover",
+  }), 409, /Only an Admin/)
+  await updateIronBatchHandover(racedPool, admin, allScope, made.batch.id, {
+    handoverStatus: "ready_for_handover",
+  })
+  const audit = await pool.query(
+    "SELECT details FROM register_audit_log WHERE action = 'iron.batch_handover' AND entity_id = $1 ORDER BY id DESC LIMIT 1",
+    [String(made.batch.id)],
+  )
+  assert.equal(audit.rows[0].details.fromStatus, "handed_over", "audit uses the locked state")
+  await updateIronBatchHandover(pool, scanner, allScope, made.batch.id, { handoverStatus: "handed_over" })
+
   // Only the Inward Team receives, by hand; a retried receive counts once.
   await expectError(receiveIronBatch(pool, scanner, allScope, made.batch.id, { notes: "", clientKey: null }), 403, /Inward Team/)
   const received = await receiveIronBatch(pool, inward, allScope, made.batch.id, { notes: "", clientKey: `SYN-${run}-RB-1` })
@@ -626,6 +670,10 @@ test("Clearing pending Iron Send records removes them from pending, preserves ba
   const beforePending = await listIronRecords(pool, allScope, { state: "pending", search: AWB.clearable })
   assert.equal(beforePending.rows.length, 1)
 
+  for (const actor of [scanner, inward]) {
+    await expectError(clearPendingIronRecords(pool, actor, allScope), 403, /Supervisor or an Admin/)
+  }
+
   const clearedRes = await clearPendingIronRecords(pool, admin, allScope, {
     upToDate: todayIst(),
     reason: "SYN daily cutover clear",
@@ -650,7 +698,7 @@ test("Clearing pending Iron Send records removes them from pending, preserves ba
       clientKey: `SYN-${run}-CLR-BATCH`,
     }),
     409,
-    /no longer open/,
+    /Some chosen lines are already in a batch or were received/,
   )
 
   const day = await calculateGoodReturnsForDay(pool, todayIst())

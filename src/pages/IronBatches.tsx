@@ -82,7 +82,11 @@ export async function printBatchSlip(batch: IronBatch): Promise<void> {
   const html = await response.text()
   const blob = new Blob([html], { type: "text/html;charset=utf-8" })
   const url = URL.createObjectURL(blob)
-  const win = window.open(url, "_blank", "noopener")
+  const win = window.open("about:blank", "_blank")
+  if (win) {
+    win.opener = null
+    win.location.replace(url)
+  }
   if (!win) {
     const link = document.createElement("a")
     link.href = url
@@ -648,6 +652,7 @@ function BatchDialog({
                     value={handoverTo}
                     maxLength={120}
                     disabled={!mayDispatch || busy}
+                    title={!mayDispatch ? "Only the Return Team, a Supervisor, or an Admin can update handover details." : undefined}
                     placeholder="e.g. Ironing Team - Raju / Khaata Dispatch"
                     onChange={(event) => setHandoverTo(event.target.value)}
                   />
@@ -658,6 +663,7 @@ function BatchDialog({
                     value={handoverNotes}
                     maxLength={500}
                     disabled={!mayDispatch || busy}
+                    title={!mayDispatch ? "Only the Return Team, a Supervisor, or an Admin can update handover details." : undefined}
                     placeholder="e.g. Verified 12 pieces with printed batch slip"
                     onChange={(event) => setHandoverNotes(event.target.value)}
                   />
@@ -668,6 +674,7 @@ function BatchDialog({
                       type="button"
                       className="btn"
                       disabled={!mayDispatch || busy}
+                      title={!mayDispatch ? "Only the Return Team, a Supervisor, or an Admin can update handover details." : undefined}
                       onClick={() => void updateHandover("ready_for_handover")}
                     >
                       Mark Ready for Handover
@@ -678,6 +685,7 @@ function BatchDialog({
                       type="button"
                       className="btn primary"
                       disabled={!mayDispatch || busy}
+                      title={!mayDispatch ? "Only the Return Team, a Supervisor, or an Admin can update handover details." : undefined}
                       onClick={() => void updateHandover("handed_over")}
                     >
                       <Icon name="check" size={16} /> Confirm Handed Over
@@ -687,6 +695,7 @@ function BatchDialog({
                       type="button"
                       className="btn"
                       disabled={!mayDispatch || busy}
+                      title={!mayDispatch ? "Only the Return Team, a Supervisor, or an Admin can update handover details." : undefined}
                       onClick={() => void updateHandover("handed_over")}
                     >
                       Update Handover Details

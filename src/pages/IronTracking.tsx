@@ -667,22 +667,20 @@ function ClearPendingDialog({
   const [reason, setReason] = useState("Cleared pending Iron Send tracking records up to today for daily batch cutover")
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState("")
-  const [clientKey] = useState(newKey)
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
     setSaving(true)
     setError("")
     try {
-      const result = await api<{ clearedCount: number; unitsCleared: number; upToDate: string }>("/api/iron/clear-pending", {
+      const result = await api<{ clearedRecords: number; clearedUnits: number; upToDate: string }>("/api/iron/clear-pending", {
         method: "POST",
         body: JSON.stringify({
           upToDate: upToDate || undefined,
           reason: reason.trim(),
-          clientKey,
         }),
       })
-      onCleared(result.clearedCount, result.unitsCleared, result.upToDate)
+      onCleared(result.clearedRecords, result.clearedUnits, result.upToDate)
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not clear pending records")
     } finally {

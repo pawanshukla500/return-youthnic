@@ -73,22 +73,29 @@ export async function masterSkusForListings(
         best.set(key, { masterSku: rawMaster, imageUrl: String(row.image_url || ""), score })
       }
     }
+    // Legacy placeholder mappings may heal from another channel, as during master import.
     const chosen = best.get(key)
     if (chosen && isPlaceholderMasterSku(chosen.masterSku)) {
+      let donor: { masterSku: string; imageUrl: string; score: number } | undefined
       for (const row of found.rows) {
-        const rawMaster = String(row.master_sku || "").trim()
-        if (isPlaceholderMasterSku(rawMaster)) continue
-        const stored = compactSkuKey(String(row.listing_sku))
-        const place = candidates.indexOf(stored)
+        const masterSku = String(row.master_sku || "").trim()
+        if (isPlaceholderMasterSku(masterSku)) continue
+        const place = candidates.indexOf(compactSkuKey(String(row.listing_sku)))
         if (place < 0) continue
-        const score = (candidates.length - place) * 10
-        if (score > chosen.score) {
-          best.set(key, { masterSku: rawMaster, imageUrl: String(row.image_url || "") || chosen.imageUrl, score })
+        const score = (candidates.length - place) * 10 + marketplaceRank(String(row.marketplace), pair.marketplace)
+        const imageUrl = String(row.image_url || "") || chosen.imageUrl
+        if (!donor || score > donor.score ||
+            (score === donor.score && (masterSku < donor.masterSku ||
+              (masterSku === donor.masterSku && imageUrl < donor.imageUrl)))) {
+          donor = { masterSku, imageUrl, score }
         }
       }
+      if (donor) best.set(key, donor)
     }
   }
-  for (const [key, hit] of best) result.set(key, { masterSku: hit.masterSku, imageUrl: hit.imageUrl })
+  for (const [key, hit] of best) {
+    if (!isPlaceholderMasterSku(hit.masterSku)) result.set(key, { masterSku: hit.masterSku, imageUrl: hit.imageUrl })
+  }
   return result
 }
 

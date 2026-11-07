@@ -16,7 +16,7 @@
 
 import type pg from "pg"
 import * as XLSX from "xlsx"
-import { accountCondition, allowsAccount, isAdminRole, isInwardRole, type AccountScope } from "./access.js"
+import { accountCondition, allowsAccount, isAdminRole, isInwardRole, isSupervisorOrAdminRole, type AccountScope } from "./access.js"
 import { extractGarmentSize } from "./return-reasons.js"
 import { ServiceError, type Actor } from "./register-service.js"
 
@@ -556,8 +556,8 @@ export async function clearPendingIronRecords(
   scope: AccountScope,
   input: { upToDate?: string; reason?: string } = {},
 ): Promise<{ clearedRecords: number; clearedUnits: number; upToDate: string }> {
-  if (!canDispatchIron(actor.role)) {
-    throw new ServiceError(403, "Only the Return Team, a Supervisor, or an Admin can clear pending Iron Send records.")
+  if (!isSupervisorOrAdminRole(actor.role)) {
+    throw new ServiceError(403, "Only a Supervisor or an Admin can clear pending Iron Send records.")
   }
   const client = await db.connect()
   let open = false
@@ -1115,10 +1115,6 @@ export async function updateIronBatchHandover(
   const targetStatus = rawStatus as IronHandoverStatus
   const current = (await getIronBatch(db, scope, id)).batch
 
-  if (current.handoverStatus === "handed_over" && targetStatus !== "handed_over" && !isAdminRole(actor.role)) {
-    throw new ServiceError(409, "This batch has already been handed over. Only an Admin can reopen its handover status.")
-  }
-
   const handoverTo =
     input.handoverTo === undefined
       ? current.handoverTo || (targetStatus === "handed_over" ? current.khaataName : "")
@@ -1137,10 +1133,18 @@ export async function updateIronBatchHandover(
   try {
     await client.query("BEGIN")
     open = true
+    const locked = await client.query("SELECT handover_status FROM iron_batches WHERE id = $1 FOR UPDATE", [id])
+    if (!locked.rows.length) throw new ServiceError(404, "Iron Send batch not found.")
+    const fromStatus = ironHandoverStatusOf(locked.rows[0].handover_status)
+    if (fromStatus === "handed_over" && targetStatus !== "handed_over" && !isAdminRole(actor.role)) {
+      throw new ServiceError(409, "This batch has already been handed over. Only an Admin can reopen its handover status.")
+    }
     if (targetStatus === "ready_for_handover") {
       await client.query(
         `UPDATE iron_batches
          SET handover_status = 'ready_for_handover',
+             handed_over_at = NULL,
+             handed_over_by = NULL,
              ready_for_handover_at = COALESCE(ready_for_handover_at, now()),
              ready_for_handover_by = COALESCE(ready_for_handover_by, $2),
              handover_to = $3,
@@ -1156,7 +1160,7 @@ export async function updateIronBatchHandover(
              ready_for_handover_at = COALESCE(ready_for_handover_at, now()),
              ready_for_handover_by = COALESCE(ready_for_handover_by, $2),
              handed_over_at = COALESCE(handed_over_at, now()),
-             handed_over_by = $2,
+             handed_over_by = COALESCE(handed_over_by, $2),
              handover_to = $3,
              handover_notes = $4,
              updated_at = now()
@@ -1167,6 +1171,10 @@ export async function updateIronBatchHandover(
       await client.query(
         `UPDATE iron_batches
          SET handover_status = 'batch_created',
+             ready_for_handover_at = NULL,
+             ready_for_handover_by = NULL,
+             handed_over_at = NULL,
+             handed_over_by = NULL,
              handover_to = $2,
              handover_notes = $3,
              updated_at = now()
@@ -1183,7 +1191,7 @@ export async function updateIronBatchHandover(
         String(id),
         JSON.stringify({
           batchNo: current.batchNo,
-          fromStatus: current.handoverStatus,
+          fromStatus,
           toStatus: targetStatus,
           handoverTo,
           handoverNotes,
