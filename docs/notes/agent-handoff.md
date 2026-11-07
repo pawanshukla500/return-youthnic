@@ -3335,3 +3335,42 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
   - Log or print any marketplace passwords or secrets (Rule 8).
   - Infer packet state or substitute wrong-return claims when category is unknown.
   - Remove the rejection reason capture from follow-up status tracking.
+
+### 2026-11-07, Pair Programming Agent, CodeRabbit Review Resolution & PR #59 Merge to Main
+
+- **Changes & Hardening (Commits 267eb7e, 50d1a73, da31a26, Merged via PR #59 / Commit 97b64c2):**
+  1. **Preserving Operator Remarks on Rejection:**
+     - Updated `recordFollowUpResult` (`server/claim-follow-up-service.ts`) so when a claim is marked rejected during ticket follow-up, any existing operator remarks are preserved and appended with ` | Rejection reason: <reason>` instead of being overwritten.
+  2. **Row Locking & Atomic Claim Status Tracking:**
+     - Added `SELECT status, remarks FROM claims WHERE id = $1 FOR UPDATE` inside the transaction before advancing status.
+     - Guards `INSERT INTO claim_status_history` strictly with `if (updateRes && (updateRes.rowCount ?? 0) > 0)`, recording the live previous status atomically.
+  3. **Verified Return-Type Classification:**
+     - In `MeeshoAutomation.execute` (`desktop-agent/src/marketplaces/meesho.ts`), requires a verified Customer Return or Courier Return / RTO return type. If unverified or missing, halts with `stage: manual_intervention_required` instead of assuming Customer Return.
+  4. **Extended Compensation Amount Matching:**
+     - Updated `extractMeeshoResolution` and follow-up parsing to support "approved for ₹...", "Claim approved for ₹749", and credited variants.
+  5. **Separate Ticket Detail Screenshots:**
+     - In `checkClaimStatus`, saved detail drawer screenshots to `ticket-detail-${safeId}.png` to avoid overwriting table list screenshots.
+  6. **Admin-Bound Credential Sync Warnings:**
+     - In `signInMarketplace` (`desktop-agent/src/portal-login.ts`), if environment credentials cannot be saved to the backend automation store, warns the operator cleanly that credentials remain unsaved in the backend and require an administrator to persist them in Marketplace Logins.
+  7. **Full JSDoc Documentation Coverage:**
+     - Added comprehensive JSDoc docstrings across `server/claim-follow-up-service.ts`, `desktop-agent/src/marketplaces/meesho.ts`, and `desktop-agent/src/portal-login.ts`.
+  8. **Pull Request & CodeRabbit Approval:**
+     - PR #59 merged into `main` via squash merge (`97b64c2`).
+     - All checks passed: CodeRabbit (success), Verify Web & API (success), Build Desktop Setup (success).
+- **Files Changed:**
+  - `desktop-agent/src/marketplaces/meesho.ts`
+  - `desktop-agent/src/portal-login.ts`
+  - `server/claim-follow-up-service.ts`
+  - `desktop-agent/meesho-issues.test.ts`
+  - `server/tests/claim-follow-up.test.ts`
+  - `docs/notes/agent-handoff.md`
+- **Verification Results on Main:**
+  - `npm run typecheck`: Passed (0 errors across tsconfig.json, tsconfig.server.json, tsconfig.desktop.json, and desktop/renderer/tsconfig.json).
+  - `npm run build`: Built in 1.78s (Vite web bundle and server/dist.js).
+  - `npm run desktop:renderer:build`: Built in 1.30s.
+  - `npm run desktop:build`: Built in 47ms.
+  - `npm test`: 920 tests executed: 873 passed, 0 failed, 47 skipped (dedicated TEST_DATABASE_URL unset).
+- **The next agent must not:**
+  - Overwrite operator remarks during automated follow-up status updates.
+  - Guess or infer Customer Return when a return type is unspecified.
+  - Log, print, or leak environment passwords or tokens (Invariant Rule 8).
