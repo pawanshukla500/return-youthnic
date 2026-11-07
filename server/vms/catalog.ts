@@ -813,10 +813,17 @@ export async function syncReturnRegisterMasterSkus(db: pg.Pool | pg.PoolClient):
       ''
     FROM expected_return_items eri
     JOIN skus s ON s.id = eri.sku_id
+    JOIN expected_returns er ON er.id = eri.expected_return_id
+    JOIN marketplaces m ON m.id = er.marketplace_id
     JOIN product_master pm
       ON replace(LOWER(btrim(COALESCE(NULLIF(eri.channel_listing_id, ''), eri.marketplace_sku_identifier))), ' ', '') = replace(LOWER(btrim(pm.listing_sku)), ' ', '')
      AND pm.master_sku IS NOT NULL AND btrim(pm.master_sku) <> ''
      AND pm.master_sku !~* '${placeholderRegex}'
+     AND (
+       LOWER(pm.marketplace) = LOWER(m.name)
+       OR (LOWER(m.name) LIKE '%' || LOWER(pm.marketplace) || '%' AND LOWER(pm.marketplace) <> 'all')
+       OR LOWER(pm.marketplace) = 'all'
+     )
     WHERE eri.product_sku_source = 'unresolved'
        OR s.code IS NULL
        OR btrim(s.code) = ''
@@ -839,6 +846,11 @@ export async function syncReturnRegisterMasterSkus(db: pg.Pool | pg.PoolClient):
         ON replace(LOWER(btrim(COALESCE(NULLIF(eri.channel_listing_id, ''), eri.marketplace_sku_identifier))), ' ', '') = replace(LOWER(btrim(pm.listing_sku)), ' ', '')
        AND pm.master_sku IS NOT NULL AND btrim(pm.master_sku) <> ''
        AND pm.master_sku !~* '${placeholderRegex}'
+       AND (
+         LOWER(pm.marketplace) = LOWER(m.name)
+         OR (LOWER(m.name) LIKE '%' || LOWER(pm.marketplace) || '%' AND LOWER(pm.marketplace) <> 'all')
+         OR LOWER(pm.marketplace) = 'all'
+       )
       JOIN skus target_sku ON target_sku.code = pm.master_sku
       WHERE eri.product_sku_source = 'unresolved'
          OR cur_sku.code IS NULL
@@ -847,9 +859,8 @@ export async function syncReturnRegisterMasterSkus(db: pg.Pool | pg.PoolClient):
       ORDER BY eri.id,
         CASE
           WHEN LOWER(pm.marketplace) = LOWER(m.name) THEN 1
-          WHEN LOWER(m.name) LIKE '%' || LOWER(pm.marketplace) || '%' AND pm.marketplace <> 'all' THEN 2
-          WHEN LOWER(pm.marketplace) = 'all' THEN 3
-          ELSE 4
+          WHEN LOWER(m.name) LIKE '%' || LOWER(pm.marketplace) || '%' AND LOWER(pm.marketplace) <> 'all' THEN 2
+          ELSE 3
         END,
         CASE WHEN pm.master_sku ~* '(_DIV|_KL|_YOU|_AI[0-9]*|_NEW|_S_S|_[SMLX|2-5XL]+_S)$' THEN 2 ELSE 1 END
     )
