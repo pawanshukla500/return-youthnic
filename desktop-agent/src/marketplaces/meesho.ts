@@ -86,6 +86,44 @@ export function parseMeeshoTicketRow(
 }
 
 /**
+ * Scrapes and extracts structured resolution information (rejection reason or approved amount)
+ * from Meesho ticket details text, resolution banners, or support conversation timeline.
+ */
+export function extractMeeshoResolution(text: string): { rejectionReason?: string; approvedAmount?: number } {
+  if (!text) return {}
+  const result: { rejectionReason?: string; approvedAmount?: number } = {}
+
+  // Approved amount detection
+  const amtMatch = text.match(/(?:approved(?:\s+(?:for|amount))?|refund\s+amount|compensation|credit(?:ed)?)\s*(?:is|of|:)?\s*(?:₹|rs\.?)\s*([\d,]+(?:\.\d+)?)/i)
+    || text.match(/(?:₹|rs\.?)\s*([\d,]+(?:\.\d+)?)\s*(?:approved|credited|refunded|compensation)/i)
+  if (amtMatch) {
+    const num = parseFloat(amtMatch[1].replace(/,/g, ""))
+    if (!isNaN(num) && num > 0) result.approvedAmount = num
+  }
+
+  // Rejection reason patterns from Meesho support
+  const rejKeywords = [
+    /(?:rejection\s*reason|reason\s*for\s*rejection|resolution\s*notes?|agent\s*remarks?|remarks?|resolution)\s*[:\-]\s*([^.\n\r]+)/i,
+    /(?:rejected\s*(?:due\s*to|because|as))\s*[:\-]?\s*([^.\n\r]+)/i,
+    /(?:claim\s*(?:is|has\s*been)?\s*rejected\s*[:\-])\s*([^.\n\r]+)/i,
+    /(?:not\s*eligible\s*for\s*(?:claim|compensation|refund)\s*[:\-]?)\s*([^.\n\r]+)/i,
+    /(?:ticket\s*closed\s*(?:due\s*to|because)\s*[:\-]?)\s*([^.\n\r]+)/i,
+  ]
+  for (const regex of rejKeywords) {
+    const m = text.match(regex)
+    if (m && m[1]) {
+      const cleaned = m[1].trim().replace(/\s+/g, " ")
+      if (cleaned.length > 5 && cleaned.length < 500) {
+        result.rejectionReason = cleaned
+        break
+      }
+    }
+  }
+
+  return result
+}
+
+/**
  * Meesho evidence-upload verification (M9 Phase 6).
  *
  * Production Claim #1 downloaded 4 files but the native browser failed to
@@ -150,6 +188,10 @@ export function checkMeeshoEvidenceFileLocal(filePath: string): { ok: boolean; r
 export class MeeshoAutomation extends BaseMarketplaceAutomation {
   readonly marketplaceName = "Meesho"
 
+  /**
+   * Executes claim automation for Meesho (prepare evidence files, navigate support categories,
+   * verify uploads, and optionally submit the claim ticket).
+   */
   async execute(action: "prepare" | "submit"): Promise<MarketplaceAutomationResult> {
     // Fail fast: never substitute a wrong-return claim and never infer the parcel condition.
     const issueLabel = resolveMeeshoIssueLabel(this.job.claim.marketplaceIssueCode)
@@ -235,19 +277,85 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
       )
       return href.includes("/support/1/") || Boolean(raiseVisible)
     }
-    for (let attempt = 0; attempt < 6 && !openedIssue; attempt++) {
-      if (attempt % 2 === 0) {
-        await this.browser.clickVisibleLabel(issueLabel)
-      } else {
-        const dom = await this.browser.clickLabelInDom(issueLabel)
-        await this.delay(1500)
-        if (dom.href && !(await issueOpen())) {
-          await this.browser.navigate(dom.href)
-          await this.waitForContent()
+
+    openedIssue = await issueOpen()
+    if (!openedIssue) {
+      // Determine return type (Courier Return / RTO vs Customer Return)
+      const isWrongBarcodeRto = this.job.claim.marketplaceIssueCode === "wrong_barcode_rto"
+      const rawReturnType = (this.job.claim.returnType || "").trim()
+      const isRto = isWrongBarcodeRto || /rto|courier/i.test(rawReturnType)
+      const isCustomerReturn = !isRto && /customer/i.test(rawReturnType)
+
+      if (!isRto && !isCustomerReturn) {
+        return {
+          success: false,
+          stage: "manual_intervention_required",
+          manualActionReason: `Return type for claim ${this.job.claimId} is unverified ("${rawReturnType || "unspecified"}"). Operator review is required to select between Customer Return and Courier Return / RTO before filing.`,
         }
       }
-      await this.delay(2000)
-      openedIssue = await issueOpen()
+
+      // Check if target issue label is visible directly on current view
+      const hasDirectIssue = await this.browser.evaluate<boolean>(`
+        (() => {
+          const want = ${JSON.stringify(issueLabel.toLowerCase())};
+          return ((document.body && document.body.innerText) || '').toLowerCase().includes(want);
+        })()
+      `).catch(() => false)
+
+      if (!hasDirectIssue) {
+        logger.info(`"${issueLabel}" not directly visible on Support root; looking for Returns / RTO category...`)
+        const parentCategories = [
+          "Returns/RTO & Exchange",
+          "Returns & RTO",
+          "Returns / RTO Exchange",
+          "Returns",
+          "Return & RTO",
+        ]
+        for (const cat of parentCategories) {
+          const clicked = await this.browser.clickVisibleLabel(cat)
+          if (clicked) {
+            await this.delay(2000)
+            await this.waitForContent()
+            break
+          }
+        }
+      }
+
+      // Check for subcategory tabs (Customer Return vs Courier Return / RTO)
+      if (isRto) {
+        logger.info("Return type is RTO/Courier Return. Selecting Courier Return subcategory...")
+        for (const tab of ["Courier Return", "Courier Return (RTO)", "RTO", "RTO Returns"]) {
+          const clicked = await this.browser.clickVisibleLabel(tab)
+          if (clicked) {
+            await this.delay(1000)
+            break
+          }
+        }
+      } else {
+        logger.info("Return type is Customer Return. Selecting Customer Return subcategory...")
+        for (const tab of ["Customer Return", "Customer Returns"]) {
+          const clicked = await this.browser.clickVisibleLabel(tab)
+          if (clicked) {
+            await this.delay(1000)
+            break
+          }
+        }
+      }
+
+      for (let attempt = 0; attempt < 6 && !openedIssue; attempt++) {
+        if (attempt % 2 === 0) {
+          await this.browser.clickVisibleLabel(issueLabel)
+        } else {
+          const dom = await this.browser.clickLabelInDom(issueLabel)
+          await this.delay(1500)
+          if (dom.href && !(await issueOpen())) {
+            await this.browser.navigate(dom.href)
+            await this.waitForContent()
+          }
+        }
+        await this.delay(2000)
+        openedIssue = await issueOpen()
+      }
     }
     if (!openedIssue) {
       const href = await this.browser.evaluate<string>(`window.location.href`)
@@ -684,9 +792,8 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
   }
 
   /**
-   * Reads a filed ticket state from the Meesho Support ticket table.
-   * Live-portal verification is still pending: the reader is DOM-driven, returns
-   * the raw portal text, and infers nothing when the row is absent.
+   * Checks the resolution and status of an existing Meesho support ticket on the Support page.
+   * If rejected, opens the ticket detail drawer to extract the specific rejection reason.
    */
   async checkClaimStatus(marketplaceClaimId: string): Promise<ClaimStatusCheckResult> {
     const ticketId = (marketplaceClaimId || "").trim()
@@ -720,7 +827,62 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
       if (!parsed) {
         return { supported: true, statusText: "", screenshotPath: shot, note: `Ticket ${ticketId} was not found on the Meesho Support page.` }
       }
-      return { supported: true, statusText: parsed.statusText, normalizedStatus: parsed.normalizedStatus, screenshotPath: shot, note: `Ticket ${ticketId} read from the Meesho Support page.` }
+
+      let resolutionNote = `Ticket ${ticketId} read from the Meesho Support page.`
+      let statusText = parsed.statusText
+
+      let finalScreenshot = shot
+      // If the ticket is rejected, open ticket details to extract the exact reason
+      if (parsed.normalizedStatus === "rejected") {
+        logger.info(`Ticket ${ticketId} is rejected. Opening ticket details to capture rejection reason...`)
+        const openedDetail = await this.browser.evaluate<boolean>(`
+          (() => {
+            const tr = Array.from(document.querySelectorAll('tr')).find((row) => (row.innerText || '').includes(${JSON.stringify(ticketId)}));
+            if (!tr) return false;
+            const clickTarget = tr.querySelector('a, button, [role="button"]') || tr;
+            if (typeof clickTarget.scrollIntoView === 'function') clickTarget.scrollIntoView({ block: 'center' });
+            if (typeof clickTarget.click === 'function') clickTarget.click();
+            return true;
+          })()
+        `).catch(() => false)
+
+        if (openedDetail) {
+          await this.delay(2000)
+          const detailShot = path.join(this.workDir, `ticket-detail-${safeId}.png`)
+          await this.browser.captureScreenshot(detailShot)
+          finalScreenshot = detailShot
+          const detailText = await this.browser.evaluate<string>(`
+            (() => {
+              const drawer = document.querySelector('[class*="drawer"], [class*="modal"], [role="dialog"], [class*="ticket-detail"], [class*="timeline"]') || document.body;
+              return (drawer && drawer.innerText) || '';
+            })()
+          `).catch(() => "")
+
+          const res = extractMeeshoResolution(detailText)
+          if (res.rejectionReason) {
+            statusText = `${parsed.statusText} | Reason: ${res.rejectionReason}`
+            resolutionNote = `Rejected: ${res.rejectionReason}`
+            logger.info(`Captured Meesho ticket rejection reason: ${res.rejectionReason}`)
+          } else {
+            resolutionNote = `Ticket ${ticketId} rejected on Meesho Support.`
+          }
+        }
+      } else if (parsed.normalizedStatus === "approved" || parsed.normalizedStatus === "paid") {
+        const rowText = parsed.statusText
+        const res = extractMeeshoResolution(rowText)
+        if (res.approvedAmount) {
+          statusText = `${parsed.statusText} | Approved Amount: ₹${res.approvedAmount}`
+          resolutionNote = `Claim approved for ₹${res.approvedAmount}.`
+        }
+      }
+
+      return {
+        supported: true,
+        statusText,
+        normalizedStatus: parsed.normalizedStatus,
+        screenshotPath: finalScreenshot,
+        note: resolutionNote,
+      }
     } catch (error) {
       return { supported: true, statusText: "", note: `Ticket read failed: ${error instanceof Error ? error.message : String(error)}`.slice(0, 300) }
     }

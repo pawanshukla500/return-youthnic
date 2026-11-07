@@ -129,6 +129,27 @@ async function secretFromAdminApi(accountName: string): Promise<PortalSecret | n
   return body
 }
 
+/**
+ * Resolves marketplace credentials from local environment variables if available.
+ * Supports MEESHOID / MEESHO_PWD (and standard aliases) for zero-configuration Meesho logins.
+ */
+export function secretFromEnvironment(accountName: string): PortalSecret | null {
+  const norm = accountName.toLowerCase()
+  if (norm.includes("meesho")) {
+    const username = (process.env.MEESHOID || process.env.MEESHO_ID || process.env.MEESHO_USERNAME || "").trim()
+    const password = (process.env.MEESHO_PWD || process.env.MEESHO_PASSWORD || process.env.MEESHO_PASS || "").trim()
+    if (username && password) {
+      return {
+        accountName,
+        portalUrl: "https://supplier.meesho.com/panel/v3/new/root/login",
+        username,
+        password,
+      }
+    }
+  }
+  return null
+}
+
 async function saveTypedLogin(row: PortalLoginRow, username: string, password: string): Promise<void> {
   const headers = await authHeaders()
   const res = await fetch(`${backend()}/api/admin/automation/credentials`, {
@@ -162,6 +183,10 @@ export async function completePortalLogin(
   await browser.navigate(portalUrl)
   await browser.delay(1500)
 
+  const envSecret = secretFromEnvironment(input.marketplace)
+  const username = input.username || envSecret?.username || ""
+  const password = input.password || envSecret?.password || ""
+
   let typed = false
   let announcedOtp = false
   const deadline = Date.now() + (input.waitMs ?? 180000)
@@ -184,15 +209,15 @@ export async function completePortalLogin(
     }
 
     const hasPasswordBox = await browser.evaluate<boolean>(`Boolean(document.querySelector('input[type="password"], input[name="password"]'))`)
-    if (!typed && hasPasswordBox && input.username && input.password) {
+    if (!typed && hasPasswordBox && username && password) {
       const userSelector = meesho
         ? 'input[name="emailOrPhone"]'
         : 'input[name="emailOrPhone"], input[type="email"], input[name="username"], input[type="text"]'
-      logger.info(`Typing the saved ${input.marketplace} bot login (${input.username.length} characters in the ID).`)
-      const typedUser = await browser.humanType(userSelector, input.username)
+      logger.info(`Typing the saved ${input.marketplace} bot login (${username.length} characters in the ID).`)
+      const typedUser = await browser.humanType(userSelector, username)
       if (typedUser) {
         await browser.delay(800)
-        await browser.humanType('input[type="password"], input[name="password"]', input.password)
+        await browser.humanType('input[type="password"], input[name="password"]', password)
         await browser.delay(800)
         await browser.evaluate(`
           (() => {
@@ -217,10 +242,10 @@ export async function completePortalLogin(
     await browser.delay(4000)
   }
 
-  if (!input.username || !input.password) {
+  if (!username || !password) {
     return {
       ok: false,
-      message: `${input.marketplace} has no bot password saved. Enter the ID and password in Marketplace logins, then save the cookies.`,
+      message: `${input.marketplace} has no bot password saved. Enter the ID and password in Marketplace logins, or configure MEESHOID & MEESHO_PWD in .env, then save the cookies.`,
     }
   }
   if (announcedOtp) {
@@ -298,6 +323,9 @@ export async function savePortalLogin(
   return { ok: true, status: 200, message: `${name} bot login saved.` }
 }
 
+/**
+ * Tests supplier portal login in the background using saved, bundled, or environment credentials.
+ */
 export async function testPortalLogin(
   marketplace: string,
   username: string,
@@ -322,6 +350,9 @@ export async function testPortalLogin(
   return { ok: false, message: result.message }
 }
 
+/**
+ * Retries a single claim job by queuing it back for processing.
+ */
 export async function queueOneClaim(jobId: number): Promise<{ ok: boolean; status: number; message: string }> {
   if (!jobId) return { ok: false, status: 400, message: "Choose a claim." }
   const headers = await authHeaders()
@@ -333,6 +364,9 @@ export async function queueOneClaim(jobId: number): Promise<{ ok: boolean; statu
   return { ok: true, status: 200, message: "That claim is back in the queue." }
 }
 
+/**
+ * Signs into a marketplace supplier panel using saved, job bundle, or environment credentials.
+ */
 export async function signInMarketplace(input: {
   accountName: string
   username?: string
@@ -344,6 +378,7 @@ export async function signInMarketplace(input: {
   if (!row) return { ok: false, message: `No marketplace account named ${input.accountName}.` }
 
   let secret: PortalSecret | null = null
+  let envSyncWarning = ""
   if (input.username && input.password) {
     await saveTypedLogin(row, input.username, input.password)
     secret = {
@@ -353,7 +388,24 @@ export async function signInMarketplace(input: {
       password: input.password,
     }
   } else {
-    secret = (await secretFromAdminApi(row.accountName)) || (await secretFromJobBundle(row.accountName))
+    const fromApi = (await secretFromAdminApi(row.accountName)) || (await secretFromJobBundle(row.accountName))
+    if (fromApi) {
+      secret = fromApi
+    } else {
+      const fromEnv = secretFromEnvironment(row.accountName)
+      if (fromEnv) {
+        secret = fromEnv
+        if (!row.usernameMasked) {
+          try {
+            await saveTypedLogin(row, fromEnv.username, fromEnv.password)
+          } catch (err) {
+            const reason = err instanceof Error ? err.message : String(err)
+            logger.warn(`Could not save environment credentials for ${row.accountName} to backend: ${reason}`)
+            envSyncWarning = `Environment credentials for ${row.accountName} were used for browser sign-in but remain unsaved on the backend (${reason}). An administrator can persist them under Marketplace Logins.`
+          }
+        }
+      }
+    }
   }
 
   if (!secret) {
@@ -388,12 +440,18 @@ export async function signInMarketplace(input: {
     if (!result.ok && input.holdOnPrompt) {
       heldBrowser = browser
     }
+    if (result.ok && envSyncWarning) {
+      result.message = `${result.message} Note: ${envSyncWarning}`
+    }
     return result
   } finally {
     if (heldBrowser !== browser) await handle.close()
   }
 }
 
+/**
+ * Retries failed or paused automation jobs for a specific marketplace account.
+ */
 export async function requeueMarketplaceJobs(accountName: string): Promise<number> {
   const headers = await authHeaders()
   const config = loadAgentConfig()

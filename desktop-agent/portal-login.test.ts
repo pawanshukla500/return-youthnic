@@ -4,7 +4,7 @@ import os from "node:os"
 import path from "node:path"
 import test from "node:test"
 import { profileDirFor, readSessionSavedAt, sessionMarkerPath, supplierSessionDir } from "./src/supplier-session.ts"
-import { isPortalLoggedIn } from "./src/portal-login.ts"
+import { isPortalLoggedIn, secretFromEnvironment } from "./src/portal-login.ts"
 
 test("marketplace profile folders stay stable for saved cookies", () => {
   const root = path.join(os.tmpdir(), "return-app-profiles")
@@ -74,4 +74,28 @@ test("isPortalLoggedIn handles non-Meesho generic portals", () => {
     isPortalLoggedIn("Flipkart", "https://seller.flipkart.com/dashboard", longText, true),
     false
   )
+})
+
+test("secretFromEnvironment resolves Meesho credentials when environment variables are set", () => {
+  const origId = process.env.MEESHOID
+  const origPwd = process.env.MEESHO_PWD
+  try {
+    delete process.env.MEESHOID
+    delete process.env.MEESHO_PWD
+    assert.equal(secretFromEnvironment("Meesho"), null)
+
+    process.env.MEESHOID = "seller@example.com"
+    process.env.MEESHO_PWD = "secretpassword"
+    const resolved = secretFromEnvironment("Meesho")
+    assert.ok(resolved)
+    assert.equal(resolved?.username, "seller@example.com")
+    assert.equal(resolved?.password, "secretpassword")
+    assert.equal(resolved?.portalUrl, "https://supplier.meesho.com/panel/v3/new/root/login")
+
+    // Non-meesho marketplace returns null
+    assert.equal(secretFromEnvironment("Amazon"), null)
+  } finally {
+    if (origId) process.env.MEESHOID = origId; else delete process.env.MEESHOID
+    if (origPwd) process.env.MEESHO_PWD = origPwd; else delete process.env.MEESHO_PWD
+  }
 })

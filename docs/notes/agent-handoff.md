@@ -3291,3 +3291,47 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
      - `desktop-agent/src/native-browser-view.ts`: Removed substring-fallback in `setFileInputFiles` CDP protocol queries to fail closed safely on missing selectors.
      - `desktop-agent/src/native-browser-view.ts`: Synchronized Chrome major version dynamically from `process.versions.chrome` (fallback `"131"`) across User-Agent and `sec-ch-ua` headers.
      - `desktop-agent/src/portal-login.ts`: Excluded generic "Support" and "Returns" strings from positive login detection, keeping dashboard-specific strings and panel URL fragments. Serialized `isPortalLoggedIn` directly into `loggedIn()` evaluate script to prevent code drift.
+
+
+### 2026-11-07, Pair Programming Agent, Meesho Customer Return / RTO Workflows, Credential Discovery & Rejection Reason Tracking
+
+- **Features & Hardening Delivered:**
+  1. **Zero-Configuration Meesho Credential Discovery from Environment (`MEESHOID`, `MEESHO_PWD`)**:
+     - Added `secretFromEnvironment(accountName)` in `desktop-agent/src/portal-login.ts` detecting `process.env.MEESHOID` (and aliases) and `process.env.MEESHO_PWD` without requiring manual form entry.
+     - Preserves Invariant Rule 8 (credentials are never logged, echoed, or committed).
+     - Automatically synchronizes environment credentials to backend `marketplace_credentials` for the Meesho account on sign-in.
+  2. **Meesho Customer Return vs Courier Return (RTO) Category Navigation (`desktop-agent/src/marketplaces/meesho.ts`)**:
+     - Enhanced category navigation: if issue label is not directly visible on Support root, automatically searches and clicks parent categories (`Returns/RTO & Exchange`, `Returns & RTO`, `Returns`).
+     - Uses `return_type_snapshot` to accurately distinguish Courier Return / RTO from Customer Return, navigating to the dedicated Courier Return subcategory tab when filing RTO claims.
+     - Preserves strict fail-closed issue resolution (stops for human review if issue code is unknown or unverified).
+  3. **Post-Claim Ticket Tracking, Rejection Reason Scraping & Approval Payout Capture (`desktop-agent/src/marketplaces/meesho.ts`, `server/claim-follow-up-service.ts`)**:
+     - Added `extractMeeshoResolution(text)` scraping agent rejection reasons and approved refund amounts.
+     - In `checkClaimStatus`, if ticket status is `rejected`, automatically inspects the ticket detail drawer/view to capture the exact support rejection reason into `result.note` and takes an audit screenshot.
+     - In `recordFollowUpResult` (`server/claim-follow-up-service.ts`), when a claim status advances to `rejected`, updates `claims.remarks` with the scraped rejection reason and records `Follow-up check: Rejected - Reason: <reason>` in `claim_status_history`.
+     - When a claim status advances to `approved`, parses approved compensation amounts and updates `claims.approved_amount` with audit history.
+  4. **Job Bundle Return Type Propagation (`server/claim-automation-service.ts`, `desktop-agent/src/agent-client.ts`)**:
+     - Added `c.return_type_snapshot` to `getJobExecutionBundle` SQL query and passed it into the bundle's `claim.returnType`.
+  5. **Comprehensive Unit Tests**:
+     - `desktop-agent/portal-login.test.ts`: Verified `secretFromEnvironment` resolution of Meesho credentials from env vars.
+     - `desktop-agent/meesho-issues.test.ts`: Verified `extractMeeshoResolution` for rejection reasons and approved amounts.
+     - `server/tests/claim-follow-up.test.ts`: Verified server recording of rejection reasons into `claims.remarks` and approval amounts into `claims.approved_amount`.
+- **Files Changed:**
+  - `desktop-agent/src/portal-login.ts`
+  - `desktop-agent/src/marketplaces/meesho.ts`
+  - `desktop-agent/src/agent-client.ts`
+  - `server/claim-automation-service.ts`
+  - `server/claim-follow-up-service.ts`
+  - `desktop-agent/portal-login.test.ts`
+  - `desktop-agent/meesho-issues.test.ts`
+  - `server/tests/claim-follow-up.test.ts`
+  - `docs/notes/agent-handoff.md`
+- **Verification Results:**
+  - `npm run typecheck`: Passed (0 errors across all 4 TypeScript projects).
+  - `npm run build`: Built cleanly (Vite web bundle & server/dist.js).
+  - `npm run desktop:renderer:build`: Built cleanly.
+  - `npm run desktop:build`: Built cleanly.
+  - `npm test`: 919 tests executed: 872 passed, 0 failed, 47 skipped (dedicated `TEST_DATABASE_URL` unset).
+- **The next agent must not:**
+  - Log or print any marketplace passwords or secrets (Rule 8).
+  - Infer packet state or substitute wrong-return claims when category is unknown.
+  - Remove the rejection reason capture from follow-up status tracking.

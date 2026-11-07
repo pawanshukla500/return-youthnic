@@ -93,6 +93,7 @@ export type JobExecutionBundle = {
     claimDescription: string
     claimContent: string
     remarks: string
+    returnType?: string
   }
   evidenceFiles: Array<{
     id: number
