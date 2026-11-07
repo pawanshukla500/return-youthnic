@@ -30,11 +30,18 @@ import { logger } from "./logger.js"
 
 type ElectronApi = typeof import("electron")
 
+const chromeMajor = process.versions?.chrome ? process.versions.chrome.split(".")[0] : "131"
+
+/** Standard genuine Chrome User-Agent header string matching Chromium engine version without automation flags. */
 export const STANDARD_CHROME_USER_AGENT =
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+  `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeMajor}.0.0.0 Safari/537.36`
 
 const configuredSessions = new WeakSet<object>()
 
+/**
+ * Injects genuine Chrome identity and client hints (sec-ch-ua) into marketplace session headers
+ * to prevent automated browser detection by anti-bot WAFs (such as Akamai EdgeSuite on Meesho).
+ */
 export function configureSupplierSessionHeaders(sessionObj: unknown): void {
   if (!sessionObj || typeof sessionObj !== "object") return
   if (configuredSessions.has(sessionObj)) return
@@ -71,7 +78,7 @@ export function configureSupplierSessionHeaders(sessionObj: unknown): void {
       },
       (details, callback) => {
         const headers = details.requestHeaders || {}
-        headers["sec-ch-ua"] = '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"'
+        headers["sec-ch-ua"] = `"Google Chrome";v="${chromeMajor}", "Chromium";v="${chromeMajor}", "Not_A Brand";v="24"`
         headers["sec-ch-ua-mobile"] = "?0"
         headers["sec-ch-ua-platform"] = '"Windows"'
         callback({ requestHeaders: headers })
@@ -1439,11 +1446,35 @@ class NativeSupplierBrowser implements SupplierBrowserApi {
     return true
   }
 
+  private buildClickByTextScript(text: string, exact: boolean): string {
+    return `
+      (() => {
+        const want = ${JSON.stringify(text.trim().toLowerCase())};
+        if (!want) return false;
+        const all = Array.from(document.querySelectorAll("button, a, input[type=button], input[type=submit], div, span, p, li, label, [role=button]"));
+        const matches = all.filter((el) => {
+          const t = (el.textContent || (el instanceof HTMLInputElement && el.value) || "").trim().toLowerCase();
+          if (${exact ? "t !== want" : "!t.includes(want)"}) return false;
+          const rect = el.getBoundingClientRect();
+          return rect.width > 0 && rect.height > 0;
+        });
+        if (!matches.length) return false;
+        matches.sort((a, b) => a.querySelectorAll("*").length - b.querySelectorAll("*").length);
+        const target = matches[0];
+        const clickable = target.closest("button, a, input[type=button], input[type=submit], [role=button]") || target;
+        if (typeof clickable.scrollIntoView === "function") clickable.scrollIntoView({ block: "center" });
+        if (typeof clickable.click === "function") clickable.click();
+        return true;
+      })()
+    `
+  }
+
   async humanClick(selector: string): Promise<boolean> {
     const center = await elementCenter(this.contents, selector)
     if (center && center.x > 0 && center.y > 0) {
       this.contents.sendInputEvent({ type: "mouseDown", x: center.x, y: center.y, button: "left", clickCount: 1 } as never)
       this.contents.sendInputEvent({ type: "mouseUp", x: center.x, y: center.y, button: "left", clickCount: 1 } as never)
+      return true
     }
     return this.evaluate<boolean>(`
       (() => {
@@ -1457,55 +1488,11 @@ class NativeSupplierBrowser implements SupplierBrowserApi {
   }
 
   async clickByTextIncludes(text: string): Promise<boolean> {
-    return this.evaluate<boolean>(`
-      (() => {
-        const want = ${JSON.stringify(text.trim().toLowerCase())};
-        if (!want) return false;
-        const all = Array.from(document.querySelectorAll("button, a, input[type=button], input[type=submit], div, span, p, li, label, [role=button]"));
-        const matches = all.filter((el) => {
-          const t = (el.textContent || (el instanceof HTMLInputElement && el.value) || "").trim().toLowerCase();
-          if (!t.includes(want)) return false;
-          const rect = el.getBoundingClientRect();
-          return rect.width > 0 && rect.height > 0;
-        });
-        if (!matches.length) return false;
-        matches.sort((a, b) => a.querySelectorAll("*").length - b.querySelectorAll("*").length);
-        const target = matches[0];
-        if (typeof target.scrollIntoView === "function") target.scrollIntoView({ block: "center" });
-        if (typeof target.click === "function") target.click();
-        const clickableAncestor = target.closest("button, a, [role=button]");
-        if (clickableAncestor && clickableAncestor !== target && typeof clickableAncestor.click === "function") {
-          clickableAncestor.click();
-        }
-        return true;
-      })()
-    `).catch(() => false)
+    return this.evaluate<boolean>(this.buildClickByTextScript(text, false)).catch(() => false)
   }
 
   async clickByExactText(text: string): Promise<boolean> {
-    return this.evaluate<boolean>(`
-      (() => {
-        const want = ${JSON.stringify(text.trim().toLowerCase())};
-        if (!want) return false;
-        const all = Array.from(document.querySelectorAll("button, a, input[type=button], input[type=submit], div, span, p, li, label, [role=button]"));
-        const matches = all.filter((el) => {
-          const t = (el.textContent || (el instanceof HTMLInputElement && el.value) || "").trim().toLowerCase();
-          if (t !== want) return false;
-          const rect = el.getBoundingClientRect();
-          return rect.width > 0 && rect.height > 0;
-        });
-        if (!matches.length) return false;
-        matches.sort((a, b) => a.querySelectorAll("*").length - b.querySelectorAll("*").length);
-        const target = matches[0];
-        if (typeof target.scrollIntoView === "function") target.scrollIntoView({ block: "center" });
-        if (typeof target.click === "function") target.click();
-        const clickableAncestor = target.closest("button, a, [role=button]");
-        if (clickableAncestor && clickableAncestor !== target && typeof clickableAncestor.click === "function") {
-          clickableAncestor.click();
-        }
-        return true;
-      })()
-    `).catch(() => false)
+    return this.evaluate<boolean>(this.buildClickByTextScript(text, true)).catch(() => false)
   }
 
   async clickVisibleLabel(text: string): Promise<boolean> {
@@ -1555,18 +1542,10 @@ class NativeSupplierBrowser implements SupplierBrowserApi {
       debuggerApi.attach("1.3")
       try {
         const doc = (await debuggerApi.sendCommand("DOM.getDocument", { depth: -1 })) as { root: { nodeId: number } }
-        let match = (await debuggerApi.sendCommand("DOM.querySelector", {
+        const match = (await debuggerApi.sendCommand("DOM.querySelector", {
           nodeId: doc.root.nodeId,
           selector,
         }).catch(() => ({ nodeId: 0 }))) as { nodeId?: number }
-
-        if (!match || typeof match.nodeId !== "number" || match.nodeId <= 0) {
-          const cleanSelector = selector.startsWith("#") ? selector.slice(1) : selector
-          match = (await debuggerApi.sendCommand("DOM.querySelector", {
-            nodeId: doc.root.nodeId,
-            selector: `input[id*="${cleanSelector}"], input[name*="${cleanSelector}"]`,
-          }).catch(() => ({ nodeId: 0 }))) as { nodeId?: number }
-        }
 
         if (!match || typeof match.nodeId !== "number" || match.nodeId <= 0) {
           logger.warn(`Native adapter: input element not found for selector ${selector}; showing panel for manual step.`)

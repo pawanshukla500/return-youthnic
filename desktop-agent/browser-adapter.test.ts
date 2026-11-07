@@ -113,9 +113,10 @@ test("marketplace support pre-check matches the automation registry", () => {
 })
 
 test("STANDARD_CHROME_USER_AGENT adheres to genuine Chrome headers without automation flags", () => {
+  const chromeMajor = process.versions?.chrome ? process.versions.chrome.split(".")[0] : "131"
   assert.match(STANDARD_CHROME_USER_AGENT, /Mozilla\/5\.0 \(Windows NT 10\.0; Win64; x64\)/)
   assert.match(STANDARD_CHROME_USER_AGENT, /AppleWebKit\/537\.36/)
-  assert.match(STANDARD_CHROME_USER_AGENT, /Chrome\/131\.0\.0\.0 Safari\/537\.36/)
+  assert.match(STANDARD_CHROME_USER_AGENT, new RegExp(`Chrome\\/${chromeMajor}\\.0\\.0\\.0 Safari\\/537\\.36`))
   assert.doesNotMatch(STANDARD_CHROME_USER_AGENT, /HeadlessChrome/)
   assert.doesNotMatch(STANDARD_CHROME_USER_AGENT, /Electron/)
 })
@@ -158,8 +159,9 @@ test("configureSupplierSessionHeaders injects Sec-CH-UA client hints on session"
   )
 
   assert.ok(callbackResult)
+  const chromeMajor = process.versions?.chrome ? process.versions.chrome.split(".")[0] : "131"
   const headers = (callbackResult as { requestHeaders: Record<string, string> }).requestHeaders
-  assert.equal(headers["sec-ch-ua"], '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"')
+  assert.equal(headers["sec-ch-ua"], `"Google Chrome";v="${chromeMajor}", "Chromium";v="${chromeMajor}", "Not_A Brand";v="24"`)
   assert.equal(headers["sec-ch-ua-mobile"], "?0")
   assert.equal(headers["sec-ch-ua-platform"], '"Windows"')
 })

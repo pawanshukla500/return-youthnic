@@ -3283,3 +3283,11 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
   - Re-enable `AutomationControlled` or remove the standard Chrome User-Agent / client hints.
   - Remove the depth `-1` parameter or React synthetic event dispatches from `setFileInputFiles`.
   - Allow `/login` or `/root/login` URLs to register as logged-in in `isPortalLoggedIn`.
+
+  5. **CodeRabbit Review Hardening**:
+     - `desktop-agent/src/crash-guard.ts`: Forwarded non-EPIPE stream errors on `stdout`/`stderr` to `handleFatal` rather than silently dropping them.
+     - `desktop-agent/src/native-browser-view.ts`: Prevented double-click risk in `humanClick` by returning immediately when mouse coordinate clicks succeed, falling back to DOM click only when coordinate resolution fails.
+     - `desktop-agent/src/native-browser-view.ts`: Unified text clicking in `buildClickByTextScript` clicking only the closest button/link/role=button (or the element itself) once, eliminating ancestor double clicks.
+     - `desktop-agent/src/native-browser-view.ts`: Removed substring-fallback in `setFileInputFiles` CDP protocol queries to fail closed safely on missing selectors.
+     - `desktop-agent/src/native-browser-view.ts`: Synchronized Chrome major version dynamically from `process.versions.chrome` (fallback `"131"`) across User-Agent and `sec-ch-ua` headers.
+     - `desktop-agent/src/portal-login.ts`: Excluded generic "Support" and "Returns" strings from positive login detection, keeping dashboard-specific strings and panel URL fragments. Serialized `isPortalLoggedIn` directly into `loggedIn()` evaluate script to prevent code drift.

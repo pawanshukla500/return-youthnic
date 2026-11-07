@@ -24,17 +24,37 @@ export type CrashGuardOptions = {
   onFatal?: (err: unknown) => void
 }
 
+/**
+ * Installs global uncaughtException, unhandledRejection, and stream error listeners
+ * to protect engine continuity and ensure clean non-zero exits on fatal crashes.
+ */
 export function installCrashGuards(options: CrashGuardOptions = {}): void {
   if (installed) return
   installed = true
 
-  // Avoid uncaught EPIPE exceptions when parent process closes stdout/stderr (e.g. Windows task scheduler)
+  function handleFatal(context: string, err: unknown): void {
+    logger.fatalSync(`${context} (exiting so the supervisor restarts a clean process):`, err)
+    if (options.onFatal) {
+      try {
+        options.onFatal(err)
+      } catch {
+        // A failing handler must not change the outcome.
+      }
+      return
+    }
+    process.exit(1)
+  }
+
+  // Avoid uncaught EPIPE exceptions when parent process closes stdout/stderr (e.g. Windows task scheduler),
+  // while forwarding non-EPIPE stream failures to the fatal error handler.
   try {
     process.stdout?.on?.("error", (err: unknown) => {
       if ((err as { code?: string })?.code === "EPIPE") return
+      handleFatal("stdout error", err)
     })
     process.stderr?.on?.("error", (err: unknown) => {
       if ((err as { code?: string })?.code === "EPIPE") return
+      handleFatal("stderr error", err)
     })
   } catch {
     // ignore
@@ -48,16 +68,7 @@ export function installCrashGuards(options: CrashGuardOptions = {}): void {
   process.on("uncaughtException", (err) => {
     // If the process pipe is broken, ignore rather than recursing indefinitely
     if ((err as { code?: string })?.code === "EPIPE") return
-    logger.fatalSync("Uncaught exception (exiting so the supervisor restarts a clean process):", err)
-    if (options.onFatal) {
-      try {
-        options.onFatal(err)
-      } catch {
-        // A failing handler must not change the outcome.
-      }
-      return
-    }
-    process.exit(1)
+    handleFatal("Uncaught exception", err)
   })
 }
 

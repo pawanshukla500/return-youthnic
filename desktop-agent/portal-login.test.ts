@@ -44,6 +44,11 @@ test("isPortalLoggedIn correctly recognizes Meesho supplier panel states", () =>
 
   // Unauthenticated / login page states
   assert.equal(
+    isPortalLoggedIn("Meesho", "https://supplier.meesho.com/help", "Customer Support and Returns policy", false),
+    false,
+    "should reject generic support or returns text outside authenticated panel"
+  )
+  assert.equal(
     isPortalLoggedIn("Meesho", "https://supplier.meesho.com/panel/v3/new/root/login", "Welcome back", false),
     false,
     "should reject login page even if text says Welcome back"
