@@ -444,14 +444,52 @@ export async function recordFollowUpResult(
     // Advance the claim when the ticket state maps to a lifecycle status and the claim is not already there.
     const claimStatus = input.outcome === "status_read" ? claimStatusForFollowUp(normalizedStatus) : null
     if (claimStatus && claimStatus !== String(row.claim_status || "")) {
+      let historyReason = `Follow-up check: ${statusText || normalizedStatus}`
+
+      if (claimStatus === "rejected") {
+        const rawNote = input.note || ""
+        const rejectionReason = (rawNote.startsWith("Rejected:") ? rawNote.replace(/^Rejected:\s*/, "") : rawNote).trim() || statusText || normalizedStatus
+        historyReason = `Follow-up check: Rejected - Reason: ${rejectionReason}`
+        await client.query(
+          `UPDATE claims
+           SET status = $2,
+               remarks = CASE WHEN $3::text <> '' THEN $3::text ELSE remarks END,
+               updated_at = now()
+           WHERE id = $1 AND status <> $2`,
+          [row.claim_id, claimStatus, `Rejection reason: ${rejectionReason}`],
+        )
+      } else if (claimStatus === "approved" || claimStatus === "paid") {
+        const textToSearch = `${input.note || ""} ${statusText || ""}`
+        const amtMatch = textToSearch.match(/(?:approved\s+amount|refund\s+amount|compensation|credit(?:ed)?)\s*(?:is|of|:)?\s*(?:₹|rs\.?)\s*([\d,]+(?:\.\d+)?)/i)
+          || textToSearch.match(/(?:₹|rs\.?)\s*([\d,]+(?:\.\d+)?)/i)
+        const parsedAmount = amtMatch ? parseFloat(amtMatch[1].replace(/,/g, "")) : 0
+        if (parsedAmount > 0) {
+          historyReason = `Follow-up check: Approved (Amount: ₹${parsedAmount})`
+          await client.query(
+            `UPDATE claims
+             SET status = $2,
+                 approved_amount = CASE WHEN $3::numeric > 0 THEN $3::numeric ELSE approved_amount END,
+                 updated_at = now()
+             WHERE id = $1 AND status <> $2`,
+            [row.claim_id, claimStatus, parsedAmount],
+          )
+        } else {
+          await client.query(
+            `UPDATE claims SET status = $2, updated_at = now() WHERE id = $1 AND status <> $2`,
+            [row.claim_id, claimStatus],
+          )
+        }
+      } else {
+        await client.query(
+          `UPDATE claims SET status = $2, updated_at = now() WHERE id = $1 AND status <> $2`,
+          [row.claim_id, claimStatus],
+        )
+      }
+
       await client.query(
         `INSERT INTO claim_status_history (claim_id, from_status, to_status, reason, changed_by)
-         SELECT id, status, $2, $3, NULL FROM claims WHERE id = $1 AND status <> $2`,
-        [row.claim_id, claimStatus, `Follow-up check: ${statusText || normalizedStatus}`],
-      )
-      await client.query(
-        `UPDATE claims SET status = $2, updated_at = now() WHERE id = $1 AND status <> $2`,
-        [row.claim_id, claimStatus],
+         VALUES ($1, $2, $3, $4, NULL)`,
+        [row.claim_id, row.claim_status, claimStatus, historyReason],
       )
     }
 

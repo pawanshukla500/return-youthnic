@@ -685,6 +685,7 @@ export async function getJobExecutionBundle(
     claimDescription: string
     claimContent: string
     remarks: string
+    returnType: string
   }
   evidenceFiles: Array<{
     id: number
@@ -705,6 +706,7 @@ export async function getJobExecutionBundle(
             c.claim_reason, c.claim_title, c.claim_description, c.claim_content, c.remarks,
             c.sub_order_id_snapshot, c.awb_snapshot, c.packet_id_snapshot, c.customer_name_snapshot,
             c.total_price_snapshot, c.sku_snapshot, c.packet_state_snapshot, c.marketplace_issue_code,
+            c.return_type_snapshot,
             er.order_number, er.tracking_id
      FROM claim_automation_jobs j
      JOIN claims c ON c.id = j.claim_id
@@ -765,6 +767,7 @@ export async function getJobExecutionBundle(
       claimDescription: String(row.claim_description || ""),
       claimContent: String(row.claim_content || ""),
       remarks: String(row.remarks || ""),
+      returnType: String(row.return_type_snapshot || ""),
     },
     evidenceFiles: mediaRes.rows.map((m) => ({
       id: Number(m.id),

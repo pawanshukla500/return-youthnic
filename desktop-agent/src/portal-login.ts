@@ -129,6 +129,27 @@ async function secretFromAdminApi(accountName: string): Promise<PortalSecret | n
   return body
 }
 
+/**
+ * Resolves marketplace credentials from local environment variables if available.
+ * Supports MEESHOID / MEESHO_PWD (and standard aliases) for zero-configuration Meesho logins.
+ */
+export function secretFromEnvironment(accountName: string): PortalSecret | null {
+  const norm = accountName.toLowerCase()
+  if (norm.includes("meesho")) {
+    const username = (process.env.MEESHOID || process.env.MEESHO_ID || process.env.MEESHO_USERNAME || "").trim()
+    const password = (process.env.MEESHO_PWD || process.env.MEESHO_PASSWORD || process.env.MEESHO_PASS || "").trim()
+    if (username && password) {
+      return {
+        accountName,
+        portalUrl: "https://supplier.meesho.com/panel/v3/new/root/login",
+        username,
+        password,
+      }
+    }
+  }
+  return null
+}
+
 async function saveTypedLogin(row: PortalLoginRow, username: string, password: string): Promise<void> {
   const headers = await authHeaders()
   const res = await fetch(`${backend()}/api/admin/automation/credentials`, {
@@ -162,6 +183,10 @@ export async function completePortalLogin(
   await browser.navigate(portalUrl)
   await browser.delay(1500)
 
+  const envSecret = secretFromEnvironment(input.marketplace)
+  const username = input.username || envSecret?.username || ""
+  const password = input.password || envSecret?.password || ""
+
   let typed = false
   let announcedOtp = false
   const deadline = Date.now() + (input.waitMs ?? 180000)
@@ -184,15 +209,15 @@ export async function completePortalLogin(
     }
 
     const hasPasswordBox = await browser.evaluate<boolean>(`Boolean(document.querySelector('input[type="password"], input[name="password"]'))`)
-    if (!typed && hasPasswordBox && input.username && input.password) {
+    if (!typed && hasPasswordBox && username && password) {
       const userSelector = meesho
         ? 'input[name="emailOrPhone"]'
         : 'input[name="emailOrPhone"], input[type="email"], input[name="username"], input[type="text"]'
-      logger.info(`Typing the saved ${input.marketplace} bot login (${input.username.length} characters in the ID).`)
-      const typedUser = await browser.humanType(userSelector, input.username)
+      logger.info(`Typing the saved ${input.marketplace} bot login (${username.length} characters in the ID).`)
+      const typedUser = await browser.humanType(userSelector, username)
       if (typedUser) {
         await browser.delay(800)
-        await browser.humanType('input[type="password"], input[name="password"]', input.password)
+        await browser.humanType('input[type="password"], input[name="password"]', password)
         await browser.delay(800)
         await browser.evaluate(`
           (() => {
@@ -217,10 +242,10 @@ export async function completePortalLogin(
     await browser.delay(4000)
   }
 
-  if (!input.username || !input.password) {
+  if (!username || !password) {
     return {
       ok: false,
-      message: `${input.marketplace} has no bot password saved. Enter the ID and password in Marketplace logins, then save the cookies.`,
+      message: `${input.marketplace} has no bot password saved. Enter the ID and password in Marketplace logins, or configure MEESHOID & MEESHO_PWD in .env, then save the cookies.`,
     }
   }
   if (announcedOtp) {
@@ -353,7 +378,13 @@ export async function signInMarketplace(input: {
       password: input.password,
     }
   } else {
-    secret = (await secretFromAdminApi(row.accountName)) || (await secretFromJobBundle(row.accountName))
+    secret =
+      (await secretFromAdminApi(row.accountName)) ||
+      (await secretFromJobBundle(row.accountName)) ||
+      secretFromEnvironment(row.accountName)
+    if (secret && !row.usernameMasked) {
+      await saveTypedLogin(row, secret.username, secret.password).catch(() => undefined)
+    }
   }
 
   if (!secret) {

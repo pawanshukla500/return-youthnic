@@ -428,3 +428,47 @@ test("an unauthorized agent cannot record a result", async () => {
   )
   assert.equal(matching(db.queries, /UPDATE claim_automation_follow_ups/).length, 0)
 })
+
+test("a rejected ticket records the rejection reason into claims and history", async () => {
+  const db = fakeDb({ lease: leaseRow() })
+  const result = await recordFollowUpResult(db.pool, "agent-uuid", 9, {
+    outcome: "status_read",
+    statusText: "Claim Rejected",
+    note: "Rejected: AWB / Reverse waybill barcode is not clear or missing",
+  })
+
+  assert.equal(result.normalizedStatus, "rejected")
+  assert.equal(result.isActive, false)
+
+  const claimUpdate = matching(db.queries, /UPDATE claims/)
+  assert.equal(claimUpdate.length, 1)
+  assert.equal(claimUpdate[0].params[0], 4)
+  assert.equal(claimUpdate[0].params[1], "rejected")
+  assert.equal(claimUpdate[0].params[2], "Rejection reason: AWB / Reverse waybill barcode is not clear or missing")
+
+  const historyInsert = matching(db.queries, /INSERT INTO claim_status_history/)
+  assert.equal(historyInsert.length, 1)
+  assert.match(String(historyInsert[0].params[3]), /Rejected - Reason: AWB \/ Reverse waybill barcode is not clear or missing/)
+})
+
+test("an approved ticket with refund amount records approved_amount into claims", async () => {
+  const db = fakeDb({ lease: leaseRow() })
+  const result = await recordFollowUpResult(db.pool, "agent-uuid", 9, {
+    outcome: "status_read",
+    statusText: "Claim Approved",
+    note: "Approved: ₹749.50 compensation credited.",
+  })
+
+  assert.equal(result.normalizedStatus, "approved")
+  assert.equal(result.isActive, false)
+
+  const claimUpdate = matching(db.queries, /UPDATE claims/)
+  assert.equal(claimUpdate.length, 1)
+  assert.equal(claimUpdate[0].params[0], 4)
+  assert.equal(claimUpdate[0].params[1], "approved")
+  assert.equal(claimUpdate[0].params[2], 749.5)
+
+  const historyInsert = matching(db.queries, /INSERT INTO claim_status_history/)
+  assert.equal(historyInsert.length, 1)
+  assert.match(String(historyInsert[0].params[3]), /Amount: ₹749\.5/)
+})

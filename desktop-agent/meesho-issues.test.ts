@@ -7,6 +7,7 @@ import {
   checkMeeshoEvidenceFileLocal,
   findExistingTicketForOrder,
   parseMeeshoTicketRow,
+  extractMeeshoResolution,
   resolveMeeshoIssueLabel,
   resolveMeeshoPacketLabel,
   resolveMeeshoUploadField,
@@ -153,5 +154,40 @@ describe("Meesho upload-field mapping (M9 Phase 6: Claim #1 regression)", () => 
     assert.ok(summary.includes("#barcode_image_link_6 (barcode_image)"))
     assert.ok(summary.includes("#attachments_12 (attachments)"))
     assert.ok(summary.includes("portalAck=no"))
+  })
+})
+
+describe("Meesho ticket resolution and rejection reason extraction", () => {
+  it("extracts rejection reason from agent remarks and resolution notes", () => {
+    const text1 = "Ticket #123456789. Rejection reason: AWB / Reverse waybill barcode is not clear or missing. Please refer to return guidelines."
+    const res1 = extractMeeshoResolution(text1)
+    assert.equal(res1.rejectionReason, "AWB / Reverse waybill barcode is not clear or missing")
+
+    const text2 = "Your claim has been reviewed. Claim rejected due to: Unboxing video does not display full package condition from all sides."
+    const res2 = extractMeeshoResolution(text2)
+    assert.equal(res2.rejectionReason, "Unboxing video does not display full package condition from all sides")
+
+    const text3 = "Reason for rejection: Claim raised after the 7 day policy window."
+    const res3 = extractMeeshoResolution(text3)
+    assert.equal(res3.rejectionReason, "Claim raised after the 7 day policy window")
+  })
+
+  it("extracts approved compensation amount when present", () => {
+    const text1 = "Ticket #987654321. Approved amount of ₹549 will be credited to your bank account within 3 business days."
+    const res1 = extractMeeshoResolution(text1)
+    assert.equal(res1.approvedAmount, 549)
+
+    const text2 = "Resolution note: Compensation: Rs. 1,299.50 approved by claims department."
+    const res2 = extractMeeshoResolution(text2)
+    assert.equal(res2.approvedAmount, 1299.5)
+
+    const text3 = "Claim Approved. ₹850 credited to supplier balance."
+    const res3 = extractMeeshoResolution(text3)
+    assert.equal(res3.approvedAmount, 850)
+  })
+
+  it("handles empty or uninformative resolution text gracefully", () => {
+    assert.deepEqual(extractMeeshoResolution(""), {})
+    assert.deepEqual(extractMeeshoResolution("Under investigation"), {})
   })
 })
