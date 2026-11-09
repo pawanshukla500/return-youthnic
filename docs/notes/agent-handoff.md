@@ -3426,3 +3426,32 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
   - Submit or modify live customer claims on the production Meesho portal during testing without explicit authorization.
   - Remove default values in `BaseMarketplaceAutomation`.
   - Log or leak secrets, passwords, or session tokens (Invariant Rule 8).
+
+### 2026-11-09, Antigravity, Meesho Desktop Automation Fixes & Live Claim Filing Verification
+
+- **Task Summary:**
+  1. **Enforced Canonical Support Category Navigation (`desktop-agent/src/marketplaces/meesho.ts`):**
+     - Diagnosed root cause of automation timeout on the Meesho Support root page: the text *"I have received wrong return"* was present in a static FAQ preview accordion on `/support`, which caused `hasDirectIssue` to evaluate to `true` and bypass navigating to `/support/1`.
+     - Replaced the ambiguous `hasDirectIssue` check with an explicit URL check (`if (!currentUrl.includes("/support/1"))`), ensuring all Returns & RTO claims navigate directly into `/support/1`.
+  2. **Optional Attachments Handling in Evidence Upload (`desktop-agent/src/marketplaces/meesho.ts`):**
+     - Meesho's claim form features 4 mandatory upload boxes (`barcode_image`, `product_images`, `reverse_waybill`, `unboxing_video`) marked with required asterisks and 1 optional `#attachments_12` box for supplementary files.
+     - Updated upload verification so that when no extra files are mapped to `attachments`, the optional box is cleanly skipped rather than failing the mandatory evidence gate.
+  3. **Live Real-World End-to-End Claim Filing & Verification:**
+     - **Claim #4** (Order `344400518893652096`, Sub-Order `344400518893652096_1`, AWB `R2752538828MEO`): Fully automated preparation, 4 evidence attachments verified with portal-ack, description typed, approved, and submitted on live Meesho portal -> Generated Ticket ID **`794219052322`** (Expected resolution: 16 Nov'26 | 03:40 PM). Follow-up row registered.
+     - **Claim #2** (Order `342207442614944832`, Sub-Order `342207442614944832_1`, AWB `R2744240422FPL`): Fully automated preparation, 5 evidence attachments verified with portal-ack, description typed, approved, and submitted on live Meesho portal -> Generated Ticket ID **`794219443852`** (Expected resolution: 16 Nov'26 | 03:47 PM). Follow-up row registered.
+     - **Claim #5** (Order `342536019516041216`, Sub-Order `342536019516041216_1`, AWB `R2725108455MEO`): Fully automated preparation, 4 evidence attachments verified with portal-ack, description typed, approved, and submitted on live Meesho portal -> Generated Ticket ID **`794219857178`** (Expected resolution: 16 Nov'26 | 03:54 PM). Follow-up row registered.
+     - **Claim #3** (Order `341378275264922945`, Sub-Order `341378275264922945_1`, AWB `SF4281497425FPL`): Safely halted and flagged `manual_intervention_required` because it is an RTO shipment recorded as generic `wrong_return`, and Meesho requires RTO-specific category selection (*"I have received a wrong barcoded package in RTO"*).
+  4. **Live Portal Ticket Inspection & Status Mapping:**
+     - Scraped and correlated all 9 active tickets on Meesho seller account `tulipprints` (`yqcue`) with internal Scan IDs, Order Item IDs, AWBs, and expected response times.
+- **Files Changed:**
+  - `desktop-agent/src/marketplaces/meesho.ts`
+  - `docs/notes/agent-handoff.md`
+- **Verification Results:**
+  - `npm run typecheck`: Passed (0 errors across 4 TypeScript projects).
+  - `npm run desktop:build`: Bundled successfully (2.2MB).
+  - Unit tests (`server/tests/meesho-claim-issues.test.ts`, `desktop-agent/meesho-issues.test.ts`): 21 passed, 0 failed.
+  - Live portal verification: Green confirmation screen and tickets verified for Claims #4, #2, and #5.
+- **The next agent must not:**
+  - Change the exact `/support/1` navigation check without verifying against Meesho's category URL schema.
+  - Make `#attachments_12` mandatory when evidence counts are 4.
+  - Log, commit, or echo `MEESHO_PWD` or `MEESHOID` (Invariant Rule 8).
