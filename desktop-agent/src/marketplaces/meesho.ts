@@ -294,35 +294,14 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
         }
       }
 
-      // Check if target issue label is visible directly on current view
-      const hasDirectIssue = await this.browser.evaluate<boolean>(`
-        (() => {
-          const want = ${JSON.stringify(issueLabel.toLowerCase())};
-          return ((document.body && document.body.innerText) || '').toLowerCase().includes(want);
-        })()
-      `).catch(() => false)
-
-      if (!hasDirectIssue) {
-        logger.info(`"${issueLabel}" not directly visible on Support root; opening Returns / RTO category...`)
+      // Enforce navigation to Returns / RTO category (/support/1)
+      const currentUrl = await this.browser.evaluate<string>(`window.location.href`).catch(() => "")
+      if (!currentUrl.includes("/support/1")) {
+        logger.info(`Opening Returns / RTO category (/support/1)...`)
         const returnsCategoryUrl = `https://supplier.meesho.com/panel/v3/new/experience/${slug}/support/1`
         await this.browser.navigate(returnsCategoryUrl)
         await this.waitForContent()
         await this.delay(1500)
-        const parentCategories = [
-          "Returns/RTO & Exchange",
-          "Returns & RTO",
-          "Returns / RTO Exchange",
-          "Returns",
-          "Return & RTO",
-        ]
-        for (const cat of parentCategories) {
-          const clicked = await this.browser.clickVisibleLabel(cat)
-          if (clicked) {
-            await this.delay(2000)
-            await this.waitForContent()
-            break
-          }
-        }
       }
 
       // Check for subcategory tabs (Customer Return vs Courier Return / RTO)
@@ -542,6 +521,10 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
         logger.warn(`Meesho upload unverified on #${rawId} (${field ?? "unknown"}): ${reason}.`)
       }
       if (!chosen.length) {
+        if (field === "attachments") {
+          logger.info(`Optional attachments upload box #${rawId} skipped (no extra attachment files).`)
+          continue
+        }
         // No evidence mapped to this box: do not guess and do not retry blindly.
         fail("no evidence file mapped to this upload box")
         continue
