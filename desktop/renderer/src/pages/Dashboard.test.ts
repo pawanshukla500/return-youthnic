@@ -87,6 +87,12 @@ test('countJobStages: empty list gives zeroed buckets', () => {
   })
 })
 
+test('countJobStages: undefined/null (initial poll) gives zeroed buckets, never throws', () => {
+  const zeroed = { total: 0, completed: 0, queued: 0, inProgress: 0, actionRequired: 0 }
+  assert.deepEqual(countJobStages(undefined), zeroed)
+  assert.deepEqual(countJobStages(null), zeroed)
+})
+
 test('countJobStages: buckets every stage exactly like the legacy KPI counters', () => {
   const rows = [
     makeJob('completed'),

@@ -134,6 +134,13 @@ export type FollowUpsResponse = {
   summary: FollowUpsSummary
 }
 
+/** GET /api/jobs → the engine proxies the backend jobs list: always an object with a rows array. */
+export type JobsResponse = {
+  rows: JobRow[]
+  total: number
+  [k: string]: unknown
+}
+
 /** GET /api/panels → { panels: PanelStatus[] } */
 export type PanelRuntimeState =
   | 'idle'
