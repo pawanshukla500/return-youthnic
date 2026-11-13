@@ -2,6 +2,7 @@ import crypto from "node:crypto"
 import fs from "node:fs"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
+import * as Sentry from "@sentry/node"
 import bcrypt from "bcryptjs"
 import cors from "cors"
 import dotenv from "dotenv"
@@ -58,6 +59,19 @@ import type { IncomingMessage } from "node:http"
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 dotenv.config({ path: path.join(root, ".env") })
+
+const SENTRY_DSN =
+  process.env.SENTRY_DSN ||
+  "https://6be0da3edbd48f45d0b35f15e290e6e5@o4512423893925888.ingest.de.sentry.io/4512423934558288"
+
+if (SENTRY_DSN) {
+  Sentry.init({
+    dsn: SENTRY_DSN,
+    environment: process.env.NODE_ENV || "production",
+    release: process.env.npm_package_version ? `return-app@${process.env.npm_package_version}` : "return-app@1.3.0",
+    tracesSampleRate: process.env.NODE_ENV === "production" ? 0.2 : 1.0,
+  })
+}
 
 // One row of the signed-in user, as userSelect reads it. password_hash is used only to check a sign-in and is never
 // sent to the browser (publicUser picks the fields).
@@ -306,6 +320,12 @@ app.get("/api/health", async (_req, res, next) => {
   } catch (error) {
     next(error)
   }
+})
+
+app.get("/api/debug/sentry-test", (_req, _res) => {
+  const testError = new Error("Sentry Test Error from Return App API - Verification")
+  Sentry.captureException(testError)
+  throw testError
 })
 
 app.get("/api/app/latest", handleLatestRelease)
@@ -1099,11 +1119,15 @@ if (fs.existsSync(dist)) {
   })
 }
 
+// Sentry error handler must be registered before any other error middleware and after all controllers
+Sentry.setupExpressErrorHandler(app)
+
 app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
   if (error instanceof multer.MulterError && error.code === "LIMIT_FILE_SIZE") {
     return res.status(400).json({ error: "File is larger than 25 MB" })
   }
   console.error(error)
+  Sentry.captureException(error)
   const isProd = process.env.NODE_ENV === "production"
   const message = isProd
     ? "An internal server error occurred. Please try again or contact an administrator."
@@ -1184,9 +1208,11 @@ process.on("SIGTERM", () => handleGracefulShutdown("SIGTERM"))
 process.on("SIGINT", () => handleGracefulShutdown("SIGINT"))
 process.on("unhandledRejection", (reason: unknown) => {
   console.error("[Process] Unhandled Promise Rejection:", reason instanceof Error ? reason.stack || reason.message : reason)
+  Sentry.captureException(reason)
 })
 process.on("uncaughtException", (error: Error) => {
   console.error("[Process] Fatal Uncaught Exception:", error.stack || error.message)
+  Sentry.captureException(error)
   handleGracefulShutdown("UNCAUGHT_EXCEPTION")
 })
 

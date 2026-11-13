@@ -3525,3 +3525,38 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
 - **The next agent must not:**
   - Delete `service_account.json` in `/opt/postgres-backup/`.
   - Remove `postgres-drive-backup.timer` on Hostinger VPS.
+
+### 2026-11-13, Antigravity, Google Drive Backup Folder Customization with 1-Day Retention & End-to-End Sentry Integration
+
+- **Google Drive Backup Folder Customization & 1-Day Retention:**
+  - Target Google Drive folder switched to `1xLtHfQvW70rV7VWVjtZP6u2S9ZqEKF_v` ("Return Scan Backup").
+  - Retention policy updated to `RETENTION_COUNT = 1`: when today's backup runs, yesterday's backup in this folder is automatically deleted to optimize Drive storage.
+  - Executed live run on VPS: dumped `return-scan_youthnic` (198.25 MB gzipped in 30s), uploaded to folder `1xLtHfQvW70rV7VWVjtZP6u2S9ZqEKF_v` (File ID `1jm5xEchydv_fA7yftNkWps1UF8Ynun6I`), retained newest 1, purged local disk copy, dispatched WhatsApp alert to operations group.
+  - Verified nightly trigger scheduled via `postgres-drive-backup.timer` at 23:45 IST.
+- **Sentry SDK Integration End-to-End (`return-app`):**
+  - Added `@sentry/node` (v11) to `package.json` dependencies.
+  - Initialized Sentry SDK in `server/index.ts` with DSN, environment, release tag, and trace sampling.
+  - Wired `Sentry.setupExpressErrorHandler(app)` and captured exceptions in standard Express error handler, `process.on("unhandledRejection")`, and `process.on("uncaughtException")`.
+  - Added diagnostic endpoint `GET /api/debug/sentry-test` for end-to-end verification.
+  - Updated `docker-compose.production.yml` and `.github/workflows/deploy.yml` with `SENTRY_DSN`.
+  - Added automated test suite `server/tests/sentry.test.ts` (3 tests pass).
+  - Verified end-to-end Sentry event ingestion in Sentry dashboard (`vb-export.sentry.io/issues/RETURN-APP-1`).
+- **Files Changed:**
+  - `package.json`
+  - `package-lock.json`
+  - `server/index.ts`
+  - `server/tests/sentry.test.ts`
+  - `docker-compose.production.yml`
+  - `.github/workflows/deploy.yml`
+  - `scripts/vps-postgres-backup.js`
+  - `.gitignore`
+  - `docs/notes/agent-handoff.md`
+- **Verification Results:**
+  - `npm.cmd run typecheck`: Passed (0 errors across 4 projects).
+  - `npm.cmd run build`: Passed (Vite + esbuild server).
+  - `npm.cmd test`: 929 tests (882 passed, 0 failed, 47 skipped).
+  - Live VPS Backup run: Complete, File ID `1jm5xEchydv_fA7yftNkWps1UF8Ynun6I` in folder `1xLtHfQvW70rV7VWVjtZP6u2S9ZqEKF_v`.
+- **The next agent must not:**
+  - Remove Sentry error handler from `server/index.ts`.
+  - Alter the Google Drive service account credentials on VPS.
+

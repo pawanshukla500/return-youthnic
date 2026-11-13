@@ -12,9 +12,9 @@ const path = require('path');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 
-const GDRIVE_FOLDER_ID = process.env.GDRIVE_FOLDER_ID || '1aMmVUgiuF4ekd6trJPtUUK8mbO6vZxKb';
+const GDRIVE_FOLDER_ID = process.env.GDRIVE_FOLDER_ID || '1xLtHfQvW70rV7VWVjtZP6u2S9ZqEKF_v';
 const LOCAL_BACKUP_DIR = process.env.LOCAL_BACKUP_DIR || '/opt/backups/postgres';
-const RETENTION_COUNT = parseInt(process.env.BACKUP_RETENTION_COUNT || '7', 10);
+const RETENTION_COUNT = parseInt(process.env.BACKUP_RETENTION_COUNT || '1', 10);
 
 // WhatsApp Alert Configuration
 const WA_URL = process.env.WHATSAPP_API_URL || 'https://wa.youthnic.shop';
@@ -217,15 +217,22 @@ async function cleanOldDriveBackups(token, folderId) {
     );
     if (res.status === 200) {
       const { files = [] } = await res.json();
+      log(`Total backup files found in folder: ${files.length}`);
+      for (const f of files) {
+        log(` - ${f.name} (ID: ${f.id}, created: ${f.createdTime})`);
+      }
       if (files.length > RETENTION_COUNT) {
         const toDelete = files.slice(RETENTION_COUNT);
         for (const file of toDelete) {
           log(`Deleting expired backup from Google Drive: ${file.name} (ID: ${file.id})...`);
-          await fetch(`https://www.googleapis.com/drive/v3/files/${file.id}?supportsAllDrives=true`, {
+          const delRes = await fetch(`https://www.googleapis.com/drive/v3/files/${file.id}?supportsAllDrives=true`, {
             method: 'DELETE',
             headers: { authorization: `Bearer ${token}` },
           });
+          log(`Deleted expired backup: ${file.name} (HTTP ${delRes.status})`);
         }
+      } else {
+        log(`No older backups need purging (${files.length} <= ${RETENTION_COUNT}).`);
       }
     }
   } catch (err) {
@@ -314,7 +321,8 @@ async function run() {
     log('Local backup removed from VPS to preserve disk space.');
   }
 
-  const successMsg = `✅ *[DATABASE BACKUP SUCCESS]*\n\n💾 *Database:* return-scan_youthnic\n📦 *Archive:* ${fileName} (${dumpRes.mb} MB gzipped)\n☁️ *Destination:* Google Drive ("VPS PostgresBackup")\n🕒 *Timestamp:* ${new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })} IST`;
+  const folderName = folderCheck.data?.name || GDRIVE_FOLDER_ID;
+  const successMsg = `✅ *[DATABASE BACKUP SUCCESS]*\n\n💾 *Database:* return-scan_youthnic\n📦 *Archive:* ${fileName} (${dumpRes.mb} MB gzipped)\n☁️ *Destination:* Google Drive ("${folderName}")\n🕒 *Timestamp:* ${new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })} IST`;
   log(successMsg);
   await sendWhatsAppAlert(successMsg);
 

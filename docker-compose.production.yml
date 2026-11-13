@@ -19,6 +19,7 @@ services:
       PORT: 3001
       TZ: Asia/Kolkata
       NODE_OPTIONS: "--max-old-space-size=384"
+      SENTRY_DSN: "${SENTRY_DSN:-https://6be0da3edbd48f45d0b35f15e290e6e5@o4512423893925888.ingest.de.sentry.io/4512423934558288}"
     extra_hosts:
       - "host.docker.internal:host-gateway"
       - "srv1845788.hstgr.cloud:host-gateway"
