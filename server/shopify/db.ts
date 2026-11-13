@@ -97,6 +97,9 @@ export function getShopifyPool(): pg.Pool {
       connectionTimeoutMillis: 10000,
       max: 5,
     })
+    shopifyPool.on("error", (err) => {
+      console.warn("[Shopify PostgreSQL Pool] Idle client error (reconnecting automatically):", err.message)
+    })
   }
   return shopifyPool
 }

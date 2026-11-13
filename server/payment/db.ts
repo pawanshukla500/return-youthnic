@@ -104,6 +104,9 @@ export function getPaymentPool(): pg.Pool {
       max: 5,
       idleTimeoutMillis: 30000,
     })
+    paymentPool.on("error", (err) => {
+      console.warn("[Payment PostgreSQL Pool] Idle client error (reconnecting automatically):", err.message)
+    })
   }
   return paymentPool
 }

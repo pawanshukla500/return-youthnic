@@ -108,6 +108,9 @@ export function getVmsPool(): pg.Pool {
       connectionTimeoutMillis: 10000,
       max: 3,
     })
+    vmsPool.on("error", (err) => {
+      console.warn("[VMS PostgreSQL Pool] Idle client error (reconnecting automatically):", err.message)
+    })
   }
   return vmsPool
 }

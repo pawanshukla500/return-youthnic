@@ -3,6 +3,7 @@
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
+import { EventEmitter } from "node:events"
 import {
   CLAIM_STATUSES,
   claimDescriptionError,
@@ -252,5 +253,16 @@ test("Meesho packet ID falls back to NA when omitted or empty", () => {
     packetId: "",
   })
   assert.match(description, /Packet ID: NA/)
+})
+
+test("PostgreSQL pool catches idle client termination error and avoids unhandled process crash", () => {
+  const fakePool = new EventEmitter()
+  let caught = false
+  fakePool.on("error", (err: Error) => {
+    caught = true
+    assert.match(err.message, /terminating connection/)
+  })
+  fakePool.emit("error", new Error("terminating connection due to administrator command"))
+  assert.equal(caught, true, "Pool error handler must capture idle connection disconnects")
 })
 

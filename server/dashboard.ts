@@ -756,7 +756,6 @@ export async function loadClaims(db: pg.Pool, scope: AccountScope) {
         GROUP BY er.marketplace_id
       ) ct ON ct.marketplace_id = m.id
       WHERE ${rowCondition}
-      GROUP BY m.id, m.name, m.sort_order
       ORDER BY m.sort_order, m.id
       `,
       rowParams,

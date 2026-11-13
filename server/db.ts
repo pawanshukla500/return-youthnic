@@ -163,6 +163,9 @@ export function getPool() {
       min: 2,
       idleTimeoutMillis: 30000,
     })
+    pool.on("error", (err) => {
+      console.warn("[PostgreSQL Pool] Idle client error (reconnecting automatically):", err.message)
+    })
   }
   return pool
 }
@@ -170,11 +173,15 @@ export function getPool() {
 // A new pool for the same database. Tests use it to check that data survives a reconnect, as after a restart.
 export function openPool(url: string = databaseUrl()): pg.Pool {
   const connection = connectionSettingsFor(url)
-  return new Pool({
+  const p = new Pool({
     connectionString: connection.connectionString,
     ssl: connection.ssl,
     connectionTimeoutMillis: 8000,
   })
+  p.on("error", (err) => {
+    console.warn("[PostgreSQL Pool] Idle client error (reconnecting automatically):", err.message)
+  })
+  return p
 }
 
 // True when this database has already been initialised to the current schema. False on a fresh database or

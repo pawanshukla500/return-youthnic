@@ -40,8 +40,14 @@ ln -sfn "$APP_DIR" "$HPANEL_LINK"
 echo ">>> [4/7] Deploying Docker container via Docker Compose under project 'return-app'..."
 docker compose -p return-app -f docker-compose.production.yml --env-file .env up -d --build --remove-orphans
 
-echo ">>> Configuring host cron job for nightly 4:30 AM IST payment sync under VPS docker..."
-(crontab -l 2>/dev/null | grep -v 'sync:payment' || true; echo '30 4 * * * docker exec Return-App npm run sync:payment >> /var/log/return-app-payment-sync.log 2>&1') | crontab - || true
+echo ">>> Configuring host cron jobs (nightly payment sync + 1-min health watchdog & auto-heal alert)..."
+if [ -f "${APP_DIR}/scripts/vps-watchdog.sh" ]; then
+  cp "${APP_DIR}/scripts/vps-watchdog.sh" "${APP_ROOT}/watchdog.sh"
+  chmod +x "${APP_ROOT}/watchdog.sh"
+fi
+(crontab -l 2>/dev/null | grep -v 'sync:payment' | grep -v 'watchdog.sh' || true; \
+ echo '30 4 * * * docker exec Return-App npm run sync:payment >> /var/log/return-app-payment-sync.log 2>&1'; \
+ echo '* * * * * /opt/return-app/watchdog.sh >> /var/log/return-app-watchdog.log 2>&1') | crontab - || true
 
 echo ">>> [5/7] Cleaning up dangling Docker build images..."
 docker image prune -f || true

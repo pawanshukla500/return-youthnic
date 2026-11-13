@@ -1182,4 +1182,11 @@ function handleGracefulShutdown(signal: string) {
 
 process.on("SIGTERM", () => handleGracefulShutdown("SIGTERM"))
 process.on("SIGINT", () => handleGracefulShutdown("SIGINT"))
+process.on("unhandledRejection", (reason: unknown) => {
+  console.error("[Process] Unhandled Promise Rejection:", reason instanceof Error ? reason.stack || reason.message : reason)
+})
+process.on("uncaughtException", (error: Error) => {
+  console.error("[Process] Fatal Uncaught Exception:", error.stack || error.message)
+  handleGracefulShutdown("UNCAUGHT_EXCEPTION")
+})
 

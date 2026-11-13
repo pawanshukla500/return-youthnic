@@ -3455,3 +3455,49 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
   - Change the exact `/support/1` navigation check without verifying against Meesho's category URL schema.
   - Make `#attachments_12` mandatory when evidence counts are 4.
   - Log, commit, or echo `MEESHO_PWD` or `MEESHOID` (Invariant Rule 8).
+
+### 2026-11-13, Antigravity, Production Outage Root Cause Diagnosis, PostgreSQL Pool Hardening, Claims GROUP BY Fix, and VPS Health Watchdog & Alert Daemon
+
+- **Incident & Root Cause Analysis:**
+  - **Issue Reported:** Operator screenshot showed `return.youthnic.shop` rendering Traefik's `404 page not found` (19 bytes, plain text).
+  - **System Root Cause:** At 06:52 UTC (12:22 PM IST), Ubuntu's unattended upgrades (`apt-daily-upgrade.service`) reloaded systemd, packagekit, containerd, and `postgresql@16-main`.
+  - **Container State Severing:** The restart of `containerd.service` severed Docker's FIFO streams and containerd task binding for container `Return-App` (`NotFound: task 0e299... not found`). Docker marked the container `unhealthy` after failing healthchecks for 83 consecutive intervals (~41 minutes), but Docker's `restart: unless-stopped` never restarted it because the container was technically still marked `running` in Docker daemon.
+  - **Traefik Ingress:** Because Traefik watches Docker container health via Docker labels, it automatically dropped `return.youthnic.shop` when `Return-App` became unhealthy and served Traefik's default `404 page not found`.
+  - **Node.js Pool Error:** Concurrently, when host PostgreSQL 16 restarted, idle connection terminations (`terminating connection due to administrator command`) were emitted on `pg.Pool`. Because `server/db.ts` (and payment/shopify/vms) lacked `pool.on("error", ...)` listeners, Node raised an unhandled EventEmitter error and terminated.
+  - **Claims SQL Bug:** In `server/dashboard.ts` (`loadClaims()`), an erroneous outer `GROUP BY m.id, m.name, m.sort_order` combined with unaggregated joined columns (`c.raised`, `ct.raised`, etc.) caused PostgreSQL error 42803 whenever the Claims dashboard was requested.
+- **Immediate Recovery & Fixes Applied:**
+  1. **Immediate Service Restoration:** Restarted `Return-App` on Hostinger VPS; confirmed `Up 2+ minutes (healthy)`, `GET /api/health` returning HTTP 200 with `database: connected`, and `https://return.youthnic.shop` fully operational.
+  2. **PostgreSQL Pool Hardening:**
+     - Added `pool.on("error", ...)` idle error handlers in `server/db.ts`, `server/payment/db.ts`, `server/shopify/db.ts`, and `server/vms/db.ts` to log reconnect warnings rather than raising uncaught fatal exceptions.
+     - Added process-level `unhandledRejection` and `uncaughtException` listeners in `server/index.ts` to log and execute clean shutdown (`handleGracefulShutdown`) so container runtimes restart cleanly.
+  3. **Claims Dashboard SQL Fix (`server/dashboard.ts`):**
+     - Removed redundant outer `GROUP BY m.id, m.name, m.sort_order` from `loadClaims()`. The joined subqueries are already grouped 1:1 by `marketplace_id = m.id`.
+  4. **Production VPS Health Watchdog & Self-Healing Alert Daemon (`scripts/vps-watchdog.sh`):**
+     - Created `/opt/return-app/watchdog.sh` deployed to root cron (`* * * * * /opt/return-app/watchdog.sh >> /var/log/return-app-watchdog.log 2>&1`).
+     - Checks internal container state, internal API `http://127.0.0.1:3001/api/health`, and public SSL routing `https://return.youthnic.shop/api/health` every 60 seconds.
+     - If degraded/unhealthy:
+       - Instantly dispatches a WhatsApp alert to the operations group (`919825149497-1631941133@g.us`) tagging Pandit Vishal Tiwari (`916306361624@s.whatsapp.net`).
+       - Automatically self-heals by restarting `Return-App` container.
+       - Re-evaluates health after 15 seconds: if recovered, dispatches an instant recovery WhatsApp confirmation; if still failing, dispatches a critical intervention alert.
+     - Integrated watchdog deployment into `.github/scripts/deploy-remote.sh` for perpetual synchronization.
+- **Files Changed:**
+  - `server/db.ts`
+  - `server/payment/db.ts`
+  - `server/shopify/db.ts`
+  - `server/vms/db.ts`
+  - `server/index.ts`
+  - `server/dashboard.ts`
+  - `server/tests/claims.test.ts`
+  - `.github/scripts/deploy-remote.sh`
+  - `scripts/vps-watchdog.sh`
+  - `docs/notes/agent-handoff.md`
+- **Verification Results:**
+  - `npm run typecheck`: Passed (0 errors across 4 TypeScript projects).
+  - `npm run build`: Built in 2.00s (Vite web bundle & server/dist.js).
+  - `npm test`: 925 tests executed: 878 passed, 0 failed, 47 skipped (dedicated TEST_DATABASE_URL unset).
+  - Production verification: `curl -fsS https://return.youthnic.shop/api/health` returns HTTP 200 `{"ok":true,"database":"connected","name":"return-scan_youthnic"}`.
+  - Watchdog live check on VPS: executed and verified in state `prev_state="HEALTHY"`.
+- **The next agent must not:**
+  - Remove `pool.on("error")` from any PostgreSQL database connection pools.
+  - Re-add outer `GROUP BY` to `loadClaims()` in `server/dashboard.ts`.
+  - Remove the 1-minute watchdog cron job on the Hostinger VPS.
