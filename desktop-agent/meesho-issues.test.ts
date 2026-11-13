@@ -6,7 +6,10 @@ import os from "node:os"
 import {
   MeeshoAutomation,
   MEESHO_PORTAL_ISSUE_LABELS,
+  MEESHO_VIDEO_MAX_BYTES,
+  MEESHO_VIDEO_SIZE_TOLERANCE_BYTES,
   checkMeeshoEvidenceFileLocal,
+  detectMeeshoEarlyBlocker,
   findExistingTicketForOrder,
   parseMeeshoTicketRow,
   extractMeeshoResolution,
@@ -14,6 +17,7 @@ import {
   resolveMeeshoPacketLabel,
   resolveMeeshoUploadField,
   summarizeMeeshoUploadFailures,
+  validateMeeshoVideoForUpload,
 } from "./src/marketplaces/meesho.js"
 
 describe("Meesho portal issue mapping", () => {
@@ -195,6 +199,63 @@ describe("Meesho ticket resolution and rejection reason extraction", () => {
   it("handles empty or uninformative resolution text gracefully", () => {
     assert.deepEqual(extractMeeshoResolution(""), {})
     assert.deepEqual(extractMeeshoResolution("Under investigation"), {})
+  })
+})
+
+describe("Meesho unpacking-video upload gate (legacy filer port)", () => {
+  it("accepts .mp4 within the 23 MB portal limit plus the MiB tolerance", () => {
+    assert.deepEqual(validateMeeshoVideoForUpload("D:/evidence/SYN-unboxing.mp4", MEESHO_VIDEO_MAX_BYTES), { ok: true })
+    // Exactly at the 512 KiB binary-MB/MiB tolerance still passes.
+    assert.deepEqual(
+      validateMeeshoVideoForUpload("D:/evidence/SYN-unboxing.mp4", MEESHO_VIDEO_MAX_BYTES + MEESHO_VIDEO_SIZE_TOLERANCE_BYTES),
+      { ok: true },
+    )
+  })
+
+  it("rejects an oversized .mp4 naming the real portal limit", () => {
+    const size = Math.round(25.4 * 1024 * 1024)
+    const res = validateMeeshoVideoForUpload("D:/evidence/SYN-unboxing.mp4", size)
+    assert.equal(res.ok, false)
+    if (!res.ok) {
+      assert.equal(res.reason, "Unpacking video is 25.4 MB; Meesho accepts at most 23 MB (.mp4 only).")
+    }
+  })
+
+  it("rejects files past the tolerance even by one byte", () => {
+    const res = validateMeeshoVideoForUpload("D:/evidence/SYN-unboxing.mp4", MEESHO_VIDEO_MAX_BYTES + MEESHO_VIDEO_SIZE_TOLERANCE_BYTES + 1)
+    assert.equal(res.ok, false)
+    if (!res.ok) assert.ok(res.reason.includes("23 MB"), res.reason)
+  })
+
+  it("rejects webm/mov/other formats even when small, naming the .mp4-only limit", () => {
+    for (const f of ["D:/evidence/SYN-unboxing.webm", "D:/evidence/SYN-unboxing.mov", "D:/evidence/SYN-unboxing.avi"]) {
+      const res = validateMeeshoVideoForUpload(f, 1024)
+      assert.equal(res.ok, false)
+      if (!res.ok) assert.ok(/\.mp4/.test(res.reason), res.reason)
+    }
+  })
+})
+
+describe("Meesho early blocker detection (legacy filer port)", () => {
+  it("flags every portal skip message, case-insensitively", () => {
+    const texts = [
+      "Return order has been delivered to the customer",
+      "A ticket already exists for this sub order",
+      "This order is NOT ELIGIBLE for a claim",
+      "You can create this ticket only if the return is delivered",
+      "A claim was already raised for this order",
+      "Duplicate claim request",
+    ]
+    for (const text of texts) {
+      assert.equal(detectMeeshoEarlyBlocker(text), text)
+    }
+  })
+
+  it("returns null for ordinary form text and empty input", () => {
+    assert.equal(detectMeeshoEarlyBlocker("Please upload a clear unboxing video of the package"), null)
+    assert.equal(detectMeeshoEarlyBlocker("Sub Order 1234567890123 verified successfully"), null)
+    assert.equal(detectMeeshoEarlyBlocker(""), null)
+    assert.equal(detectMeeshoEarlyBlocker("   "), null)
   })
 })
 
