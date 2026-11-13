@@ -99,6 +99,7 @@ jobs:
           PAYMENT_DATABASE_URL: ${{ secrets.PAYMENT_DATABASE_URL || '' }}
           PAYMENT_SSL_CA: ${{ secrets.PAYMENT_SSL_CA || '' }}
           VMS_DATABASE_URL: ${{ secrets.VMS_DATABASE_URL || 'postgresql://pawanshukla:Xchange4SQL%24@postgres:5432/packing_database' }}
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN || vars.SENTRY_DSN || 'https://6be0da3edbd48f45d0b35f15e290e6e5@o4512423893925888.ingest.de.sentry.io/4512423934558288' }}
           PORT: ${{ vars.PORT || '3001' }}
           NODE_ENV: 'production'
         run: |
@@ -123,6 +124,7 @@ jobs:
           PAYMENT_SSL_CA_FILE=certs/payment-ca.pem
           VMS_DATABASE_URL=${VMS_DATABASE_URL}
           VMS_SSL_CA_FILE=certs/vms-ca.pem
+          SENTRY_DSN=${SENTRY_DSN}
           EOF
 
           mkdir -p /tmp/certs
