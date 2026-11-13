@@ -185,6 +185,57 @@ export function checkMeeshoEvidenceFileLocal(filePath: string): { ok: boolean; r
   return { ok: true, reason: "local file ok" }
 }
 
+/**
+ * Meesho unpacking-video upload gate (ported from the legacy Selenium filer).
+ * The portal's video box (#product_openingvideo_link_9) accepts ONLY .mp4 files
+ * of at most 23 MB. A webm/mov or oversized video passes the generic local
+ * pre-flight and then fails portal acknowledgement every time, so it is stopped
+ * here, before any attachment attempt. The portal-ack verification after a
+ * successful upload stays authoritative; this gate only adds a pre-flight.
+ */
+export const MEESHO_VIDEO_MAX_BYTES = 23 * 1024 * 1024
+
+/**
+ * 512 KiB tolerance on top of MEESHO_VIDEO_MAX_BYTES: absorbs the binary-MB vs
+ * MiB difference between how encoders report "23 MB" and the portal's check.
+ */
+export const MEESHO_VIDEO_SIZE_TOLERANCE_BYTES = 512 * 1024
+
+/** True only when the unpacking video satisfies the portal's .mp4 / ≤23 MB rule. */
+export function validateMeeshoVideoForUpload(filePath: string, sizeBytes: number): { ok: true } | { ok: false; reason: string } {
+  if (!/\.mp4$/i.test(filePath)) {
+    return { ok: false, reason: `Unpacking video must be .mp4 for Meesho (got "${path.basename(filePath)}"); the unpacking-video box accepts .mp4 only, up to 23 MB.` }
+  }
+  if (sizeBytes > MEESHO_VIDEO_MAX_BYTES + MEESHO_VIDEO_SIZE_TOLERANCE_BYTES) {
+    return { ok: false, reason: `Unpacking video is ${(sizeBytes / (1024 * 1024)).toFixed(1)} MB; Meesho accepts at most 23 MB (.mp4 only).` }
+  }
+  return { ok: true }
+}
+
+/**
+ * Portal skip messages that mean "do not file" (ported from the legacy Selenium
+ * filer's early eligibility check). Matched case-insensitively as substrings of
+ * visible portal text; returns the matched message for the not_eligible result,
+ * or null when the portal shows none of them.
+ */
+const MEESHO_EARLY_BLOCKERS = [
+  "return order has been delivered",
+  "ticket already exists",
+  "not eligible",
+  "you can create this ticket only if",
+  "already raised",
+  "duplicate",
+]
+
+/** First visible portal message that blocks filing, or null when there is none. */
+export function detectMeeshoEarlyBlocker(text: string): string | null {
+  const raw = (text || "").trim()
+  if (!raw) return null
+  const haystack = raw.toLowerCase()
+  if (!MEESHO_EARLY_BLOCKERS.some((phrase) => haystack.includes(phrase))) return null
+  return raw.replace(/\s+/g, " ").slice(0, 400)
+}
+
 export class MeeshoAutomation extends BaseMarketplaceAutomation {
   readonly marketplaceName = "Meesho"
 
@@ -433,6 +484,22 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
       }
     }
 
+    // Broader pre-submit skip scan (ported from the legacy filer): delivered
+    // returns, existing tickets and eligibility windows also block filing, and
+    // Meesho does not always style them as the red "not eligible" error above.
+    const earlyBlocker = await this.readEarlyBlockerMessage()
+    if (earlyBlocker) {
+      const shot = path.join(this.workDir, `not-eligible-job-${this.job.jobId}.png`)
+      await this.browser.captureScreenshot(shot)
+      logger.warn(`Meesho blocks filing before submit: ${earlyBlocker}`)
+      return {
+        success: false,
+        stage: "not_eligible",
+        screenshotPath: shot,
+        manualActionReason: `Not eligible on Meesho: ${earlyBlocker.slice(0, 400)}`,
+      }
+    }
+
     // Packet condition: Meesho uses a listbox dropdown labelled "State of the packet". packetState is the verified claim condition (fail-fast above).
     let packetSelected = false
     for (let attempt = 0; attempt < 3 && !packetSelected; attempt++) {
@@ -460,6 +527,39 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
       logger.info(`Selected packet state: ${packetState}.`)
     } else {
       logger.warn(`Could not select packet state '${packetState}' on the Meesho form.`)
+    }
+
+    // Callback Number (ported from the legacy filer): an empty callback field can
+    // keep the portal's Submit disabled, stalling an otherwise valid claim. The
+    // fill is best-effort from an optional bundle value only — the bot never
+    // invents a number. `callbackNumber` is additive and optional: when the
+    // server does not thread it yet, this step skips silently.
+    const callbackClaim = this.job.claim as { callbackNumber?: unknown }
+    const callbackNumber = typeof callbackClaim.callbackNumber === "string" ? callbackClaim.callbackNumber.trim() : ""
+    if (callbackNumber) {
+      const callbackSelector = 'input[placeholder*="callback" i], input[placeholder*="phone" i], input[placeholder*="mobile" i]'
+      const callbackFilled = await this.browser.evaluate<boolean>(`
+        (() => {
+          const input = Array.from(document.querySelectorAll(${JSON.stringify(callbackSelector)}))
+            .find((el) => el.getBoundingClientRect().width > 0 && !el.disabled && el.type !== 'hidden');
+          if (!input) return false;
+          input.scrollIntoView({ block: 'center' });
+          const descriptor = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value');
+          if (descriptor && descriptor.set) descriptor.set.call(input, ${JSON.stringify(callbackNumber)});
+          else input.value = ${JSON.stringify(callbackNumber)};
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+          input.dispatchEvent(new Event('change', { bubbles: true }));
+          return true;
+        })()
+      `).catch(() => false)
+      if (callbackFilled) {
+        logger.info("Filled the Meesho Callback Number field from the claim bundle.")
+        await this.delay(500)
+      } else {
+        logger.info("Meesho Callback Number field is not visible on this form; skipping it.")
+      }
+    } else {
+      logger.info("No callback number in the execution bundle; the Meesho callback field is left untouched.")
     }
 
     // Barcode / Flyer ID if present
@@ -528,6 +628,32 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
         // No evidence mapped to this box: do not guess and do not retry blindly.
         fail("no evidence file mapped to this upload box")
         continue
+      }
+      // Unpacking-video gate (ported from the legacy filer): Meesho accepts only
+      // .mp4 up to 23 MB in the video box. An oversized or wrong-format video
+      // would pass the generic local check and then fail portal ack every time,
+      // so it is stopped here — before any attachment attempt, never retried.
+      // Mirrors the two evidence branches below that can pick video files.
+      const isVideoBox = field === "unboxing_video" || (field === null && id.includes("video"))
+      if (isVideoBox) {
+        let gateFailure: { f: string; reason: string } | null = null
+        for (const f of chosen) {
+          let sizeBytes = 0
+          try {
+            sizeBytes = fs.statSync(f).size
+          } catch {
+            sizeBytes = 0 // missing file: the generic local pre-flight below reports it
+          }
+          const gate = validateMeeshoVideoForUpload(f, sizeBytes)
+          if (!gate.ok) {
+            gateFailure = { f, reason: gate.reason }
+            break
+          }
+        }
+        if (gateFailure) {
+          fail(`unpacking video rejected before upload (${path.basename(gateFailure.f)}): ${gateFailure.reason}`)
+          continue
+        }
       }
       // Local pre-flight: correct file, exists, MIME/size accepted.
       const localBad = chosen.map((f) => ({ f, check: checkMeeshoEvidenceFileLocal(f) })).find((c) => !c.check.ok)
@@ -607,7 +733,14 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
       const descReady = await this.browser.evaluate<boolean>(`
         (() => {
           const areas = Array.from(document.querySelectorAll('textarea'));
-          const target = areas[areas.length - 1];
+          // Visibility filter (ported from the legacy filer): hidden template
+          // textareas must not swallow the description. Fall back to the last
+          // textarea only when none is visible.
+          const isVisible = (el) => el.offsetParent !== null
+            && el.getAttribute('aria-hidden') !== 'true'
+            && el.getAttribute('tabindex') !== '-1';
+          const visible = areas.filter(isVisible);
+          const target = visible[visible.length - 1] || areas[areas.length - 1];
           if (!target) return false;
           target.id = 'return-claim-description';
           return true;
@@ -657,7 +790,7 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
       await this.browser.captureScreenshot(disabledShot)
       const meeshoSays = (fieldErrors || []).join(" | ")
       logger.warn(`Meesho kept Submit disabled. ${meeshoSays ? `Meesho says: ${meeshoSays}` : `Empty fields: ${(emptyFields || []).join(", ") || "none found"}`}`)
-      if (/not eligible/i.test(meeshoSays)) {
+      if (detectMeeshoEarlyBlocker(meeshoSays)) {
         return {
           success: false,
           stage: "not_eligible",
@@ -774,6 +907,27 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
       `)
       if (message) return message
       await this.delay(1000)
+    }
+    return ""
+  }
+
+  /**
+   * Broader pre-submit skip scan: collects short visible leaf texts from the page
+   * and returns the first one matching detectMeeshoEarlyBlocker. Empty when the
+   * portal shows none of the skip messages. Single-shot: the AWB check above has
+   * already settled the page.
+   */
+  private async readEarlyBlockerMessage(): Promise<string> {
+    const texts = await this.browser.evaluate<string[]>(`
+      Array.from(document.querySelectorAll('body *'))
+        .filter((el) => el.childElementCount === 0 && el.getBoundingClientRect().width > 0)
+        .map((el) => (el.textContent || '').trim().replace(/\\s+/g, ' '))
+        .filter((text) => text.length > 12 && text.length < 300)
+        .slice(0, 60)
+    `).catch(() => [])
+    for (const text of texts) {
+      const blocker = detectMeeshoEarlyBlocker(text)
+      if (blocker) return blocker
     }
     return ""
   }

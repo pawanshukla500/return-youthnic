@@ -13,6 +13,7 @@ import {
 import { notifyWindowGeometryChanged, setBrowserWorkspaceRect, setDetachedViewHost, setFullscreenSupplierView, setSupplierViewHost, handleDetachedWindowClosed, disposeDetachedSupplierViews, notifyWindowLifecycle, DETACHED_WINDOW_WEB_PREFERENCES, STANDARD_CHROME_USER_AGENT, type WindowLifecycleEvent } from "../desktop-agent/src/native-browser-view.js"
 import { isInsecureRemoteUrl, isSameOrigin, localEngineUrl, resolveEngineBind, type EngineBind } from "../desktop-agent/src/engine-config.js"
 import { logger } from "../desktop-agent/src/logger.js"
+import { clampWindowBounds, parseSavedBounds } from "./window-bounds.js"
 
 // Hardware efficiency switches for low-spec PCs (4GB RAM, 2-Core CPUs)
 app.commandLine.appendSwitch("js-flags", "--max-old-space-size=256")
@@ -605,6 +606,61 @@ async function downloadUpdateAsset(url: string): Promise<void> {
   }
 }
 
+/**
+ * Saved window bounds.
+ *
+ * The shell remembers the window's normal geometry across restarts so the
+ * operator finds it where they left it. Restore is defensive: the persisted
+ * JSON is untrusted, sizes are clamped to the window minimum, and a center
+ * point on no connected display falls back to a centered default (see
+ * window-bounds.ts). Saving skips minimized and maximized states: a minimized
+ * window reports placeholder bounds, and maximized bounds would restore as an
+ * unmaximized full-screen window.
+ */
+const windowBoundsFile = (): string => path.join(app.getPath("userData"), "window-bounds.json")
+
+function readSavedWindowBounds(): ReturnType<typeof parseSavedBounds> {
+  try {
+    return parseSavedBounds(JSON.parse(fs.readFileSync(windowBoundsFile(), "utf-8")))
+  } catch {
+    return null
+  }
+}
+
+let windowBoundsSaveTimer: NodeJS.Timeout | null = null
+
+function persistWindowBounds(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  if (mainWindow.isMinimized() || mainWindow.isMaximized()) return
+  try {
+    const bounds = mainWindow.getBounds()
+    fs.writeFileSync(windowBoundsFile(), JSON.stringify({ x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height }))
+  } catch {
+    // A locked file or a torn-down window must never break close/quit.
+  }
+}
+
+function persistWindowBoundsSoon(): void {
+  if (windowBoundsSaveTimer) clearTimeout(windowBoundsSaveTimer)
+  windowBoundsSaveTimer = setTimeout(() => {
+    windowBoundsSaveTimer = null
+    persistWindowBounds()
+  }, 1000)
+}
+
+// Repaint-on-show tuning: reload only when the renderer has not finished a load
+// in 30+ minutes, check 500ms after the show event so the frame can settle, and
+// never force a show-triggered reload more than once a minute.
+const SHOW_RELOAD_AFTER_MS = 30 * 60 * 1000
+const SHOW_RELOAD_DEBOUNCE_MS = 500
+const SHOW_RELOAD_COOLDOWN_MS = 60 * 1000
+
+// Unresponsive-renderer tuning: force a reload only after 15s of confirmed
+// unresponsiveness, and at most twice in any 10-minute window.
+const UNRESPONSIVE_RELOAD_AFTER_MS = 15_000
+const FORCED_RELOAD_WINDOW_MS = 10 * 60 * 1000
+const FORCED_RELOAD_MAX_PER_WINDOW = 2
+
 function createMainWindow(target: EngineTarget): void {
   const iconPath = iconFor()
   let appIcon: NativeImage | undefined
@@ -660,9 +716,18 @@ function createMainWindow(target: EngineTarget): void {
     }
   })
 
+  const savedBounds = readSavedWindowBounds()
+  const initialBounds = savedBounds
+    ? clampWindowBounds(
+        savedBounds,
+        screen.getAllDisplays().map((display) => ({ workArea: display.workArea })),
+      )
+    : null
+
   mainWindow = new BrowserWindow({
-    width: 1400,
-    height: 900,
+    width: initialBounds?.width ?? 1400,
+    height: initialBounds?.height ?? 900,
+    ...(initialBounds ? { x: initialBounds.x, y: initialBounds.y } : {}),
     minWidth: 1024,
     minHeight: 680,
     title: "Return App · 24/7 Claim Bot",
@@ -690,6 +755,8 @@ function createMainWindow(target: EngineTarget): void {
   // dashboard workspace rect — or hides it when no valid rect is reported.
   mainWindow.on("resize", () => notifyWindowGeometryChanged("resize"))
   mainWindow.on("move", () => notifyWindowGeometryChanged("move"))
+  mainWindow.on("resize", persistWindowBoundsSoon)
+  mainWindow.on("move", persistWindowBoundsSoon)
   mainWindow.on("maximize", () => {
     notifyWindowGeometryChanged("maximize")
     notifyWindowLifecycleFromShell("maximize")
@@ -707,6 +774,32 @@ function createMainWindow(target: EngineTarget): void {
 
   mainWindow.once("ready-to-show", () => {
     if (!startHidden) mainWindow?.show()
+  })
+
+  // Repaint-on-show: a window hidden in the tray for hours can come back with a
+  // frozen/black frame even though the renderer process is alive. On each
+  // hidden→visible transition, wait for the paint to settle, then reload once
+  // if the page has not finished loading for 30+ minutes. The check is
+  // time-gated and debounced, so a show burst triggers at most one reload, and
+  // a reload itself refreshes the timer. Safe for a 24/7 bot: the engine
+  // session lives server-side, and the renderer re-renders its own state.
+  let lastRendererFinishLoadAt: number | null = null
+  let showReloadTimer: NodeJS.Timeout | null = null
+  let lastShowReloadAt = 0
+  mainWindow.on("show", () => {
+    if (showReloadTimer) clearTimeout(showReloadTimer)
+    showReloadTimer = setTimeout(() => {
+      showReloadTimer = null
+      if (isQuitting || !mainWindow || mainWindow.isDestroyed()) return
+      if (mainWindow.webContents.isLoading()) return
+      if (lastRendererFinishLoadAt === null) return
+      const now = Date.now()
+      if (now - lastRendererFinishLoadAt < SHOW_RELOAD_AFTER_MS) return
+      if (now - lastShowReloadAt < SHOW_RELOAD_COOLDOWN_MS) return
+      lastShowReloadAt = now
+      logger.info("Window shown after a long hidden period; reloading the desktop renderer for a fresh paint.")
+      mainWindow.webContents.reload()
+    }, SHOW_RELOAD_DEBOUNCE_MS)
   })
 
   // The shell loads the bundled React renderer, never the engine dashboard.
@@ -731,27 +824,44 @@ function createMainWindow(target: EngineTarget): void {
     }
   })
 
-  // A failed RENDERER load is retried once. An engine outage does not surface
-  // here: renderer assets come from the app itself (returnapp://) or the dev
-  // server, while engine connectivity shows up as failed API calls inside the
-  // renderer, which renders its own offline/connecting state.
-  let rendererRetryScheduled = false
-  mainWindow.webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL) => {
+  // A failed RENDERER load is retried with growing backoff (3s/6s/12s, up to 3
+  // attempts). Only main-frame failures of the renderer origin count: engine
+  // outages do not surface here (renderer assets come from the app itself,
+  // returnapp://, or the dev server) — engine connectivity shows up as failed
+  // API calls inside the renderer, which renders its own offline/connecting
+  // state. A successful load resets the counter.
+  const RENDERER_LOAD_MAX_RETRIES = 3
+  const RENDERER_LOAD_RETRY_DELAYS_MS = [3000, 6000, 12000]
+  let rendererLoadRetryCount = 0
+  mainWindow.webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
     if (errorCode === -3) return // ERR_ABORTED: navigation cancelled, not a real load failure
+    if (!isMainFrame) return
     if (validatedURL && !isRendererNavigation(validatedURL, shellUrl)) return
-    logger.warn(`Desktop renderer failed to load (${errorCode}: ${errorDescription})`)
-    if (rendererRetryScheduled) return
-    rendererRetryScheduled = true
+    if (rendererLoadRetryCount >= RENDERER_LOAD_MAX_RETRIES) {
+      logger.error(
+        `Desktop renderer is still failing to load (${errorCode}: ${errorDescription}); ` +
+          `no more automatic retries until a load succeeds.`,
+      )
+      return
+    }
+    rendererLoadRetryCount += 1
+    const delayMs = RENDERER_LOAD_RETRY_DELAYS_MS[rendererLoadRetryCount - 1]
+    logger.warn(
+      `Desktop renderer failed to load (${errorCode}: ${errorDescription}); ` +
+        `retry ${rendererLoadRetryCount}/${RENDERER_LOAD_MAX_RETRIES} in ${delayMs / 1000}s.`,
+    )
     setTimeout(() => {
-      if (!isQuitting && mainWindow && !mainWindow.isDestroyed()) {
+      if (!isQuitting && mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isLoading()) {
+        logger.info(`Retrying the desktop shell load (attempt ${rendererLoadRetryCount}).`)
         mainWindow.loadURL(shellUrl).catch((err) => {
           logger.error("Retrying the desktop shell load failed:", err)
         })
       }
-    }, 3000)
+    }, delayMs)
   })
   mainWindow.webContents.on("did-finish-load", () => {
-    rendererRetryScheduled = false
+    rendererLoadRetryCount = 0
+    lastRendererFinishLoadAt = Date.now()
   })
 
   // No system browser: popups are denied, and an installer link downloads the
@@ -777,12 +887,39 @@ function createMainWindow(target: EngineTarget): void {
     }, 2000)
   })
 
+  // An unresponsive renderer gets 15 seconds to recover before the shell forces
+  // a reload; becoming responsive again cancels the timer. Forced reloads are
+  // capped at 2 per 10 minutes so a genuinely hung page cannot loop the window.
+  // The engine keeps filing throughout; only this window is affected.
+  let unresponsiveTimer: NodeJS.Timeout | null = null
+  let forcedReloadTimestamps: number[] = []
   mainWindow.webContents.on("unresponsive", () => {
-    logger.warn("Claim bot window is unresponsive. The engine keeps running; the window will be reloaded if it dies.")
+    logger.warn("Claim bot window is unresponsive; reloading it if it does not recover within 15s.")
+    if (unresponsiveTimer) return
+    unresponsiveTimer = setTimeout(() => {
+      unresponsiveTimer = null
+      if (isQuitting || !mainWindow || mainWindow.isDestroyed()) return
+      const now = Date.now()
+      forcedReloadTimestamps = forcedReloadTimestamps.filter((at) => now - at < FORCED_RELOAD_WINDOW_MS)
+      if (forcedReloadTimestamps.length >= FORCED_RELOAD_MAX_PER_WINDOW) {
+        logger.error("Claim bot window stayed unresponsive, but the forced-reload limit was reached; leaving it alone.")
+        return
+      }
+      forcedReloadTimestamps.push(now)
+      logger.warn("Claim bot window stayed unresponsive for 15s. Reloading the renderer.")
+      mainWindow.webContents.reload()
+    }, UNRESPONSIVE_RELOAD_AFTER_MS)
+  })
+  mainWindow.webContents.on("responsive", () => {
+    if (!unresponsiveTimer) return
+    clearTimeout(unresponsiveTimer)
+    unresponsiveTimer = null
+    logger.info("Claim bot window became responsive again; no reload needed.")
   })
 
   // Close to tray so the 24/7 bot keeps running on the server PC.
   mainWindow.on("close", (event) => {
+    persistWindowBounds()
     if (!isQuitting) {
       event.preventDefault()
       mainWindow?.hide()
@@ -1123,6 +1260,7 @@ app.whenReady().then(async () => {
 
 app.on("before-quit", () => {
   isQuitting = true
+  persistWindowBounds()
   notifyWindowLifecycleFromShell("before-quit")
   disposeDetachedSupplierViews()
 })
