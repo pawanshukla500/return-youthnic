@@ -3501,3 +3501,27 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
   - Remove `pool.on("error")` from any PostgreSQL database connection pools.
   - Re-add outer `GROUP BY` to `loadClaims()` in `server/dashboard.ts`.
   - Remove the 1-minute watchdog cron job on the Hostinger VPS.
+
+### 2026-11-13, Antigravity, Sentry MCP Project & Uptime Monitor Provisioning, and Automated Google Drive Backup Restoration
+
+- **Sentry Project Provisioning via MCP (`sentry_sentry`):**
+  - Authenticated via Sentry MCP as Pawan Shukla (`returnorders@vbexports.co.in`) in Organization `vb-export` (`https://vb-export.sentry.io`).
+  - Created Sentry Project `return-app` (ID: `4512423934558288`, platform: `node-express`).
+  - Generated Project DSN: `https://6be0da3edbd48f45d0b35f15e290e6e5@o4512423893925888.ingest.de.sentry.io/4512423934558288`.
+  - Created Sentry HTTP Uptime Monitor `Return App Production Health` (ID: `2660748`, checking `https://return.youthnic.shop/api/health` every 60s, active and verified green).
+- **Automated Database Backup Restoration & Modernization (`scripts/vps-postgres-backup.js`):**
+  - Diagnosed broken VPS backup daemon: `/opt/postgres-backup/backup.js` was crashing nightly with `Cannot find module 'undici'`, and had only targeted the container instead of host PostgreSQL 16 database `return-scan_youthnic` (1.66 GB).
+  - Modernized `backup.js` using native Node 20 `fetch` (zero npm dependencies).
+  - Configured full compressed database dump: `pg_dump return-scan_youthnic | gzip` -> compressed 1.66 GB down to 198 MB `.sql.gz` in 31 seconds.
+  - Uploaded directly to Google Drive folder `VPS PostgresBackup` (`1aMmVUgiuF4ekd6trJPtUUK8mbO6vZxKb`) via Google Service Account resumable chunked upload (`1sfJ0uFaDJ9jXvmUyMiaczCouuSrvxPQF`).
+  - Configured rolling 7-backup retention and instant WhatsApp confirmation dispatch to operations group on completion.
+  - Live execution verified in production; timer `postgres-drive-backup.timer` active nightly at 23:45 IST.
+- **Files Changed:**
+  - `scripts/vps-postgres-backup.js`
+  - `docs/notes/agent-handoff.md`
+- **Verification Results:**
+  - Sentry MCP: Project `return-app` created; monitor `Return App Production Health` verified OK.
+  - Backup execution: Dumped 1.66 GB to 198.07 MB, uploaded to Google Drive in chunks, verified in Drive folder list, local dump freed, WhatsApp message sent.
+- **The next agent must not:**
+  - Delete `service_account.json` in `/opt/postgres-backup/`.
+  - Remove `postgres-drive-backup.timer` on Hostinger VPS.
