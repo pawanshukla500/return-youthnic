@@ -5,7 +5,7 @@ import { apiGet, apiPost, EngineApiError } from '../services/engineApi'
 import type {
   FollowUpsResponse,
   FollowUpsSummary,
-  JobRow,
+  JobsResponse,
   OkResponse,
   PanelClearResponse,
   PanelsResponse,
@@ -70,7 +70,7 @@ const LEVEL_TEXT_CLASSES: Record<LogLevel, string> = {
 
 export default function DashboardPage() {
   const { status, refresh } = useEngineStatus(2_000)
-  const jobsPoll = useEnginePolling(() => apiGet<JobRow[]>('/api/jobs'), JOBS_POLL_MS, true)
+  const jobsPoll = useEnginePolling(() => apiGet<JobsResponse>('/api/jobs'), JOBS_POLL_MS, true)
   const panelsPoll = useEnginePolling(() => apiGet<PanelsResponse>('/api/panels'), PANELS_POLL_MS, true)
   const followUpsPoll = useEnginePolling(
     () => apiGet<FollowUpsResponse>('/api/follow-ups?pageSize=100'),
@@ -102,7 +102,7 @@ export default function DashboardPage() {
     [status, activePanels, followUpSummary],
   )
   const chips = useMemo(() => derivePanelChips(panels ?? []), [panels])
-  const kpis = useMemo(() => countJobStages(jobsPoll.data ?? []), [jobsPoll.data])
+  const kpis = useMemo(() => countJobStages(jobsPoll.data?.rows), [jobsPoll.data])
 
   // Next-poll countdown: seeded by each status snapshot, decremented locally
   // once per second between polls.

@@ -8,7 +8,7 @@ import { ErrorState } from '../components/ui/ErrorState'
 import { MarketplaceBadge } from '../components/ui/MarketplaceBadge'
 import { PanelStateDot } from '../components/ui/PanelStateDot'
 import { Spinner } from '../components/ui/Spinner'
-import type { JobRow, PanelClearResponse, PanelStatus, PanelsResponse } from '../types/engine'
+import type { JobRow, JobsResponse, PanelClearResponse, PanelStatus, PanelsResponse } from '../types/engine'
 
 /* ------------------------------------------------------------------ */
 /* Pure helpers (exported for tests)                                    */
@@ -268,12 +268,12 @@ export default function ClaimsPage() {
 
   // Polling is the steady cadence; the overrides give instant feedback after
   // operator actions and converge back to the poll data on the next tick.
-  const jobsPoll = useEnginePolling<JobRow[]>(useCallback(() => apiGet<JobRow[]>('/api/jobs'), []), JOBS_POLL_MS, true)
+  const jobsPoll = useEnginePolling<JobsResponse>(useCallback(() => apiGet<JobsResponse>('/api/jobs'), []), JOBS_POLL_MS, true)
   const panelsPoll = useEnginePolling<PanelsResponse>(useCallback(() => apiGet<PanelsResponse>('/api/panels'), []), PANELS_POLL_MS, true)
   const [jobsOverride, setJobsOverride] = useState<JobRow[] | null>(null)
   const [panelsOverride, setPanelsOverride] = useState<PanelStatus[] | null>(null)
 
-  const lastJobsPollData = useRef<JobRow[] | null>(null)
+  const lastJobsPollData = useRef<JobsResponse | null>(null)
   useEffect(() => {
     if (jobsPoll.data !== lastJobsPollData.current) {
       lastJobsPollData.current = jobsPoll.data
@@ -309,7 +309,7 @@ export default function ClaimsPage() {
     }
   }, [chip])
 
-  const jobs = jobsOverride ?? jobsPoll.data
+  const jobs = jobsOverride ?? jobsPoll.data?.rows ?? null
   const jobsError = jobsPoll.error
   const rows = useMemo(() => jobs ?? [], [jobs])
   const panels = panelsOverride ?? panelsPoll.data?.panels ?? null
@@ -331,11 +331,11 @@ export default function ClaimsPage() {
   const refresh = useCallback(async () => {
     setRefreshing(true)
     const [jobsResult, panelsResult] = await Promise.allSettled([
-      apiGet<JobRow[]>('/api/jobs'),
+      apiGet<JobsResponse>('/api/jobs'),
       apiGet<PanelsResponse>('/api/panels'),
     ])
     if (jobsResult.status === 'fulfilled') {
-      setJobsOverride(jobsResult.value)
+      setJobsOverride(jobsResult.value.rows)
     } else {
       setNotice({ kind: 'error', text: `Claims refresh failed: ${asApiError(jobsResult.reason).message}` })
     }

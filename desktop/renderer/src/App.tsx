@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type FormEvent, type KeyboardEvent } from 'react'
+import { Component, useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type FormEvent, type KeyboardEvent, type ReactNode } from 'react'
 import DashboardPage from './pages/Dashboard'
 import ClaimsPage from './pages/Claims'
 import BrowsersPage from './pages/Browsers'
@@ -327,6 +327,42 @@ function UpdateBanner() {
 }
 
 /* ------------------------------------------------------------------ */
+/* Render error boundary — a page crash must never white-screen the app  */
+/* ------------------------------------------------------------------ */
+
+type BoundaryState = { message: string | null }
+
+class PageErrorBoundary extends Component<{ children: ReactNode }, BoundaryState> {
+  state: BoundaryState = { message: null }
+
+  static getDerivedStateFromError(error: unknown): BoundaryState {
+    return { message: error instanceof Error ? error.message : String(error) }
+  }
+
+  componentDidCatch(error: unknown, info: unknown) {
+    // Diagnostics only — no secrets in error text.
+    console.error('[render-boundary]', error, info)
+  }
+
+  render() {
+    if (this.state.message === null) return this.props.children
+    return (
+      <div className="flex min-h-[50vh] flex-col items-center justify-center gap-3 px-6 text-center" role="alert">
+        <h2 className="font-display text-lg font-bold text-ink">This screen hit an unexpected error</h2>
+        <p className="max-w-lg text-sm text-muted">{this.state.message}</p>
+        <button
+          type="button"
+          onClick={() => window.location.reload()}
+          className="rounded-lg bg-green px-4 py-2 text-sm font-semibold text-white hover:bg-green-dark"
+        >
+          Reload the app
+        </button>
+      </div>
+    )
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /* App shell                                                            */
 /* ------------------------------------------------------------------ */
 
@@ -490,7 +526,9 @@ export default function App() {
           <UpdateBanner />
 
           <main className="min-h-0 flex-1 overflow-y-auto p-4">
-            <ActivePage />
+            <PageErrorBoundary key={activeTab.id}>
+              <ActivePage />
+            </PageErrorBoundary>
           </main>
         </div>
       </div>

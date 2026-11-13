@@ -23,10 +23,14 @@ export type JobStageCounts = {
   actionRequired: number
 }
 
-/** Buckets the job list into the five dashboard KPI counters. */
-export function countJobStages(rows: JobRow[]): JobStageCounts {
-  const counts: JobStageCounts = { total: rows.length, completed: 0, queued: 0, inProgress: 0, actionRequired: 0 }
-  for (const row of rows) {
+/**
+ * Buckets the job list into the five dashboard KPI counters.
+ * Tolerates a missing list (initial load) so a slow poll can never white-screen the page.
+ */
+export function countJobStages(rows: readonly JobRow[] | null | undefined): JobStageCounts {
+  const safe = rows ?? []
+  const counts: JobStageCounts = { total: safe.length, completed: 0, queued: 0, inProgress: 0, actionRequired: 0 }
+  for (const row of safe) {
     if (row.stage === 'completed') counts.completed += 1
     else if (row.stage === 'queued') counts.queued += 1
     else if ((IN_PROGRESS_STAGES as readonly string[]).includes(row.stage)) counts.inProgress += 1
