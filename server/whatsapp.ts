@@ -377,8 +377,11 @@ export async function sendDailyReportToWhatsApp(
   data: DailyReportData,
   options: { force?: boolean } = {},
 ): Promise<{ sent: boolean; messageId?: string; error?: string }> {
+  if (!options.force) {
+    return { sent: false, error: "Daily return report WhatsApp notification disabled per policy (OMSGuru stock update with CSV only)" }
+  }
   const config = await getWhatsAppConfig(db)
-  if (!config.enabled && !options.force) {
+  if (!config.enabled) {
     return { sent: false, error: "WhatsApp notifications disabled in settings" }
   }
 

@@ -14,7 +14,6 @@ import type pg from "pg"
 import { ALL_ACCOUNTS } from "./access.js"
 import { loadAnalytics } from "./analytics.js"
 import { ironSummary } from "./iron.js"
-import { sendDailyReportToWhatsApp } from "./whatsapp.js"
 
 export const SENDER_EMAIL = process.env.RESEND_FROM_EMAIL?.trim() || "return.scan@youthnic.shop"
 
@@ -1224,16 +1223,6 @@ export async function runScheduledReports(
                 html: email.html,
                 text: email.text,
               })
-
-              // Dispatch to WhatsApp group (Inventory Management) with CSV summary & tagging Pandit Vishal Tiwari
-              try {
-                const waResult = await sendDailyReportToWhatsApp(db, data)
-                if (waResult.sent) {
-                  console.log(`[Reports WhatsApp] Dispatched daily report to group. Message ID: ${waResult.messageId}`)
-                }
-              } catch (waErr: any) {
-                console.warn("[Reports WhatsApp] Dispatch skipped/failed:", waErr?.message || waErr)
-              }
 
               await db.query(
                 "UPDATE scheduled_report_runs SET status = 'sent', sent_at = now(), last_error = NULL WHERE id = $1",
