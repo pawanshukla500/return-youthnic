@@ -16,12 +16,6 @@ const GDRIVE_FOLDER_ID = process.env.GDRIVE_FOLDER_ID || '1xLtHfQvW70rV7VWVjtZP6
 const LOCAL_BACKUP_DIR = process.env.LOCAL_BACKUP_DIR || '/opt/backups/postgres';
 const RETENTION_COUNT = parseInt(process.env.BACKUP_RETENTION_COUNT || '1', 10);
 
-// WhatsApp Alert Configuration
-const WA_URL = process.env.WHATSAPP_API_URL || 'https://wa.youthnic.shop';
-const WA_AUTH = process.env.WHATSAPP_BASIC_AUTH || 'returnorders@vbexports.co.in:Xchange4WA$';
-const WA_GROUP = process.env.WHATSAPP_GROUP_JID || '919825149497-1631941133@g.us';
-const WA_TAG_USER = process.env.WHATSAPP_TAG_USER_JID || '916306361624@s.whatsapp.net';
-
 function log(msg, ...args) {
   const istDate = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
   console.log(`[${istDate} IST] ${msg}`, ...args);
@@ -30,26 +24,6 @@ function log(msg, ...args) {
 function errorLog(msg, ...args) {
   const istDate = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
   console.error(`[${istDate} IST] [ERROR] ${msg}`, ...args);
-}
-
-async function sendWhatsAppAlert(message) {
-  try {
-    const authB64 = Buffer.from(WA_AUTH).toString('base64');
-    await fetch(`${WA_URL}/send/message`, {
-      method: 'POST',
-      headers: {
-        authorization: `Basic ${authB64}`,
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify({
-        phone: WA_GROUP,
-        message,
-        mentions: [WA_TAG_USER],
-      }),
-    });
-  } catch (err) {
-    errorLog('Failed to dispatch WhatsApp alert:', err.message);
-  }
 }
 
 function getServiceAccountCredentials() {
@@ -308,7 +282,6 @@ async function run() {
     uploadResult = await uploadToDriveResumable(token, localFilePath, fileName, GDRIVE_FOLDER_ID);
   } catch (err) {
     errorLog('Upload failed, preserving local backup:', localFilePath);
-    await sendWhatsAppAlert(`🚨 *[DATABASE BACKUP FAILED]*\n\nDatabase: return-scan_youthnic\nError: ${err.message}\nLocal file kept: ${localFilePath}`);
     throw err;
   }
 
@@ -322,12 +295,11 @@ async function run() {
   }
 
   const folderName = folderCheck.data?.name || GDRIVE_FOLDER_ID;
-  const successMsg = `✅ *[DATABASE BACKUP SUCCESS]*\n\n💾 *Database:* return-scan_youthnic\n📦 *Archive:* ${fileName} (${dumpRes.mb} MB gzipped)\n☁️ *Destination:* Google Drive ("${folderName}")\n🕒 *Timestamp:* ${new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })} IST`;
+  const successMsg = `[DATABASE BACKUP SUCCESS] Database: return-scan_youthnic | Archive: ${fileName} (${dumpRes.mb} MB gzipped) | Destination: Google Drive ("${folderName}")`;
   log(successMsg);
-  await sendWhatsAppAlert(successMsg);
 
   log('================================================================');
-  log('Backup & Google Drive Sync COMPLETED Successfully!');
+  log('Backup & Google Drive Sync COMPLETED Successfully (Silent Mode)');
   log('================================================================');
 }
 

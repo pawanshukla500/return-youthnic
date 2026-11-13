@@ -3560,3 +3560,27 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
   - Remove Sentry error handler from `server/index.ts`.
   - Alter the Google Drive service account credentials on VPS.
 
+### 2026-11-13, Antigravity, Silencing Database Backup Notifications & Enforcing Exclusive WhatsApp Dispatch for OMSGuru Stock Update CSV at 11:58 PM
+
+- **Silenced Database Backup Notifications:**
+  - Removed WhatsApp notification dispatch (`sendWhatsAppAlert`) from `scripts/vps-postgres-backup.js` and `/opt/postgres-backup/backup.js` on VPS.
+  - The database backup runs 100% silently every night at 23:45 IST via systemd timer `postgres-drive-backup.timer`, archiving to Google Drive folder `1xLtHfQvW70rV7VWVjtZP6u2S9ZqEKF_v` with 1-day retention and logging to `/var/log/postgres-drive-backup.log` without sending any WhatsApp messages.
+- **Enforced Exclusive WhatsApp Dispatch for OMSGuru Stock Update:**
+  - Removed WhatsApp delivery of daily return reports from `server/email-reports.ts` and guarded `sendDailyReportToWhatsApp` in `server/whatsapp.ts`.
+  - Confirmed OMSGuru daily inventory update configuration: `dailyTime: "23:58"` (11:58 PM IST), `dailyEnabled: true`, target group `919825149497-1631941133@g.us`, tagging Pandit Vishal Tiwari (`@916306361624`), attaching `UpdateInStockQtyAnd_orLastPurchasePrice.csv`.
+  - Verified WhatsApp Gateway status at `https://wa.youthnic.shop/app/status` is active and connected.
+- **Files Changed:**
+  - `scripts/vps-postgres-backup.js`
+  - `server/email-reports.ts`
+  - `server/whatsapp.ts`
+  - `docs/notes/agent-handoff.md`
+- **Verification Results:**
+  - `npm.cmd run typecheck`: Passed (0 errors across 4 projects).
+  - `npm.cmd run build`: Passed (Vite frontend + esbuild server).
+  - `npm.cmd test`: 929 tests (882 passed, 0 failed, 47 skipped).
+  - Live VPS backup script updated at `/opt/postgres-backup/backup.js`.
+- **The next agent must not:**
+  - Re-add WhatsApp alerts to the database backup script.
+  - Re-add WhatsApp alerts to the daily email reports.
+
+
