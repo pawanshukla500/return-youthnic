@@ -1113,10 +1113,17 @@ async function elementCenter(
   return { x: Math.round(rect.x), y: Math.round(rect.y) }
 }
 
-class NativeSupplierBrowser implements SupplierBrowserApi {
+export class NativeSupplierBrowser implements SupplierBrowserApi {
   private view: Electron.CrossProcessExports.WebContentsView | null = null
   private host: Electron.CrossProcessExports.BrowserWindow | null = null
   private ownedHost = false
+  /**
+   * True only when this instance constructed the WebContentsView and is
+   * responsible for destroying it. An instance that ADOPTED an existing view
+   * (one was already registered for the panel) only drops its reference on
+   * close() — the owner's close tears the shared view down.
+   */
+  private ownsView = false
 
   constructor(
     private electron: ElectronApi,
@@ -1142,15 +1149,26 @@ class NativeSupplierBrowser implements SupplierBrowserApi {
       // — off-screen but fully functional for automation — until
       // showForManualStep() attaches it to the main window.
       if (!this.view) {
-        this.view = new WebContentsView({
-          webPreferences: { partition, contextIsolation: true, nodeIntegration: false, sandbox: true },
-        })
-        if (typeof this.view.webContents.setUserAgent === "function") {
-          this.view.webContents.setUserAgent(STANDARD_CHROME_USER_AGENT)
+        const adopted = managedSupplierViews.get(this.options.panelKey)?.view
+        if (adopted) {
+          // A live view already exists for this partition (e.g. a manually
+          // opened tab the operator showed before automation ran). Drive it
+          // instead of constructing a second WebContentsView on the same
+          // session — two views on one partition would fight over it.
+          this.view = adopted
+          this.ownsView = false
+        } else {
+          this.view = new WebContentsView({
+            webPreferences: { partition, contextIsolation: true, nodeIntegration: false, sandbox: true },
+          })
+          if (typeof this.view.webContents.setUserAgent === "function") {
+            this.view.webContents.setUserAgent(STANDARD_CHROME_USER_AGENT)
+          }
+          configureSupplierSessionHeaders(this.view.webContents.session)
+          this.attachViewHandlers()
+          registerSupplierView(this.options.panelKey, this.view)
+          this.ownsView = true
         }
-        configureSupplierSessionHeaders(this.view.webContents.session)
-        this.attachViewHandlers()
-        registerSupplierView(this.options.panelKey, this.view)
       }
       this.ownedHost = false
       return
@@ -1170,19 +1188,31 @@ class NativeSupplierBrowser implements SupplierBrowserApi {
       })
     }
     if (!this.view) {
-      this.view = new WebContentsView({
-        webPreferences: { partition, contextIsolation: true, nodeIntegration: false, sandbox: true },
-      })
-      if (typeof this.view.webContents.setUserAgent === "function") {
-        this.view.webContents.setUserAgent(STANDARD_CHROME_USER_AGENT)
+      const adopted = managedSupplierViews.get(this.options.panelKey)?.view
+      if (adopted) {
+        // Same adoption as the shell-host path: drive the registered view.
+        // It is NOT reparented into this hidden window — it stays where the
+        // owner put it, and this instance must not destroy it on close().
+        this.view = adopted
+        this.ownsView = false
+      } else {
+        this.view = new WebContentsView({
+          webPreferences: { partition, contextIsolation: true, nodeIntegration: false, sandbox: true },
+        })
+        if (typeof this.view.webContents.setUserAgent === "function") {
+          this.view.webContents.setUserAgent(STANDARD_CHROME_USER_AGENT)
+        }
+        configureSupplierSessionHeaders(this.view.webContents.session)
+        // Operator-visible only when manual completion is needed (OTP/CAPTCHA,
+        // assisted submit). Automation runs headless-in-window otherwise.
+        this.attachViewHandlers()
+        registerSupplierView(this.options.panelKey, this.view)
+        this.ownsView = true
       }
-      configureSupplierSessionHeaders(this.view.webContents.session)
+    }
+    if (this.ownsView && this.view) {
       this.host.contentView.addChildView(this.view)
       this.view.setBounds({ x: 0, y: 0, width: 1280, height: 800 })
-      // Operator-visible only when manual completion is needed (OTP/CAPTCHA,
-      // assisted submit). Automation runs headless-in-window otherwise.
-      this.attachViewHandlers()
-      registerSupplierView(this.options.panelKey, this.view)
     }
   }
 
@@ -1623,24 +1653,30 @@ class NativeSupplierBrowser implements SupplierBrowserApi {
   async close(): Promise<void> {
     try {
       if (this.view) {
-        try {
-          supplierViewHost?.removeView(this.view)
-        } catch {
-          // ignore teardown races
-        }
-        const entry = managedSupplierViews.get(this.options.panelKey)
-        if (entry && entry.view === this.view) {
-          for (const popup of entry.popups) {
-            try {
-              supplierViewHost?.removeView(popup)
-            } catch {
-              // ignore teardown races
+        if (this.ownsView) {
+          // Owner teardown: detach the view from the window, drop the tab
+          // manager registration, and release the host window. An adopted
+          // view belongs to whoever created it — the adopter only drops its
+          // reference so the shared view (and its session) survives.
+          try {
+            supplierViewHost?.removeView(this.view)
+          } catch {
+            // ignore teardown races
+          }
+          const entry = managedSupplierViews.get(this.options.panelKey)
+          if (entry && entry.view === this.view) {
+            for (const popup of entry.popups) {
+              try {
+                supplierViewHost?.removeView(popup)
+              } catch {
+                // ignore teardown races
+              }
             }
           }
-        }
-        unregisterSupplierView(this.options.panelKey, this.view)
-        if (this.host) {
-          this.host.contentView.removeChildView(this.view)
+          unregisterSupplierView(this.options.panelKey, this.view)
+          if (this.host) {
+            this.host.contentView.removeChildView(this.view)
+          }
         }
       }
     } catch {
@@ -1686,6 +1722,22 @@ export function hasSupplierView(panelKey: string): boolean {
 }
 
 /**
+ * Outcome of ensureSupplierView, so routes can tell the three cases apart:
+ * - "exists": the tab manager already holds a live view for the panel.
+ * - "created": this call opened the browser and registered a new view.
+ * - "unavailable": no native adapter (headless Linux, external adapter,
+ *   plain-node tests) — there is no in-window view to create; callers keep
+ *   their old metadata-only behaviour.
+ * - "failed": the native adapter is present but the browser could not start
+ *   or navigate; `error` carries the cause (logged by the route).
+ */
+export type EnsureSupplierViewResult =
+  | { kind: "exists" }
+  | { kind: "created" }
+  | { kind: "unavailable" }
+  | { kind: "failed"; error: string }
+
+/**
  * Ensure a panel's native WebContentsView exists so the tab manager has a real
  * browser to show. Automation flows create the view on first use; a tab opened
  * manually from the Browsers page used to hold metadata only, so showing it
@@ -1697,21 +1749,19 @@ export function hasSupplierView(panelKey: string): boolean {
  * handle reference is then dropped WITHOUT closing: close() would destroy the
  * WebContentsView the adapter registered on open(), so the view stays alive in
  * the tab manager — like the login flow's held browser, but owned by the
- * manager and closed only through the existing close-tab path.
+ * manager and closed only through the existing close-tab path. A later open
+ * for the same panel ADOPTS that view instead of constructing a second one.
  *
- * Never opens anything when the native adapter is unavailable (headless Linux
- * server, external adapter, plain-node tests): there is no in-window view to
- * create there. Returns false instead of throwing so callers keep the old
- * metadata-only behaviour on those engines.
+ * Never throws: every failure path lands in "unavailable" or "failed".
  */
-export async function ensureSupplierView(panelKey: string, portalUrl: string): Promise<boolean> {
+export async function ensureSupplierView(panelKey: string, portalUrl: string): Promise<EnsureSupplierViewResult> {
   const resolved = resolveStoredPanelKey(panelKey)
   const key = resolved || panelKey
   const existing = managedSupplierViews.get(key)
-  if (existing?.view) return true
+  if (existing?.view) return { kind: "exists" }
   try {
     const adapter = await import("./browser-adapter.js")
-    if (!adapter.nativeBrowserAvailable()) return false
+    if (!adapter.nativeBrowserAvailable()) return { kind: "unavailable" }
     const { loadAgentConfig } = await import("./config.js")
     const { profileDirFor } = await import("./supplier-session.js")
     const config = loadAgentConfig()
@@ -1724,9 +1774,11 @@ export async function ensureSupplierView(panelKey: string, portalUrl: string): P
     // Deliberately no handle.close(): it would unregister and destroy the view
     // the adapter just created. The view persists in the tab manager.
     if (portalUrl) await handle.browser.navigate(portalUrl)
-    return managedSupplierViews.get(key)?.view != null
+    if (managedSupplierViews.get(key)?.view != null) return { kind: "created" }
+    return { kind: "failed", error: "The browser opened but no view was registered." }
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
     logger.warn(`Could not create the supplier browser view for ${key}.`, error)
-    return false
+    return { kind: "failed", error: message }
   }
 }

@@ -71,7 +71,7 @@ declare global {
       isDesktop: true
       platform: string
       getAppInfo: () => Promise<DesktopAppInfo>
-      getSystemStats: () => Promise<SystemStats>
+      getSystemStats?: () => Promise<SystemStats>
       getEngineTarget: () => Promise<EngineTarget>
       getBotStatus: () => Promise<DesktopBotStatus>
       toggleBot: () => Promise<DesktopBotStatus>

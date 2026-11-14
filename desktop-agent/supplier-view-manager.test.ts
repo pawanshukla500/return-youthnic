@@ -6,6 +6,7 @@ import {
   hasSupplierView,
   hideSupplierViews,
   layoutSupplierViews,
+  NativeSupplierBrowser,
   notifyWindowGeometryChanged,
   registerSupplierView,
   setBrowserWorkspaceRect,
@@ -17,6 +18,7 @@ import {
   unregisterSupplierView,
   type SupplierViewHost,
 } from "./src/native-browser-view.js"
+import type { SupplierBrowserOptions } from "./src/browser-adapter.js"
 
 type FakeView = { bounds: unknown; setBounds(bounds: unknown): void }
 
@@ -121,20 +123,142 @@ describe("ensureSupplierView for manually opened tabs", () => {
     const view = fakeView()
     registerSupplierView("syn-alive", toView(view))
     const created = await ensureSupplierView("syn-alive", "https://syn.example/portal")
-    assert.equal(created, true)
+    assert.deepEqual(created, { kind: "exists" })
     // The registered view is untouched (a second open would have thrown in plain node).
     assert.equal(hasSupplierView("syn-alive"), true)
     unregisterSupplierView("syn-alive", toView(view))
   })
 
-  it("returns false instead of launching a browser when the native adapter is unavailable", async () => {
+  it("reports unavailable instead of launching a browser when the native adapter is missing", async () => {
     // Plain-node test process: no Electron, so there is no in-window view to
     // create. The route keeps its metadata-only behaviour on those engines
     // and must never spawn an external system browser from here.
     const created = await ensureSupplierView("syn-headless", "https://syn.example/portal")
-    assert.equal(created, false)
+    assert.deepEqual(created, { kind: "unavailable" })
     assert.equal(hasSupplierView("syn-headless"), false)
     assert.deepEqual(supplierViewStatus(), [])
+  })
+})
+
+type FakeElectron = ConstructorParameters<typeof NativeSupplierBrowser>[0]
+
+/** Minimal Electron main-process surface for exercising NativeSupplierBrowser in plain node. */
+function fakeElectronApi(): FakeElectron {
+  class FakeContents {
+    url = ""
+    loading = false
+    session = {
+      setUserAgent: (): void => undefined,
+      on: (): void => undefined,
+    }
+    navigationHistory = { canGoBack: (): boolean => false, canGoForward: (): boolean => false }
+    on(_event: string, _handler: () => void): void {}
+    setUserAgent(): void {}
+    setWindowOpenHandler(): void {}
+    async loadURL(next: string): Promise<void> {
+      this.url = next
+    }
+    async executeJavaScript(): Promise<null> {
+      return null
+    }
+    getURL(): string {
+      return this.url
+    }
+    getTitle(): string {
+      return ""
+    }
+    isLoading(): boolean {
+      return this.loading
+    }
+    sendInputEvent(): void {}
+  }
+  class FakeView {
+    webContents = new FakeContents()
+    setBounds(_bounds: unknown): void {}
+  }
+  class FakeWindow {
+    contentView = {
+      addChildView: (_view: unknown): void => undefined,
+      removeChildView: (_view: unknown): void => undefined,
+    }
+    on(_event: string, _handler: () => void): void {}
+    isDestroyed(): boolean {
+      return false
+    }
+    show(): void {}
+    focus(): void {}
+    close(): void {}
+  }
+  return {
+    app: { getPath: () => "/tmp" },
+    BrowserWindow: FakeWindow,
+    WebContentsView: FakeView,
+  } as unknown as FakeElectron
+}
+
+describe("native browser view ownership", () => {
+  it("adopts the registered view on a second open; only the owner destroys it", async () => {
+    const { host, calls } = fakeHost()
+    setSupplierViewHost(host)
+    const electron = fakeElectronApi()
+    const options: SupplierBrowserOptions = {
+      panelKey: "syn-adopt",
+      profileDir: "/tmp/syn-profile",
+      headless: false,
+      port: 9333,
+    }
+
+    const first = new NativeSupplierBrowser(electron, options)
+    await first.open()
+    assert.equal(hasSupplierView("syn-adopt"), true)
+    assert.equal(supplierViewStatus().filter((s) => s.panelKey === "syn-adopt").length, 1)
+    const firstView = (first as unknown as { view: unknown }).view
+    assert.ok(firstView)
+    assert.equal((first as unknown as { ownsView: boolean }).ownsView, true)
+    // Snapshot the call log length instead of clearing it (assigning 0 to
+    // .length would narrow calls to never[] for the rest of the test).
+    const baseline = calls.length
+
+    const second = new NativeSupplierBrowser(electron, options)
+    await second.open()
+    // ONE registered view: the second open adopted the same WebContentsView
+    // instead of constructing a second one on the same partition.
+    assert.equal(supplierViewStatus().filter((s) => s.panelKey === "syn-adopt").length, 1)
+    assert.equal((second as unknown as { view: unknown }).view, firstView)
+    assert.equal((second as unknown as { ownsView: boolean }).ownsView, false)
+
+    // Closing the adopter must not destroy or unregister the shared view.
+    await second.close()
+    assert.equal(hasSupplierView("syn-adopt"), true)
+    assert.equal(supplierViewStatus().filter((s) => s.panelKey === "syn-adopt").length, 1)
+    assert.equal(calls.length, baseline)
+
+    // Closing the owner destroys it, unregisters it, and detaches it.
+    await first.close()
+    assert.equal(hasSupplierView("syn-adopt"), false)
+    assert.equal(calls.length, baseline + 1)
+    assert.equal(calls[calls.length - 1], "remove")
+    setSupplierViewHost(null)
+  })
+
+  it("ensureSupplierView agrees with an adopted view: one view, reported as existing", async () => {
+    const { host } = fakeHost()
+    setSupplierViewHost(host)
+    const electron = fakeElectronApi()
+    const options: SupplierBrowserOptions = {
+      panelKey: "syn-adopt-ensure",
+      profileDir: "/tmp/syn-profile-2",
+      headless: false,
+      port: 9333,
+    }
+    const owner = new NativeSupplierBrowser(electron, options)
+    await owner.open()
+    const result = await ensureSupplierView("syn-adopt-ensure", "https://syn.example/portal")
+    assert.deepEqual(result, { kind: "exists" })
+    assert.equal(supplierViewStatus().filter((s) => s.panelKey === "syn-adopt-ensure").length, 1)
+    await owner.close()
+    assert.equal(hasSupplierView("syn-adopt-ensure"), false)
+    setSupplierViewHost(null)
   })
 })
 

@@ -164,6 +164,11 @@ function portalUrlForPanel(panelKey: string): string {
  * so "Show supplier browser" renders an actual page instead of nothing. Never
  * creates a view while the claim worker or a login test owns the profile: two
  * browsers on one profile would race on the same cookies and debug port.
+ *
+ * Three outcomes: the view exists/was created (proceed), the engine has no
+ * native adapter (headless/external: answer exactly as before, metadata only),
+ * or creation genuinely failed (fail loudly with an actionable 500 — an
+ * ok:true that renders nothing is what the operator reported).
  */
 async function ensureViewForManualShow(panelKey: string): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
   if (hasSupplierView(panelKey)) return { ok: true }
@@ -174,7 +179,16 @@ async function ensureViewForManualShow(panelKey: string): Promise<{ ok: true } |
       error: "The claim worker is using this panel right now; try again when it is idle.",
     }
   }
-  await ensureSupplierView(panelKey, portalUrlForPanel(panelKey))
+  const result = await ensureSupplierView(panelKey, portalUrlForPanel(panelKey))
+  if (result.kind === "unavailable") return { ok: true }
+  if (result.kind === "failed") {
+    logger.warn(`Supplier browser view could not be created for ${panelKey}: ${result.error}`)
+    return {
+      ok: false,
+      status: 500,
+      error: "Could not open the supplier browser on this PC. Check that the app is not blocked and try again.",
+    }
+  }
   return { ok: true }
 }
 

@@ -13,12 +13,11 @@ export default function SystemStatsPill() {
   const [stats, setStats] = useState<SystemStats | null>(null)
 
   useEffect(() => {
-    const bridge = window.desktopApp
-    if (!bridge?.getSystemStats) return undefined
+    const getStats = window.desktopApp?.getSystemStats
+    if (!getStats) return undefined
     let cancelled = false
     const load = () => {
-      bridge
-        .getSystemStats()
+      getStats()
         .then((next) => {
           if (!cancelled) setStats(next)
         })

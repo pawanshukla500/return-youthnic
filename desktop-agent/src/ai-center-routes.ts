@@ -37,14 +37,20 @@ const PROVIDER_IDS = PROVIDER_CATALOG.map((e) => e.id)
 
 /**
  * Resolve the model for Test Connection: an explicit body model wins, then the
- * operator's saved preference, then the catalog default. Exported for tests.
+ * operator's saved preference, then the catalog default. Each candidate is
+ * trimmed before the emptiness test so a whitespace-only value falls through
+ * instead of masking the next candidate. Exported for tests.
  */
 export function resolveTestModel(
   bodyModel: unknown,
   prefsDefaultModel: string | null | undefined,
   catalogDefaultModel: string | undefined,
 ): string {
-  return String(bodyModel || prefsDefaultModel || catalogDefaultModel || "").trim()
+  const fromBody = String(bodyModel || "").trim()
+  if (fromBody) return fromBody
+  const fromPrefs = String(prefsDefaultModel || "").trim()
+  if (fromPrefs) return fromPrefs
+  return String(catalogDefaultModel || "").trim()
 }
 
 function isProviderId(value: string): value is Exclude<ProviderId, "gateway"> {

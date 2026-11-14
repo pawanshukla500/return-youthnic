@@ -162,11 +162,14 @@ test("test connection model resolution: body model, saved pref, then catalog def
   assert.equal(resolveTestModel("SYN-body-model", "SYN-pref-model", catalogDefault), "SYN-body-model")
   // A saved preference beats the catalog default and is trimmed.
   assert.equal(resolveTestModel("", " SYN-pref ", catalogDefault), "SYN-pref")
-  // A whitespace-only body model is truthy in the chain and trims to ""
-  // (the route then answers with the actionable no-model message).
-  assert.equal(resolveTestModel("   ", "SYN-pref-model", catalogDefault), "")
+  // Whitespace-only values fall through to the next candidate instead of
+  // masking it (the earlier bug: "  " truncated the chain to "").
+  assert.equal(resolveTestModel("   ", "SYN-pref-model", catalogDefault), "SYN-pref-model")
+  assert.equal(resolveTestModel("   ", "   ", catalogDefault), catalogDefault)
+  assert.equal(resolveTestModel("", "   ", catalogDefault), catalogDefault)
   // Still nothing anywhere: the route answers with the actionable message.
   assert.equal(resolveTestModel("", "", ""), "")
+  assert.equal(resolveTestModel("   ", "  ", "  "), "")
 })
 
 test("security: prompt injection and malicious output cannot escape validation", () => {
