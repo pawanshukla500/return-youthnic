@@ -3,16 +3,17 @@ import { isWithinNightlyWindow, msUntilNightlyWindow, nextNightlyWindowStart } f
 /**
  * Engine-side nightly gate for follow-up ticket checks.
  *
- * The server only hands out due tickets and aligns reschedules into the
- * 01:00-02:00 Asia/Kolkata window; this gate stops the engine from even
- * leasing outside it. Due rows simply wait for the next window (an expired
- * lease returns to `scheduled`), so a PC that is offline during the window
- * loses nothing. `FOLLOWUP_NIGHTLY_ONLY=0` restores the previous
- * check-whenever-due behaviour for operators who need it.
+ * Default behaviour is check-whenever-due: the server only hands out due
+ * tickets, the look-up is a cheap poll, and the operator evidence is that a
+ * nightly-only engine starves follow-ups on any PC that is not running inside
+ * the 01:00-02:00 Asia/Kolkata window. Operators who still want the engine to
+ * lease only inside that window opt in with FOLLOWUP_NIGHTLY_ONLY=1; due rows
+ * outside it then wait for the next window (an expired lease returns to
+ * `scheduled`), so a PC that is offline during the window loses nothing.
  */
 
 export function nightlyFollowUpOnly(env: NodeJS.ProcessEnv = process.env): boolean {
-  const raw = String(env.FOLLOWUP_NIGHTLY_ONLY ?? "1")
+  const raw = String(env.FOLLOWUP_NIGHTLY_ONLY ?? "0")
     .trim()
     .toLowerCase()
   return !["0", "false", "no", "off"].includes(raw)

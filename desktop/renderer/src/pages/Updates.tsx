@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, type ChangeEvent } from 'react'
 import { apiGet, EngineApiError } from '../services/config'
 import type { UpdateAsset, UpdateCheckResult } from '../types/engine'
 import { Spinner } from '../components/ui/Spinner'
+import UpdateDownloadFlow from '../components/UpdateDownloadFlow'
 import { useSession } from '../state/SessionContext'
 
 /**
@@ -194,20 +195,14 @@ export default function UpdatesPage() {
             </p>
             <div className="mt-2 flex flex-wrap items-center gap-3">
               {downloadUrl ? (
-                <a
-                  href={downloadUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="rounded-lg bg-green px-4 py-2 text-sm font-semibold text-white hover:bg-green-dark"
-                >
-                  Download {downloadAsset?.name ?? 'installer'}
-                </a>
+                <UpdateDownloadFlow url={downloadUrl} label={`Download ${downloadAsset?.name ?? 'installer'}`} />
               ) : (
                 <span className="text-sm text-muted">No download has been published for this release yet.</span>
               )}
             </div>
             <p className="mt-2 text-xs text-muted">
-              The installer downloads inside this app; close the app and run it to update. Supplier cookies are kept.
+              The installer downloads to your Downloads folder with live progress here; when it finishes, run it
+              straight from this page — the app closes, installs over this version, and supplier cookies are kept.
             </p>
           </div>
         ) : null}

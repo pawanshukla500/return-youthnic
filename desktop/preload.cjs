@@ -26,6 +26,20 @@ contextBridge.exposeInMainWorld("desktopApp", {
   sendNotification: (title, body) => {
     ipcRenderer.send("desktop:notify", { title, body })
   },
+  downloadUpdate: (url) => {
+    return ipcRenderer.invoke("desktop:download-update", url)
+  },
+  runUpdateInstaller: (savePath) => {
+    return ipcRenderer.invoke("desktop:run-update-installer", savePath)
+  },
+  onDownloadProgress: (callback) => {
+    if (typeof callback !== "function") return () => {}
+    const listener = (_event, progress) => callback(progress)
+    ipcRenderer.on("desktop:download-progress", listener)
+    // Same unsubscribe contract as onBotStatusChange: a renderer reload must
+    // not leave a duplicate progress listener behind.
+    return () => ipcRenderer.removeListener("desktop:download-progress", listener)
+  },
   setBrowserWorkspaceRect: (rect) => {
     // Validate before the payload crosses the bridge: only a null rect (hide
     // the view) or {x, y, width, height} with finite numbers is forwarded.

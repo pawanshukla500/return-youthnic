@@ -20,9 +20,13 @@ import type {
   OperatorSessionResponse,
   OperatorProfile,
   UpdateCheckResult,
+  FollowUpRow,
+  FollowUpsResponse,
 } from './types/engine'
 import { Spinner } from './components/ui/Spinner'
 import { Badge } from './components/ui/Badge'
+import UpdateDownloadFlow from './components/UpdateDownloadFlow'
+import { detectFollowUpNotifications } from './pages/follow-ups-notify'
 
 type TabId = 'dashboard' | 'claims' | 'browsers' | 'follow-ups' | 'ai-center' | 'settings' | 'updates'
 
@@ -297,16 +301,7 @@ function UpdateBanner() {
         A new desktop release is available: <strong>{update.latestTag}</strong>
       </span>
       <span className="flex items-center gap-2">
-        {update.downloadUrl ? (
-          <a
-            href={update.downloadUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="rounded-lg bg-blue px-3 py-1 text-xs font-semibold text-white hover:opacity-90"
-          >
-            Download update
-          </a>
-        ) : null}
+        {update.downloadUrl ? <UpdateDownloadFlow url={update.downloadUrl} label="Download update" tone="blue" /> : null}
         <button
           type="button"
           className="rounded-lg border border-line bg-surface px-3 py-1 text-xs font-medium text-muted hover:text-ink"
@@ -324,6 +319,77 @@ function UpdateBanner() {
       </span>
     </div>
   )
+}
+
+/* ------------------------------------------------------------------ */
+/* Follow-up ticket notifications (renderer-side watcher)               */
+/* ------------------------------------------------------------------ */
+
+const FOLLOW_UP_NOTIFY_POLL_MS = 60_000
+const FIRED_FOLLOW_UP_KEYS_STORAGE_KEY = 'ra-fu-notify-fired'
+// Keys already reported this session. Persisted (bounded) so an app restart
+// does not re-report every tracked ticket as if it were freshly filed.
+const firedFollowUpNotificationKeys = new Set<string>(readFiredFollowUpKeys())
+
+function readFiredFollowUpKeys(): string[] {
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(FIRED_FOLLOW_UP_KEYS_STORAGE_KEY) ?? '[]')
+    return Array.isArray(parsed) ? parsed.filter((key): key is string => typeof key === 'string') : []
+  } catch {
+    return []
+  }
+}
+
+function markFollowUpNotificationFired(key: string): void {
+  firedFollowUpNotificationKeys.add(key)
+  try {
+    localStorage.setItem(FIRED_FOLLOW_UP_KEYS_STORAGE_KEY, JSON.stringify(Array.from(firedFollowUpNotificationKeys).slice(-200)))
+  } catch {
+    // Best-effort persistence; the in-memory Set still guards this session.
+  }
+}
+
+/**
+ * Poll the engine's follow-ups (local or remote — the shell resolves the base
+ * and injects remote auth) and surface ticket-tracking changes as OS
+ * notifications through the bridge. Runs only while signed in; a 401 feeds the
+ * caught error to the session (which tears this effect down), anything else
+ * waits for the next tick.
+ */
+function useFollowUpNotifications(): void {
+  const { user, handleAuthError } = useSession()
+
+  useEffect(() => {
+    if (!user) return
+    let cancelled = false
+    let timer: number | undefined
+    let prevRows: FollowUpRow[] | null = null
+
+    const tick = async () => {
+      try {
+        const result = await apiGet<FollowUpsResponse>('/api/follow-ups?pageSize=100')
+        if (cancelled) return
+        const rows = Array.isArray(result?.rows) ? result.rows : []
+        for (const note of detectFollowUpNotifications(prevRows, rows)) {
+          if (firedFollowUpNotificationKeys.has(note.key)) continue
+          markFollowUpNotificationFired(note.key)
+          window.desktopApp?.sendNotification(note.title, note.body)
+        }
+        prevRows = rows
+      } catch (cause) {
+        if (cancelled) return
+        handleAuthError(cause)
+      } finally {
+        if (!cancelled) timer = window.setTimeout(() => void tick(), FOLLOW_UP_NOTIFY_POLL_MS)
+      }
+    }
+
+    void tick()
+    return () => {
+      cancelled = true
+      if (timer !== undefined) window.clearTimeout(timer)
+    }
+  }, [user, handleAuthError])
 }
 
 /* ------------------------------------------------------------------ */
@@ -371,6 +437,7 @@ export default function App() {
   const { theme, toggleTheme } = useTheme()
   const [hash, navigate] = useHashRoute()
   const { status, error: statusError } = useEngineStatus(5000)
+  useFollowUpNotifications()
 
   const [engineUrl, setEngineUrl] = useState('http://127.0.0.1:3005')
   const [connectionError, setConnectionError] = useState<EngineApiError | null>(null)

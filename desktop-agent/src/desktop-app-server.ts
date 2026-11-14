@@ -756,6 +756,10 @@ export function engineRunOnceNow(): Promise<void> {
   return manualRunChain
 }
 
+// First follow-up look-up after the scheduler starts: overdue tickets are
+// visible ~10s after sign-in instead of one 30-minute interval later.
+const FOLLOW_UP_START_DELAY_MS = 10_000
+
 function startScheduler(): void {
   isWorkerRunning = true
   if (!schedulerStarted) {
@@ -775,8 +779,12 @@ function startScheduler(): void {
   }
 
   if (!pollTimer) scheduleNextPoll(config.pollIntervalMs)
-  // The follow-up chain runs on its own timer so a slow ticket check never delays filing.
-  if (!followUpTimer) scheduleNextFollowUp(config.followUpCheckIntervalMs)
+  // The follow-up chain runs on its own timer so a slow ticket check never
+  // delays filing. The first look-up goes out shortly after the scheduler
+  // starts (not a full interval later) so follow-ups that came due while the
+  // app was closed are caught right after start/sign-in; every later tick
+  // stays at the configured interval via scheduleNextFollowUp's reschedule.
+  if (!followUpTimer) scheduleNextFollowUp(FOLLOW_UP_START_DELAY_MS)
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -1210,7 +1218,7 @@ catch (e) { document.documentElement.setAttribute('data-theme', 'light'); }
 
     <section class="panel" id="follow-ups" style="padding: 16px 18px;">
       <div class="panel-title" style="margin-bottom: 4px;">Ticket follow-ups <span id="followup-count" style="font-size: 11px; font-weight: normal; color: var(--muted);"></span></div>
-      <p style="color: var(--muted); font-size: 12px; line-height: 1.5; margin-bottom: 12px;">After a claim is filed, the bot re-opens that panel on its own in the nightly 01:00-02:00 IST window once the ticket is 48 hours old, reads the ticket status, and records it here until the ticket is approved or rejected. The ticket ID is the marketplace's own reference number.</p>
+      <p style="color: var(--muted); font-size: 12px; line-height: 1.5; margin-bottom: 12px;">After a claim is filed, the bot re-opens that panel on its own once the ticket is due, reads the ticket status, and records it here until the ticket is approved or rejected. The ticket ID is the marketplace's own reference number.</p>
       <div class="table-container" style="max-height: 280px;">
         <table>
           <thead>

@@ -189,8 +189,8 @@ export default function FollowUpsPage() {
         ) : null}
       </div>
       <p className="mt-1 max-w-3xl text-sm text-muted">
-        Once a ticket is due, the bot re-opens that supplier panel in the nightly window, reads the
-        ticket status and records it here — keeping at it until the ticket is approved, rejected or paid.
+        Once a ticket is due, the bot re-opens that supplier panel, reads the ticket status and records it
+        here — keeping at it until the ticket is approved, rejected or paid.
       </p>
 
       {error ? (
