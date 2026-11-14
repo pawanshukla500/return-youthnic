@@ -41,3 +41,4 @@ android/.cxx
 .vscode
 scratch/
 Order_Scan_Audit_*.xlsx
+graphify-out/

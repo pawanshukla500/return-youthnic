@@ -103,6 +103,18 @@ npm run engine
 npm run engine:docker
 ```
 
+## Code knowledge graph (graphify)
+
+This repo maintains a [graphify](https://github.com/Graphify-Labs/graphify) knowledge graph of the whole codebase (`graphify-out/`, gitignored — regenerate, never commit it). Coding agents (human or AI) working in unfamiliar areas should consult the graph BEFORE broad grep/read sweeps:
+
+```bash
+graphify query "how do claim follow-ups read ticket status?"   # scoped subgraph for a question
+graphify path "completeJobSubmission" "claim_follow_ups"       # trace how two things connect
+graphify explain "pollNextAutomationJob"                       # one concept: source, community, links
+```
+
+After code changes, refresh it with `graphify update .` (code-only, no API cost, incremental). The project skill lives at `.kimi/skills/graphify/` (installed via `graphify install --project --platform kimi`); inside Kimi Code the `/graphify` skill provides the same query-first guidance. Every edge is tagged EXTRACTED (explicit in source) or INFERRED — trust EXTRACTED first.
+
 ## Roles
 
 The project has 33 role agents in `.claude/agents/`. Thirteen of them were added on 2026-10-11 and stay unused until the user asks. Their use, and the workstreams they lead, are in [docs/notes/agent-roster.md](docs/notes/agent-roster.md). A role gives instructions, not access. Every role follows the rules above.
