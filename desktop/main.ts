@@ -1,6 +1,9 @@
 import "../desktop-agent/src/load-env.js"
 import path from "node:path"
 import fs from "node:fs"
+import { spawn } from "node:child_process"
+import { Readable, Transform } from "node:stream"
+import { pipeline } from "node:stream/promises"
 import { app, BrowserWindow, Menu, Tray, nativeImage, Notification, ipcMain, protocol, screen, session, type NativeImage } from "electron"
 import {
   enginePause,
@@ -581,29 +584,144 @@ function registerDetachedViewHost(): void {
 }
 
 /**
+ * Resolve where an update installer from `url` would be saved. The file name
+ * must end in `.exe` (same rule the popup path has always enforced); anything
+ * else is refused so a panel page can never push an arbitrary download through
+ * this path.
+ */
+function resolveUpdateDownloadTarget(url: string): { fileName: string; savePath: string; partialPath: string } | null {
+  const fileName = decodeURIComponent(url.split("?")[0].split("/").pop() || "Return.App.Setup.exe")
+  if (!fileName.toLowerCase().endsWith(".exe")) return null
+  const downloadsDir = app.getPath("downloads")
+  fs.mkdirSync(downloadsDir, { recursive: true })
+  const savePath = path.join(downloadsDir, fileName)
+  return { fileName, savePath, partialPath: `${savePath}.part` }
+}
+
+/**
  * Save the update installer without leaving the app: the dashboard's update
  * link opens here instead of a system browser, and the operator runs the
  * downloaded `.exe` themselves.
  */
 async function downloadUpdateAsset(url: string): Promise<void> {
-  const fileName = decodeURIComponent(url.split("?")[0].split("/").pop() || "Return.App.Setup.exe")
-  if (!fileName.toLowerCase().endsWith(".exe")) {
+  const target = resolveUpdateDownloadTarget(url)
+  if (!target) {
     logger.warn(`Blocked a non-installer popup inside the app window: ${url}`)
     return
   }
-  const downloadsDir = app.getPath("downloads")
-  fs.mkdirSync(downloadsDir, { recursive: true })
-  const savePath = path.join(downloadsDir, fileName)
-  logger.info(`Downloading the update installer to ${savePath}`)
+  logger.info(`Downloading the update installer to ${target.savePath}`)
   const res = await fetch(url)
   if (!res.ok || !res.body) throw new Error(`The update download answered HTTP ${res.status}.`)
-  fs.writeFileSync(savePath, Buffer.from(await res.arrayBuffer()))
+  fs.writeFileSync(target.savePath, Buffer.from(await res.arrayBuffer()))
   if (Notification.isSupported()) {
     new Notification({
       title: "Return App update downloaded",
-      body: `${fileName} is in Downloads. Close the app and run it to update; supplier cookies are kept.`,
+      body: `${target.fileName} is in Downloads. Close the app and run it to update; supplier cookies are kept.`,
     }).show()
   }
+}
+
+/**
+ * Renderer-initiated update download (desktop:download-update).
+ *
+ * The renderer gets a real button flow: the response streams to Downloads
+ * chunk-by-chunk (never buffered — the installer is ~127MB and this must stay
+ * inside the 256MB heap discipline, AGENTS.md rule 13), progress events are
+ * pushed over "desktop:download-progress", and the result names the saved file
+ * so the renderer can offer "run the installer". The bytes land in a `.part`
+ * file and are renamed only when the stream completes, mirroring the evidence
+ * download: a failed or retried download never leaves a truncated installer
+ * behind. A missing content-length reports totalBytes null and the renderer
+ * shows an indeterminate progress.
+ */
+async function downloadUpdateForRenderer(event: Electron.IpcMainInvokeEvent, url: unknown): Promise<{ ok: boolean; savePath?: string; fileName?: string; error?: string }> {
+  let partialPath: string | null = null
+  try {
+    if (typeof url !== "string" || !(url.startsWith("https://") || url.startsWith("http://"))) {
+      return { ok: false, error: "The update link is not a valid download URL." }
+    }
+    const target = resolveUpdateDownloadTarget(url)
+    if (!target) {
+      return { ok: false, error: "The update link does not point to a .exe installer." }
+    }
+    partialPath = target.partialPath
+    logger.info(`Downloading the update installer to ${target.savePath}`)
+    const res = await fetch(url)
+    if (!res.ok || !res.body) {
+      return { ok: false, error: `The update download answered HTTP ${res.status}.` }
+    }
+    const contentLength = res.headers.get("content-length")
+    const parsedLength = contentLength ? Number.parseInt(contentLength, 10) : Number.NaN
+    const totalBytes = Number.isFinite(parsedLength) && parsedLength > 0 ? parsedLength : null
+    let receivedBytes = 0
+    const progressTap = new Transform({
+      transform(chunk: Buffer, _encoding, callback) {
+        receivedBytes += chunk.length
+        // The window may be closed mid-download; a dead sender must not kill the stream.
+        try {
+          if (!event.sender.isDestroyed()) {
+            event.sender.send("desktop:download-progress", { receivedBytes, totalBytes })
+          }
+        } catch {
+          // Progress is best-effort; the download itself must continue.
+        }
+        callback(null, chunk)
+      },
+    })
+    await pipeline(Readable.fromWeb(res.body as any), progressTap, fs.createWriteStream(partialPath))
+    fs.renameSync(partialPath, target.savePath)
+    partialPath = null
+    logger.info(`Update installer saved to ${target.savePath} (${receivedBytes} bytes).`)
+    return { ok: true, savePath: target.savePath, fileName: target.fileName }
+  } catch (err) {
+    logger.warn("The in-app update download failed.", err)
+    return { ok: false, error: err instanceof Error ? err.message : String(err) }
+  } finally {
+    // A leftover .part from a failed attempt must never masquerade as an installer.
+    if (partialPath) {
+      try {
+        fs.rmSync(partialPath, { force: true })
+      } catch {
+        // best-effort cleanup
+      }
+    }
+  }
+}
+
+/**
+ * Renderer-initiated "run the installer now" (desktop:run-update-installer).
+ *
+ * Only a `.exe` directly inside the operator's Downloads folder may be
+ * launched — the exact shape downloadUpdateForRenderer() produces. The shell
+ * answers { ok: true } immediately, then ~1.5s later launches the installer
+ * detached (cmd /c start, so it survives this process) and quits: isQuitting
+ * keeps the close-to-tray handler from intercepting the quit.
+ */
+function runUpdateInstallerForRenderer(savePath: unknown): { ok: boolean; error?: string } {
+  if (typeof savePath !== "string" || !savePath) {
+    return { ok: false, error: "No installer path was given." }
+  }
+  const downloadsDir = path.resolve(app.getPath("downloads"))
+  const target = path.resolve(savePath)
+  if (!target.toLowerCase().endsWith(".exe")) {
+    return { ok: false, error: "Only a .exe installer can be run." }
+  }
+  if (target !== downloadsDir && !target.startsWith(downloadsDir + path.sep)) {
+    return { ok: false, error: "The installer must live inside the Downloads folder." }
+  }
+  setTimeout(() => {
+    isQuitting = true
+    try {
+      // Detached + ignored stdio: the installer keeps running after this process exits.
+      const child = spawn("cmd", ["/c", "start", "", target], { detached: true, stdio: "ignore", windowsHide: true })
+      child.unref()
+      logger.info(`Launching the update installer ${target}; the app is closing.`)
+    } catch (err) {
+      logger.error("Failed to launch the update installer.", err)
+    }
+    app.quit()
+  }, 1500)
+  return { ok: true }
 }
 
 /**
@@ -1057,6 +1175,14 @@ ipcMain.handle("desktop:get-engine-target", async () => {
 ipcMain.handle("desktop:get-bot-status", async () => shellStatus())
 
 ipcMain.handle("desktop:toggle-bot", async () => toggleWorker())
+
+// Update installer download with progress: streams to Downloads in the main
+// process (no renderer fetch, no CSP change) and reports receivedBytes while
+// the stream runs. The old popup-routing path below stays as a fallback.
+ipcMain.handle("desktop:download-update", (event, url) => downloadUpdateForRenderer(event, url))
+
+// Launch a downloaded installer and quit so the installer can replace the app.
+ipcMain.handle("desktop:run-update-installer", (_event, savePath) => runUpdateInstallerForRenderer(savePath))
 
 /**
  * Dashboard workspace rect (DIPs, relative to the window content area).

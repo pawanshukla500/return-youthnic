@@ -36,6 +36,20 @@ export type BrowserWorkspaceRect = {
   height: number
 }
 
+/** Progress push for an in-app update download. totalBytes is null when the server did not send a content-length. */
+export type UpdateDownloadProgress = {
+  receivedBytes: number
+  totalBytes: number | null
+}
+
+/** Result of desktop:download-update: ok names the saved file; !ok carries an operator-readable error. */
+export type UpdateDownloadResult = {
+  ok: boolean
+  savePath?: string
+  fileName?: string
+  error?: string
+}
+
 declare global {
   interface Window {
     desktopApp?: {
@@ -47,6 +61,9 @@ declare global {
       toggleBot: () => Promise<DesktopBotStatus>
       onBotStatusChange: (callback: (status: DesktopBotStatus) => void) => () => void
       sendNotification: (title: string, body: string) => void
+      downloadUpdate: (url: string) => Promise<UpdateDownloadResult>
+      runUpdateInstaller: (savePath: string) => Promise<{ ok: boolean; error?: string }>
+      onDownloadProgress: (callback: (progress: UpdateDownloadProgress) => void) => () => void
       setBrowserWorkspaceRect: (rect: BrowserWorkspaceRect | null) => void
       setBrowserFullscreen: (on: boolean) => void
     }
