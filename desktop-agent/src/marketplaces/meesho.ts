@@ -124,6 +124,104 @@ export function extractMeeshoResolution(text: string): { rejectionReason?: strin
 }
 
 /**
+ * Normalized states the per-ticket page classifier may report. Deliberately the
+ * same vocabulary as parseMeeshoTicketRow ("paid" | "rejected" | "approved") plus
+ * the server-accepted non-terminal keys from server/claim-follow-up-service.ts
+ * STATUS_PATTERNS ("under_review" | "escalated" | "submitted"). There is NO
+ * "response_needed" key: the server re-normalizes statusText authoritatively and
+ * drops any hint it does not recognize, so action-required wording is reported as
+ * "under_review" (the server's own mapping for it) with the matched phrase kept
+ * in statusText.
+ */
+export type MeeshoTicketPageNormalizedStatus =
+  | "approved"
+  | "rejected"
+  | "paid"
+  | "under_review"
+  | "escalated"
+  | "submitted"
+  | undefined
+
+/**
+ * Deterministic keyword classes for the per-ticket deep-link page, checked in
+ * priority order (first class with a keyword substring in the line wins; the
+ * first keyword within the class wins). Ported from the operator's legacy
+ * meesho_tracker.py fallback, re-targeted at the table reader/server vocabulary.
+ */
+const TICKET_PAGE_STATUS_CLASSES: ReadonlyArray<{
+  normalizedStatus: Exclude<MeeshoTicketPageNormalizedStatus, undefined>
+  keywords: readonly string[]
+}> = [
+  { normalizedStatus: "rejected", keywords: ["rejected", "not eligible", "denied", "invalid claim", "not approved", "claim rejected"] },
+  { normalizedStatus: "approved", keywords: ["approved", "resolved", "claim approved"] },
+  { normalizedStatus: "paid", keywords: ["credited", "settled", "refund issued", "payment processed"] },
+  // Response/action-needed wording shares the server's "under_review" bucket; the
+  // matched phrase stays visible in statusText so the operator sees what is asked.
+  { normalizedStatus: "under_review", keywords: ["please provide", "waiting for you", "share proof", "action required", "reply required"] },
+  { normalizedStatus: "under_review", keywords: ["pending", "in progress", "under review", "awaiting"] },
+  { normalizedStatus: "escalated", keywords: ["escalated"] },
+  { normalizedStatus: "submitted", keywords: ["open", "ticket created"] },
+]
+
+/** Status-chip-like lines: short banner/chip text is a more reliable verdict than body copy. */
+const TICKET_PAGE_CHIP_LINE_MAX_CHARS = 60
+/** Cap for the statusText line kept in the result and sent to the server. */
+const TICKET_PAGE_STATUS_TEXT_MAX_CHARS = 200
+/** Cap for the raw page text extracted from the ticket page. */
+export const TICKET_PAGE_TEXT_MAX_CHARS = 8000
+
+/**
+ * Classifies raw per-ticket page text into a deterministic status, scanning
+ * line-by-line in two passes: short status-chip-like lines first, then all lines.
+ * Pure so fixtures can test it without a browser. Returns the matched line
+ * trimmed (max 200 chars) as statusText; empty or unmatched text yields
+ * normalizedStatus undefined and statusText "".
+ */
+export function classifyMeeshoTicketPageText(text: string): {
+  statusText: string
+  normalizedStatus: MeeshoTicketPageNormalizedStatus
+} {
+  const lines = String(text || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+  if (!lines.length) return { statusText: "", normalizedStatus: undefined }
+
+  const matches = (line: string): MeeshoTicketPageNormalizedStatus => {
+    const lowered = line.toLowerCase()
+    for (const cls of TICKET_PAGE_STATUS_CLASSES) {
+      if (cls.keywords.some((keyword) => lowered.includes(keyword))) return cls.normalizedStatus
+    }
+    return undefined
+  }
+
+  const chipLike = lines.filter((line) => line.length <= TICKET_PAGE_CHIP_LINE_MAX_CHARS)
+  for (const pass of [chipLike, lines]) {
+    for (const line of pass) {
+      const normalizedStatus = matches(line)
+      if (normalizedStatus) {
+        return { statusText: line.trim().slice(0, TICKET_PAGE_STATUS_TEXT_MAX_CHARS), normalizedStatus }
+      }
+    }
+  }
+  return { statusText: "", normalizedStatus: undefined }
+}
+
+/**
+ * Picks the longest non-empty trimmed text from a list of candidate element
+ * texts (mirrors the Python tracker's longest-scoped-text rule), capped at
+ * TICKET_PAGE_TEXT_MAX_CHARS. Pure. Empty input yields "".
+ */
+export function pickLongestTicketText(elements: string[]): string {
+  let best = ""
+  for (const element of elements || []) {
+    const text = String(element || "").trim()
+    if (text.length > best.length) best = text
+  }
+  return best.slice(0, TICKET_PAGE_TEXT_MAX_CHARS)
+}
+
+/**
  * Meesho evidence-upload verification (M9 Phase 6).
  *
  * Production Claim #1 downloaded 4 files but the native browser failed to
@@ -933,8 +1031,11 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
   }
 
   /**
-   * Checks the resolution and status of an existing Meesho support ticket on the Support page.
-   * If rejected, opens the ticket detail drawer to extract the specific rejection reason.
+   * Checks the resolution and status of an existing Meesho support ticket.
+   * PRIMARY: opens the per-ticket deep link (the operator's legacy meesho_tracker.py
+   * approach) and classifies the ticket page text deterministically. FALLBACK: the
+   * Support ticket table reader, which may open the ticket drawer for the rejection
+   * reason. Any throw still resolves to supported:true with the error note.
    */
   async checkClaimStatus(marketplaceClaimId: string): Promise<ClaimStatusCheckResult> {
     const ticketId = (marketplaceClaimId || "").trim()
@@ -946,6 +1047,47 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
       if (!slug) {
         return { supported: true, statusText: "", note: "Meesho panel address not found; open the supplier panel first." }
       }
+
+      // PRIMARY read: the ticket page carries the full timeline, so rejection reasons
+      // and approved amounts come from the page text itself — no drawer click needed.
+      const page = await this.readTicketPage(ticketId, slug)
+      if (page.ok && page.text.length > 30) {
+        const classification = classifyMeeshoTicketPageText(page.text)
+        if (classification.normalizedStatus) {
+          const safeId = ticketId.replace(/[^0-9a-z]+/gi, "")
+          const shot = path.join(this.workDir, `ticket-page-${safeId}.png`)
+          await this.browser.captureScreenshot(shot)
+          let statusText = classification.statusText
+          let resolutionNote = `Ticket ${ticketId} read from its Meesho ticket page.`
+          if (classification.normalizedStatus === "rejected") {
+            const res = extractMeeshoResolution(page.text)
+            if (res.rejectionReason) {
+              statusText = `${classification.statusText} | Reason: ${res.rejectionReason}`
+              resolutionNote = `Rejected: ${res.rejectionReason}`
+            } else {
+              resolutionNote = `Ticket ${ticketId} rejected on its Meesho ticket page.`
+            }
+          } else if (classification.normalizedStatus === "approved" || classification.normalizedStatus === "paid") {
+            const res = extractMeeshoResolution(page.text)
+            if (res.approvedAmount) {
+              statusText = `${classification.statusText} | Approved Amount: ₹${res.approvedAmount}`
+              resolutionNote = `Claim approved for ₹${res.approvedAmount}.`
+            }
+          }
+          return {
+            supported: true,
+            statusText,
+            normalizedStatus: classification.normalizedStatus,
+            screenshotPath: shot,
+            note: resolutionNote,
+          }
+        }
+        logger.info(`Ticket page for ${ticketId} gave no deterministic status; falling back to the Support table.`)
+      } else {
+        logger.info(`Ticket page read for ${ticketId} failed (ok=${page.ok}, ${page.text.length} chars); falling back to the Support table.`)
+      }
+
+      // FALLBACK read: Support ticket table (unchanged).
       await this.browser.navigate(`https://supplier.meesho.com/panel/v3/new/experience/${slug}/support`)
       await this.waitForContent()
       let parsed = await this.readTicketRow(ticketId)
@@ -1031,6 +1173,52 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
 
   private async readTicketRow(ticketId: string): Promise<{ statusText: string; normalizedStatus?: string } | null> {
     return parseMeeshoTicketRow(await this.readTicketTableRows(), ticketId)
+  }
+
+  /**
+   * Opens a ticket's deep link and scrapes its page text (primary read for
+   * checkClaimStatus). Scoped selectors mirror the legacy meesho_tracker.py; the
+   * LONGEST non-empty innerText wins (pickLongestTicketText). Never throws: a
+   * navigation/extract failure resolves to ok:false so the caller falls back to
+   * the Support table reader.
+   */
+  private async readTicketPage(ticketId: string, slug: string): Promise<{ ok: boolean; text: string; url: string }> {
+    const url = `https://supplier.meesho.com/panel/v3/new/experience/${slug}/support/ticket/${encodeURIComponent(ticketId)}`
+    try {
+      await this.browser.navigate(url)
+      await this.waitForContent()
+      const texts = await this.browser.evaluate<string[]>(`
+        (() => {
+          const selectors = ["[class*='ticket']", "[class*='chat']", "[class*='message']", "[class*='reply']", "[class*='status']", "main", "#root", "body"]
+          const seen = new Set()
+          const out = []
+          for (const selector of selectors) {
+            for (const el of document.querySelectorAll(selector)) {
+              if (seen.has(el)) continue
+              seen.add(el)
+              const text = (el.innerText || '').trim()
+              if (text) out.push(text)
+            }
+          }
+          return out
+        })()
+      `).catch(() => [] as string[])
+      const text = pickLongestTicketText(texts || [])
+      const chips = await this.browser.evaluate<string[]>(`
+        Array.from(document.querySelectorAll("[class*='status'], [role='text']"))
+          .filter((el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 })
+          .map((el) => (el.textContent || '').trim())
+          .filter((t) => t && t.length < 60)
+          .slice(0, 10)
+      `).catch(() => [] as string[])
+      if (chips && chips.length) {
+        logger.info(`Meesho ticket ${ticketId} status chips: ${chips.map((chip) => `"${chip}"`).join(", ")}`)
+      }
+      return { ok: text.length > 0, text, url }
+    } catch (error) {
+      logger.warn(`Meesho ticket page read failed for ${ticketId}: ${error instanceof Error ? error.message : String(error)}`)
+      return { ok: false, text: "", url }
+    }
   }
 
   /** Single-shot read of the Support ticket table rows for the ticket checks. */
