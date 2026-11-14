@@ -8,7 +8,7 @@
  */
 
 import type http from "node:http"
-import { PROVIDER_CATALOG, PROVIDER_CATALOG_VERSION, discoverModels, type ProviderId } from "./ai-providers.js"
+import { PROVIDER_CATALOG, PROVIDER_CATALOG_VERSION, catalogEntry, discoverModels, type ProviderId } from "./ai-providers.js"
 import {
   hasProviderKey,
   readProviderPrefs,
@@ -34,6 +34,18 @@ export type AiCenterRouteCtx = {
 }
 
 const PROVIDER_IDS = PROVIDER_CATALOG.map((e) => e.id)
+
+/**
+ * Resolve the model for Test Connection: an explicit body model wins, then the
+ * operator's saved preference, then the catalog default. Exported for tests.
+ */
+export function resolveTestModel(
+  bodyModel: unknown,
+  prefsDefaultModel: string | null | undefined,
+  catalogDefaultModel: string | undefined,
+): string {
+  return String(bodyModel || prefsDefaultModel || catalogDefaultModel || "").trim()
+}
 
 function isProviderId(value: string): value is Exclude<ProviderId, "gateway"> {
   return (PROVIDER_IDS as string[]).includes(value)
@@ -124,7 +136,17 @@ export async function handleAiCenterRoute(
     if (action === "test" && req.method === "POST") {
       const body = (await ctx.readJson(req).catch(() => ({}))) as Record<string, unknown>
       const prefs = readProviderPrefs(dir, provider)
-      const model = String(body.model || prefs.defaultModel || "").trim()
+      const model = resolveTestModel(body.model, prefs.defaultModel, catalogEntry(provider)?.defaultModel)
+      if (!model) {
+        // Actionable instead of the raw provider error: the operator pasted a
+        // key and hit Test without ever picking a model.
+        ctx.sendJson(res, 400, {
+          ok: false,
+          category: "unsupported_model",
+          error: "No model selected — pick one with Discover models or type an ID, then Save model.",
+        })
+        return true
+      }
       if (String(body.mode || "") === "sdk") {
         // Vercel AI SDK Core path: proves the packaged app runs the official
         // generateText + @ai-sdk/* integrations against the real provider API.

@@ -1,6 +1,7 @@
 import "../desktop-agent/src/load-env.js"
 import path from "node:path"
 import fs from "node:fs"
+import os from "node:os"
 import { spawn } from "node:child_process"
 import { Readable, Transform } from "node:stream"
 import { pipeline } from "node:stream/promises"
@@ -1163,6 +1164,36 @@ ipcMain.handle("desktop:get-app-info", async () => ({
   platform: process.platform,
   isPackaged: app.isPackaged,
 }))
+
+/**
+ * Local resource snapshot for the renderer top bar. Computed per call —
+ * getAppMetrics() snapshots on demand — with no timers in the main process,
+ * so the 24/7 idle CPU budget is untouched between polls.
+ */
+ipcMain.handle("desktop:get-system-stats", async () => {
+  const metrics = app.getAppMetrics()
+  let cpuPercent = 0
+  let memoryKB = 0
+  for (const metric of metrics) {
+    cpuPercent += Number(metric.cpu?.percentCPUUsage) || 0
+    memoryKB += Number(metric.memory?.workingSetSize) || 0
+  }
+  const totalMemMB = Math.round(os.totalmem() / (1024 * 1024))
+  const usedMemMB = Math.round((os.totalmem() - os.freemem()) / (1024 * 1024))
+  return {
+    app: {
+      cpuPercent: Math.round(cpuPercent * 10) / 10,
+      memoryMB: Math.round(memoryKB / 1024),
+      processCount: metrics.length,
+    },
+    system: {
+      totalMemMB,
+      usedMemMB,
+      usedMemPercent: totalMemMB > 0 ? Math.round((usedMemMB / totalMemMB) * 100) : 0,
+      uptimeSec: Math.round(os.uptime()),
+    },
+  }
+})
 
 // The engine API base for the renderer. The token is deliberately never
 // exposed here: remote-engine bearer auth stays in this main process (the

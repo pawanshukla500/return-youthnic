@@ -15,6 +15,21 @@ export type DesktopAppInfo = {
   isPackaged: boolean
 }
 
+/** Local resource snapshot from the shell: app-wide totals plus system RAM/uptime. */
+export type SystemStats = {
+  app: {
+    cpuPercent: number
+    memoryMB: number
+    processCount: number
+  }
+  system: {
+    totalMemMB: number
+    usedMemMB: number
+    usedMemPercent: number
+    uptimeSec: number
+  }
+}
+
 export type EngineTarget = {
   kind: 'local' | 'remote'
   url: string
@@ -56,6 +71,7 @@ declare global {
       isDesktop: true
       platform: string
       getAppInfo: () => Promise<DesktopAppInfo>
+      getSystemStats: () => Promise<SystemStats>
       getEngineTarget: () => Promise<EngineTarget>
       getBotStatus: () => Promise<DesktopBotStatus>
       toggleBot: () => Promise<DesktopBotStatus>

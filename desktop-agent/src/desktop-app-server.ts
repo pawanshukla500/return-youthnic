@@ -20,8 +20,10 @@ import {
   closeSupplierTab,
   detachSupplierTab,
   dockSupplierTab,
+  ensureSupplierView,
   focusDetachedSupplierTab,
   handleDetachedWindowClosed,
+  hasSupplierView,
   hideSupplierViews,
   isSupplierTabDetached,
   labelForPanelKey,
@@ -150,6 +152,30 @@ function supplierProfileInUse(): boolean {
     followUpInFlight,
     portalBrowserHeld: holdPortalBrowser(),
   })
+}
+
+/** Portal URL for a panel key from the claim panel definitions ("" when unknown). */
+function portalUrlForPanel(panelKey: string): string {
+  return CLAIM_PANELS.find((candidate) => candidate.key === panelKey)?.portalUrl || ""
+}
+
+/**
+ * Ensure a manually opened tab has a real WebContentsView before it is shown,
+ * so "Show supplier browser" renders an actual page instead of nothing. Never
+ * creates a view while the claim worker or a login test owns the profile: two
+ * browsers on one profile would race on the same cookies and debug port.
+ */
+async function ensureViewForManualShow(panelKey: string): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
+  if (hasSupplierView(panelKey)) return { ok: true }
+  if (engineBusy()) {
+    return {
+      ok: false,
+      status: 409,
+      error: "The claim worker is using this panel right now; try again when it is idle.",
+    }
+  }
+  await ensureSupplierView(panelKey, portalUrlForPanel(panelKey))
+  return { ok: true }
 }
 
 async function pollAndProcessJob(manual = false): Promise<boolean> {
@@ -3754,6 +3780,14 @@ export function startDesktopAppServer(bind: EngineBind = resolveEngineBind()): P
         try {
           const body = await readJson(req)
           const panelKey = panelKeyForMarketplace(String(body.marketplace || body.panelKey || body.tabId || ""))
+          // A manually opened tab has metadata only: no WebContentsView exists
+          // until automation uses the panel, so showing it rendered nothing.
+          // Create the real view and start loading the portal page first.
+          const ensured = await ensureViewForManualShow(panelKey)
+          if (!ensured.ok) {
+            sendJson(res, ensured.status, { error: ensured.error })
+            return
+          }
           openSupplierTab(panelKey)
           // Explicit user action (Open in Browsers / Sign in): focus only when
           // the caller asks for it. Background paths never send focus: true.
@@ -3788,6 +3822,13 @@ export function startDesktopAppServer(bind: EngineBind = resolveEngineBind()): P
           }
           const panelKey = panelKeyForMarketplace(raw)
           const panel = CLAIM_PANELS.find((candidate) => candidate.key === panelKey)
+          // Same as /show: a fresh manual tab gets a real browser view and the
+          // portal page starts loading, unless the worker owns the profile now.
+          const ensured = await ensureViewForManualShow(panelKey)
+          if (!ensured.ok) {
+            sendJson(res, ensured.status, { error: ensured.error })
+            return
+          }
           const label = panel?.name || labelForPanelKey(panelKey)
           const tab = openSupplierTab(panelKey, {
             label,

@@ -1,7 +1,9 @@
 import { describe, it } from "node:test"
 import assert from "node:assert/strict"
 import {
+  ensureSupplierView,
   getBrowserWorkspaceRect,
+  hasSupplierView,
   hideSupplierViews,
   layoutSupplierViews,
   notifyWindowGeometryChanged,
@@ -101,6 +103,38 @@ describe("main-window supplier view manager", () => {
     layoutSupplierViews()
     unregisterSupplierView("flipkart", toView(view))
     setSupplierViewHost(null)
+  })
+})
+
+describe("ensureSupplierView for manually opened tabs", () => {
+  it("reports no view for an unknown panel and a view after registration", () => {
+    assert.equal(hasSupplierView("syn-unknown-panel"), false)
+    const view = fakeView()
+    registerSupplierView("syn-manual", toView(view))
+    assert.equal(hasSupplierView("syn-manual"), true)
+    assert.equal(hasSupplierView("tab-syn-manual"), true)
+    unregisterSupplierView("syn-manual", toView(view))
+    assert.equal(hasSupplierView("syn-manual"), false)
+  })
+
+  it("keeps an existing view without opening a second browser", async () => {
+    const view = fakeView()
+    registerSupplierView("syn-alive", toView(view))
+    const created = await ensureSupplierView("syn-alive", "https://syn.example/portal")
+    assert.equal(created, true)
+    // The registered view is untouched (a second open would have thrown in plain node).
+    assert.equal(hasSupplierView("syn-alive"), true)
+    unregisterSupplierView("syn-alive", toView(view))
+  })
+
+  it("returns false instead of launching a browser when the native adapter is unavailable", async () => {
+    // Plain-node test process: no Electron, so there is no in-window view to
+    // create. The route keeps its metadata-only behaviour on those engines
+    // and must never spawn an external system browser from here.
+    const created = await ensureSupplierView("syn-headless", "https://syn.example/portal")
+    assert.equal(created, false)
+    assert.equal(hasSupplierView("syn-headless"), false)
+    assert.deepEqual(supplierViewStatus(), [])
   })
 })
 

@@ -1674,3 +1674,59 @@ export async function openNativeSupplierBrowser(options: SupplierBrowserOptions)
     }
   })
 }
+
+/**
+ * True when the tab manager holds a live WebContentsView for the panel.
+ * Metadata-only tabs (opened manually before any automation ran) have no view.
+ */
+export function hasSupplierView(panelKey: string): boolean {
+  const resolved = resolveStoredPanelKey(panelKey)
+  const key = resolved || panelKey
+  return managedSupplierViews.get(key)?.view != null
+}
+
+/**
+ * Ensure a panel's native WebContentsView exists so the tab manager has a real
+ * browser to show. Automation flows create the view on first use; a tab opened
+ * manually from the Browsers page used to hold metadata only, so showing it
+ * found no view and silently rendered nothing.
+ *
+ * When the view is missing this opens the supplier browser through the shared
+ * adapter exactly like the sign-in flow does (openSupplierBrowser with the
+ * per-panel profile directory) and navigates it to the panel's portal URL. The
+ * handle reference is then dropped WITHOUT closing: close() would destroy the
+ * WebContentsView the adapter registered on open(), so the view stays alive in
+ * the tab manager — like the login flow's held browser, but owned by the
+ * manager and closed only through the existing close-tab path.
+ *
+ * Never opens anything when the native adapter is unavailable (headless Linux
+ * server, external adapter, plain-node tests): there is no in-window view to
+ * create there. Returns false instead of throwing so callers keep the old
+ * metadata-only behaviour on those engines.
+ */
+export async function ensureSupplierView(panelKey: string, portalUrl: string): Promise<boolean> {
+  const resolved = resolveStoredPanelKey(panelKey)
+  const key = resolved || panelKey
+  const existing = managedSupplierViews.get(key)
+  if (existing?.view) return true
+  try {
+    const adapter = await import("./browser-adapter.js")
+    if (!adapter.nativeBrowserAvailable()) return false
+    const { loadAgentConfig } = await import("./config.js")
+    const { profileDirFor } = await import("./supplier-session.js")
+    const config = loadAgentConfig()
+    const handle = await adapter.openSupplierBrowser({
+      panelKey: key,
+      profileDir: profileDirFor(config.userDataDir, key),
+      headless: false,
+      port: 9333,
+    })
+    // Deliberately no handle.close(): it would unregister and destroy the view
+    // the adapter just created. The view persists in the tab manager.
+    if (portalUrl) await handle.browser.navigate(portalUrl)
+    return managedSupplierViews.get(key)?.view != null
+  } catch (error) {
+    logger.warn(`Could not create the supplier browser view for ${key}.`, error)
+    return false
+  }
+}
