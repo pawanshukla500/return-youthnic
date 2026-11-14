@@ -222,7 +222,46 @@ export default function SettingsPage() {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const usernameRef = useRef<HTMLInputElement>(null)
+  const marketplaceRef = useRef<HTMLSelectElement>(null)
   const formSectionRef = useRef<HTMLDivElement>(null)
+
+  // The form is only needed when a login is broken or missing, so it stays
+  // behind a disclosure: open it on demand, when a panel genuinely needs the
+  // operator to act, or when a deep link asks for it.
+  const [loginFormOpen, setLoginFormOpen] = useState(false)
+  // Focus requests are nonce-driven, not keyed on the open transition, so a
+  // Connect/Reconnect action re-focuses even when the form is already open.
+  const [focusNonce, setFocusNonce] = useState(0)
+  const focusTargetRef = useRef<'marketplace' | 'username' | null>(null)
+
+  useEffect(() => {
+    if (!loginFormOpen || focusNonce === 0) return
+    const target = focusTargetRef.current
+    focusTargetRef.current = null
+    const frame = window.requestAnimationFrame(() => {
+      formSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      if (target === 'username') usernameRef.current?.focus()
+      else marketplaceRef.current?.focus()
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [loginFormOpen, focusNonce])
+
+  const openLoginForm = useCallback((focus: 'marketplace' | 'username') => {
+    focusTargetRef.current = focus
+    setLoginFormOpen(true)
+    setFocusNonce((nonce) => nonce + 1)
+  }, [])
+
+  // Auto-open once when the first channel load shows a panel that is both
+  // unconfigured and without a saved session — the operator must act.
+  const autoOpenDoneRef = useRef(false)
+  useEffect(() => {
+    if (autoOpenDoneRef.current || channels === null) return
+    autoOpenDoneRef.current = true
+    if (channels.some((channel) => !channel.configured && !channel.sessionSavedAt)) {
+      setLoginFormOpen(true)
+    }
+  }, [channels])
 
   // Deep link: something in the app asked us to focus the supplier login form
   // for one marketplace (e.g. a panel whose cookies expired). Consume the key
@@ -247,12 +286,8 @@ export default function SettingsPage() {
     )
     if (!match) return
     setMarketplace(match.name)
-    const frame = window.requestAnimationFrame(() => {
-      formSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-      usernameRef.current?.focus()
-    })
-    return () => window.cancelAnimationFrame(frame)
-  }, [])
+    openLoginForm('username')
+  }, [openLoginForm])
 
   const [saveNotice, setSaveNotice] = useState<Notice>(null)
   const [testNotice, setTestNotice] = useState<Notice>(null)
@@ -334,12 +369,11 @@ export default function SettingsPage() {
   }
 
   /** Onboarding row button — parity with the old dashboard wizard: an
-   * unconfigured panel focuses the form; a configured one re-opens the
-   * supplier browser right away to refresh the saved cookies. */
+   * unconfigured panel opens the login form and focuses it; a configured one
+   * re-opens the supplier browser right away to refresh the saved cookies. */
   const connectChannel = (channel: PortalChannelStatus) => {
     setMarketplace(channel.name)
-    formSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-    usernameRef.current?.focus()
+    openLoginForm('username')
     if (channel.configured) {
       void runLoginTest(channel.name, '', '')
     }
@@ -493,74 +527,115 @@ export default function SettingsPage() {
         </div>
       </div>
 
-      {/* 2 — supplier login form */}
+      {/* 2 — supplier login form, collapsed behind a disclosure */}
       <div ref={formSectionRef} className="mt-4 scroll-mt-4 rounded-xl border border-line bg-surface p-5 shadow-card">
         <h2 className="font-display text-sm font-bold text-ink">Supplier login</h2>
-        <p className="mt-1 text-xs text-muted">
-          Do one marketplace at a time. Leave the ID and password blank to use the login already saved on the server. The
-          password is sent to the engine once and is never shown again.
-        </p>
-        <form onSubmit={saveLogin} className="mt-3 flex flex-wrap items-end gap-3">
-          <label className="text-xs font-semibold text-ink">
-            Marketplace
-            <select
-              id="portal-marketplace"
-              value={marketplace}
-              onChange={(event) => setMarketplace(event.target.value)}
-              className="mt-1 block min-w-36 rounded-lg border border-line bg-surface-2 px-3 py-2 text-sm text-ink outline-none focus:border-blue"
-            >
-              {MARKETPLACES.map((entry) => (
-                <option key={entry.key} value={entry.name}>
-                  {entry.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="text-xs font-semibold text-ink">
-            Supplier ID
-            <input
-              id="portal-username"
-              ref={usernameRef}
-              type="text"
-              autoComplete="off"
-              value={username}
-              onChange={(event) => setUsername(event.target.value)}
-              className="mt-1 block min-w-48 rounded-lg border border-line bg-surface-2 px-3 py-2 text-sm text-ink outline-none focus:border-blue"
-            />
-          </label>
-          <label className="text-xs font-semibold text-ink">
-            Password
-            <input
-              id="portal-password"
-              type="password"
-              autoComplete="off"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              className="mt-1 block min-w-48 rounded-lg border border-line bg-surface-2 px-3 py-2 text-sm text-ink outline-none focus:border-blue"
-            />
-          </label>
-          <div className="flex gap-2">
-            <button
-              type="submit"
-              disabled={saveBusy || testBusy}
-              className="rounded-lg bg-green px-4 py-2 text-sm font-semibold text-white hover:bg-green-dark"
-            >
-              {saveBusy ? 'Saving…' : 'Save login'}
-            </button>
+        {loginFormOpen ? (
+          <>
+            <p className="mt-1 text-xs text-muted">
+              Do one marketplace at a time. Leave the ID and password blank to use the login already saved on the server.
+              The password is sent to the engine once and is never shown again.
+            </p>
+            <form onSubmit={saveLogin} className="mt-3 flex flex-wrap items-end gap-3">
+              <label className="text-xs font-semibold text-ink">
+                Marketplace
+                <select
+                  id="portal-marketplace"
+                  ref={marketplaceRef}
+                  value={marketplace}
+                  onChange={(event) => setMarketplace(event.target.value)}
+                  className="mt-1 block min-w-36 rounded-lg border border-line bg-surface-2 px-3 py-2 text-sm text-ink outline-none focus:border-blue"
+                >
+                  {MARKETPLACES.map((entry) => (
+                    <option key={entry.key} value={entry.name}>
+                      {entry.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="text-xs font-semibold text-ink">
+                Supplier ID
+                <input
+                  id="portal-username"
+                  ref={usernameRef}
+                  type="text"
+                  autoComplete="off"
+                  value={username}
+                  onChange={(event) => setUsername(event.target.value)}
+                  className="mt-1 block min-w-48 rounded-lg border border-line bg-surface-2 px-3 py-2 text-sm text-ink outline-none focus:border-blue"
+                />
+              </label>
+              <label className="text-xs font-semibold text-ink">
+                Password
+                <input
+                  id="portal-password"
+                  type="password"
+                  autoComplete="off"
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  className="mt-1 block min-w-48 rounded-lg border border-line bg-surface-2 px-3 py-2 text-sm text-ink outline-none focus:border-blue"
+                />
+              </label>
+              <div className="flex gap-2">
+                <button
+                  type="submit"
+                  disabled={saveBusy || testBusy}
+                  className="rounded-lg bg-green px-4 py-2 text-sm font-semibold text-white hover:bg-green-dark"
+                >
+                  {saveBusy ? 'Saving…' : 'Save login'}
+                </button>
+                <button
+                  type="button"
+                  onClick={testLogin}
+                  disabled={saveBusy || testBusy}
+                  className="rounded-lg border border-line bg-surface px-3 py-2 text-sm font-medium text-ink hover:bg-surface-2"
+                >
+                  {testBusy ? 'Opening…' : 'Sign in and save cookies'}
+                </button>
+              </div>
+            </form>
+            <div className="mt-2 flex flex-col gap-1">
+              <NoticeLine notice={saveNotice} />
+              <NoticeLine notice={testNotice} />
+            </div>
+          </>
+        ) : (
+          <div className="mt-3">
+            <p className="text-xs text-muted">
+              Saved supplier logins stay on this PC — you only need this form when a sign-in is broken or missing.
+            </p>
+            {channelsError ? (
+              <p className="mt-2 text-xs text-muted">Supplier login status is unavailable.</p>
+            ) : channels === null ? (
+              <p className="mt-2 text-xs text-muted">Loading supplier login status…</p>
+            ) : (
+              <ul className="mt-2 flex flex-col gap-1">
+                {channels.map((channel) => {
+                  const ready = Boolean(channel.sessionSavedAt)
+                  return (
+                    <li key={channel.name} className="flex flex-wrap items-center gap-2 text-xs">
+                      <span className="min-w-28">
+                        <MarketplaceBadge marketplace={channel.name} />
+                      </span>
+                      <span className={ready ? 'text-green-dark' : channel.configured ? 'text-orange' : 'text-muted'}>
+                        {channelStatusLabel(channel)}
+                        {channel.usernameMasked ? ` · ${channel.usernameMasked}` : ''}
+                      </span>
+                    </li>
+                  )
+                })}
+              </ul>
+            )}
             <button
               type="button"
-              onClick={testLogin}
-              disabled={saveBusy || testBusy}
-              className="rounded-lg border border-line bg-surface px-3 py-2 text-sm font-medium text-ink hover:bg-surface-2"
+              onClick={() => openLoginForm('marketplace')}
+              aria-expanded={false}
+              className="mt-3 rounded-lg border border-line bg-surface px-3 py-2 text-sm font-medium text-ink hover:bg-surface-2"
             >
-              {testBusy ? 'Opening…' : 'Sign in and save cookies'}
+              Fix or change a supplier login
             </button>
           </div>
-        </form>
-        <div className="mt-2 flex flex-col gap-1">
-          <NoticeLine notice={saveNotice} />
-          <NoticeLine notice={testNotice} />
-        </div>
+        )}
       </div>
 
       {/* 3 — backend server */}

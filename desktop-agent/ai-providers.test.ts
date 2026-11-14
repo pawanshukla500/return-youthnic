@@ -28,7 +28,7 @@ function openAiOk(text = "SYN-OK", usage: Record<string, unknown> = { prompt_tok
 }
 
 test("catalog is versioned, covers six providers, and marks operator-requested IDs unverified", () => {
-  assert.equal(PROVIDER_CATALOG_VERSION, 1)
+  assert.equal(PROVIDER_CATALOG_VERSION, 2)
   assert.deepEqual(PROVIDER_CATALOG.map((e) => e.id).sort(), ["anthropic", "google", "kimi", "meta", "openai", "zai"])
   for (const entry of PROVIDER_CATALOG) {
     assert.ok(entry.baseUrl.startsWith("https://"), entry.id)
@@ -36,10 +36,17 @@ test("catalog is versioned, covers six providers, and marks operator-requested I
     assert.equal(entry.defaultModel, entry.models[0].id, entry.id)
   }
   // Operator-requested names stay manual until a provider confirms them.
+  assert.equal(catalogEntry("meta")?.defaultModel, "muse-spark-1.3-contributor")
   assert.equal(isKnownModel("meta", "muse-spark-1.3-contributor"), true)
   assert.equal(catalogEntry("meta")?.models.find((m) => m.id === "muse-spark-1.3-contributor")?.verified, false)
+  assert.equal(catalogEntry("openai")?.defaultModel, "GPT-6.1-Terra")
+  assert.equal(isKnownModel("openai", "GPT-6.1-Terra"), true)
+  assert.equal(catalogEntry("openai")?.models.find((m) => m.id === "GPT-6.1-Terra")?.verified, false)
+  assert.equal(catalogEntry("anthropic")?.defaultModel, "claude-haiku-5-5")
+  assert.equal(isKnownModel("anthropic", "claude-haiku-5-5"), true)
+  assert.equal(catalogEntry("anthropic")?.models.find((m) => m.id === "claude-haiku-5-5")?.verified, false)
   assert.equal(catalogEntry("zai")?.models.find((m) => m.id === "glm-5.3-flash")?.verified, false)
-  // GPT marketing names are never API IDs.
+  // Unrequested marketing names are never API IDs.
   assert.equal(isKnownModel("openai", "GPT Luna"), false)
   assert.equal(isKnownModel("openai", "gpt-4o-mini"), true)
 })
@@ -239,7 +246,7 @@ test("model discovery falls back to the catalog when the API is unreachable", as
   assert.ok(found.models.includes("gpt-4o-mini"))
 })
 
-test("testConnection makes a genuine low-cost call capped at 16 tokens", async () => {
+test("testConnection makes a genuine low-cost call capped at 64 tokens (thinking-safe)", async () => {
   let maxTokens = 0
   const fetchFn = (async (_url: string | URL | Request, init?: RequestInit) => {
     maxTokens = Number((JSON.parse(String(init?.body)) as { max_tokens?: unknown }).max_tokens)
@@ -247,6 +254,6 @@ test("testConnection makes a genuine low-cost call capped at 16 tokens", async (
   }) as typeof fetch
   const res = await testConnection({ provider: "openai", apiKey: "SYN-KEY", model: "gpt-4o-mini", fetchFn })
   assert.equal(res.ok, true)
-  assert.equal(maxTokens, 16)
+  assert.equal(maxTokens, 64)
   assert.equal(res.usage.outputTokens, 1)
 })

@@ -1479,25 +1479,45 @@ class NativeSupplierBrowser implements SupplierBrowserApi {
    * to in-page DOM element clicks when the view is detached, unfocused, or running in background.
    */
   async humanClick(selector: string): Promise<boolean> {
+    const clickInPage = (): Promise<boolean> =>
+      this.evaluate<boolean>(`
+        (() => {
+          const el = document.querySelector(${JSON.stringify(selector)});
+          if (!el) return false;
+          if (typeof el.scrollIntoView === "function") el.scrollIntoView({ block: "center" });
+          if (typeof el.click === "function") el.click();
+          return true;
+        })()
+      `).catch(() => false)
     const focusedWindow = this.electron?.BrowserWindow?.getFocusedWindow?.()
     const ownerWindow = this.electron?.BrowserWindow?.fromWebContents?.(this.contents)
     if (focusedWindow && ownerWindow && focusedWindow === ownerWindow) {
       const center = await elementCenter(this.contents, selector)
       if (center && center.x > 0 && center.y > 0) {
-        this.contents.sendInputEvent({ type: "mouseDown", x: center.x, y: center.y, button: "left", clickCount: 1 } as never)
-        this.contents.sendInputEvent({ type: "mouseUp", x: center.x, y: center.y, button: "left", clickCount: 1 } as never)
-        return true
+        // Human-like approach: move the cursor toward the element in two steps
+        // from a small random offset before pressing, so hover states fire.
+        const targetX = Math.round(center.x)
+        const targetY = Math.round(center.y)
+        const startX = Math.max(0, targetX + Math.round(Math.random() * 240 - 120))
+        const startY = Math.max(0, targetY + Math.round(Math.random() * 240 - 120))
+        this.contents.sendInputEvent({ type: "mouseMoved", x: startX, y: startY } as never)
+        await this.delay(30 + Math.floor(Math.random() * 51))
+        this.contents.sendInputEvent({ type: "mouseMoved", x: Math.round((startX + targetX) / 2), y: Math.round((startY + targetY) / 2) } as never)
+        await this.delay(30 + Math.floor(Math.random() * 51))
+        // The moved steps take ~160ms: the element may have left the DOM. Press
+        // only at freshly resolved coordinates, else fall back to a DOM click.
+        const fresh = await elementCenter(this.contents, selector)
+        if (fresh && fresh.x > 0 && fresh.y > 0) {
+          const x = Math.round(fresh.x)
+          const y = Math.round(fresh.y)
+          this.contents.sendInputEvent({ type: "mouseDown", x, y, button: "left", clickCount: 1 } as never)
+          this.contents.sendInputEvent({ type: "mouseUp", x, y, button: "left", clickCount: 1 } as never)
+          return true
+        }
+        return clickInPage()
       }
     }
-    return this.evaluate<boolean>(`
-      (() => {
-        const el = document.querySelector(${JSON.stringify(selector)});
-        if (!el) return false;
-        if (typeof el.scrollIntoView === "function") el.scrollIntoView({ block: "center" });
-        if (typeof el.click === "function") el.click();
-        return true;
-      })()
-    `).catch(() => false)
+    return clickInPage()
   }
 
   async clickByTextIncludes(text: string): Promise<boolean> {
