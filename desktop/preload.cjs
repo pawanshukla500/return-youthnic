@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld("desktopApp", {
   isDesktop: true,
   platform: process.platform,
   getAppInfo: () => ipcRenderer.invoke("desktop:get-app-info"),
+  getSystemStats: () => ipcRenderer.invoke("desktop:get-system-stats"),
   getEngineTarget: () => ipcRenderer.invoke("desktop:get-engine-target"),
   getBotStatus: () => ipcRenderer.invoke("desktop:get-bot-status"),
   toggleBot: () => ipcRenderer.invoke("desktop:toggle-bot"),

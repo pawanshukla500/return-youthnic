@@ -13,6 +13,8 @@ import { isSensitiveForRtdb, loadRtdbConfig, pushSignal } from "./src/ai-firebas
 import { sdkModelFor } from "./src/ai-sdk-bridge.ts"
 import { saveProviderKey, hasProviderKey, removeProviderKey, readProviderPrefs, writeProviderPrefs } from "./src/ai-provider-store.ts"
 import { buildDiagnosticPrompt, validateAiProposal } from "./src/ai-assistant.ts"
+import { resolveTestModel } from "./src/ai-center-routes.ts"
+import { catalogEntry } from "./src/ai-providers.ts"
 
 function tempDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "SYN-aicenter-"))
@@ -147,6 +149,27 @@ test("provider store: keys persist separately from prefs, removal revokes", () =
   assert.equal(readProviderPrefs(dir, "openai").defaultModel, "gpt-4o")
   assert.equal(removeProviderKey(dir, "openai").removed, true)
   assert.equal(hasProviderKey(dir, "openai"), false)
+})
+
+test("test connection model resolution: body model, saved pref, then catalog default", () => {
+  const catalogDefault = catalogEntry("meta")?.defaultModel
+  assert.ok(catalogDefault, "expected the meta catalog entry to carry a default model")
+  // The operator-reported case: no body model and no saved pref must fall back
+  // to the catalog default instead of failing with "unsupported_model".
+  assert.equal(resolveTestModel("", "", catalogDefault), catalogDefault)
+  assert.equal(resolveTestModel(undefined, null, catalogDefault), catalogDefault)
+  // An explicit body model wins over everything.
+  assert.equal(resolveTestModel("SYN-body-model", "SYN-pref-model", catalogDefault), "SYN-body-model")
+  // A saved preference beats the catalog default and is trimmed.
+  assert.equal(resolveTestModel("", " SYN-pref ", catalogDefault), "SYN-pref")
+  // Whitespace-only values fall through to the next candidate instead of
+  // masking it (the earlier bug: "  " truncated the chain to "").
+  assert.equal(resolveTestModel("   ", "SYN-pref-model", catalogDefault), "SYN-pref-model")
+  assert.equal(resolveTestModel("   ", "   ", catalogDefault), catalogDefault)
+  assert.equal(resolveTestModel("", "   ", catalogDefault), catalogDefault)
+  // Still nothing anywhere: the route answers with the actionable message.
+  assert.equal(resolveTestModel("", "", ""), "")
+  assert.equal(resolveTestModel("   ", "  ", "  "), "")
 })
 
 test("security: prompt injection and malicious output cannot escape validation", () => {

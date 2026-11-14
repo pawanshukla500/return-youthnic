@@ -9,6 +9,7 @@ import UpdatesPage, { readAutoUpdatesPreference, safeLocalStorage } from './page
 import { useSession } from './state/SessionContext'
 import { useTheme } from './state/ThemeProvider'
 import { useEngineStatus } from './hooks/useEngineStatus'
+import SystemStatsPill from './components/SystemStatsPill'
 import {
   apiGet,
   apiPost,
@@ -578,6 +579,7 @@ export default function App() {
                 {session.user.name}
                 <span className="ml-1 text-xs">({session.user.role})</span>
               </span>
+              <SystemStatsPill />
               <button
                 type="button"
                 onClick={toggleTheme}
