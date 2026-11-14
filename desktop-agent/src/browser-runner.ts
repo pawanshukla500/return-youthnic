@@ -533,7 +533,7 @@ export class BrowserRunner {
     await this.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: startX, y: startY })
     await this.delay(30 + Math.floor(Math.random() * 51))
     await this.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: targetX, y: targetY })
-    await this.evaluate<boolean>(`
+    const clicked = await this.evaluate<boolean>(`
       (() => {
         const el = document.querySelector(${JSON.stringify(selector)});
         if (!el) return false;
@@ -541,6 +541,7 @@ export class BrowserRunner {
         return true;
       })()
     `)
+    if (!clicked) return false
 
     // 1-second delay after every click as requested
     await this.delay(1000)

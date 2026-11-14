@@ -229,23 +229,27 @@ export default function SettingsPage() {
   // behind a disclosure: open it on demand, when a panel genuinely needs the
   // operator to act, or when a deep link asks for it.
   const [loginFormOpen, setLoginFormOpen] = useState(false)
-  const focusRequestRef = useRef<'marketplace' | 'username' | null>(null)
+  // Focus requests are nonce-driven, not keyed on the open transition, so a
+  // Connect/Reconnect action re-focuses even when the form is already open.
+  const [focusNonce, setFocusNonce] = useState(0)
+  const focusTargetRef = useRef<'marketplace' | 'username' | null>(null)
 
   useEffect(() => {
-    if (!loginFormOpen) return
-    const target = focusRequestRef.current
-    focusRequestRef.current = null
+    if (!loginFormOpen || focusNonce === 0) return
+    const target = focusTargetRef.current
+    focusTargetRef.current = null
     const frame = window.requestAnimationFrame(() => {
       formSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
       if (target === 'username') usernameRef.current?.focus()
       else marketplaceRef.current?.focus()
     })
     return () => window.cancelAnimationFrame(frame)
-  }, [loginFormOpen])
+  }, [loginFormOpen, focusNonce])
 
   const openLoginForm = useCallback((focus: 'marketplace' | 'username') => {
-    focusRequestRef.current = focus
+    focusTargetRef.current = focus
     setLoginFormOpen(true)
+    setFocusNonce((nonce) => nonce + 1)
   }, [])
 
   // Auto-open once when the first channel load shows a panel that is both

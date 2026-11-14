@@ -473,9 +473,13 @@ export async function generateWithFallback(candidates: GenerateRequest[]): Promi
   throw last instanceof Error ? last : new Error("All provider candidates failed.")
 }
 
-/** Genuine low-cost authenticated check: a real model call capped at 16 tokens. */
+/** Genuine low-cost authenticated check: a real model call with a small
+ * output cap. The cap is 64 (not 16) so provider-side thinking on
+ * thinking-capable models cannot eat the whole budget before any answer
+ * text is produced; `reasoning: undefined` already asks the SDK to attach
+ * no reasoning params. */
 export async function testConnection(req: Omit<GenerateRequest, "prompt" | "maxTokens"> & { prompt?: string }): Promise<{ ok: true; model: string; latencyMs: number; usage: TokenUsage }> {
-  const res = await generateWithRetries({ ...req, prompt: req.prompt ?? "Reply with the single word OK.", system: undefined, maxTokens: 16, tools: undefined, reasoning: undefined }, 1)
+  const res = await generateWithRetries({ ...req, prompt: req.prompt ?? "Reply with the single word OK.", system: undefined, maxTokens: 64, tools: undefined, reasoning: undefined }, 1)
   return { ok: true, model: res.model, latencyMs: res.latencyMs, usage: res.usage }
 }
 

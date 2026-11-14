@@ -246,7 +246,7 @@ test("model discovery falls back to the catalog when the API is unreachable", as
   assert.ok(found.models.includes("gpt-4o-mini"))
 })
 
-test("testConnection makes a genuine low-cost call capped at 16 tokens", async () => {
+test("testConnection makes a genuine low-cost call capped at 64 tokens (thinking-safe)", async () => {
   let maxTokens = 0
   const fetchFn = (async (_url: string | URL | Request, init?: RequestInit) => {
     maxTokens = Number((JSON.parse(String(init?.body)) as { max_tokens?: unknown }).max_tokens)
@@ -254,6 +254,6 @@ test("testConnection makes a genuine low-cost call capped at 16 tokens", async (
   }) as typeof fetch
   const res = await testConnection({ provider: "openai", apiKey: "SYN-KEY", model: "gpt-4o-mini", fetchFn })
   assert.equal(res.ok, true)
-  assert.equal(maxTokens, 16)
+  assert.equal(maxTokens, 64)
   assert.equal(res.usage.outputTokens, 1)
 })
