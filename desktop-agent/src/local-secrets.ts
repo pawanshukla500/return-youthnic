@@ -25,7 +25,12 @@ type SafeStorageApi = {
 
 function electronSafeStorage(): SafeStorageApi | null {
   try {
-    const req = createRequire(import.meta.url)
+    // The esbuild CJS bundle (desktop/dist/main.cjs) has no import.meta.url —
+    // it shims to undefined and createRequire would throw. There __filename is
+    // the real bundle path; under tsx/ESM dev __filename is undefined and
+    // import.meta.url is the module URL. Prefer whichever exists.
+    const base = typeof __filename === "string" && __filename ? __filename : import.meta.url
+    const req = createRequire(base)
     const electron = req("electron") as { safeStorage?: SafeStorageApi }
     const ss = electron?.safeStorage
     if (!ss || typeof ss.isEncryptionAvailable !== "function") return null

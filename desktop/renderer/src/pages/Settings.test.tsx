@@ -43,8 +43,10 @@ test('pingLabel reports latency on success and the message on failure', () => {
 })
 
 /* SSR smoke render: effects do not run under renderToString, so the page must
-   render its static shell (sections, form controls, live regions) from empty
-   state without the engine, the bridge, or a DOM. */
+   render its static shell (sections, the supplier-login disclosure, live
+   regions) from empty state without the engine, the bridge, or a DOM. The
+   supplier login form starts collapsed — opening it needs channel data or a
+   deep link, both of which only arrive through effects. */
 
 test('MARKETPLACES lists the six claim panels with engine-exact names', () => {
   assert.deepEqual(
@@ -60,14 +62,15 @@ test('SettingsPage renders its settings shell without the engine or a DOM', () =
   // First-time setup panel.
   assert.match(html, /Connect each supplier panel/)
   assert.match(html, /Loading supplier panels/)
-  // Supplier login form.
-  assert.match(html, /Supplier ID/)
-  assert.match(html, /Password/)
-  assert.match(html, /Save login/)
-  assert.match(html, /Sign in and save cookies/)
-  for (const entry of MARKETPLACES) {
-    assert.ok(html.includes(`>${entry.name}</option>`), `missing select option for ${entry.name}`)
-  }
+  // Supplier login section starts collapsed: compact summary + disclosure
+  // button, no credential fields in the static shell.
+  assert.match(html, /Supplier login/)
+  assert.match(html, /Saved supplier logins stay on this PC/)
+  assert.match(html, /Loading supplier login status…/)
+  assert.match(html, /Fix or change a supplier login/)
+  assert.ok(!html.includes('id="portal-marketplace"'), 'login form must stay hidden until opened')
+  assert.ok(!html.includes('id="portal-password"'), 'password field must stay hidden until opened')
+  assert.ok(!html.includes('type="password"'), 'no password input in the collapsed shell')
   // Backend server section.
   assert.match(html, /Backend server/)
   assert.match(html, /Test Ping/)
@@ -81,6 +84,4 @@ test('SettingsPage renders its settings shell without the engine or a DOM', () =
   assert.match(html, /Browsers tab/)
   // Result messages are announced to screen readers.
   assert.match(html, /aria-live="polite"/)
-  // The password field never auto-fills.
-  assert.match(html, /type="password"[^>]*value=""/)
 })

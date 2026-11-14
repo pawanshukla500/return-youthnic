@@ -508,21 +508,39 @@ export class BrowserRunner {
   }
 
   async humanClick(selector: string): Promise<boolean> {
-    const clicked = await this.evaluate<boolean>(`
+    const point = await this.evaluate<{ x: number; y: number } | null>(`
+      (() => {
+        const el = document.querySelector(${JSON.stringify(selector)});
+        if (!el) return null;
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        el.focus();
+        const box = el.getBoundingClientRect();
+        return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+      })()
+    `)
+
+    if (!point) {
+      logger.warn(`humanClick: Element not found for selector: ${selector}`)
+      return false
+    }
+
+    // Human-like cursor path: approach the element in two mouseMoved steps from
+    // a small random offset before clicking (mirrors the native view's humanClick).
+    const targetX = Math.round(point.x)
+    const targetY = Math.round(point.y)
+    const startX = Math.max(0, targetX + Math.round(Math.random() * 240 - 120))
+    const startY = Math.max(0, targetY + Math.round(Math.random() * 240 - 120))
+    await this.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: startX, y: startY })
+    await this.delay(30 + Math.floor(Math.random() * 51))
+    await this.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: targetX, y: targetY })
+    await this.evaluate<boolean>(`
       (() => {
         const el = document.querySelector(${JSON.stringify(selector)});
         if (!el) return false;
-        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        el.focus();
         el.click();
         return true;
       })()
     `)
-
-    if (!clicked) {
-      logger.warn(`humanClick: Element not found for selector: ${selector}`)
-      return false
-    }
 
     // 1-second delay after every click as requested
     await this.delay(1000)

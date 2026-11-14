@@ -77,7 +77,7 @@ export type ProviderCatalogEntry = {
 }
 
 /** Versioned catalog: bump CATALOG_VERSION when models/pricing change. */
-export const PROVIDER_CATALOG_VERSION = 1
+export const PROVIDER_CATALOG_VERSION = 2
 
 export const PROVIDER_CATALOG: ProviderCatalogEntry[] = [
   {
@@ -88,10 +88,10 @@ export const PROVIDER_CATALOG: ProviderCatalogEntry[] = [
     docUrl: "https://developers.meta.com/",
     transport: "openai-compatible",
     discovery: { kind: "models-endpoint", path: "/models" },
-    defaultModel: "muse-spark-1.3",
+    defaultModel: "muse-spark-1.3-contributor",
     models: [
+      { id: "muse-spark-1.3-contributor", label: "Muse Spark 1.3 Contributor (low-cost default)", verified: false, strengths: ["general", "complex-reasoning"], supportsTools: true, supportsReasoning: false },
       { id: "muse-spark-1.3", label: "Muse Spark 1.3", verified: false, strengths: ["general", "worker-diagnosis"], supportsTools: true, supportsReasoning: false },
-      { id: "muse-spark-1.3-contributor", label: "Muse Spark 1.3 Contributor", verified: false, strengths: ["general", "complex-reasoning"], supportsTools: true, supportsReasoning: false },
     ],
     pricing: {
       "muse-spark-1.3": { inputPer1M: null, outputPer1M: null, provenance: "Unknown — no public per-token pricing page confirmed" },
@@ -106,13 +106,15 @@ export const PROVIDER_CATALOG: ProviderCatalogEntry[] = [
     docUrl: "https://platform.openai.com/docs/models",
     transport: "openai-compatible",
     discovery: { kind: "models-endpoint", path: "/models" },
-    defaultModel: "gpt-4o-mini",
+    defaultModel: "GPT-6.1-Terra",
     models: [
-      { id: "gpt-4o-mini", label: "GPT-4o mini (low-cost default)", verified: true, strengths: ["worker-diagnosis", "status-interpretation", "cost-aware"], supportsTools: true, supportsReasoning: false, contextWindow: 128000 },
+      { id: "GPT-6.1-Terra", label: "GPT-6.1 Terra (low-cost default)", verified: false, strengths: ["worker-diagnosis", "status-interpretation", "cost-aware"], supportsTools: true, supportsReasoning: false },
+      { id: "gpt-4o-mini", label: "GPT-4o mini", verified: true, strengths: ["worker-diagnosis", "status-interpretation", "cost-aware"], supportsTools: true, supportsReasoning: false, contextWindow: 128000 },
       { id: "gpt-4o", label: "GPT-4o (stronger escalation)", verified: true, strengths: ["claim-rejection", "response-drafting", "complex-reasoning"], supportsTools: true, supportsReasoning: false, contextWindow: 128000 },
       { id: "gpt-4.1-mini", label: "GPT-4.1 mini", verified: true, strengths: ["worker-diagnosis", "report-analysis"], supportsTools: true, supportsReasoning: false, contextWindow: 1047576 },
     ],
     pricing: {
+      "GPT-6.1-Terra": { inputPer1M: null, outputPer1M: null, provenance: "Operator-requested ID — no public per-token pricing page confirmed" },
       "gpt-4o-mini": { inputPer1M: 0.15, outputPer1M: 0.6, provenance: "OpenAI pricing page, snapshot 2026 — estimate, provider bills" },
       "gpt-4o": { inputPer1M: 2.5, outputPer1M: 10, provenance: "OpenAI pricing page, snapshot 2026 — estimate, provider bills" },
       "gpt-4.1-mini": { inputPer1M: 0.4, outputPer1M: 1.6, provenance: "OpenAI pricing page, snapshot 2026 — estimate, provider bills" },
@@ -146,12 +148,14 @@ export const PROVIDER_CATALOG: ProviderCatalogEntry[] = [
     docUrl: "https://docs.anthropic.com/en/docs/models-overview",
     transport: "anthropic-messages",
     discovery: { kind: "models-endpoint", path: "/models" },
-    defaultModel: "claude-3-5-haiku-20241022",
+    defaultModel: "claude-haiku-5-5",
     models: [
-      { id: "claude-3-5-haiku-20241022", label: "Claude 3.5 Haiku (low-cost default)", verified: true, strengths: ["worker-diagnosis", "status-interpretation", "cost-aware"], supportsTools: true, supportsReasoning: false, contextWindow: 200000 },
+      { id: "claude-haiku-5-5", label: "Claude Haiku 5.5 (low-cost default)", verified: false, strengths: ["worker-diagnosis", "status-interpretation", "cost-aware"], supportsTools: true, supportsReasoning: false },
+      { id: "claude-3-5-haiku-20241022", label: "Claude 3.5 Haiku", verified: true, strengths: ["worker-diagnosis", "status-interpretation", "cost-aware"], supportsTools: true, supportsReasoning: false, contextWindow: 200000 },
       { id: "claude-3-5-sonnet-20241022", label: "Claude 3.5 Sonnet (stronger escalation)", verified: true, strengths: ["claim-rejection", "response-drafting", "complex-reasoning"], supportsTools: true, supportsReasoning: false, contextWindow: 200000 },
     ],
     pricing: {
+      "claude-haiku-5-5": { inputPer1M: null, outputPer1M: null, provenance: "Operator-requested ID — no public per-token pricing page confirmed" },
       "claude-3-5-haiku-20241022": { inputPer1M: 0.8, outputPer1M: 4, provenance: "Anthropic pricing page, snapshot 2026 — estimate, provider bills" },
       "claude-3-5-sonnet-20241022": { inputPer1M: 3, outputPer1M: 15, provenance: "Anthropic pricing page, snapshot 2026 — estimate, provider bills" },
     },

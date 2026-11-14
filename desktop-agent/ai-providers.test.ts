@@ -28,7 +28,7 @@ function openAiOk(text = "SYN-OK", usage: Record<string, unknown> = { prompt_tok
 }
 
 test("catalog is versioned, covers six providers, and marks operator-requested IDs unverified", () => {
-  assert.equal(PROVIDER_CATALOG_VERSION, 1)
+  assert.equal(PROVIDER_CATALOG_VERSION, 2)
   assert.deepEqual(PROVIDER_CATALOG.map((e) => e.id).sort(), ["anthropic", "google", "kimi", "meta", "openai", "zai"])
   for (const entry of PROVIDER_CATALOG) {
     assert.ok(entry.baseUrl.startsWith("https://"), entry.id)
@@ -36,10 +36,17 @@ test("catalog is versioned, covers six providers, and marks operator-requested I
     assert.equal(entry.defaultModel, entry.models[0].id, entry.id)
   }
   // Operator-requested names stay manual until a provider confirms them.
+  assert.equal(catalogEntry("meta")?.defaultModel, "muse-spark-1.3-contributor")
   assert.equal(isKnownModel("meta", "muse-spark-1.3-contributor"), true)
   assert.equal(catalogEntry("meta")?.models.find((m) => m.id === "muse-spark-1.3-contributor")?.verified, false)
+  assert.equal(catalogEntry("openai")?.defaultModel, "GPT-6.1-Terra")
+  assert.equal(isKnownModel("openai", "GPT-6.1-Terra"), true)
+  assert.equal(catalogEntry("openai")?.models.find((m) => m.id === "GPT-6.1-Terra")?.verified, false)
+  assert.equal(catalogEntry("anthropic")?.defaultModel, "claude-haiku-5-5")
+  assert.equal(isKnownModel("anthropic", "claude-haiku-5-5"), true)
+  assert.equal(catalogEntry("anthropic")?.models.find((m) => m.id === "claude-haiku-5-5")?.verified, false)
   assert.equal(catalogEntry("zai")?.models.find((m) => m.id === "glm-5.3-flash")?.verified, false)
-  // GPT marketing names are never API IDs.
+  // Unrequested marketing names are never API IDs.
   assert.equal(isKnownModel("openai", "GPT Luna"), false)
   assert.equal(isKnownModel("openai", "gpt-4o-mini"), true)
 })

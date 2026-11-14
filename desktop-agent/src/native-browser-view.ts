@@ -1484,8 +1484,18 @@ class NativeSupplierBrowser implements SupplierBrowserApi {
     if (focusedWindow && ownerWindow && focusedWindow === ownerWindow) {
       const center = await elementCenter(this.contents, selector)
       if (center && center.x > 0 && center.y > 0) {
-        this.contents.sendInputEvent({ type: "mouseDown", x: center.x, y: center.y, button: "left", clickCount: 1 } as never)
-        this.contents.sendInputEvent({ type: "mouseUp", x: center.x, y: center.y, button: "left", clickCount: 1 } as never)
+        // Human-like approach: move the cursor toward the element in two steps
+        // from a small random offset before pressing, so hover states fire.
+        const targetX = Math.round(center.x)
+        const targetY = Math.round(center.y)
+        const startX = Math.max(0, targetX + Math.round(Math.random() * 240 - 120))
+        const startY = Math.max(0, targetY + Math.round(Math.random() * 240 - 120))
+        this.contents.sendInputEvent({ type: "mouseMoved", x: startX, y: startY } as never)
+        await this.delay(30 + Math.floor(Math.random() * 51))
+        this.contents.sendInputEvent({ type: "mouseMoved", x: Math.round((startX + targetX) / 2), y: Math.round((startY + targetY) / 2) } as never)
+        await this.delay(30 + Math.floor(Math.random() * 51))
+        this.contents.sendInputEvent({ type: "mouseDown", x: targetX, y: targetY, button: "left", clickCount: 1 } as never)
+        this.contents.sendInputEvent({ type: "mouseUp", x: targetX, y: targetY, button: "left", clickCount: 1 } as never)
         return true
       }
     }
