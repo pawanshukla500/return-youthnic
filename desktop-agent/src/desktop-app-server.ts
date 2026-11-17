@@ -7,6 +7,7 @@ import { loadAgentConfig, saveAgentConfig, type AgentConfig } from "./config.js"
 import { bearerTokenFromHeader, engineTokenMatches, localEngineUrl, resolveEngineBind, type EngineBind } from "./engine-config.js"
 import { installCrashGuards } from "./crash-guard.js"
 import { engineBusy as engineBusyWith, shouldRunPollCycle, supplierProfileInUse as supplierProfileInUseWith } from "./poll-guard.js"
+import { CYCLE_TIMEOUT, FOLLOW_UP_CYCLE_TIMEOUT_MS, POLL_CYCLE_TIMEOUT_MS, withCycleTimeout } from "./cycle-watchdog.js"
 import { agentDataDir } from "./paths.js"
 import { logger } from "./logger.js"
 import { AgentBackendClient } from "./agent-client.js"
@@ -201,8 +202,15 @@ async function pollAndProcessJob(manual = false): Promise<boolean> {
   pollInFlight = true
   lastPollTime = new Date().toLocaleTimeString("en-IN")
   let submissionOutcomeUnknown = false
+  // Panel marked busy this cycle; the watchdog force-resets it on timeout.
+  let watchdogPanelKey: string | null = null
 
-  try {
+  // The cycle body (lease through browser teardown) runs as a closure so it can
+  // race the watchdog: a single backend fetch that hangs forever must not wedge
+  // pollInFlight and silence both worker loops (2026-11-17 incident). On timeout
+  // the callback clears the flags before the sentinel resolves, and the shared
+  // finally below re-runs the same cleanup on both paths.
+  const runCycle = async (): Promise<boolean> => {
     const poll = await client.pollJob()
     if (!poll.hasJob || !poll.job) return false
 
@@ -219,6 +227,7 @@ async function pollAndProcessJob(manual = false): Promise<boolean> {
     logger.info(`=== Received Claim Job #${jobHeader.jobId} (${jobHeader.marketplace} · AWB/Order: ${jobHeader.trackingId || jobHeader.orderNumber} · Stage: ${jobHeader.stage}) ===`)
     await client.sendHeartbeat("busy", { activeJobId: jobHeader.jobId, marketplace: jobHeader.marketplace })
     markPanelBusy(panelKey, jobHeader.jobId, String(jobHeader.stage || ""))
+    watchdogPanelKey = panelKey
     // The worker owns this tab until the job settles: a manual close needs a
     // pause first (409 WORKER_ACTIVE_PAUSE_REQUIRED). Opening the tab here
     // also keeps the tab strip honest while the worker drives the view.
@@ -371,6 +380,23 @@ async function pollAndProcessJob(manual = false): Promise<boolean> {
       // job settles so a manual close no longer needs the pause-first guard.
       setSupplierTabWorkerState(panelKey, { workerOwned: false })
     }
+    return true
+  }
+
+  try {
+    const outcome = await withCycleTimeout(runCycle(), POLL_CYCLE_TIMEOUT_MS, () => {
+      logger.error("Poll cycle watchdog: a filing step hung and was force-reset after 20 minutes. The engine keeps running; the job returns to the queue on the next lease.")
+      // The wedge from the 2026-11-17 incident: clear every flag a guard reads
+      // before the sentinel resolves. The finally below re-runs this cleanup,
+      // so timeout flag mutation stays in one place.
+      pollInFlight = false
+      isCurrentlyProcessing = false
+      activeJobInfo = null
+      submissionOutcomeUnknown = false
+      if (watchdogPanelKey) markPanelResult(watchdogPanelKey, "failed", "A filing step hung and was force-reset after 20 minutes.")
+    })
+    if (outcome === CYCLE_TIMEOUT) return false
+    return outcome
   } catch (err: any) {
     logger.error("Error processing automation job:", err)
     if (activeJobInfo?.jobId) {
@@ -551,6 +577,11 @@ async function runFollowUpAssist(input: {
 }
 
 /**
+ * A follow-up ticket leased from the server for one check cycle.
+ */
+type LeasedFollowUp = { followUpId: number; claimId: number; marketplace: string; accountName: string; marketplaceClaimId: string; portalUrl: string }
+
+/**
  * Run one follow-up cycle. Returns true when a ticket was actually checked.
  *
  * On any failure after the server handed out a ticket, the outcome is reported as an error so the ticket is
@@ -566,11 +597,19 @@ async function pollAndProcessFollowUp(): Promise<boolean> {
   followUpInFlight = true
   lastFollowUpCheckTime = new Date().toLocaleTimeString("en-IN")
 
-  let leased: { followUpId: number; claimId: number; marketplace: string; accountName: string; marketplaceClaimId: string; portalUrl: string } | null = null
-  try {
+  let leased: LeasedFollowUp | null = null
+  let leasedId: number | null = null
+
+  // Same watchdog discipline as the filing loop: one hung step must not wedge
+  // followUpInFlight and silence both loops. On timeout a leased ticket is
+  // reported as an error best-effort so the server reschedules it, the flag is
+  // cleared before the sentinel resolves, and the shared finally below re-runs
+  // the same cleanup on both paths.
+  const runCheck = async (): Promise<boolean> => {
     const poll = await client.pollFollowUp()
     if (!poll.hasFollowUp || !poll.followUp) return false
     leased = poll.followUp
+    leasedId = poll.followUp.followUpId
     const followUp = poll.followUp
     const panelKey = panelKeyForMarketplace(String(followUp.marketplace || ""))
     logger.info(
@@ -666,14 +705,31 @@ async function pollAndProcessFollowUp(): Promise<boolean> {
     }
     followUpChecksRun += 1
     return true
+  }
+
+  try {
+    const outcome = await withCycleTimeout(runCheck(), FOLLOW_UP_CYCLE_TIMEOUT_MS, () => {
+      logger.error("Follow-up cycle watchdog: a ticket check hung and was force-reset after 8 minutes. The engine keeps running; the check retries on its normal schedule.")
+      if (leasedId !== null) {
+        void client
+          .reportFollowUp(leasedId, { outcome: "error", note: "Desktop check timed out and was reset; will retry on schedule." })
+          .catch(() => undefined)
+      }
+      followUpInFlight = false
+    })
+    return outcome === CYCLE_TIMEOUT ? false : outcome
   } catch (err) {
     const message = err instanceof Error ? err.message : "Follow-up check failed."
     logger.error("Follow-up check failed:", err)
     lastFollowUpResult = message.slice(0, 200)
-    if (leased) {
+    // leased is assigned inside the runCheck closure, which control-flow
+    // narrowing cannot see (it reads null here), so read it through an
+    // explicit cast of its declared type.
+    const leasedFailure = leased as LeasedFollowUp | null
+    if (leasedFailure) {
       await client
-        .reportFollowUp(leased.followUpId, { outcome: "error", note: message.slice(0, 400) })
-      await runFollowUpAssist({ followUpId: leased.followUpId, claimId: leased.claimId, marketplace: leased.marketplace, marketplaceClaimId: leased.marketplaceClaimId, ...assistClientHooks(client, leased.claimId, leased.marketplace), outcome: "error", note: message.slice(0, 200), statusText: "", normalizedStatus: "", statusChanged: false })
+        .reportFollowUp(leasedFailure.followUpId, { outcome: "error", note: message.slice(0, 400) })
+      await runFollowUpAssist({ followUpId: leasedFailure.followUpId, claimId: leasedFailure.claimId, marketplace: leasedFailure.marketplace, marketplaceClaimId: leasedFailure.marketplaceClaimId, ...assistClientHooks(client, leasedFailure.claimId, leasedFailure.marketplace), outcome: "error", note: message.slice(0, 200), statusText: "", normalizedStatus: "", statusChanged: false })
         .catch(() => undefined)
     }
     return false
