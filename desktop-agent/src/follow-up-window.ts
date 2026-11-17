@@ -41,3 +41,5 @@ export function nightlyWindowStatus(now: Date, env: NodeJS.ProcessEnv = process.
     msUntilWindow: msUntilNightlyWindow(now),
   }
 }
+
+// guard-check probe (no version bump on purpose)
