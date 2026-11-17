@@ -111,6 +111,23 @@ running in the tray.
   tag. (The old banner download link — a raw link routed through the popup
   handler with no feedback — is gone since 1.3.3.)
 
+### How releases are made (why an update always exists)
+
+- Every change that touches the desktop app, the engine, or the installer must
+  bump `package.json`'s version — the CI on the PR fails without it
+  ("Require a version bump for desktop changes"). A same-version rebuild is
+  invisible twice: the in-app updater compares versions, and the NSIS
+  installer silently skips an upgrade over an identical version.
+- Merges to `main` automatically build and publish `desktop-v<version>.<run>`
+  on GitHub Releases (`.github/workflows/desktop-release.yml`; only the
+  newest two desktop releases are kept, and Android releases are never
+  touched).
+- Installed apps see the new release on their next check (30s after launch,
+  then every 6h; the banner + Updates tab). Install over — cookies, logins,
+  and queue state are preserved.
+- Server-side changes deploy separately via the VPS workflow; the desktop
+  release carries the engine (`desktop-agent/`) inside the installer.
+
 ### Overall status and the green panel state
 
 The Dashboard headline answers "is anything waiting on me?":

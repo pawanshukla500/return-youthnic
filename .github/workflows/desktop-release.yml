@@ -66,6 +66,22 @@ jobs:
           node-version: 22
           cache: "npm"
 
+      # A same-version desktop change can never reach installed apps: the
+      # in-app updater ignores run-number-only tags, and NSIS silently skips
+      # an upgrade over an identical version. Fail the PR instead of shipping
+      # an invisible fix.
+      - name: Require a version bump for desktop changes (PR)
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          base_v=$(git show "${{ github.event.pull_request.base.sha }}:package.json" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>console.log(JSON.parse(s).version))")
+          head_v=$(node -e "console.log(require('./package.json').version)")
+          if [ "$base_v" = "$head_v" ]; then
+            echo "::error::Desktop-affecting changes require a package.json version bump (still $head_v). The in-app updater and silent upgrades both key off the version; without a bump this fix is invisible to installed apps."
+            exit 1
+          fi
+          echo "Version bump $base_v -> $head_v — OK"
+
       - name: Install Dependencies
         run: npm ci
 
