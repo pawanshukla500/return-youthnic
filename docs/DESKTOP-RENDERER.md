@@ -1,6 +1,6 @@
 # Desktop renderer — the bundled desktop UI
 
-The Windows desktop app (1.3.0) ships a genuine bundled renderer: an independent
+The Windows desktop app (1.3.5) ships a genuine bundled renderer: an independent
 React 19 + TypeScript (strict) + Vite + Tailwind CSS application in
 `desktop/renderer/`, served by the Electron main process over a privileged
 custom scheme (`returnapp://desktop`). This replaced the pre-1.3.0 design where
@@ -49,15 +49,19 @@ desktop/renderer/
       FollowUps.tsx          # ticket follow-ups table
       AiCenter.tsx           # six providers, routing, memory, usage, events
       Settings.tsx           # backend, credentials, notifications, diagnostics
-      Updates.tsx            # update check + download links
+      Updates.tsx            # update check + in-app download flow
+      follow-ups-notify.ts   # pure diff → tracking started/approved/rejected/needs-response notifications
       dashboard/             # dashboard-logic.ts (derived headline), useLogStream.ts
       ai-center/             # per-tab panels + format.ts helpers
+    components/              # UpdateDownloadFlow (in-app update download/run),
+                             # SystemStatsPill (top-bar CPU/RAM pill) + system-stats-format.ts
     components/ui/           # Badge, DataTable, EmptyState, ErrorState, Modal,
                              # MarketplaceBadge, PanelStateDot, Spinner, StatCard
     hooks/
       useEngineStatus.ts     # polls GET /api/status (2s default)
       useEnginePolling.ts    # shared poll/refresh helper
       useBrowserWorkspaceRect.ts  # reports the native viewport rect over IPC
+      useUpdateDownload.ts   # streamed update download state machine (progress/retry/run)
     services/
       engineApi.ts           # typed fetch client, EngineApiError, base resolution
       config.ts              # one-place re-export of the engine surface
@@ -78,8 +82,10 @@ desktop/renderer/
   `aria-current`. The supplier browser never covers it.
 - **Top bar** — page title, a live worker pill (Processing / Bot running /
   Bot paused / Bot idle) fed by `useEngineStatus`, the signed-in operator name
-  and role, and the theme toggle. The shell uses the native window frame, so
-  there are no custom min/max/close buttons.
+  and role, the theme toggle, and a **CPU/RAM pill** (`SystemStatsPill`, a 5s
+  poll over `desktop:get-system-stats`; the tooltip details app
+  CPU/memory/process count and system RAM/uptime). The shell uses the native
+  window frame, so there are no custom min/max/close buttons.
 - **Routing** — hand-rolled hash routing (`#dashboard`, `#claims`, …), no
   router library, matching the repo convention. The active tab persists in
   `localStorage` (`ra-side-tab`) and unknown hashes fall back to Dashboard.
@@ -89,7 +95,13 @@ desktop/renderer/
   the form. The password is cleared from state as soon as the engine accepts it.
 - **Update banner** — polls `/api/updates/check` every 30 minutes once signed
   in; a newer `desktop-v*` release shows a dismissible banner ("Later" is
-  remembered per release tag).
+  remembered per release tag) that hosts the in-app download flow
+  (`UpdateDownloadFlow`: streamed download with live progress, inline error +
+  Retry, and a double-click-confirmed **Run installer** that closes the app
+  and launches the setup).
+- **Page error boundary** — every page renders inside a `PageErrorBoundary`
+  (1.3.1): one bad page response (e.g. a `/api/jobs` payload the page did not
+  expect) shows that page's error UI instead of white-screening the whole app.
 - **Full-page states** — when the engine cannot be reached the entire window
   renders a connecting/offline page (spinner, engine URL, error, Retry now);
   see §9.
@@ -198,6 +210,10 @@ renderer also runs in a plain browser; all call sites guard with
 | `desktop:get-bot-status` | invoke | none → `ShellStatus` | `ipcMain.handle` → `shellStatus()` (local engine or remote control API, 5s timeout) |
 | `desktop:toggle-bot` | invoke | none → `ShellStatus` | `ipcMain.handle` → `toggleWorker()`; sends an explicit start/pause for remote engines |
 | `desktop:bot-status-changed` | main → renderer push | `ShellStatus` every 5s | `startBotStatusPush()` broadcast; subscription returns an unsubscribe so a reload never leaves a duplicate listener |
+| `desktop:get-system-stats` | invoke | none → `SystemStats` (`{ app: { cpuPercent, memoryMB, processCount }, system: { totalMemMB, usedMemMB, usedMemPercent, uptimeSec } }`) | `ipcMain.handle` reading app + OS stats (top-bar pill, 5s poll) |
+| `desktop:download-update` | invoke | update URL → `{ ok, savePath?, fileName?, error? }` — streams the setup into Downloads | `ipcMain.handle` in the main process |
+| `desktop:download-progress` | main → renderer push | `{ receivedBytes, totalBytes \| null }` while a download runs (`totalBytes` null when the server sent no content-length) | main broadcasts progress; subscription returns an unsubscribe |
+| `desktop:run-update-installer` | invoke | `savePath` → `{ ok, error? }` — double-click-confirmed; closes the app and launches the saved setup | `ipcMain.handle` in the main process |
 | `desktop:notify` | renderer → main send | `{ title, body }` | `ipcMain.on` → OS `Notification` |
 | `desktop:browser-rect` | renderer → main send | `{ x, y, width, height }` in DIPs relative to the window content area, or `null` to hide | `ipcMain.on` → `setBrowserWorkspaceRect()` after validating finite, non-negative numbers |
 | `desktop:browser-fullscreen` | renderer → main send | `boolean` — true only from the Expand button, false from Exit/Esc | `ipcMain.on` → `setFullscreenSupplierView()` |
@@ -256,14 +272,30 @@ Fullscreen button (§15).
   copy buttons and an evidence viewer served by the local evidence endpoints
   (works while the backend is down).
 - **Browsers** — tab strip, Back/Forward/Reload, open/close/detach/dock,
-  bounded native viewport, claim control strip, expand/fullscreen.
+  bounded native viewport, claim control strip, expand/fullscreen. Show/Open
+  create the real embedded view on demand (`ensureSupplierView`) and load the
+  panel's supplier portal; while the claim worker owns a panel the engine
+  answers **409** *worker is using this panel*, and each profile adopts and
+  reuses its existing view — never a duplicate browser on one profile.
 - **Follow-ups** — the ticket follow-ups table (marketplace ticket ID, last
   check, next due, outcome), never guessing a status a panel cannot read.
+  Checks run whenever a ticket is due by default (`FOLLOWUP_NIGHTLY_ONLY=1`
+  opts back into the 01:00–02:00 Asia/Kolkata window); `follow-ups-notify.ts`
+  diffs minute polls into OS notifications for tracking
+  started/approved/rejected/needs-response.
 - **AI Center** — the six-provider configuration, routing, approved memory,
-  usage and events, served by the engine's AI Center routes.
+  usage and events, served by the engine's AI Center routes. Provider keys
+  encrypt with the OS store (DPAPI) when the packaged app runs; **Test
+  connection** falls back to the provider's catalog default model when no
+  model is picked.
 - **Settings** — backend URL and diagnostics, credential-storage mode, worker
-  controls, appearance.
-- **Updates** — manual and automatic update checks with download links.
+  controls, appearance. The supplier-login form hides behind a **Fix or
+  change a supplier login** disclosure that auto-opens (nonce-driven focus) only
+  when a login is missing or broken, or a Connect/Reconnect action asks.
+- **Updates** — manual and automatic update checks with an in-app download
+  flow: streamed progress, inline error + Retry, and a double-click-confirmed
+  **Run installer** that closes the app and launches the setup (the old raw
+  download link is gone).
 
 ## 9. Offline and connecting behavior
 
@@ -302,7 +334,7 @@ are consumed by Tailwind 4 utilities.
   `desktop/dist/main.cjs` (external: electron, ws).
 - `npm run desktop:dist` — **renderer build first**, then the main bundle, then
   electron-builder NSIS → `dist-electron/Return.App.Setup.<version>.exe`
-  (version 1.3.0). The installer behavior is unchanged (per-machine NSIS,
+  (version 1.3.5). The installer behavior is unchanged (per-machine NSIS,
   `ReturnAppClaimBot` Scheduled Task, session data preserved under
   `~/.taskflow-claim-agent` across upgrades).
 - The electron-builder `files` list ships `desktop/dist/**/*`,
@@ -325,9 +357,10 @@ are consumed by Tailwind 4 utilities.
   engine origin is an API base, never a page. `window.open` is denied; an
   http(s) popup is treated as an update-installer download and saved to
   Downloads.
-- **Key material is never rendered.** AI provider keys and supplier passwords
-  stay server-encrypted or OS-store encrypted; the UI shows modes and statuses,
-  not values.
+- **Key material is never rendered.** AI provider keys encrypt with the OS
+  store (DPAPI on Windows) when the packaged app runs, alongside the operator
+  token and PC API key; supplier passwords stay server-encrypted. The UI
+  shows modes and statuses, not values.
 - **Evidence endpoints are traversal-safe.** `GET /api/evidence/:claimId` and
   `GET /api/evidence/:claimId/:fileName` (`desktop-app-server.ts`) are
   operator-gated, validate the claim ID and file name

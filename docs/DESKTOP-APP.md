@@ -26,7 +26,7 @@ running in the tray.
 ## 1. Install
 
 1. Take the matching setup from the latest `desktop-v*` GitHub release:
-   Windows `Return.App.Setup.<version>.exe` (1.3.0).
+   Windows `Return.App.Setup.<version>.exe` (1.3.5).
 2. Run it (admin rights needed — it installs per-machine into
    `C:\Program Files\Return App\` with Desktop and Start Menu shortcuts).
 3. The installer automatically:
@@ -63,7 +63,9 @@ running in the tray.
 
 - **Dashboard**: one headline — **All panels green** or **Action required**
   (naming exactly what to do) — plus per-panel chips, worker status, recent
-  activity and a live log terminal. Update checks moved to the **Updates** tab
+  activity and a live log terminal. The top bar carries a **CPU/RAM pill**
+  (live app + system usage; the tooltip details app CPU/memory/process count
+  and system RAM/uptime; 5s poll). Update checks moved to the **Updates** tab
   (Check now, auto-check toggle, dismissible banner; install over this
   version, cookies kept).
 - **Browsers page**: the supplier workspace — tab strip, Back/Forward/Reload,
@@ -71,15 +73,26 @@ running in the tray.
   **Expand** button that fills the window with the supplier page (Esc or Exit
   Fullscreen returns). While expanded or detached, the sidebar and controls
   stay out of the way by design; sessions, cookies and any in-progress form
-  input survive tab switches, detach/dock and tray hides.
+  input survive tab switches, detach/dock and tray hides. **Show/Open** on a
+  tab creates the real embedded view on demand (`ensureSupplierView`) and
+  loads that panel's supplier portal — a manually opened tab is a real
+  browser, never metadata only; while the claim worker owns a panel the
+  answer is **409** *The claim worker is using this panel right now; try again
+  when it is idle* (pause the worker first); and each profile adopts and
+  reuses its existing view, so one panel never gets a second browser.
 - **Claims page**: the claims queue with filters, per-claim detail and the
   local evidence viewer (photos/videos stream from this PC, so they open even
   while the backend is down).
 - **Follow-ups page**: the ticket follow-ups table.
 - **AI Center**: the six-provider configuration, routing, approved memory,
-  usage and events.
+  usage and events. Provider keys are encrypted with the OS store (DPAPI on
+  Windows) when the packaged app runs, and **Test connection** falls back to
+  the provider's catalog default model when no model is picked.
 - **Settings**: backend URL and diagnostics, credential-storage mode, worker
-  controls, appearance (light default, dark option).
+  controls, appearance (light default, dark option). The supplier-login form
+  sits behind a **Fix or change a supplier login** disclosure that auto-opens
+  only when a panel login is missing or broken (or a Connect/Reconnect action
+  asks for it).
 - **Logs**: live terminal on the Dashboard + files at
   `%USERPROFILE%\.taskflow-claim-agent\logs\bot-YYYY-MM-DD.log` (7 days kept).
 - **Evidence cache**: `%USERPROFILE%\.taskflow-claim-agent\evidence-cache`
@@ -88,11 +101,15 @@ running in the tray.
   (one per panel — never delete while connected).
 - **Tray menu**: open, pause/resume, check-now, quit. Quit stops the worker;
   closing the window does not.
-- **Updates**: Updates tab → Check now (or wait for the automatic check) → the
-  download link saves the new setup into your Downloads folder; close the app
-  and run it to install over this version (cookies kept). No silent
-  auto-install. A banner appears when a newer GitHub release exists; Later
-  dismisses it per release tag.
+- **Updates**: Updates tab → Check now (or wait for the automatic check) →
+  **Download update** streams the new setup into your Downloads folder with
+  live progress (indeterminate when the server sends no content length); a
+  failed download shows an inline error with **Retry**. **Run installer** asks
+  for a confirming second click, then closes the app and launches the setup to
+  install over this version (cookies kept). No silent auto-install. A banner
+  appears when a newer GitHub release exists; Later dismisses it per release
+  tag. (The old banner download link — a raw link routed through the popup
+  handler with no feedback — is gone since 1.3.3.)
 
 ### Overall status and the green panel state
 
@@ -116,6 +133,13 @@ Filing a claim is not the end of it: a marketplace ticket stays open for days.
 When a filing job completes, the server creates a follow-up for that ticket,
 and the bot re-opens that panel on its own every 2 days — using the panel's
 saved cookies, no password needed — reads the ticket status, and records it.
+Checks run **whenever a ticket is due** (the default since 1.3.3): the first
+look-up lands ~10 seconds after the worker starts, so a PC that was off when
+a check came due catches up on its own instead of waiting for the next night.
+Operators who want the old behaviour back set `FOLLOWUP_NIGHTLY_ONLY=1` to
+lease checks only inside the 01:00–02:00 Asia/Kolkata window. OS
+notifications report *tracking started*, *approved*, *rejected* and *needs a
+response* as they happen.
 The **Follow-ups** page shows the marketplace, the marketplace's own ticket
 ID, the claim status, when the last check ran, when the next one is due, how
 many checks have run, and the current state.
@@ -143,7 +167,7 @@ A job is never marked submitted from a screenshot alone. Duplicate filing is
 prevented by server-side leases + bounded attempts; an uncertain submission
 stops for manual reconciliation instead of retrying blind.
 
-**Ticket status reading exists for Meesho.** `desktop-agent/src/marketplaces/meesho.ts:537` implements `checkClaimStatus()` (DOM ticket-table reader, fixture-tested; live-portal verification still pending). All other panels use the shared default that answers "not implemented", which stops the follow-up for that panel instead of guessing. Once the status page for another marketplace is described, that marketplace implements `checkClaimStatus()` and its tickets start being tracked automatically.
+**Ticket status reading exists for Meesho.** `desktop-agent/src/marketplaces/meesho.ts:1040` implements `checkClaimStatus()` by opening the ticket's own deep link (`…/support/ticket/{ticketId}`) and classifying the page deterministically, with the ticket-table DOM reader kept as the fallback (fixture-tested; live-portal verification still pending). All other panels use the shared default that answers "not implemented", which stops the follow-up for that panel instead of guessing. Once the status page for another marketplace is described, that marketplace implements `checkClaimStatus()` and its tickets start being tracked automatically.
 
 ## 5. Recovery
 
@@ -197,7 +221,7 @@ and consumed by the bundled renderer over the preload bridge:
 
 | Route | Purpose |
 |---|---|
-| `GET /api/status` | Worker state, active job, next poll, backend URL, follow-up worker state, nightly window, browser adapter |
+| `GET /api/status` | Worker state, active job, next poll, backend URL, follow-up worker state, nightly-window opt-in status, browser adapter |
 | `GET /api/operator/session` | Whether a claim-bot-capable operator is signed in |
 | `POST /api/operator/login` / `POST /api/operator/logout` | Operator sign-in (Admin/Supervisor only) and sign-out |
 | `GET /api/panels` | Six panels: state, active job, cookie status, last result |
@@ -211,7 +235,7 @@ and consumed by the bundled renderer over the preload bridge:
 | `POST /api/portal-logins` | Save a supplier ID/password (server-encrypted) |
 | `POST /api/portal-logins/test` | Open the visible browser and save that panel's cookies |
 | `POST /api/jobs/run-one` | Queue one waiting claim immediately |
-| `GET /api/portal-browser` + `POST /api/portal-browser/*` | Supplier browser tabs: snapshot, open, switch, nav, close, detach, dock, focus, hide/show, test-claim |
+| `GET /api/portal-browser` + `POST /api/portal-browser/*` | Supplier browser tabs: snapshot, open, switch, nav, close, detach, dock, focus, hide/show, test-claim. Show/open create the real embedded view on demand and load the panel's portal (409 *worker is using this panel* while a claim owns it); views are adopted/reused per panel |
 | `GET /api/logs/stream` | Live log terminal (EventSource) |
 
 Cross-origin calls from the renderer are restricted by the engine's CORS
@@ -321,8 +345,8 @@ Full server setup, health checks, systemd and Docker are in
   in production; preflight answered before the bearer gate; never `*`).
 - New operator-gated local evidence endpoints (`GET /api/evidence/:claimId`,
   `GET /api/evidence/:claimId/:fileName`) stream the evidence cache and work
-  while the backend is down. `GET /api/status` also reports the nightly window
-  and the browser adapter.
+  while the backend is down. `GET /api/status` also reports the nightly-window
+  opt-in status and the browser adapter.
 - The preload bridge (`window.desktopApp`) is typed and minimal; the remote
   engine token is never exposed to the renderer (the shell injects it).
 - Packaging ships `desktop/renderer/dist`, fixes the preload path in the
@@ -331,14 +355,51 @@ Full server setup, health checks, systemd and Docker are in
   per-machine NSIS, sessions and data preserved under
   `%USERPROFILE%\.taskflow-claim-agent` across upgrades.
 
+### Since 1.3.0 (1.3.1 – 1.3.5)
+
+- **1.3.1** — white-screen crash fixed: Dashboard/Claims typed the `/api/jobs`
+  response as an array, so one malformed payload crashed the whole app; every
+  page now sits inside a `PageErrorBoundary`, and the version bump makes
+  same-version rebuilds visible to the updater.
+- **1.3.2** — Meesho follow-ups open the per-ticket deep link
+  `…/support/ticket/{id}` and classify the page deterministically (the
+  ticket-table reader is the fallback); RTO verified — the return type is read
+  from the claim and an unverified return stops for review ("Courier Return
+  (RTO)" tab); the graphify code knowledge graph was adopted (see
+  [AGENTS.md](AGENTS.md)).
+- **1.3.3** — update download reworked: the setup streams into Downloads with
+  live progress, failures show an inline error + Retry, and **Run installer**
+  takes a confirming double click before closing the app and launching the
+  setup (the old no-feedback banner link is gone). Follow-up checks default to
+  check-whenever-due (first look-up ~10s after start) with OS notifications
+  for tracking started/approved/rejected/needs-response;
+  `FOLLOWUP_NIGHTLY_ONLY=1` restores the 01:00–02:00 Asia/Kolkata window.
+- **1.3.4** — DPAPI/OS-store key storage fixed in the packaged app
+  (`createRequire` based on `__filename`): local secrets and AI provider keys
+  encrypt, guarded by a bundle regression test. The Settings supplier-login
+  form collapsed behind the **Fix or change a supplier login** disclosure
+  (auto-opens when a login is missing or broken). The AI catalog defaults to
+  low-cost primaries (meta: `muse-spark-1.3-contributor`, anthropic:
+  `claude-haiku-5-5`, openai: `GPT-6.1-Terra`; saved preferences override).
+  `humanClick` moves the cursor in steps before pressing (native + CDP
+  adapters).
+- **1.3.5** — Browsers **Show/Open** create the real embedded view on demand
+  (`ensureSupplierView`) and load the supplier portal; while the worker owns a
+  panel the answer is **409** *worker is using this panel*; views are
+  adopted/reused per profile, so one panel never gets a duplicate browser. AI
+  **Test connection** falls back to the catalog default model when none is
+  picked. The top bar gained the CPU/RAM pill (`desktop:get-system-stats`;
+  app + system RAM/uptime tooltip; 5s poll).
+
 ## 11. Honestly not yet done
 
 - Full auto-filing for Flipkart/Amazon/Myntra/Ajio (assisted today; writing
   untested portal scripts would be mock automation). This also means only
   Meesho is useful in headless remote mode.
-- **Only Meesho implements `checkClaimStatus()` so far** (`meesho.ts:537`,
-  fixture-tested, live verification pending). The follow-up framework is
-  complete end to end (schema, service, routes, worker, dashboard). Each
+- **Only Meesho implements `checkClaimStatus()` so far** (`meesho.ts:1040`,
+  per-ticket deep-link reader, fixture-tested, live verification pending). The
+  follow-up framework is complete end to end (schema, service, routes, worker,
+  dashboard). Each
   remaining marketplace's status page needs its own reader before its tickets
   are tracked; no ticket state is ever guessed.
 - Esc is not forwarded from a focused supplier WebContentsView; exit the
