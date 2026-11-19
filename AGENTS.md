@@ -2,12 +2,71 @@
 
 This file is for any agent, human or AI, that starts work on the Return App. Read it, then the documents below in the order given. Do not change code until you know the current state.
 
+## Before any work: the three required skills
+
+Every agent, human or AI, checks these three skills before reading code or changing anything, installs whichever is missing, and uses them on every task (rule 21). They help an agent understand the code and keep changes small. They never override the rules in this file. If a skill cannot be installed (no network, a missing tool), say so in your reply and in the session log, and do not claim you used it.
+
+| Skill | Source | Use it for | Where it lives |
+|---|---|---|---|
+| graphify | [Graphify-Labs/graphify](https://github.com/Graphify-Labs/graphify) | A code knowledge graph in `graphify-out/` (gitignored, regenerate, never commit): `graphify query`, `path` and `explain` before any grep or file read | Python CLI (PyPI package `graphifyy`, two y's), the project skill in `.claude/skills/graphify/`, `.agents/skills/graphify/` and `.kimi/skills/graphify/`, and advisory Read/Grep hooks in `.claude/settings.json` |
+| ponytail | [DietrichGebert/ponytail](https://github.com/DietrichGebert/ponytail) | The smallest change that works: reuse what the repo has, leave a test for any logic. `/ponytail-review` on a diff, `/ponytail-audit` on the whole repo | Claude Code plugin `ponytail@ponytail`, project scope |
+| Understand-Anything | [Egonex-AI/Understand-Anything](https://github.com/Egonex-AI/Understand-Anything) | Architecture, business flows and onboarding: `/understand-chat`, `/understand-explain`, `/understand-domain`, `/understand-diff`, `/understand-dashboard`. Its graph is committed in `.ua/` | Claude Code plugin `understand-anything@understand-anything`, project scope |
+
+### 1. Check
+
+```powershell
+graphify --version
+```
+
+```powershell
+claude plugin list
+```
+
+They are installed when graphify prints 0.9.112 or newer and the plugin list shows `ponytail@ponytail` and `understand-anything@understand-anything` as enabled. Inside a Claude Code session, the skill list shows `graphify`, `ponytail:*` and `understand-anything:*`.
+
+### 2. Install what is missing
+
+graphify needs Python 3.11 to 3.14. Install the CLI, then register the skill for Claude Code and for the cross-agent `.agents/skills/` folder:
+
+```powershell
+pip install --upgrade graphifyy
+graphify install --project
+graphify install --project --platform agents
+```
+
+The two plugins are declared in `.claude/settings.json` (`extraKnownMarketplaces` and `enabledPlugins`), so Claude Code offers to install them when it opens this folder. If it does not, install them at project scope:
+
+```powershell
+claude plugin marketplace add DietrichGebert/ponytail --scope project
+claude plugin install ponytail@ponytail --scope project
+claude plugin marketplace add Egonex-AI/Understand-Anything --scope project
+claude plugin install understand-anything@understand-anything --scope project
+```
+
+Inside a session, `/plugin marketplace add <owner/repo>` and then `/plugin install <plugin>@<marketplace>` do the same. Plugins load when a session starts, so start a new session after installing. Understand-Anything also needs Node 22 or newer and pnpm 10 or newer; its first `/understand` builds its engine if it is not built yet.
+
+Other agents (Codex, Cursor, Kimi, Antigravity, Gemini and the rest): graphify's skill is already in `.agents/skills/graphify/` and `.kimi/skills/graphify/`; for another agent run `graphify install --project --platform <name>`. For ponytail follow its [INSTALL.md](https://github.com/DietrichGebert/ponytail/blob/main/INSTALL.md); for Understand-Anything follow the Multi-Platform Installation section of its [README](https://github.com/Egonex-AI/Understand-Anything#-multi-platform-installation).
+
+### 3. Use them on every task
+
+1. **Orient with graphify first.** Before the first grep, search or file read for a code question, run `graphify query "<question>"`. Use `graphify path "<A>" "<B>"` for how two things connect and `graphify explain "<concept>"` for one concept. Read raw files only for the lines the graph located, put this rule in every subagent prompt that explores code, and trust EXTRACTED edges over INFERRED ones. After changing code, run `graphify update .` (AST only, no API cost).
+
+   ```powershell
+   graphify query "how do claim follow-ups read ticket status?"
+   graphify path "completeJobSubmission" "claim_follow_ups"
+   graphify explain "pollNextAutomationJob"
+   ```
+
+2. **Use Understand-Anything for the bigger picture.** For architecture, business flow or onboarding questions use `/understand-chat <question>`, `/understand-explain <file>` and `/understand-domain`, and run `/understand-diff` before opening a PR. When `gitCommitHash` in `.ua/meta.json` is behind `HEAD`, refresh with `/understand` (incremental). A full rebuild (`/understand --full`) spends many tokens, so ask the user first.
+3. **Write the change the ponytail way, then review it.** Once the plugin is installed it is active in every session: reuse what the repo already has, write the smallest change that works, and leave a test for any logic. Before handing back, run `/ponytail-review` on the diff and fix what it finds. Ponytail never cuts what the rules here require: account scope, validation, audit history, security, `SYN-` test data and the desktop hardware limits all stay.
+
 ## What the project is
 
 A return-scanning app for VB Exports. Marketplace return reports (Myntra VB and EJ, Flipkart, Meesho, Amazon, Ajio) are loaded as lookup data, one account at a time. A scan records what physically arrived in the return scan register, which is the permanent record. The stack is Express 4 and PostgreSQL on the server, React 19 with Vite on the client, strict TypeScript, and `node:test` through `tsx`. It runs on Windows, and PowerShell is the primary shell.
 
-## Current state (2026-11-14)
+## Current state (2026-11-19)
 
+- Required agent skills (2026-11-19): graphify 0.9.112 (CLI, plus the project skill for Claude Code, `.agents/skills/` and Kimi, plus advisory Read/Grep hooks in `.claude/settings.json`), ponytail 5.3.3 and Understand-Anything 2.9.8 (Claude Code plugins at project scope, declared in `.claude/settings.json`). Every agent checks, installs and uses them first: see [Before any work](#before-any-work-the-three-required-skills) and rule 21. The committed `.ua/` graph was built at commit `7074635` (2026-11-02) and stays stale until someone runs `/understand`.
 - The app runs locally and in production on Hostinger VPS (`https://return.youthnic.shop`). On 2026-11-03 local checks passed: `npm run typecheck` (0 errors across three projects), `npm run build`, and `npm test` (767 tests: 721 pass, 0 fail, 46 skipped — 43 need `TEST_DATABASE_URL`, 3 POSIX-only). CI runs all 767 green against its throwaway Postgres.
 - `GET /api/health` returns HTTP 200, database connected, name `return-scan_youthnic`.
 - Merged PR #50 (M9, 2026-11-03): submission-authorization fix (a saved supplier login never authorizes submit), real-DB authorization tests, light-mode dashboard with sidebar tabs + Updates tab, `AUTOMATION_SECRET_KEY` deploy wiring. Operator UAT T1–T5 pass on installed 1.2.0. Live Meesho/mobile/Firebase sessions still pending.
@@ -59,6 +118,7 @@ Each rule has a check. The handoff lists the checks under [Invariants](docs/note
 18. **Engine CORS is an exact allowlist.** Only `returnapp://desktop` is allowed in production, plus the Vite dev origins (`localhost:5180`) outside production and exact http(s) origins from `ENGINE_CORS_ORIGINS`. `OPTIONS` preflights to `/api/*` are answered 204 before the bearer-token gate; the allow-origin is never `*` and never reflects an arbitrary request origin.
 19. **The renderer/shell IPC contract lives in two files.** `desktop/preload.cjs` and `desktop/renderer/src/types/global.d.ts` are one contract — change them together so the bridge and its types never drift. The bridge exposes no `ipcRenderer`, no Node APIs and no secrets; event subscriptions must return an unsubscribe so a renderer reload never leaves duplicate listeners.
 20. **Every desktop change ships as a numbered release.** Any PR touching `desktop/`, `desktop-agent/`, or the installer must bump `package.json`'s version (CI enforces it): same-version rebuilds are invisible to the in-app updater and silently no-op as silent upgrades. Merges to `main` auto-publish `desktop-v<version>.<run>` via `.github/workflows/desktop-release.yml`; the app's Updates banner offers it within a minute of launch. See docs/DESKTOP-APP.md §Updates for the operator-facing flow.
+21. **Skills first.** Before reading code or changing anything, every agent checks that graphify, ponytail and Understand-Anything are installed, installs any that is missing, and uses them as [Before any work](#before-any-work-the-three-required-skills) describes: graphify before grep or file reads, Understand-Anything for architecture and flows, ponytail for the change and `/ponytail-review` before handing back. Keep the skill declarations in `.claude/settings.json` (the graphify hooks, `extraKnownMarketplaces`, `enabledPlugins`) unless the user asks to remove them. A skill never overrides rules 1 to 20.
 
 ## Commands
 
@@ -106,15 +166,7 @@ npm run engine:docker
 
 ## Code knowledge graph (graphify)
 
-This repo maintains a [graphify](https://github.com/Graphify-Labs/graphify) knowledge graph of the whole codebase (`graphify-out/`, gitignored — regenerate, never commit it). Coding agents (human or AI) working in unfamiliar areas should consult the graph BEFORE broad grep/read sweeps:
-
-```bash
-graphify query "how do claim follow-ups read ticket status?"   # scoped subgraph for a question
-graphify path "completeJobSubmission" "claim_follow_ups"       # trace how two things connect
-graphify explain "pollNextAutomationJob"                       # one concept: source, community, links
-```
-
-After code changes, refresh it with `graphify update .` (code-only, no API cost, incremental). The project skill lives at `.kimi/skills/graphify/` (installed via `graphify install --project --platform kimi`); inside Kimi Code the `/graphify` skill provides the same query-first guidance. Every edge is tagged EXTRACTED (explicit in source) or INFERRED — trust EXTRACTED first.
+graphify, ponytail and Understand-Anything are required on every task. How to check, install and use them is in [Before any work](#before-any-work-the-three-required-skills) at the top of this file. The `## graphify` block at the end of this file is written by `graphify install`; leave it for the tool to update.
 
 ## Roles
 
@@ -122,4 +174,24 @@ The project has 33 role agents in `.claude/agents/`. Thirteen of them were added
 
 ## Handing back
 
+Before you hand back a code change, run `graphify update .` and `/ponytail-review` on the diff (rule 21).
+
 When you finish, add a dated entry to the session log in [docs/notes/agent-handoff.md](docs/notes/agent-handoff.md#session-log). Say what changed, which files, what you ran and its result, what you did not run, and what the next agent must not change. Then follow the [handoff protocol](docs/notes/agent-handoff.md#handoff-protocol).
+
+## graphify
+
+This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
+
+When the user types `/graphify`, use the installed graphify skill or instructions before doing anything else.
+
+Rules:
+- When graphify-out/graph.json exists, run `graphify query "<question>"` before your first grep, search or source-file read for a codebase question, and put this rule in every subagent prompt that explores code. Read raw files only for lines the graph or an earlier read already located. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. When the answer is under a Markdown heading, `graphify section "<heading>"` prints that section's text, so the .md need not be opened. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
+- Dirty graphify-out/ files are expected after hooks or incremental updates; dirty graph files are not a reason to skip graphify. Only skip graphify if the task is about stale or incorrect graph output, or the user explicitly says not to use it.
+- If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
+- Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
+- After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).
+- A committed graphify-out/graph.json is rewritten whole on every build, so a large diff to it in a pull request is expected. Do not flag it as churn or suggest skipping the graph rebuild or its hooks.
+
+# graphify
+- **graphify** (`.claude/skills/graphify/SKILL.md`) - any input to knowledge graph. Trigger: `/graphify`
+When the user types `/graphify`, use the installed graphify skill or instructions before doing anything else.
