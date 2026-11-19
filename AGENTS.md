@@ -49,7 +49,7 @@ Other agents (Codex, Cursor, Kimi, Antigravity, Gemini and the rest): graphify's
 
 ### 3. Use them on every task
 
-1. **Orient with graphify first.** Before the first grep, search or file read for a code question, run `graphify query "<question>"`. Use `graphify path "<A>" "<B>"` for how two things connect and `graphify explain "<concept>"` for one concept. Read raw files only for the lines the graph located, put this rule in every subagent prompt that explores code, and trust EXTRACTED edges over INFERRED ones. After changing code, run `graphify update .` (AST only, no API cost).
+1. **Orient with graphify first.** `graphify-out/` is gitignored, so a fresh checkout has no graph and `graphify query` fails with "graph file not found": build it first with `graphify update .` (AST only, no API key). If the build fails, use normal search and say so in your reply. Before the first grep, search or file read for a code question, run `graphify query "<question>"`. Use `graphify path "<A>" "<B>"` for how two things connect and `graphify explain "<concept>"` for one concept. Read raw files only for the lines the graph located, put this rule in every subagent prompt that explores code, and trust EXTRACTED edges over INFERRED ones. After changing code, run `graphify update .` (AST only, no API cost).
 
    ```powershell
    graphify query "how do claim follow-ups read ticket status?"
