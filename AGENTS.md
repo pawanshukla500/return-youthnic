@@ -34,6 +34,8 @@ graphify install --project
 graphify install --project --platform agents
 ```
 
+Never create a `CLAUDE.md` for graphify. Its hooks reference says `graphify claude install` writes to `CLAUDE.md`, but when this repo has no `CLAUDE.md` it writes its section to `AGENTS.md` instead (tested on 0.9.112). A `CLAUDE.md` would hide this file from Claude Code.
+
 The two plugins are declared in `.claude/settings.json` (`extraKnownMarketplaces` and `enabledPlugins`), so Claude Code offers to install them when it opens this folder. If it does not, install them at project scope:
 
 ```powershell
