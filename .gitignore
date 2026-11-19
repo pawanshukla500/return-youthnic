@@ -42,3 +42,8 @@ android/.cxx
 scratch/
 Order_Scan_Audit_*.xlsx
 graphify-out/
+
+# Understand-Anything scratch (the graph, lessons, fingerprints and meta in .ua/ are committed)
+.ua/tmp/
+.ua/intermediate/
+.ua/.trash-*/

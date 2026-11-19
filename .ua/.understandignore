@@ -14,3 +14,14 @@ tmp/
 coverage/
 android/app/build/
 android/.gradle/
+
+# Agent tooling: role prompts and vendored skill copies, not app code
+.claude/
+.agents/
+.kimi/
+.cursor/
+
+# Own data folder and secrets
+.ua/
+.env*
+*.keystore
