@@ -1,15 +1,18 @@
 // Pure checks for the claim follow-up rules: ticket text normalization, the terminal rules, the claim-status
-// mapping, and what one check should do next. No database. The database behaviour (leasing, scoping,
-// rescheduling, audit) runs in claim-follow-up-db.test.ts when TEST_DATABASE_URL is set.
+// mapping, and what one check should do next. No database. The database checks for recording a result (a settled
+// claim stays settled, a portal "paid" never sets paid) run in claim-authorization-db.test.ts when
+// TEST_DATABASE_URL is set.
 
 import assert from "node:assert/strict"
 import test from "node:test"
 import type pg from "pg"
 import type { AccountScope } from "../access.js"
 import {
+  agreedFollowUpStatus,
   claimStatusForFollowUp,
   createFollowUpForJob,
   decideFollowUpStep,
+  followUpClaimChange,
   FOLLOW_UP_INTERVAL_HOURS,
   FOLLOW_UP_MAX_CHECKS,
   FOLLOW_UP_MAX_ERROR_STREAK,
@@ -18,6 +21,7 @@ import {
   leaseNextDueFollowUp,
   nextCheckAtFrom,
   normalizeFollowUpStatus,
+  PAID_WITHOUT_PAYOUT_NOTE,
   recordFollowUpResult,
 } from "../claim-follow-up-service.js"
 
@@ -63,6 +67,111 @@ test("a negative reading is never mistaken for approval", () => {
   assert.equal(normalizeFollowUpStatus("Not approved"), "rejected")
   assert.equal(normalizeFollowUpStatus("Closed without approval"), "rejected")
   assert.equal(normalizeFollowUpStatus("Return not eligible"), "rejected")
+})
+
+test("pending, awaiting and not-yet wording never reads as approved or as any final state", () => {
+  const cases: Array<[string, string]> = [
+    ["Pending approval", "under_review"],
+    ["Awaiting approval", "under_review"],
+    ["Approval pending", "under_review"],
+    ["Approval awaited", "under_review"],
+    ["Not yet approved", "under_review"],
+    ["Not approved yet", "under_review"],
+    ["Refund yet to be credited", "under_review"],
+    ["Under review for approval", "under_review"],
+    ["Approval in progress", "under_review"],
+    // Money that has not moved is still open: nothing says the claim was refused.
+    ["Refund not credited", "under_review"],
+    ["Amount not settled", "under_review"],
+    ["Not paid", "under_review"],
+    // "Approval" on its own is a process, not a decision.
+    ["Sent for approval", "unknown"],
+  ]
+  for (const [text, expected] of cases) {
+    const reading = normalizeFollowUpStatus(text)
+    assert.equal(reading, expected, `"${text}" should normalize to ${expected}`)
+    assert.equal(isTerminalFollowUpStatus(reading), false, `"${text}" must not close the ticket`)
+  }
+})
+
+test("a negation that means the marketplace said no is a rejection, never an approval", () => {
+  assert.equal(normalizeFollowUpStatus("Claim not accepted"), "rejected")
+  assert.equal(normalizeFollowUpStatus("Claim Accepted"), "approved")
+})
+
+test("a rejection whose reason mentions waiting is still a rejection", () => {
+  assert.equal(normalizeFollowUpStatus("Rejected - product not yet received at warehouse"), "rejected")
+  assert.equal(normalizeFollowUpStatus("Claim declined: pickup pending"), "rejected")
+})
+
+test("a disagreement between the server and the desktop never closes a ticket", () => {
+  // The desktop read the page correctly and the server's own reading is final: the open reading is kept.
+  assert.equal(agreedFollowUpStatus("approved", "under_review"), "under_review")
+  assert.equal(agreedFollowUpStatus("rejected", "under_review"), "under_review")
+  assert.equal(agreedFollowUpStatus("paid", "submitted"), "submitted")
+  // The server's open reading stands against a final desktop reading.
+  assert.equal(agreedFollowUpStatus("under_review", "approved"), "under_review")
+  assert.equal(agreedFollowUpStatus("unknown", "approved"), "unknown")
+  // Two final readings that contradict each other stay open.
+  assert.equal(agreedFollowUpStatus("approved", "rejected"), "unknown")
+  assert.equal(agreedFollowUpStatus("rejected", "paid"), "unknown")
+
+  const known = ["approved", "rejected", "paid", "reconciled", "under_review", "escalated", "reclaim", "submitted"]
+  for (const server of [...known, "unknown"]) {
+    for (const reported of known) {
+      if (server === reported) continue
+      const granted = ["approved", "paid"]
+      if (granted.includes(server) && granted.includes(reported)) continue
+      const kept = agreedFollowUpStatus(server, reported)
+      assert.equal(isTerminalFollowUpStatus(kept), false, `server ${server} against desktop ${reported} kept ${kept}`)
+    }
+  }
+})
+
+test("approved against paid is not a disagreement about the outcome: the less final approved is kept", () => {
+  assert.equal(agreedFollowUpStatus("approved", "paid"), "approved")
+  assert.equal(agreedFollowUpStatus("paid", "approved"), "approved")
+})
+
+test("an agreeing, missing or unrecognized desktop reading leaves the server's reading as it is", () => {
+  assert.equal(agreedFollowUpStatus("approved", "approved"), "approved")
+  assert.equal(agreedFollowUpStatus("approved", ""), "approved")
+  assert.equal(agreedFollowUpStatus("approved", "resolved"), "approved")
+  assert.equal(agreedFollowUpStatus("under_review", "mystery"), "under_review")
+})
+
+test("follow-ups move a claim only along the claim transition rules", () => {
+  assert.deepEqual(followUpClaimChange("submitted", "approved"), { toStatus: "approved", note: "" })
+  assert.deepEqual(followUpClaimChange("submitted", "under_review"), { toStatus: "under_review", note: "" })
+  assert.deepEqual(followUpClaimChange("under_review", "rejected"), { toStatus: "rejected", note: "" })
+  // Backwards or sideways moves are refused, and the refusal is the note.
+  assert.deepEqual(followUpClaimChange("approved", "under_review"), {
+    toStatus: null,
+    note: "A claim cannot move from approved to under_review.",
+  })
+  assert.equal(followUpClaimChange("submitted", "reconciled").toStatus, null)
+  assert.equal(followUpClaimChange("rejected", "approved").toStatus, null)
+  // No change for the same status or a reading that maps to none.
+  assert.deepEqual(followUpClaimChange("approved", "approved"), { toStatus: null, note: "" })
+  assert.deepEqual(followUpClaimChange("submitted", "unknown"), { toStatus: null, note: "" })
+})
+
+test("a portal paid reading is recorded as approved with a note, because it carries no payout details", () => {
+  assert.deepEqual(followUpClaimChange("submitted", "paid"), { toStatus: "approved", note: PAID_WITHOUT_PAYOUT_NOTE })
+  assert.deepEqual(followUpClaimChange("under_review", "paid"), { toStatus: "approved", note: PAID_WITHOUT_PAYOUT_NOTE })
+  assert.deepEqual(followUpClaimChange("approved", "paid"), { toStatus: null, note: "" })
+})
+
+test("a claim a person already reconciled or paid stops the follow-up without spending a check", () => {
+  for (const claimStatus of ["reconciled", "paid"]) {
+    for (const outcome of ["status_read", "error", "login_required"] as const) {
+      const step = decideFollowUpStep({ outcome, normalizedStatus: "under_review", checkCount: 1, errorStreak: 0, claimStatus })
+      assert.equal(step.stopReason, "claim_settled", `${claimStatus} / ${outcome}`)
+      assert.equal(step.countAsCheck, false)
+      assert.equal(step.countAsError, false)
+    }
+  }
+  assert.equal(decideFollowUpStep({ outcome: "status_read", normalizedStatus: "under_review", checkCount: 1, errorStreak: 0, claimStatus: "approved" }).stopReason, "")
 })
 
 test("an approval that mentions the refund wins over the wording that follows it", () => {
@@ -181,16 +290,13 @@ function fakeDb(options: { agentAuthorized?: boolean; due?: Record<string, unkno
         const authorized = options.agentAuthorized !== false
         return { rows: authorized ? [{ id: 11 }] : [], rowCount: authorized ? 1 : 0 }
       }
-      // A follow-up read that locks one specific row is the record step's lease lookup.
+      // A follow-up read that locks one specific row (and its claim) is the record step's lease lookup.
       if (/f\.agent_id = \$2/.test(sql)) {
         return { rows: options.lease ? [options.lease] : [], rowCount: options.lease ? 1 : 0 }
       }
       // A follow-up read that filters on the due time is the lease step's queue lookup.
       if (/f\.next_check_at <= now\(\)/.test(sql)) {
         return { rows: options.due ? [options.due] : [], rowCount: options.due ? 1 : 0 }
-      }
-      if (/FROM claims WHERE id = \$1 FOR UPDATE/.test(sql)) {
-        return { rows: [{ status: options.lease?.claim_status || "submitted", remarks: options.lease?.remarks || "" }], rowCount: 1 }
       }
       if (/UPDATE claims/.test(sql)) {
         return { rows: [], rowCount: 1 }
@@ -495,4 +601,101 @@ test("a rejected ticket preserves existing operator remarks and appends the reje
     claimUpdate[0].params[2],
     "Damaged sleeve received from customer | Rejection reason: Return package barcode missing or illegible",
   )
+})
+
+test("pending wording with a desktop approval keeps the ticket open and never approves the claim", async () => {
+  const db = fakeDb({ lease: leaseRow() })
+  const result = await recordFollowUpResult(db.pool, "agent-uuid", 9, {
+    outcome: "status_read",
+    statusText: "Pending approval",
+    normalizedStatus: "approved",
+  })
+
+  assert.equal(result.normalizedStatus, "under_review")
+  assert.equal(result.isActive, true)
+  assert.equal(result.stopReason, "")
+  const claimUpdate = matching(db.queries, /UPDATE claims/)
+  assert.equal(claimUpdate.length, 1)
+  assert.deepEqual(claimUpdate[0].params, [4, "under_review"])
+})
+
+test("the desktop's open reading wins over a final server reading", async () => {
+  const db = fakeDb({ lease: leaseRow() })
+  const result = await recordFollowUpResult(db.pool, "agent-uuid", 9, {
+    outcome: "status_read",
+    statusText: "Claim approved",
+    normalizedStatus: "under_review",
+  })
+
+  assert.equal(result.normalizedStatus, "under_review")
+  assert.equal(result.isActive, true)
+  const history = JSON.parse(String(matching(db.queries, /UPDATE claim_automation_follow_ups/)[0].params[9]))
+  assert.equal(history[0].reportedStatus, "under_review", "the desktop's reading is kept in the follow-up history")
+})
+
+test("the claim row is locked together with its follow-up", async () => {
+  const db = fakeDb({ lease: leaseRow() })
+  await recordFollowUpResult(db.pool, "agent-uuid", 9, { outcome: "status_read", statusText: "Claim approved" })
+  assert.match(matching(db.queries, /f\.agent_id = \$2/)[0].sql, /FOR UPDATE OF f, c/)
+})
+
+test("a portal paid reading approves the claim with a note and never sets paid", async () => {
+  const db = fakeDb({ lease: leaseRow() })
+  const result = await recordFollowUpResult(db.pool, "agent-uuid", 9, {
+    outcome: "status_read",
+    statusText: "Payment processed",
+    normalizedStatus: "paid",
+  })
+
+  assert.equal(result.normalizedStatus, "paid")
+  assert.equal(result.isActive, false, "a paid ticket has nothing left to chase")
+  const claimUpdate = matching(db.queries, /UPDATE claims/)
+  assert.equal(claimUpdate.length, 1)
+  assert.deepEqual(claimUpdate[0].params, [4, "approved"])
+  const history = matching(db.queries, /INSERT INTO claim_status_history/)
+  assert.equal(history[0].params[2], "approved")
+  assert.match(String(history[0].params[3]), /Record the payout to mark it paid/)
+})
+
+test("a claim a person already reconciled is never moved and its follow-up stops", async () => {
+  const db = fakeDb({ lease: leaseRow({ claim_status: "reconciled" }) })
+  const result = await recordFollowUpResult(db.pool, "agent-uuid", 9, {
+    outcome: "status_read",
+    statusText: "Escalated to category team",
+    normalizedStatus: "escalated",
+  })
+
+  assert.equal(result.stopReason, "claim_settled")
+  assert.equal(result.isActive, false)
+  assert.equal(matching(db.queries, /UPDATE claims/).length, 0)
+  assert.equal(matching(db.queries, /INSERT INTO claim_status_history/).length, 0)
+  const params = matching(db.queries, /UPDATE claim_automation_follow_ups/)[0].params
+  assert.equal(params[3], "claim_settled")
+  assert.match(String(params[8]), /already reconciled or paid/)
+})
+
+test("a move backwards is refused and the claim keeps its status", async () => {
+  const db = fakeDb({ lease: leaseRow({ claim_status: "approved" }) })
+  const result = await recordFollowUpResult(db.pool, "agent-uuid", 9, {
+    outcome: "status_read",
+    statusText: "Claim under review",
+  })
+
+  assert.equal(result.isActive, true, "the ticket is still open on the portal")
+  assert.equal(matching(db.queries, /UPDATE claims/).length, 0)
+  const history = JSON.parse(String(matching(db.queries, /UPDATE claim_automation_follow_ups/)[0].params[9]))
+  assert.equal(history[0].claimNote, "A claim cannot move from approved to under_review.")
+})
+
+test("a final ticket the rules cannot apply stops the follow-up and says the claim was not changed", async () => {
+  const db = fakeDb({ lease: leaseRow({ claim_status: "submitted" }) })
+  const result = await recordFollowUpResult(db.pool, "agent-uuid", 9, {
+    outcome: "status_read",
+    statusText: "Reconciled against payout",
+  })
+
+  assert.equal(result.stopReason, "ticket_resolved")
+  assert.equal(matching(db.queries, /UPDATE claims/).length, 0)
+  const params = matching(db.queries, /UPDATE claim_automation_follow_ups/)[0].params
+  assert.match(String(params[8]), /The claim was not changed: A claim cannot move from submitted to reconciled\./)
 })

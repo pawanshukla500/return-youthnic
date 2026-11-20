@@ -12,6 +12,9 @@
 //  - An expired lease cannot record a ticket; the next poll parks the job as manual_intervention_required.
 //  - An auto-submit account (require_approval_before_submit = false) completes from a live lease.
 //  - Retry cannot re-arm a submitting job.
+//  - Ticket follow-up results (checklist 5.1, 5.2): "Pending approval" never approves a claim, a reconciled claim
+//    stays reconciled after an "under review" reading and its follow-up stops, and "Payment processed" without
+//    payout data records the claim as approved, never paid.
 import { after, before, test } from "node:test"
 import assert from "node:assert/strict"
 import pg from "pg"
@@ -23,6 +26,7 @@ import {
   pollNextAutomationJob,
   retryAutomationJob,
 } from "../claim-automation-service.js"
+import { recordFollowUpResult } from "../claim-follow-up-service.js"
 import { ServiceError, type Actor } from "../register-service.js"
 import type { AccountScope } from "../access.js"
 
@@ -101,6 +105,38 @@ async function makeJob(claimId: number, credentialId: number, stage: string): Pr
 async function jobRow(jobId: number): Promise<Record<string, unknown>> {
   const res = await pool.query(`SELECT stage, marketplace_claim_id, agent_id FROM claim_automation_jobs WHERE id = $1`, [jobId])
   return res.rows[0]
+}
+
+// A ticket follow-up already leased by agent 1, for a claim in the given status (as a person or an earlier check left it).
+async function leasedFollowUp(label: string, claimStatus: string): Promise<{ claimId: number; followUpId: number }> {
+  const claimId = await makeClaim(label)
+  await pool.query(`UPDATE claims SET status = $2 WHERE id = $1`, [claimId, claimStatus])
+  const followUp = await pool.query(
+    `INSERT INTO claim_automation_follow_ups
+       (claim_id, marketplace_id, marketplace_claim_id, account_name, stage, is_active, agent_id, lease_expires_at, next_check_at)
+     VALUES ($1, $2, $3, $4, 'leased', true, $5, now() + INTERVAL '15 minutes', now() + INTERVAL '48 hours')
+     RETURNING id`,
+    [claimId, meeshoId, `SYN-${run}-T-${label}`, `SYN-${run}-${label}`, agent1],
+  )
+  return { claimId, followUpId: Number(followUp.rows[0].id) }
+}
+
+async function claimRow(claimId: number): Promise<Record<string, unknown>> {
+  const res = await pool.query(`SELECT status, paid_amount, payout_reference FROM claims WHERE id = $1`, [claimId])
+  return res.rows[0]
+}
+
+async function followUpRow(followUpId: number): Promise<Record<string, unknown>> {
+  const res = await pool.query(`SELECT is_active, stage, stop_reason FROM claim_automation_follow_ups WHERE id = $1`, [followUpId])
+  return res.rows[0]
+}
+
+async function statusHistory(claimId: number): Promise<Array<Record<string, unknown>>> {
+  const res = await pool.query(
+    `SELECT from_status, to_status, reason FROM claim_status_history WHERE claim_id = $1 ORDER BY id`,
+    [claimId],
+  )
+  return res.rows
 }
 
 before(async () => {
@@ -233,4 +269,50 @@ test("db: retry cannot re-arm a submitting job", { skip: skip || false }, async 
   assert.equal(leased.stage, "submitting")
   const code = await errCode(retryAutomationJob(pool, supervisor, scope, jobId))
   assert.equal(code, 409, "a mid-flight submission must never be re-armed by retry")
+})
+
+test("db: 'Pending approval' keeps the ticket open and never approves the claim", { skip: skip || false }, async () => {
+  const { claimId, followUpId } = await leasedFollowUp("PENDING", "submitted")
+  // The desktop's reading says approved; the server reads waiting wording, and the less final reading is kept.
+  const result = await recordFollowUpResult(pool, agentUuid1, followUpId, {
+    outcome: "status_read",
+    statusText: "Pending approval",
+    normalizedStatus: "approved",
+  })
+  assert.equal(result.normalizedStatus, "under_review")
+  assert.equal(result.isActive, true)
+  assert.equal((await claimRow(claimId)).status, "under_review")
+  assert.deepEqual(await followUpRow(followUpId), { is_active: true, stage: "scheduled", stop_reason: "" })
+})
+
+test("db: a reconciled claim stays reconciled after an 'under review' reading and its follow-up stops", { skip: skip || false }, async () => {
+  const { claimId, followUpId } = await leasedFollowUp("RECONCILED", "reconciled")
+  const result = await recordFollowUpResult(pool, agentUuid1, followUpId, {
+    outcome: "status_read",
+    statusText: "Claim under review",
+    normalizedStatus: "under_review",
+  })
+  assert.equal(result.stopReason, "claim_settled")
+  assert.equal((await claimRow(claimId)).status, "reconciled", "a follow-up never moves a claim out of reconciled")
+  assert.equal((await statusHistory(claimId)).length, 0, "no status change is recorded")
+  assert.deepEqual(await followUpRow(followUpId), { is_active: false, stage: "stopped", stop_reason: "claim_settled" })
+})
+
+test("db: 'Payment processed' without payout data records the claim as approved, never paid", { skip: skip || false }, async () => {
+  const { claimId, followUpId } = await leasedFollowUp("PAID", "submitted")
+  const result = await recordFollowUpResult(pool, agentUuid1, followUpId, {
+    outcome: "status_read",
+    statusText: "Payment processed",
+    normalizedStatus: "paid",
+  })
+  assert.equal(result.isActive, false, "a paid ticket has nothing left to chase")
+  const claim = await claimRow(claimId)
+  assert.equal(claim.status, "approved", "paid needs a paid amount and a payout reference")
+  assert.equal(Number(claim.paid_amount), 0)
+  assert.equal(claim.payout_reference, "")
+  const history = await statusHistory(claimId)
+  assert.equal(history.length, 1)
+  assert.equal(history[0].from_status, "submitted")
+  assert.equal(history[0].to_status, "approved")
+  assert.match(String(history[0].reason), /Record the payout to mark it paid/)
 })
