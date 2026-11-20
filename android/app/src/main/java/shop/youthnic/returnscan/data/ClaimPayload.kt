@@ -28,6 +28,10 @@ object ClaimPayload {
     /** What the claim form identifies its return by: the sub order, or the AWB when there is none. */
     private fun formKey(subOrderId: String, awb: String): String = subOrderId.trim().ifBlank { awb.trim() }
 
+    /** The same key for a lookup: the sub order (or order) it fills in, or its AWB when there is none. */
+    private fun lookupKey(lookup: ClaimReturnLookup): String =
+        formKey(lookup.subOrderId.ifBlank { lookup.orderId }, lookup.awb.ifBlank { lookup.trackingNumber })
+
     /**
      * [lookup] when it found a return and the form still shows the sub order (or AWB) that lookup filled in, otherwise
      * null. A search that found nothing, or a lookup for a sub order the operator has since changed, supplies nothing.
@@ -35,8 +39,18 @@ object ClaimPayload {
     fun confirmedLookup(lookup: ClaimReturnLookup?, subOrderId: String, awb: String): ClaimReturnLookup? {
         if (lookup == null || !lookup.found) return null
         val key = formKey(subOrderId, awb)
-        val lookupKey = formKey(lookup.subOrderId.ifBlank { lookup.orderId }, lookup.awb.ifBlank { lookup.trackingNumber })
-        return lookup.takeIf { key.isNotBlank() && key.equals(lookupKey, ignoreCase = true) }
+        return lookup.takeIf { key.isNotBlank() && key.equals(lookupKey(lookup), ignoreCase = true) }
+    }
+
+    /**
+     * True when [next] is the same return as [previous]. Evidence is captured for [previous] (Proceed only opens the
+     * evidence step for a confirmed lookup), so it may stay only when the new lookup is that same return; otherwise the
+     * screen drops it, or it would be uploaded with another return's claim.
+     */
+    fun sameReturn(previous: ClaimReturnLookup?, next: ClaimReturnLookup): Boolean {
+        if (previous == null) return false
+        val key = lookupKey(previous)
+        return key.isNotBlank() && key.equals(lookupKey(next), ignoreCase = true)
     }
 
     /** The SKU a claim names: the looked-up return's first item, master SKU first. Blank without a lookup. */

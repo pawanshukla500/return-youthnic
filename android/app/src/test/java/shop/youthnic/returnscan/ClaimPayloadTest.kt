@@ -4,6 +4,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import shop.youthnic.returnscan.data.ClaimFormInput
 import shop.youthnic.returnscan.data.ClaimPayload
@@ -130,6 +131,35 @@ class ClaimPayloadTest {
         assertFalse(body.has("receiptScanId"))
         assertFalse(body.has("expectedReturnId"))
         assertFalse(body.has("claimTemplateId"))
+    }
+
+    @Test
+    fun evidenceStaysOnlyWhenTheNewLookupIsTheSameReturn() {
+        // Evidence is captured for the confirmed lookup. Looking that return up again keeps it; any other return drops it,
+        // so one package's photos and video are never uploaded with another package's claim.
+        assertTrue(ClaimPayload.sameReturn(lookup, lookup.copy(customerName = "SYN-Customer-2")))
+        assertTrue(ClaimPayload.sameReturn(lookup, lookup.copy(subOrderId = " syn-sub-1 ")))
+        assertFalse(ClaimPayload.sameReturn(lookup, lookup.copy(subOrderId = "SYN-SUB-2")))
+        assertFalse(ClaimPayload.sameReturn(null, lookup))
+    }
+
+    @Test
+    fun withoutASubOrderTheAwbDecidesWhetherEvidenceStays() {
+        val noSubOrder = lookup.copy(subOrderId = "", orderId = "")
+        assertTrue(ClaimPayload.sameReturn(noSubOrder, noSubOrder))
+        assertFalse(ClaimPayload.sameReturn(noSubOrder, noSubOrder.copy(awb = "SYN-AWB-0002", trackingNumber = "SYN-AWB-0002")))
+        val noKey = noSubOrder.copy(awb = "", trackingNumber = "")
+        assertFalse(ClaimPayload.sameReturn(noKey, noKey))
+    }
+
+    @Test
+    fun theClaimScreenDropsEvidenceWhenALookupLoadsAnotherReturn() {
+        // The screen cannot be inflated in a unit test, so read its source: before a lookup replaces lookupData, the
+        // evidence captured for the old return is checked and, for another return, deleted.
+        val source = File(appDir, "src/main/java/shop/youthnic/returnscan/ui/ClaimCaptureActivity.kt").readText()
+        val beforeReplace = source.substringAfter("private fun populateReturnDetails(").substringBefore("lookupData = data")
+        assertTrue("populateReturnDetails must compare the returns first", beforeReplace.contains("ClaimPayload.sameReturn(lookupData, data)"))
+        assertTrue("populateReturnDetails must drop another return's evidence", beforeReplace.contains("clearCapturedEvidence()"))
     }
 
     @Test

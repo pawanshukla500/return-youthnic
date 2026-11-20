@@ -408,6 +408,10 @@ class ClaimCaptureActivity : AppCompatActivity() {
     }
 
     private fun populateReturnDetails(data: ClaimReturnLookup) {
+        // Captured evidence belongs to the return it was captured for. The same return keeps it and its cards as they
+        // are; a different one (the sub order was corrected or changed) drops it, so it never goes on this claim.
+        val sameReturn = ClaimPayload.sameReturn(lookupData, data)
+        val droppedEvidence = if (sameReturn) 0 else clearCapturedEvidence()
         lookupData = data
         binding.layoutStepReturnDetails.visibility = View.VISIBLE
 
@@ -522,8 +526,11 @@ class ClaimCaptureActivity : AppCompatActivity() {
                 fields = getMeeshoStandardEvidenceFields()
             )
 
-        buildDynamicEvidenceCards(selectedTemplate?.fields ?: getMeeshoStandardEvidenceFields())
+        if (!sameReturn) buildDynamicEvidenceCards(selectedTemplate?.fields ?: getMeeshoStandardEvidenceFields())
         showStep(1)
+        if (droppedEvidence > 0) {
+            showMessage("$droppedEvidence evidence file(s) from the previous return were removed. Capture evidence again for Sub Order $resolvedSubOrder.")
+        }
     }
 
     private fun updateDescriptionAndTitle(code: String) {
@@ -815,6 +822,26 @@ class ClaimCaptureActivity : AppCompatActivity() {
         card.tvEvidenceCount.text = "0 / 1"
     }
 
+    /** Deletes every captured evidence file, from memory and disk, and empties the cards. Returns how many were dropped. */
+    private fun clearCapturedEvidence(): Int {
+        var dropped = 0
+        for (list in capturedFiles.values) {
+            for (item in list) {
+                try {
+                    if (item.file.exists()) item.file.delete()
+                } catch (_: Exception) {}
+                dropped++
+            }
+            list.clear()
+        }
+        capturedFiles.clear()
+        for ((_, card) in evidenceCardBindings) {
+            card.layoutEvidencePreview.visibility = View.GONE
+            card.tvEvidenceCount.text = "0 / 1"
+        }
+        return dropped
+    }
+
     private fun createEvidenceFile(fieldKey: String, extension: String): File {
         val dir = File(filesDir, "claim-evidence").apply { mkdirs() }
         return File(dir, "claim-evidence-${fieldKey}-${UUID.randomUUID()}$extension")
@@ -1049,24 +1076,10 @@ class ClaimCaptureActivity : AppCompatActivity() {
         binding.etClaimContent.setText("")
         binding.tvClaimMessage.visibility = View.GONE
 
-        // 2. Clear captured evidence files from memory and disk
-        for (list in capturedFiles.values) {
-            for (item in list) {
-                try {
-                    if (item.file.exists()) item.file.delete()
-                } catch (_: Exception) {}
-            }
-            list.clear()
-        }
-        capturedFiles.clear()
+        // 2. Clear captured evidence files from memory and disk, and reset the evidence cards
+        clearCapturedEvidence()
 
-        // 3. Reset all evidence card views
-        for ((_, card) in evidenceCardBindings) {
-            card.layoutEvidencePreview.visibility = View.GONE
-            card.tvEvidenceCount.text = "0 / 1"
-        }
-
-        // 4. Reset state variables
+        // 3. Reset state variables
         lookupData = null
         binding.cardProductPreview.visibility = View.GONE
         binding.cardOrderSummary.visibility = View.GONE
@@ -1076,10 +1089,10 @@ class ClaimCaptureActivity : AppCompatActivity() {
         binding.btnSubmitClaim.isEnabled = true
         binding.progressClaim.visibility = View.GONE
 
-        // 5. Switch back to Step 1: Return Details
+        // 4. Switch back to Step 1: Return Details
         showStep(1)
 
-        // 6. Request focus on search input
+        // 5. Request focus on search input
         binding.etClaimSearch.requestFocus()
         showMessage("Ready for next return claim. Enter or scan SubOrder ID / AWB.")
     }
