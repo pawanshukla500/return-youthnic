@@ -22,8 +22,8 @@ android {
 
     // Release signing comes only from the environment: CI sets these four variables from GitHub
     // secrets (.github/workflows/return-scan-apk.yml). No keystore file or password lives in this
-    // repository. Without all four, a release build is left unsigned. Debug builds keep Android's
-    // default debug key (signingConfigs.debug is not overridden here), never the release key.
+    // repository. Without all four (pull-request and local builds) the release build is signed with Android's
+    // debug key; see buildTypes.release. Debug builds keep the default debug key, never the release key.
     signingConfigs {
         release {
             def ksPath = System.getenv("RS_KEYSTORE")
@@ -49,9 +49,11 @@ android {
             minifyEnabled true
             shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-            if (signingConfigs.release.storeFile != null) {
-                signingConfig signingConfigs.release
-            }
+            // CI builds that publish (push to main, manual runs) always have the four RS_* variables: the workflow
+            // stops before building when a secret is missing. Pull-request and local builds have none, so they are
+            // signed with Android's debug key: the APK installs for testing but can never replace the warehouse app,
+            // whose updates must carry the release signer.
+            signingConfig(signingConfigs.release.storeFile != null ? signingConfigs.release : signingConfigs.debug)
             def defaultApiUrl = System.getenv("API_URL") ?: "https://return.youthnic.shop"
             buildConfigField "String", "DEFAULT_API_URL", "\"${defaultApiUrl}\""
         }
