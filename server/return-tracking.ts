@@ -977,9 +977,12 @@ export async function getReturnTrackingList(
   }
 }
 
-// Inward scan reconciliation hook: updates return_tracking_records when a return is scanned at the bench
+// Inward scan reconciliation hook: updates return_tracking_records when a return is scanned at the bench.
+// Only the scanned return's own account is touched (rule 1): Myntra EJ and Myntra VB can hold the same AWB and the
+// same order ID, so the AWB and order matches are both limited to the scan's marketplace.
 export async function syncScanToReturnTracking(
   db: Queryable,
+  marketplaceId: number,
   scanId: number,
   trackingId: string,
   orderNumber: string,
@@ -1000,12 +1003,15 @@ export async function syncScanToReturnTracking(
         ELSE claim_eligibility_status
       END,
       updated_at = now()
-    WHERE tracking_id = $4
-       OR forward_tracking_number = $4
-       OR return_tracking_number = $4
-       OR (order_id = $5 AND $5 <> '')
+    WHERE marketplace_id = $6
+      AND (
+        tracking_id = $4
+        OR forward_tracking_number = $4
+        OR return_tracking_number = $4
+        OR (order_id = $5 AND $5 <> '')
+      )
   `
-  const res = await db.query(sql, [scanId, userId, outcome, normTrk, orderNumber.trim()])
+  const res = await db.query(sql, [scanId, userId, outcome, normTrk, orderNumber.trim(), marketplaceId])
   return res.rowCount || 0
 }
 

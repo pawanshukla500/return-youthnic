@@ -460,6 +460,101 @@ test("the register lists item rows with their issues, and the export matches the
   assert.ok(csv.includes(`"SYN-${run}-TKT-P"`))
 })
 
+// A return tracking row for one account, in a state the scan sync would change.
+async function trackingRow(marketplace: string, tracking: string, order: string): Promise<number> {
+  const result = await pool.query(
+    `INSERT INTO return_tracking_records (marketplace_id, order_id, tracking_id, effective_return_date, claim_eligibility_status)
+     SELECT id, $2, $3, current_date, 'eligible_rnr' FROM marketplaces WHERE name = $1
+     RETURNING id`,
+    [marketplace, order, tracking],
+  )
+  return Number(result.rows[0].id)
+}
+
+async function trackingState(id: number): Promise<Record<string, unknown>> {
+  const result = await pool.query(
+    `SELECT is_physically_received, physical_scan_id, physical_scanned_by, physical_outcome, claim_eligibility_status, updated_at
+     FROM return_tracking_records WHERE id = $1`,
+    [id],
+  )
+  return result.rows[0]
+}
+
+test("a return tracking sync error rolls back only the sync: the scan, its items and its audit row are kept", { skip: skip || false }, async (t) => {
+  const tracking = `SYN-${run}-SAVEPOINT`
+  await upload(
+    "Myntra EJ",
+    [row({ trackingId: tracking, orderId: `SYN-${run}-ORD-SP`, marketplace: "Myntra EJ", channelListingId: "SYN-EJ-SP", sku: "SYN-EJ-SP", orderLineId: "SYN-EJ-LSP" })],
+    "EJ-SAVEPOINT",
+  )
+  const trackingId = await trackingRow("Myntra EJ", tracking, `SYN-${run}-ORD-SP`)
+  const shipment = await found(tracking, "Myntra EJ")
+  const items = shipment.items.map((item) => ({ itemId: item.itemId, receivedQty: item.expectedQty, verified: true, issues: [] }))
+
+  // Force the sync's UPDATE to fail with a real SQL error inside the scan's transaction.
+  await pool.query(`
+    CREATE OR REPLACE FUNCTION syn_fail_tracking_sync() RETURNS trigger LANGUAGE plpgsql AS $$
+    BEGIN
+      IF NEW.tracking_id LIKE 'SYN-%-SAVEPOINT' THEN RAISE EXCEPTION 'SYN forced tracking sync failure'; END IF;
+      RETURN NEW;
+    END $$`)
+  await pool.query("DROP TRIGGER IF EXISTS syn_fail_tracking_sync ON return_tracking_records")
+  await pool.query(
+    "CREATE TRIGGER syn_fail_tracking_sync BEFORE UPDATE ON return_tracking_records FOR EACH ROW EXECUTE FUNCTION syn_fail_tracking_sync()",
+  )
+  const logged = t.mock.method(console, "error", () => undefined)
+  let receipt: Awaited<ReturnType<typeof recordScan>>
+  try {
+    receipt = await recordScan(pool, actor, { submission: submission(shipment.shipmentId, `${KEY_PREFIX}-SAVEPOINT`, items), photoCount: 0, hasVideo: false })
+  } finally {
+    await pool.query("DROP TRIGGER IF EXISTS syn_fail_tracking_sync ON return_tracking_records")
+    await pool.query("DROP FUNCTION IF EXISTS syn_fail_tracking_sync()")
+  }
+  assert.equal(logged.mock.callCount(), 1, "the sync error is still logged")
+  assert.equal(receipt.replayed, false)
+
+  const scanId = receipt.scan.id
+  const scan = await pool.query("SELECT expected_return_id FROM receipt_scans WHERE id = $1", [scanId])
+  assert.equal(Number(scan.rows[0]?.expected_return_id), shipment.shipmentId, "the scan is kept")
+  const scanItems = await pool.query("SELECT COUNT(*)::int AS n FROM receipt_scan_items WHERE receipt_scan_id = $1", [scanId])
+  assert.equal(scanItems.rows[0].n, items.length, "the scan's items are kept")
+  const audit = await pool.query(
+    "SELECT COUNT(*)::int AS n FROM register_audit_log WHERE action = 'scan.record' AND entity_type = 'receipt_scan' AND entity_id = $1",
+    [String(scanId)],
+  )
+  assert.equal(audit.rows[0].n, 1, "the scan's audit row is kept")
+  const state = await trackingState(trackingId)
+  assert.equal(state.is_physically_received, false, "only the failed sync is rolled back")
+})
+
+test("one AWB in Myntra EJ and Myntra VB: a scan in one account leaves the other account's tracking row unchanged", { skip: skip || false }, async () => {
+  const tracking = `SYN-${run}-TWIN`
+  const order = `SYN-${run}-ORD-TWIN`
+  await upload(
+    "Myntra EJ",
+    [row({ trackingId: tracking, orderId: order, marketplace: "Myntra EJ", channelListingId: "SYN-EJ-TW", sku: "SYN-EJ-TW", orderLineId: "SYN-EJ-LTW" })],
+    "EJ-TWIN",
+  )
+  await upload(
+    "Myntra VB",
+    [row({ trackingId: tracking, orderId: order, marketplace: "Myntra VB", channelListingId: "SYN-VB-TW", sku: "SYN-VB-TW", orderLineId: "SYN-VB-LTW" })],
+    "VB-TWIN",
+  )
+  const ejTracking = await trackingRow("Myntra EJ", tracking, order)
+  const vbTracking = await trackingRow("Myntra VB", tracking, order)
+  const vbBefore = await trackingState(vbTracking)
+
+  const shipment = await found(tracking, "Myntra EJ")
+  const items = shipment.items.map((item) => ({ itemId: item.itemId, receivedQty: item.expectedQty, verified: true, issues: [] }))
+  const receipt = await recordScan(pool, actor, { submission: submission(shipment.shipmentId, `${KEY_PREFIX}-TWIN`, items), photoCount: 0, hasVideo: false })
+
+  const ej = await trackingState(ejTracking)
+  assert.equal(ej.is_physically_received, true, "the scanned account's tracking row is reconciled")
+  assert.equal(Number(ej.physical_scan_id), receipt.scan.id)
+  assert.equal(ej.claim_eligibility_status, "delivered_normal")
+  assert.deepEqual(await trackingState(vbTracking), vbBefore, "the other account's row with the same AWB and order is unchanged")
+})
+
 test("persistence: a new connection and a second schema run keep every scan", { skip: skip || false }, async () => {
   const before = await listRegister(pool, { tracking: TRACK.multi }, 1, 50)
   await pool.end()
