@@ -306,3 +306,15 @@ test("register sync: ticket replacement history keeps the replaced code", async 
   assert.equal(history.length, 1)
   assert.match(String(history[0].params[3]), /OLD-1.*NEW-2|NEW-2.*OLD-1/, "history must keep both codes")
 })
+
+// 2.3: a scan with no line keeps just its ticket. No line is invented with a received or verified quantity.
+test("register sync: a scan without lines records the ticket and invents no received line", async () => {
+  const { poolClient, queries } = fakePool((sql) => {
+    if (sql.includes("INSERT INTO claim_tickets")) return { rows: [{ id: 12 }] }
+    return { rows: [] }
+  })
+  const ticketId = await syncClaimTicketToRegister(poolClient, { receiptScanId: 9, ticketCode: "SYN-CLM-9", actorId: 7 })
+  assert.equal(ticketId, 12)
+  assert.equal(queries.some((q) => q.sql.includes("INSERT INTO receipt_scan_items")), false, "no invented line")
+  assert.equal(queries.some((q) => q.sql.includes("INSERT INTO receipt_scan_issues")), false, "no issue without a line")
+})

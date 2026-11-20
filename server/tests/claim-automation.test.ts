@@ -4,8 +4,11 @@ import {
   authenticateAutomationAgent,
   decryptSecret,
   encryptSecret,
+  likeContains,
+  lookupReturnForClaim,
   maskSecret,
   mapToReceiptIssueCategory,
+  resolveClaimScanId,
   updateJobProgress,
 } from "../claim-automation-service.js"
 import { ServiceError } from "../register-service.js"
@@ -298,5 +301,88 @@ test("job progress: the lease holder reports progress while the lease is live", 
   assert.ok(queries.some((q) => q.sql.includes("UPDATE claim_automation_jobs")), "the holder's progress must be recorded")
 })
 
+// 2.3: the claim lookup's partial match treats % and _ as text, not LIKE wildcards.
+test("claim lookup: the contains-pattern escapes LIKE wildcards and the escape character", () => {
+  assert.equal(likeContains("SYN-123"), "%SYN-123%")
+  assert.equal(likeContains("SYN%1_2"), "%SYN\\%1\\_2%")
+  assert.equal(likeContains("SYN\\9"), "%SYN\\\\9%")
+})
 
+// 2.3: a claim attaches only to a saved bench scan. The fake answers the bench's exact saved-scan query.
+function scanPool(scansByKey: Record<string, Array<{ scan_id: number; marketplace_id: number }>>) {
+  const keys: string[] = []
+  const pool = {
+    query: async (_sql: string, params: unknown[] = []) => {
+      keys.push(String(params[0]))
+      return { rows: scansByKey[String(params[0])] ?? [] }
+    },
+  } as unknown as pg.Pool
+  return { pool, keys }
+}
 
+const allAccounts = { all: true } as const
+
+test("claim scan: the app's saved scan id is used as sent, with no lookup", async () => {
+  const { pool, keys } = scanPool({})
+  assert.equal(await resolveClaimScanId(pool, allAccounts, { scanId: 41, keys: ["SYN-AWB-1"] }), 41)
+  assert.equal(keys.length, 0)
+})
+
+test("claim scan: an older APK with no scan id attaches to the one saved scan for its AWB", async () => {
+  const { pool, keys } = scanPool({ "SYN-AWB-2": [{ scan_id: 52, marketplace_id: 1 }] })
+  assert.equal(await resolveClaimScanId(pool, allAccounts, { scanId: null, keys: ["syn-awb-2", "SYN-SUB-2", ""] }), 52)
+  assert.deepEqual(keys, ["SYN-AWB-2"], "the AWB is tried first, upper-cased like the bench")
+})
+
+test("claim scan: a stale sub order never rescues an AWB that has no saved scan", async () => {
+  const { pool, keys } = scanPool({ "SYN-SUB-3": [{ scan_id: 63, marketplace_id: 1 }] })
+  await assert.rejects(
+    resolveClaimScanId(pool, allAccounts, { scanId: null, keys: ["SYN-AWB-3", "SYN-SUB-3", ""] }),
+    /Save the bench scan first/,
+  )
+  assert.deepEqual(keys, ["SYN-AWB-3"], "only the AWB is tried when one is sent")
+  assert.equal(await resolveClaimScanId(pool, allAccounts, { scanId: null, keys: ["", "SYN-SUB-3", ""] }), 63)
+})
+
+test("claim scan: no saved scan is rejected with bench_scan_required", async () => {
+  const { pool } = scanPool({})
+  await assert.rejects(resolveClaimScanId(pool, allAccounts, { scanId: null, keys: ["SYN-AWB-4", "", ""] }), (err) => {
+    assert.ok(err instanceof ServiceError)
+    assert.equal(err.status, 409)
+    assert.equal(err.extra.code, "bench_scan_required")
+    assert.match(err.message, /Save the bench scan first/)
+    return true
+  })
+  await assert.rejects(resolveClaimScanId(pool, allAccounts, { scanId: null, keys: ["", "", ""] }), /Save the bench scan first/)
+})
+
+test("claim scan: two saved scans for one AWB never bind silently", async () => {
+  const { pool } = scanPool({
+    "SYN-AWB-5": [
+      { scan_id: 71, marketplace_id: 4 },
+      { scan_id: 72, marketplace_id: 5 },
+    ],
+  })
+  await assert.rejects(resolveClaimScanId(pool, allAccounts, { scanId: null, keys: ["SYN-AWB-5"] }), (err) => {
+    assert.ok(err instanceof ServiceError)
+    assert.equal(err.status, 409)
+    assert.equal(err.extra.code, "scan_ambiguous")
+    return true
+  })
+})
+
+// 2.3: a restricted user's account list is bound after the search text, so $1 and $2 stay the text and its pattern.
+test("claim lookup: a restricted scope binds the account list after the search text", async () => {
+  const calls: Array<{ sql: string; params: unknown[] }> = []
+  const pool = {
+    query: async (sql: string, params: unknown[] = []) => {
+      calls.push({ sql, params })
+      return { rows: [] }
+    },
+  } as unknown as pg.Pool
+  assert.equal(await lookupReturnForClaim(pool, { all: false, marketplaceIds: [3, 5] }, "SYN-AWB_9"), null)
+  assert.equal(calls.length, 1)
+  assert.deepEqual(calls[0].params, ["SYN-AWB_9", "%SYN-AWB\\_9%", [3, 5]])
+  assert.match(calls[0].sql, /er\.marketplace_id = ANY\(\$3::integer\[\]\)/)
+  assert.match(calls[0].sql, /er\.lookup_status = 'active'/)
+})

@@ -97,6 +97,7 @@ Located in [`server/claim-automation-service.ts`](../server/claim-automation-ser
    - Creates a pending claim ticket with initial code `CLM-<claimId>`.
    - Links `receipt_scan_issues.claim_ticket_id` to `claim_tickets.id`.
    - Marks the return scan in the Return Register with status `Draft`.
+   - Attaches to the saved bench scan only: it never creates a scan and never invents a received line (a scan with no line keeps just its ticket).
 2. **On Desktop Automation Bot Submission (`completeJobSubmission`) / Manual Resolve**:
    - The desktop bot extracts the actual Meesho Support Ticket / Claim Reference ID (e.g., `777535617152` — Meesho ticket IDs are 12-digit numbers, never `M-` prefixed).
    - Updates `claim_tickets.ticket_code = marketplaceClaimId` and `status = 'Raised'`.
