@@ -146,3 +146,13 @@ test("[Security/AppSec] Responses hide X-Powered-By, enforce only the safe CSP, 
     server.close()
   }
 })
+
+test("[Security/AppSec] The production server applies the security headers before any route or static file", () => {
+  const source = fs.readFileSync(path.join(root, "server", "index.ts"), "utf-8")
+  const call = source.indexOf("applySecurityHeaders(app)")
+  assert.ok(call > 0, "server/index.ts calls applySecurityHeaders(app)")
+  for (const marker of ["app.get(", "app.post(", "express.static("]) {
+    const first = source.indexOf(marker)
+    if (first >= 0) assert.ok(call < first, `applySecurityHeaders(app) comes before the first ${marker}`)
+  }
+})
