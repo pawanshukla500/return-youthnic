@@ -38,30 +38,42 @@ export const FOLLOW_UP_OUTCOMES: readonly FollowUpOutcome[] = [
 /**
  * Free text read from a supplier portal, mapped to one normalized ticket state. Ordered deliberately, and the
  * first match wins:
- *  1. An explicit rejection (rejected, declined, denied, closed without approval), so a rejection reason such as
- *     "Rejected - product not yet received" stays a rejection.
+ *  1. An explicit rejection (rejected, declined, denied, closed without approval, not eligible), so a rejection
+ *     reason such as "Rejected - product not yet received" stays a rejection. "Not eligible" never means waiting.
  *  2. Waiting wording ("Pending approval", "Awaiting approval", "Approval pending", "Not yet credited",
- *     "Not approved yet", "Under review"), so an approval word inside it never closes the ticket.
- *  3. The negations that mean the marketplace said no ("not approved", "not accepted", "not eligible").
- *  4. Money that has not moved ("not settled", "not credited", "not paid"): the claim is still open, so these are
+ *     "Not approved yet", "Under review", "Accepted for review", "On hold", "In progress", "Verification",
+ *     "Action required"), so an approval word beside it never closes the ticket. It is looked for only before the
+ *     desktop's " | Reason: " suffix, which the desktop adds to rejections alone: a reason such as "pickup pending"
+ *     says why the claim was refused, not that it is still open.
+ *  3. A negated decision means the marketplace said no ("not approved", "has not been accepted", "could not be
+ *     approved", "isn't approved", "never accepted"): rejected. The negator may sit up to three words before the word.
+ *  4. Negated money ("not settled", "has not been credited", "not paid"): the claim is still open, so these are
  *     under review. They are not rejections, because nothing says the claim was refused.
  *  5. The final positive states (approved, paid, reconciled). "Approved" and "accepted" are whole words, so
  *     "approval" or "acceptance" on their own (as in "sent for approval") never read as a decision.
- *  6. The other active states (escalated, reopened, processing, submitted).
+ *  6. The other active states (escalated, reopened, processing, submitted). "Approved - payment processing" stays
+ *     approved, because processing there is the payout, not the decision.
  * A state that matches nothing is "unknown", which keeps the follow-up running rather than closing it, because
  * wrongly closing a live ticket loses it while an extra check costs nothing.
  */
-const STATUS_PATTERNS: ReadonlyArray<{ key: string; test: RegExp }> = [
-  { key: "rejected", test: /\breject|\bdeclin|\bdenied|\bclosed\s+without/i },
-  { key: "under_review", test: /\bpending\b|\bawait|\byet\b|\bunder\s*review|\bin\s*review/i },
-  { key: "rejected", test: /\bnot\s+eligible|\bnot\s+approved|\bnot\s+accepted/i },
-  { key: "under_review", test: /\bnot\s+(?:settled|credited|paid)\b/i },
+const negated = (words: string): RegExp =>
+  new RegExp(`(?:\\bnot|\\bnever|\\bcannot|n['’]t)\\s+(?:\\w+\\s+){0,3}(?:${words})\\b`, "i")
+
+const STATUS_PATTERNS: ReadonlyArray<{ key: string; test: RegExp; beforeReasonOnly?: true }> = [
+  { key: "rejected", test: /\breject|\bdeclin|\bdenied|\bclosed\s+without|\bnot\s+eligible/i },
+  {
+    key: "under_review",
+    test: /\bpending\b|\bawait|\byet\b|\b(?:under|in|for)\s*review|in\s*progress|on\s*hold|verification|action\s+required/i,
+    beforeReasonOnly: true,
+  },
+  { key: "rejected", test: negated("approved|accepted|eligible") },
+  { key: "under_review", test: negated("settled|credited|paid") },
   { key: "approved", test: /\bapproved\b|\baccepted\b|\bsettled\b|\bcredited\b/i },
   { key: "paid", test: /\bpaid\b|payment\s+(done|completed|released|processed)/i },
   { key: "reconciled", test: /\breconcil|\badjusted\b/i },
   { key: "escalated", test: /\bescalat/i },
   { key: "reclaim", test: /\breclaim|re-?opened?\b/i },
-  { key: "under_review", test: /processing|verification|in\s*progress|on\s*hold|action\s+required/i },
+  { key: "under_review", test: /processing/i },
   { key: "submitted", test: /\bsubmitted|\braised|\bcreated|ticket\s+open|\bopen\b/i },
 ]
 
@@ -74,8 +86,10 @@ const KNOWN_READINGS: ReadonlySet<string> = new Set(STATUS_PATTERNS.map((pattern
 export function normalizeFollowUpStatus(raw: string): string {
   const value = String(raw || "").trim()
   if (!value) return "unknown"
+  // The desktop sends a rejection as "<status> | Reason: <reason>" (desktop-agent/src/marketplaces/meesho.ts).
+  const beforeReason = value.split(/\|\s*reason\s*:/i)[0]
   for (const pattern of STATUS_PATTERNS) {
-    if (pattern.test.test(value)) return pattern.key
+    if (pattern.test.test(pattern.beforeReasonOnly ? beforeReason : value)) return pattern.key
   }
   return "unknown"
 }

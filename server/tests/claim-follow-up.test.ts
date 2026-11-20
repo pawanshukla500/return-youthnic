@@ -80,10 +80,22 @@ test("pending, awaiting and not-yet wording never reads as approved or as any fi
     ["Refund yet to be credited", "under_review"],
     ["Under review for approval", "under_review"],
     ["Approval in progress", "under_review"],
-    // Money that has not moved is still open: nothing says the claim was refused.
+    // Waiting wording beside an approval word wins, so the ticket stays open while the marketplace works on it.
+    ["Accepted - on hold", "under_review"],
+    ["Claim accepted, verification in progress", "under_review"],
+    ["Accepted for review", "under_review"],
+    ["Request accepted for review", "under_review"],
+    ["Approved | Remarks: action required, share invoice", "under_review"],
+    // Money that has not moved is still open: nothing says the claim was refused. The negator may sit a few
+    // words before the word, as in a normal sentence.
     ["Refund not credited", "under_review"],
     ["Amount not settled", "under_review"],
     ["Not paid", "under_review"],
+    ["Refund has not been credited", "under_review"],
+    ["Amount has not been credited to your account", "under_review"],
+    ["Payment has not been settled", "under_review"],
+    ["Refund hasn't been credited", "under_review"],
+    ["Amount never credited", "under_review"],
     // "Approval" on its own is a process, not a decision.
     ["Sent for approval", "unknown"],
   ]
@@ -95,13 +107,38 @@ test("pending, awaiting and not-yet wording never reads as approved or as any fi
 })
 
 test("a negation that means the marketplace said no is a rejection, never an approval", () => {
-  assert.equal(normalizeFollowUpStatus("Claim not accepted"), "rejected")
+  for (const text of [
+    "Claim not accepted",
+    "Your claim has not been approved",
+    "Claim could not be approved",
+    "Claim isn't approved",
+    "Claim wasn’t approved",
+    "Claim has not been accepted",
+    "Claim cannot be accepted",
+    "Claim was never accepted",
+    "Return is not currently eligible",
+  ]) {
+    assert.equal(normalizeFollowUpStatus(text), "rejected", `"${text}" should normalize to rejected`)
+  }
   assert.equal(normalizeFollowUpStatus("Claim Accepted"), "approved")
+  // A decision word in the next cell is not negated by the cell before it.
+  assert.equal(normalizeFollowUpStatus("Not applicable | Approved"), "approved")
 })
 
 test("a rejection whose reason mentions waiting is still a rejection", () => {
   assert.equal(normalizeFollowUpStatus("Rejected - product not yet received at warehouse"), "rejected")
   assert.equal(normalizeFollowUpStatus("Claim declined: pickup pending"), "rejected")
+  // The desktop sends a rejection with its reason as "<status> | Reason: <reason>".
+  assert.equal(normalizeFollowUpStatus("Not eligible | Reason: Product not yet received at our warehouse"), "rejected")
+  assert.equal(normalizeFollowUpStatus("Not eligible | Reason: Product not yet received"), "rejected")
+  assert.equal(normalizeFollowUpStatus("Not Approved | Reason: Pickup pending from customer"), "rejected")
+  assert.equal(normalizeFollowUpStatus("Claim not accepted | Reason: Awaiting proof was not shared"), "rejected")
+  // Waiting wording in the status itself still wins.
+  assert.equal(normalizeFollowUpStatus("Not approved yet | Reason: Pickup pending"), "under_review")
+})
+
+test("processing after an approval is the payout, so the approval stands", () => {
+  assert.equal(normalizeFollowUpStatus("Approved - payment processing"), "approved")
 })
 
 test("a disagreement between the server and the desktop never closes a ticket", () => {
