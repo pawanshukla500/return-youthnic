@@ -53,6 +53,7 @@ import shop.youthnic.returnscan.update.AppUpdater
 import shop.youthnic.returnscan.util.CameraPermission
 import shop.youthnic.returnscan.util.CameraTuning
 import shop.youthnic.returnscan.util.Cue
+import shop.youthnic.returnscan.util.Debouncer
 import shop.youthnic.returnscan.util.ScanSignals
 import shop.youthnic.returnscan.util.Ui
 import java.util.concurrent.ExecutorService
@@ -104,6 +105,8 @@ class ScannerActivity : AppCompatActivity() {
     private var online = true
     private var lastVerdictAt = 0L
     private var tickerJob: Job? = null
+    // A busy shift sends a live change per scan. They are folded into one refresh of today's figures every 2 seconds.
+    private val liveRefresh by lazy { Debouncer(lifecycleScope, LIVE_REFRESH_WAIT_MS) { refreshShift() } }
 
     private val sessionManager get() = (application as ReturnScanApp).sessionManager
 
@@ -136,7 +139,7 @@ class ScannerActivity : AppCompatActivity() {
             (application as ReturnScanApp).apiClient,
             sessionManager,
             lifecycleScope,
-            onChange = { refreshShift() },
+            onChange = { liveRefresh.trigger() },
             onStatus = { mode, syncedAt ->
                 syncMode = mode
                 if (syncedAt > 0) lastSyncedAt = syncedAt
@@ -167,6 +170,7 @@ class ScannerActivity : AppCompatActivity() {
         super.onPause()
         idleJob?.cancel()
         liveSync?.stop()
+        liveRefresh.cancel()
         tickerJob?.cancel()
         pauseCamera(showOverlay = false)
     }
@@ -243,18 +247,29 @@ class ScannerActivity : AppCompatActivity() {
         renderConnection()
     }
 
-    /** Reloads today's figures (all benches and phones). Called on open, and whenever the live cursor moves. */
+    /**
+     * Reloads today's figures (all benches and phones). Called on open, and through [liveRefresh] when the live cursor
+     * moves. Only the figures are fetched; a scanner that opened offline has no issue rules yet, so it takes the whole
+     * session once.
+     */
     private fun refreshShift() {
         lifecycleScope.launch {
-            val app = application as ReturnScanApp
-            val result = app.apiClient.getSessionData(accountId)
-            val data = result.getOrNull()
-            if (data != null) {
+            val api = (application as ReturnScanApp).apiClient
+            val result = if (sessionData.categories.isEmpty()) {
+                api.getSessionData(accountId).map { data ->
+                    sessionData = data
+                    data.shift
+                }
+            } else {
+                api.getShiftProgress()
+            }
+            val shift = result.getOrNull()
+            if (shift != null) {
                 // Keep the issue rules the open verification sheet already uses; only the figures change.
-                sessionData = if (sessionData.categories.isEmpty()) data else sessionData.copy(shift = data.shift)
-                scannedCountToday = data.shiftProgress.scannedToday
-                issuesToday = data.shiftProgress.issuesToday
-                ironSendToday = data.shiftProgress.ironSendToday
+                sessionData = sessionData.copy(shift = shift)
+                scannedCountToday = shift.scannedToday
+                issuesToday = shift.issuesToday
+                ironSendToday = shift.ironSendToday
                 lastSyncedAt = System.currentTimeMillis()
                 online = true
                 updateCountsUi()
@@ -996,5 +1011,6 @@ class ScannerActivity : AppCompatActivity() {
         const val EXTRA_ACCOUNT_NAME = "extra_account_name"
         const val EXTRA_MARKETPLACE = "extra_marketplace"
         const val EXTRA_COLOR = "extra_color"
+        const val LIVE_REFRESH_WAIT_MS = 2_000L
     }
 }

@@ -85,7 +85,7 @@ Sign-in and mutating routes are login- and IP-rate-limited (`server/rate-limit.t
 | POST | `/api/uploads/import` | Yes | Activates a staged file as the account's lookup data. |
 | POST | `/api/uploads/scanner-list/preview` | Yes | Reads a multi-sheet scanner list and validates entries against active lookups. It never activates data or creates scans. |
 | POST | `/api/scan/lookup` | Yes | Finds the return for an AWB: found, duplicate, choose, or not found. |
-| GET | `/api/scan/session` | Yes | Today's scan counts, the accounts, the active issue categories, and the active sub-issues. |
+| GET | `/api/scan/session` | Yes | Today's scan counts, the accounts, the active issue categories, and the active sub-issues. `?only=shift` returns only `{shift}`. |
 | POST | `/api/scan/complete` | Yes | Records one physical scan with every item verified. A retry with the same key is safe. |
 | GET | `/api/register` | Yes | The return register: one row per verified item, with filters, sorting and paging. |
 | GET | `/api/register/export` | Yes | The register rows that match the filters, as CSV or Excel. |
@@ -472,6 +472,8 @@ Lookup errors: 400 `Enter a tracking ID` for an empty value, and 400 with a mess
 ```
 
 The shift counts today's scans of the user's accounts, in IST. Only active categories and active sub-issues are listed.
+
+`GET /api/scan/session?only=shift` returns only `{"shift": {...}}`, with the same figures and the same account scope. The Android scanner uses it for its live refresh, at most once every 2 seconds. A server without this option ignores the parameter and sends the whole session, which still carries `shift`.
 
 ### `POST /api/scan/correct`
 

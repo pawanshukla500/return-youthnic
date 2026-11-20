@@ -3,6 +3,7 @@
 //
 // What these checks cover, in order (later checks build on the data of earlier ones):
 //  - A scan with only Iron Send is a clear return: not an issue, no claim, and one open Iron Send record.
+//  - The shift-only refresh the phones use matches the whole session's figures and stays inside the user's accounts.
 //  - A scan with Iron Send and a real issue is an issue return, and its issue text names only the real issue.
 //  - Iron Send units are never in the OMSGuru file, and missing units are not subtracted twice.
 //  - Nothing marks an Iron Send as received. Only the Inward Team (or an Admin) records units that came back; the
@@ -15,7 +16,7 @@
 import { after, before, test } from "node:test"
 import assert from "node:assert/strict"
 import pg from "pg"
-import { scopeFor, type AccountScope } from "../access.js"
+import { NO_ACCOUNTS, scopeFor, type AccountScope } from "../access.js"
 import { loadAnalytics } from "../analytics.js"
 import { loadReasons } from "../dashboard.js"
 import { applySchema, connectionSettingsFor } from "../db.js"
@@ -40,7 +41,7 @@ import { currentCursor } from "../live.js"
 import { commitLookupUpload } from "../lookup-import.js"
 import { calculateGoodReturnsForDay } from "../omsguru-daily.js"
 import { ensureReferenceData } from "../reference-data.js"
-import { ServiceError, correctScanIssue, exportRegisterRows, listRegister, lookupShipment, recordScan, scanSession, type Actor } from "../register-service.js"
+import { ServiceError, correctScanIssue, exportRegisterRows, listRegister, lookupShipment, recordScan, scanSession, todayShift, type Actor } from "../register-service.js"
 import { registerCsv, type ScanSubmission } from "../register-rules.js"
 import type { ParsedRow } from "../sheets.js"
 
@@ -221,6 +222,16 @@ test("a scan with only Iron Send is a clear return, opens one Iron Send record, 
   assert.equal(record.qtyReceived, 0, "nothing is received automatically")
   assert.equal(record.state, "pending")
   assert.equal(record.size, "M")
+})
+
+// The phones refresh only today's figures on a live change (GET /api/scan/session?only=shift, which is todayShift).
+test("the shift-only refresh gives the same figures as the whole session, inside the user's accounts", { skip: skip || false }, async () => {
+  assert.deepEqual(await todayShift(pool, allScope), (await scanSession(pool, allScope)).shift)
+  const ajioOnly = scopeFor({ role: "Scanner", hasAllMarketplaces: false, marketplaceIds: [accountId] })
+  const ajioShift = await todayShift(pool, ajioOnly)
+  assert.deepEqual(ajioShift, (await scanSession(pool, ajioOnly)).shift)
+  assert.notEqual(ajioShift.scanned, "0", "today's Iron Send scan is counted for its own account")
+  assert.equal((await todayShift(pool, NO_ACCOUNTS)).scanned, "0", "a user with no accounts sees no scans")
 })
 
 test("the register never lists Iron Send as a return issue: it has its own column", { skip: skip || false }, async () => {
