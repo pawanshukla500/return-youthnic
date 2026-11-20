@@ -85,8 +85,9 @@ async function fetchLatestFromGitHub(): Promise<MobileReleaseInfo | null> {
       minRequiredVersionCode: 10001,
       sha256,
       sizeBytes: Number(apkAsset.size) || 0,
-      notes: data.body || DEFAULT_RELEASE.notes,
-      publishedAt: data.published_at || DEFAULT_RELEASE.publishedAt,
+      // Never show another release's notes or date for this one.
+      notes: data.body || "",
+      publishedAt: data.published_at || "",
       downloadUrl,
       pageUrl: data.html_url || DEFAULT_RELEASE.pageUrl,
     }
