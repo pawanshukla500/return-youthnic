@@ -42,6 +42,7 @@ import { workspaceUi } from "./register-service.js"
 import { mountUploadRoutes } from "./upload-routes.js"
 import { mountScannerListRoutes } from "./scanner-list-routes.js"
 import { loginRateLimiter, ipRateLimiter } from "./rate-limit.js"
+import { applySecurityHeaders } from "./security-headers.js"
 import { handleLatestRelease, handleApkDownload } from "./mobile-release.js"
 import { mountOmsguruRoutes } from "./omsguru-routes.js"
 import { runScheduledOmsguruUpdate, getOmsguruConfig } from "./omsguru-daily.js"
@@ -165,14 +166,7 @@ app.use(
     credentials: true,
   }),
 )
-app.use((_req, res, next) => {
-  res.setHeader("X-Content-Type-Options", "nosniff")
-  res.setHeader("X-Frame-Options", "DENY")
-  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin")
-  res.setHeader("Permissions-Policy", "camera=(self), microphone=(), geolocation=()")
-  res.setHeader("X-XSS-Protection", "1; mode=block")
-  next()
-})
+applySecurityHeaders(app)
 app.use(express.json({ limit: "2mb" }))
 
 // CSRF defense-in-depth: Reject state-changing mutations from untrusted origins
