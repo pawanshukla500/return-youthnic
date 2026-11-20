@@ -252,8 +252,8 @@ High-volume product catalog imports are broken into 500-row transactional chunks
 
 ### Mobile release & updates
 
-- `GET /api/app/latest`: returns JSON release metadata (`versionCode`, `versionName`, `downloadUrl`, `notes`, `minRequiredVersionCode`, `sha256`, `sizeBytes`) for the Android in-app updater (`AppUpdater.kt`). The server picks the newest Android release itself from GitHub (tags matching `v1.0.*` only; `desktop-v*` releases are ignored even when one holds the "Latest" badge) and falls back to `data/return-scan-release.json` when GitHub is unreachable.
-- `GET /download/return-scan.apk`: serves the signed production APK binary; when no local APK exists on the server it redirects to the tag-specific GitHub asset (never `/releases/latest`, which can be a desktop installer).
+- `GET /api/app/latest`: returns JSON release metadata (`versionCode`, `versionName`, `downloadUrl`, `notes`, `minRequiredVersionCode`, `sha256`, `sizeBytes`) for the Android in-app updater (`AppUpdater.kt`). The server picks the newest Android release itself from GitHub (tags matching `v1.0.*` only; `desktop-v*` releases are ignored even when one holds the "Latest" badge) and falls back to `data/return-scan-release.json` when GitHub is unreachable. A release whose APK asset has no SHA-256 digest is never offered (no hash is borrowed from another release); the last good release keeps being served. The GitHub request times out after 8 s; a good answer is cached for 10 minutes and a failure for 5.
+- `GET /download/return-scan.apk`: serves the signed production APK binary; when no local APK exists on the server it redirects to the tag-specific GitHub asset (never `/releases/latest`, which can be a desktop installer). It resolves the release with the same resolver as `/api/app/latest`, so both always name the same release, also right after a server restart.
 
 
 ## Uploads
