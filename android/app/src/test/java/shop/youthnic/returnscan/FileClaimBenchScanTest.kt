@@ -82,4 +82,22 @@ class FileClaimBenchScanTest {
         val reset = claim.substringAfter("private fun resetFormForNextClaim(").substringBefore("private fun showInfoDialog(")
         assertTrue("the next return filed on this screen has no bench scan", reset.contains("benchScan = null"))
     }
+
+    @Test
+    fun theClaimScreenRefusesAReturnWithNoSavedBenchScanBeforeTheEvidenceStep() {
+        // Owner decision (2026-11-20): the Claims card opens this screen with no EXTRA_SCAN_ID, and its return may never have
+        // been saved. Proceed (the way into the evidence step) and Submit both stop on ClaimPayload.benchScanIdFor.
+        val claim = source("ClaimCaptureActivity.kt")
+        val block = claim.substringAfter("private fun benchScanBlockMessage(").substringBefore("private fun showStep(")
+        assertTrue(block.contains("ClaimPayload.benchScanIdFor(benchScan, found)"))
+        assertTrue(block.contains("NO_BENCH_SCAN_MESSAGE"))
+        val proceed = claim.substringAfter("private fun validateStep1(").substringBefore("private fun benchScanBlockMessage(")
+        assertTrue("Proceed must refuse a return with no saved bench scan", proceed.contains("benchScanBlockMessage(subOrder, awb)"))
+        val submit = claim.substringAfter("private fun submitCompleteClaim(").substringBefore("Validate required evidence fields")
+        assertTrue(submit.contains("ClaimPayload.build(lookupData, form, benchScan)"))
+        assertTrue("Submit must say why it sent nothing", submit.contains("benchScanBlockMessage(form.subOrderId, form.awb)"))
+        assertTrue(
+            claim.contains("\"This return has no saved bench scan. Save it on the scanner first (Save or File Claim), then file the claim.\"")
+        )
+    }
 }

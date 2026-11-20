@@ -579,6 +579,8 @@ class ClaimCaptureActivity : AppCompatActivity() {
         if (droppedEvidence > 0) {
             showMessage("$droppedEvidence evidence file(s) from the previous return were removed. Capture evidence again for Sub Order $resolvedSubOrder.")
         }
+        // Said as soon as the return loads, before any evidence is captured; Proceed and Submit refuse it too.
+        benchScanBlockMessage(resolvedSubOrder, resolvedAwb)?.let { showMessage(it) }
     }
 
     private fun updateDescriptionAndTitle(code: String) {
@@ -1003,22 +1005,26 @@ class ClaimCaptureActivity : AppCompatActivity() {
             searchReturn(subOrder)
             return false
         }
-        val otherReturn = benchMismatchMessage(subOrder, awb)
-        if (otherReturn != null) {
-            showMessage(otherReturn)
+        // Stops here, before the evidence step, so no evidence is captured for a claim that cannot be filed.
+        val blocked = benchScanBlockMessage(subOrder, awb)
+        if (blocked != null) {
+            showMessage(blocked)
             return false
         }
         return true
     }
 
     /**
-     * On a screen File Claim opened, the message to show when the form's confirmed return is not the one whose bench scan
-     * File Claim saved; null otherwise. That claim cannot be filed here: its return has no bench scan on this screen.
+     * The message to show when the form's confirmed return has no saved bench scan to file the claim on
+     * ([ClaimPayload.benchScanIdFor]); null when it has one, or when the return is not confirmed yet. A claim never exists
+     * without a saved bench scan (owner decision 2026-11-20). Two cases: on a screen File Claim opened, the form shows a
+     * different return from the one whose scan File Claim saved; opened from the Claims card (no EXTRA_SCAN_ID), the last
+     * scanned return may never have been saved, so the operator saves it on the scanner first.
      */
-    private fun benchMismatchMessage(subOrder: String, awb: String): String? {
-        val bench = benchScan ?: return null
+    private fun benchScanBlockMessage(subOrder: String, awb: String): String? {
         val found = ClaimPayload.confirmedLookup(lookupData, subOrder, awb) ?: return null
-        if (bench.isFor(found)) return null
+        if (ClaimPayload.benchScanIdFor(benchScan, found) != null) return null
+        val bench = benchScan ?: return NO_BENCH_SCAN_MESSAGE
         val saved = bench.subOrderId.ifBlank { bench.awb }
         return "File Claim saved the bench scan for $saved, so this claim is for $saved. Search $saved again, or go back and tap File Claim on the other return's scan."
     }
@@ -1063,12 +1069,13 @@ class ClaimCaptureActivity : AppCompatActivity() {
         )
         // Only a lookup that found this form's return may supply its details. Without one nothing is sent: no invented
         // return, and no customer, price, SKU or packet ID remembered from an earlier scan.
-        // A screen File Claim opened files the claim on the bench scan it saved (receiptScanId), not on the lookup's scan.
+        // A screen File Claim opened files the claim on the bench scan it saved (receiptScanId), not on the lookup's scan;
+        // without a saved bench scan there is no body (ClaimPayload.benchScanIdFor).
         val body = ClaimPayload.build(lookupData, form, benchScan)
         if (body == null) {
             showStep(1)
             showMessage(
-                benchMismatchMessage(form.subOrderId, form.awb)
+                benchScanBlockMessage(form.subOrderId, form.awb)
                     ?: "The return for Sub Order ${form.subOrderId} is not confirmed yet. Tap Proceed to look it up, then submit again."
             )
             return
@@ -1257,6 +1264,9 @@ class ClaimCaptureActivity : AppCompatActivity() {
         const val EXTRA_MASTER_SKU = "extra_master_sku"
         const val EXTRA_IMAGE_URL = "extra_image_url"
         const val EXTRA_ISSUE_CODE = "extra_issue_code"
+
+        private const val NO_BENCH_SCAN_MESSAGE =
+            "This return has no saved bench scan. Save it on the scanner first (Save or File Claim), then file the claim."
 
         private const val TARGET_SEARCH = 0
         private const val TARGET_PACKET_ID = 1

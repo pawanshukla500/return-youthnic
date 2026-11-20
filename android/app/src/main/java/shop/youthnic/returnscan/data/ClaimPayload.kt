@@ -75,16 +75,26 @@ object ClaimPayload {
     }
 
     /**
-     * The request body, or null when [lookup] is not a confirmed lookup for the return on [form]. A screen opened by File
-     * Claim passes its [bench] scan: the claim is filed on that scan, never on the one the lookup names, and there is no
-     * body when the bench scan has no id or the form shows another return.
+     * The saved bench scan the claim for the confirmed [lookup] is filed on, or null when there is none. A claim never
+     * exists without a saved bench scan (owner decision 2026-11-20), so null blocks Proceed and Submit. File Claim's
+     * [bench] scan wins, but only for the return it was saved for; a screen opened another way (the Claims card, no
+     * EXTRA_SCAN_ID) files on the scan the lookup found, if the return was saved. An id of 0 or below is no scan.
+     */
+    fun benchScanIdFor(bench: BenchScan?, lookup: ClaimReturnLookup): Int? {
+        if (bench != null) return bench.scanId.takeIf { it > 0 && bench.isFor(lookup) }
+        return lookup.scanId?.takeIf { it > 0 }
+    }
+
+    /**
+     * The request body, or null when [lookup] is not a confirmed lookup for the return on [form] or the claim has no saved
+     * bench scan to be filed on ([benchScanIdFor]). A screen opened by File Claim passes its [bench] scan: the claim is
+     * filed on that scan, never on the one the lookup names, and there is no body when the form shows another return.
      */
     fun build(lookup: ClaimReturnLookup?, form: ClaimFormInput, bench: BenchScan? = null): JSONObject? {
         val found = confirmedLookup(lookup, form.subOrderId, form.awb) ?: return null
-        if (bench != null && (bench.scanId <= 0 || !bench.isFor(found))) return null
+        val scanId = benchScanIdFor(bench, found) ?: return null
         return JSONObject().apply {
-            val scanId = bench?.scanId ?: found.scanId
-            if (scanId != null && scanId > 0) put("receiptScanId", scanId)
+            put("receiptScanId", scanId)
             if (found.expectedReturnId > 0) put("expectedReturnId", found.expectedReturnId)
             put("claimReason", form.issueLabel)
             put("marketplaceIssueCode", form.issueCode)

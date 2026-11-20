@@ -127,11 +127,51 @@ class ClaimPayloadTest {
     }
 
     @Test
-    fun noScanOrTemplateIdIsSentWhenThereIsNone() {
-        val body = ClaimPayload.build(lookup.copy(scanId = null, expectedReturnId = 0), form.copy(templateId = null))!!
-        assertFalse(body.has("receiptScanId"))
+    fun noExpectedReturnOrTemplateIdIsSentWhenThereIsNone() {
+        val body = ClaimPayload.build(lookup.copy(expectedReturnId = 0), form.copy(templateId = null))!!
+        assertEquals(900, body.getInt("receiptScanId"))
         assertFalse(body.has("expectedReturnId"))
         assertFalse(body.has("claimTemplateId"))
+    }
+
+    // Owner decision (2026-11-20): a claim never exists without a saved bench scan. The Claims card opens the claim screen
+    // with the last scanned return and no EXTRA_SCAN_ID; benchScanIdFor decides whether that return has a saved scan.
+
+    @Test
+    fun theSavedBenchScanWinsOverTheLookupsScan() {
+        assertEquals(1234, ClaimPayload.benchScanIdFor(bench, lookup))
+        assertEquals(1234, ClaimPayload.benchScanIdFor(bench, lookup.copy(scanId = null)))
+    }
+
+    @Test
+    fun withoutASavedBenchScanTheLookupsScanIsUsed() {
+        // The Claims card on a return that was saved: the lookup names its register row, and the claim files on it.
+        assertEquals(900, ClaimPayload.benchScanIdFor(null, lookup))
+        assertEquals(900, ClaimPayload.build(lookup, form)!!.getInt("receiptScanId"))
+    }
+
+    @Test
+    fun withNeitherThereIsNoScanAndTheClaimIsBlocked() {
+        // The Claims card on a return that was never saved: no scan, so no body (today's server would make a Draft scan).
+        assertNull(ClaimPayload.benchScanIdFor(null, lookup.copy(scanId = null)))
+        assertNull(ClaimPayload.build(lookup.copy(scanId = null), form))
+        assertNull(ClaimPayload.build(lookup.copy(scanId = null, expectedReturnId = 0), form.copy(templateId = null)))
+    }
+
+    @Test
+    fun aZeroOrNegativeScanIdIsNoScan() {
+        assertNull(ClaimPayload.benchScanIdFor(null, lookup.copy(scanId = 0)))
+        assertNull(ClaimPayload.benchScanIdFor(null, lookup.copy(scanId = -5)))
+        assertNull(ClaimPayload.build(lookup.copy(scanId = 0), form))
+        assertNull(ClaimPayload.benchScanIdFor(bench.copy(scanId = 0), lookup.copy(scanId = null)))
+        assertNull(ClaimPayload.benchScanIdFor(bench.copy(scanId = -1), lookup.copy(scanId = null)))
+    }
+
+    @Test
+    fun aBenchScanSavedForAnotherReturnIsNoScanForThisOne() {
+        val other = lookup.copy(scanId = 77, subOrderId = "SYN-SUB-2", orderId = "SYN-ORDER-2", awb = "SYN-AWB-0002", trackingNumber = "SYN-AWB-0002")
+        assertNull(ClaimPayload.benchScanIdFor(bench, other))
+        assertEquals(77, ClaimPayload.benchScanIdFor(null, other))
     }
 
     // File Claim on the bench saves the scan first and opens the claim screen with that scan's id (EXTRA_SCAN_ID).
