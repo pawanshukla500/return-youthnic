@@ -190,8 +190,11 @@ test("WhatsApp Gateway — a forced OMSGuru dispatch with a stored config missin
   assert.equal(calls, 0)
   assert.equal(result?.sent, false)
   assert.match(result?.error || "", /not configured: missing gateway login/)
-  // Only the settings read ran: no audit row and no "sent" update.
-  assert.equal(queries.length, 1)
+  // The settings read, then one update that records the reason on the history row: no audit row, no "sent" update.
+  assert.equal(queries.length, 2)
+  assert.match(queries[1].sql, /UPDATE omsguru_daily_inventory_updates\s+SET whatsapp_sent = false, whatsapp_error = \$1/)
+  assert.match(String(queries[1].params?.[0]), /not configured: missing gateway login/)
+  assert.equal(queries[1].params?.[1], syntheticRecord.id)
 })
 
 test("WhatsApp Gateway — WHATSAPP_* values set after import are read at call time", async () => {

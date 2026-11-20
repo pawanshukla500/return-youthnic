@@ -345,6 +345,13 @@ export async function sendOmsguruDailyToWhatsApp(
   const config = await getWhatsAppConfig(db)
   const notConfigured = whatsAppNotConfiguredReason(config)
   if (notConfigured) {
+    // No network call, but record why, so the history row shows the reason instead of staying pending.
+    await db.query(
+      `UPDATE omsguru_daily_inventory_updates
+       SET whatsapp_sent = false, whatsapp_error = $1
+       WHERE id = $2`,
+      [notConfigured, record.id],
+    ).catch(() => {})
     return { sent: false, error: notConfigured }
   }
   if (!config.enabled && !options.force) {
