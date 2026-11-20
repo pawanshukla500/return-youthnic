@@ -61,3 +61,15 @@ export function writeSessionMarker(sessionDir: string, accountName: string): voi
     "utf8",
   )
 }
+
+export function clearSessionMarker(sessionDir: string): boolean {
+  if (!sessionDir) return false
+  try {
+    const file = sessionMarkerPath(sessionDir)
+    if (!fs.existsSync(file)) return false
+    fs.unlinkSync(file)
+    return true
+  } catch {
+    return false
+  }
+}

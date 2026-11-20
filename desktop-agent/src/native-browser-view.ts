@@ -1273,13 +1273,23 @@ export class NativeSupplierBrowser implements SupplierBrowserApi {
     }
     // Operator-visible only when manual completion is needed (OTP/CAPTCHA,
     // assisted submit). Automation runs headless-in-window otherwise.
-    wire("dom-ready", refreshNav)
-    wire("did-navigate", refreshNav)
-    wire("did-navigate-in-page", refreshNav)
+    wire("dom-ready", () => {
+      refreshNav()
+      notifySupplierViewSettled(panelKey)
+    })
+    wire("did-navigate", () => {
+      refreshNav()
+      notifySupplierViewSettled(panelKey)
+    })
+    wire("did-navigate-in-page", () => {
+      refreshNav()
+      notifySupplierViewSettled(panelKey)
+    })
     wire("did-start-loading", () => noteSupplierTabNavigation(panelKey, { loading: true }))
     wire("did-stop-loading", () => {
       noteSupplierTabNavigation(panelKey, { loading: false })
       refreshNav()
+      notifySupplierViewSettled(panelKey)
     })
     refreshNav()
     this.contents.setWindowOpenHandler(({ url }) => {
@@ -1780,5 +1790,51 @@ export async function ensureSupplierView(panelKey: string, portalUrl: string): P
     const message = error instanceof Error ? error.message : String(error)
     logger.warn(`Could not create the supplier browser view for ${key}.`, error)
     return { kind: "failed", error: message }
+  }
+}
+
+const supplierViewSettledListeners = new Set<(panelKey: string) => void>()
+
+export function registerSupplierViewSettledListener(listener: (panelKey: string) => void): () => void {
+  supplierViewSettledListeners.add(listener)
+  return () => {
+    supplierViewSettledListeners.delete(listener)
+  }
+}
+
+function notifySupplierViewSettled(panelKey: string): void {
+  for (const listener of supplierViewSettledListeners) {
+    try {
+      listener(panelKey)
+    } catch {
+      // Listener errors must never disrupt WebContentsView navigation handling.
+    }
+  }
+}
+
+export async function evaluateSupplierView<T>(panelKey: string, expression: string): Promise<T | null> {
+  const resolved = resolveStoredPanelKey(panelKey) || panelKey
+  const view = managedSupplierViews.get(resolved)?.view
+  if (!view) return null
+  try {
+    const wc = view.webContents as unknown as { isDestroyed?: () => boolean; executeJavaScript?: (code: string) => Promise<T> }
+    if (wc.isDestroyed?.() || typeof wc.executeJavaScript !== "function") return null
+    return await wc.executeJavaScript(expression)
+  } catch {
+    return null
+  }
+}
+
+export async function flushSupplierSessionCookies(panelKey: string): Promise<void> {
+  const resolved = resolveStoredPanelKey(panelKey) || panelKey
+  const view = managedSupplierViews.get(resolved)?.view
+  if (!view) return
+  try {
+    const ses = (view.webContents as unknown as { session?: { cookies?: { flushStore?: () => Promise<void> } } }).session
+    if (typeof ses?.cookies?.flushStore === "function") {
+      await ses.cookies.flushStore().catch(() => undefined)
+    }
+  } catch {
+    // Best-effort flush on partition cookies.
   }
 }

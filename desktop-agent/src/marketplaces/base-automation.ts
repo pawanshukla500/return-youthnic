@@ -12,6 +12,7 @@ export type MarketplaceAutomationResult = {
   screenshotPath?: string
   errorMessage?: string
   manualActionReason?: string
+  loginRequired?: boolean
 }
 
 /**

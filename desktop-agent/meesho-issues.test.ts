@@ -13,6 +13,7 @@ import {
   findExistingTicketForOrder,
   parseMeeshoTicketRow,
   extractMeeshoResolution,
+  extractTicketIdFromConfirmation,
   resolveMeeshoIssueLabel,
   resolveMeeshoPacketLabel,
   resolveMeeshoUploadField,
@@ -277,5 +278,31 @@ describe("MeeshoAutomation and BaseMarketplaceAutomation defaults", () => {
     assert.ok(automation.getExposedEvidenceMap() instanceof Map)
     assert.equal(automation.getExposedEvidenceMap().size, 0)
     assert.equal(automation.getExposedWorkDir(), os.tmpdir())
+  })
+})
+
+describe("extractTicketIdFromConfirmation", () => {
+  it("extracts ticket ID from confirmation URL or body text while excluding order/AWB IDs", () => {
+    const exclude = new Set(["123456789012", "999888777666"])
+    assert.equal(
+      extractTicketIdFromConfirmation("https://supplier.meesho.com/panel/v3/new/experience/abc/support/ticket/98765432101", "", exclude),
+      "98765432101",
+    )
+    assert.equal(
+      extractTicketIdFromConfirmation(
+        "https://supplier.meesho.com/panel/v3/new/experience/abc/support",
+        "Sub Order 123456789012 Ticket ID: 98765432102 raised successfully",
+        exclude,
+      ),
+      "98765432102",
+    )
+    assert.equal(
+      extractTicketIdFromConfirmation(
+        "https://supplier.meesho.com/panel/v3/new/experience/abc/support",
+        "Ticket for order 123456789012 is pending",
+        exclude,
+      ),
+      "",
+    )
   })
 })

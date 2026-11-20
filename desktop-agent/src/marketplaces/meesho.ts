@@ -1,7 +1,7 @@
 import fs from "node:fs"
 import path from "node:path"
 import { BaseMarketplaceAutomation, type ClaimStatusCheckResult, type MarketplaceAutomationResult } from "./base-automation.js"
-import { completePortalLogin } from "../portal-login.js"
+import { completePortalLogin, isPortalLoggedIn, resolvePortalLoginUrl } from "../portal-login.js"
 import { logger } from "../logger.js"
 
 /**
@@ -334,6 +334,20 @@ export function detectMeeshoEarlyBlocker(text: string): string | null {
   return raw.replace(/\s+/g, " ").slice(0, 400)
 }
 
+/**
+ * Extracts a newly created numeric Meesho ticket ID (9-15 digits) from either
+ * the confirmation URL or page text, ignoring order/AWB/prior ticket numbers.
+ */
+export function extractTicketIdFromConfirmation(url: string, bodyText: string, exclude: Set<string> = new Set()): string {
+  const urlMatch = String(url || "").match(/\/ticket\/(\d{9,15})\b/i)
+  if (urlMatch?.[1] && !exclude.has(urlMatch[1])) return urlMatch[1]
+  const text = String(bodyText || "")
+  for (const m of text.matchAll(/(?:ticket|claim|case|request)[^0-9]{0,40}(\d{9,15})\b/gi)) {
+    if (m[1] && !exclude.has(m[1])) return m[1]
+  }
+  return ""
+}
+
 export class MeeshoAutomation extends BaseMarketplaceAutomation {
   readonly marketplaceName = "Meesho"
 
@@ -359,14 +373,17 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
         manualActionReason: `Parcel condition is "${this.job.claim.packetState || "unknown"}", not a verified Intact/Tampered observation. An operator must confirm the shipment condition before Meesho filing.`,
       }
     }
-    const portalLoginUrl = this.job.portalUrl || "https://supplier.meesho.com/panel/v3/new/root/login"
+    const portalLoginUrl = resolvePortalLoginUrl("Meesho", this.job.portalUrl)
     logger.info(`Starting Meesho claim automation for Job #${this.job.jobId} (Sub-Order: ${this.job.claim.subOrderId}, Action: ${action})...`)
 
+    const hasSavedCreds = Boolean(this.job.credentials.username && this.job.credentials.password)
     const login = await completePortalLogin(this.browser, {
       marketplace: "Meesho",
       portalUrl: portalLoginUrl,
       username: this.job.credentials.username,
       password: this.job.credentials.password,
+      failFastOnManualPrompt: true,
+      waitMs: hasSavedCreds ? 25000 : 8000,
     })
     if (!login.ok) {
       const loginScreenshot = path.join(this.workDir, `login-required-job-${this.job.jobId}.png`)
@@ -375,6 +392,7 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
         success: false,
         stage: "manual_intervention_required",
         screenshotPath: loginScreenshot,
+        loginRequired: login.loginRequired !== false,
         manualActionReason: login.message,
       }
     }
@@ -385,11 +403,16 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
     if (!slug) {
       const blockedScreenshot = path.join(this.workDir, `support-missing-job-${this.job.jobId}.png`)
       await this.browser.captureScreenshot(blockedScreenshot)
+      const hasPassword = await this.browser.evaluate<boolean>(`Boolean(document.querySelector('input[type="password"], input[name="password"]'))`).catch(() => false)
+      const sessionLost = !isPortalLoggedIn("Meesho", panelUrl, "", hasPassword)
       return {
         success: false,
         stage: "manual_intervention_required",
         screenshotPath: blockedScreenshot,
-        manualActionReason: "Meesho is signed in, but the seller panel address was not found. Open Support in the browser, then run this claim again.",
+        ...(sessionLost ? { loginRequired: true } : {}),
+        manualActionReason: sessionLost
+          ? "Meesho session expired. Log in to Meesho in the Browsers tab and the claim will continue automatically."
+          : "Meesho is signed in, but the seller panel address was not found. Open Support in the browser, then run this claim again.",
       }
     }
     const supportUrl = `https://supplier.meesho.com/panel/v3/new/experience/${slug}/support`
@@ -942,11 +965,14 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
     }
     let extractedTicketId = ""
     const started = Date.now()
-    while (!extractedTicketId && Date.now() - started < 12000) {
-      const shown = await this.browser.evaluate<string[]>(`
-        Array.from(((document.body && document.body.innerText) || '').matchAll(/ticket[^0-9]{0,40}(\\d{9,15})\\b/gi)).map((m) => m[1])
-      `)
-      extractedTicketId = (shown || []).find((id) => !known.has(id)) || ""
+    while (!extractedTicketId && Date.now() - started < 15000) {
+      const confirmation = await this.browser.evaluate<{ href: string; text: string }>(`
+        ({
+          href: window.location.href || '',
+          text: (document.body && document.body.innerText) || ''
+        })
+      `).catch(() => ({ href: "", text: "" }))
+      extractedTicketId = extractTicketIdFromConfirmation(confirmation.href, confirmation.text, known)
       if (!extractedTicketId) await this.delay(1500)
     }
     const formStillOpen = await this.browser.evaluate<boolean>(`Boolean(document.querySelector(${JSON.stringify(subOrderInputSelector)}))`)
@@ -958,7 +984,7 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
         manualActionReason: `Meesho kept the claim form open with errors: ${formErrors.slice(0, 3).join(" | ").slice(0, 400)}`,
       }
     }
-    if (!extractedTicketId && !formStillOpen && ticketsBefore.length) {
+    if (!extractedTicketId && !formStillOpen) {
       await this.browser.navigate(supportUrl)
       await this.waitForContent()
       const after = await this.readRecentTicketIds(20000)
@@ -1041,9 +1067,24 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
     const ticketId = (marketplaceClaimId || "").trim()
     if (!ticketId) return { supported: true, statusText: "", note: "Empty marketplace ticket reference; nothing to read." }
     try {
-      const panelUrl = await this.browser.evaluate<string>(`window.location.href`)
-      const slug = panelUrl.match(/\/(?:growth|experience)\/([^/]+)/)?.[1]
+      let panelUrl = await this.browser.evaluate<string>(`window.location.href`)
+      let slug = panelUrl.match(/\/(?:growth|experience)\/([^/]+)/)?.[1]
         || this.job.portalUrl.match(/\/(?:growth|experience)\/([^/]+)/)?.[1]
+      if (!slug) {
+        const login = await completePortalLogin(this.browser, {
+          marketplace: "Meesho",
+          portalUrl: "https://supplier.meesho.com/panel/v3/new/root/login",
+          username: this.job.credentials?.username || "",
+          password: this.job.credentials?.password || "",
+          failFastOnManualPrompt: true,
+          waitMs: 8000,
+        })
+        if (!login.ok) {
+          return { supported: true, statusText: "", note: "Meesho session expired; sign in again to check ticket status." }
+        }
+        panelUrl = await this.browser.evaluate<string>(`window.location.href`)
+        slug = panelUrl.match(/\/(?:growth|experience)\/([^/]+)/)?.[1]
+      }
       if (!slug) {
         return { supported: true, statusText: "", note: "Meesho panel address not found; open the supplier panel first." }
       }

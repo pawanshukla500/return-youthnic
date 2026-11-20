@@ -38,6 +38,7 @@ export type PanelStatus = {
   profileDir: string
   sessionSavedAt: string | null
   state: PanelRuntimeState
+  reloginRequired: boolean
   activeJobId: number | null
   consecutiveErrors: number
   lastResult: string | null
@@ -47,12 +48,12 @@ export type PanelStatus = {
 /** How long a panel cools down after 3 straight failures before it takes queued jobs again. */
 export const PANEL_COOLDOWN_MS = 30 * 60_000
 
-const runtime = new Map<string, { state: PanelRuntimeState; activeJobId: number | null; consecutiveErrors: number; cooldownUntil: number; lastResult: string | null; lastResultAt: string | null }>()
+const runtime = new Map<string, { state: PanelRuntimeState; reloginRequired: boolean; activeJobId: number | null; consecutiveErrors: number; cooldownUntil: number; lastResult: string | null; lastResultAt: string | null }>()
 
 function runtimeFor(key: string) {
   let r = runtime.get(key)
   if (!r) {
-    r = { state: "idle", activeJobId: null, consecutiveErrors: 0, cooldownUntil: 0, lastResult: null, lastResultAt: null }
+    r = { state: "idle", reloginRequired: false, activeJobId: null, consecutiveErrors: 0, cooldownUntil: 0, lastResult: null, lastResultAt: null }
     runtime.set(key, r)
   }
   // A cooled-down panel's queued jobs are skipped when polling, so no success
@@ -66,30 +67,40 @@ function runtimeFor(key: string) {
 export function markPanelBusy(panelKey: string, jobId: number, stage: string): void {
   const r = runtimeFor(panelKey)
   r.activeJobId = jobId
+  r.reloginRequired = false
   r.state = stage === "submitting" ? "submitting" : "preparing"
 }
 
 /** Record the outcome of a finished job so the dashboard shows per-panel progress. */
-export function markPanelResult(panelKey: string, outcome: "completed" | "prepared" | "manual_action" | "not_eligible" | "failed", detail?: string): void {
+export function markPanelResult(
+  panelKey: string,
+  outcome: "completed" | "prepared" | "manual_action" | "not_eligible" | "failed",
+  detail?: string,
+  options?: { loginRequired?: boolean },
+): void {
   const r = runtimeFor(panelKey)
   r.activeJobId = null
   r.lastResultAt = new Date().toISOString()
   if (outcome === "completed" || outcome === "not_eligible") {
     r.consecutiveErrors = 0
+    r.reloginRequired = false
     r.state = "idle"
     r.lastResult = detail || outcome
   } else if (outcome === "prepared") {
     r.consecutiveErrors = 0
+    r.reloginRequired = false
     // Prepared claims wait for operator review and approval on this specific
     // panel without blocking other panels from filing round-robin.
     r.state = "prepared"
     r.lastResult = detail || "Prepared on the supplier panel. Waiting for approval."
   } else if (outcome === "manual_action") {
     r.consecutiveErrors = 0
+    r.reloginRequired = Boolean(options?.loginRequired)
     r.state = "manual_action"
     r.lastResult = detail || "Waiting for operator in the supplier browser."
   } else {
     r.consecutiveErrors += 1
+    r.reloginRequired = false
     // After 3 straight failures the panel cools down for PANEL_COOLDOWN_MS so a
     // broken portal layout does not spin the worker or spend every queued job's
     // attempts; other panels keep filing.
@@ -111,7 +122,13 @@ export function clearPanelHold(panelKey: string): void {
     // Rejoin starts the count again, or one more failure would cool the panel down at once.
     r.consecutiveErrors = 0
   }
+  r.reloginRequired = false
   r.activeJobId = null
+}
+
+export function isPanelWaitingRelogin(panelKey: string): boolean {
+  const r = runtimeFor(panelKey)
+  return r.state === "manual_action" && r.reloginRequired
 }
 
 /** True when the panel is held waiting for operator action or approval. */
@@ -197,6 +214,7 @@ export function getPanelStatuses(userDataDir: string): PanelStatus[] {
       profileDir,
       sessionSavedAt,
       state: r.state,
+      reloginRequired: r.state === "manual_action" && r.reloginRequired,
       activeJobId: r.activeJobId,
       consecutiveErrors: r.consecutiveErrors,
       lastResult: r.lastResult,
