@@ -29,6 +29,31 @@ object EvidencePhotoSizing {
     ) {
         val finalWidth: Int get() = if (rotationDegrees % 180 == 0) targetWidth else targetHeight
         val finalHeight: Int get() = if (rotationDegrees % 180 == 0) targetHeight else targetWidth
+
+        /**
+         * The 3x3 matrix, in `android.graphics.Matrix.setValues` order, that takes a [srcWidth] x [srcHeight]
+         * decode to the stored photo: scale to [targetWidth] x [targetHeight], turn [rotationDegrees] clockwise,
+         * then mirror left to right if [mirror], shifted so the result covers (0, 0) to ([finalWidth], [finalHeight]).
+         */
+        fun matrixValues(srcWidth: Int, srcHeight: Int): FloatArray {
+            val sx = targetWidth.toFloat() / srcWidth
+            val sy = targetHeight.toFloat() / srcHeight
+            // A clockwise turn in y-down image coordinates: (x, y) -> (x cos - y sin, x sin + y cos).
+            val (cos, sin) = when (rotationDegrees) {
+                90 -> 0f to 1f
+                180 -> -1f to 0f
+                270 -> 0f to -1f
+                else -> 1f to 0f
+            }
+            val flip = if (mirror) -1f else 1f
+            val a = flip * cos * sx
+            val b = -flip * sin * sy
+            val c = sin * sx
+            val d = cos * sy
+            val tx = -(minOf(0f, a * srcWidth) + minOf(0f, b * srcHeight))
+            val ty = -(minOf(0f, c * srcWidth) + minOf(0f, d * srcHeight))
+            return floatArrayOf(a, b, tx, c, d, ty, 0f, 0f, 1f)
+        }
     }
 
     /**

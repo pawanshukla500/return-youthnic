@@ -2,15 +2,36 @@ package shop.youthnic.returnscan
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
 import shop.youthnic.returnscan.util.EvidencePhotoSizing
+import shop.youthnic.returnscan.util.replaceFileSafely
 import java.io.File
+import kotlin.math.abs
 
 class EvidencePhotoSizingTest {
 
     private val appDir: File = listOf(File("."), File("app"), File("android/app"))
         .first { File(it, "src/main/res/values/strings.xml").isFile }
+
+    @get:Rule
+    val folder = TemporaryFolder()
+
+    /** Where the matrix [m] (android.graphics.Matrix.setValues order) sends the point ([x], [y]). */
+    private fun landing(m: FloatArray, x: Float, y: Float): Pair<Float, Float> =
+        (m[0] * x + m[1] * y + m[2]) to (m[3] * x + m[4] * y + m[5])
+
+    /** Which corner of the stored photo the source point lands on: T or B, then L or R ("?" when on none). */
+    private fun corner(plan: EvidencePhotoSizing.Plan, m: FloatArray, x: Float, y: Float): String {
+        val (px, py) = landing(m, x, y)
+        fun near(value: Float, edge: Int) = abs(value - edge) < 0.01f
+        val vertical = when { near(py, 0) -> "T"; near(py, plan.finalHeight) -> "B"; else -> "?" }
+        val horizontal = when { near(px, 0) -> "L"; near(px, plan.finalWidth) -> "R"; else -> "?" }
+        return vertical + horizontal
+    }
 
     @Test
     fun aTwelveMegapixelCaptureHeldUprightIsStoredUprightAt1600OnTheLongEdge() {
@@ -76,6 +97,73 @@ class EvidencePhotoSizingTest {
             val got = EvidencePhotoSizing.rotationDegrees(orientation) to EvidencePhotoSizing.isMirrored(orientation)
             assertEquals("EXIF orientation $orientation", want, got)
         }
+    }
+
+    @Test
+    fun aTwelveMegapixelCaptureHeldUprightIsDrawnUprightAt1200By1600() {
+        // The sampled decoder halves a 4000 x 3000 capture for a 1600 x 1200 target (inSampleSize 2).
+        val plan = EvidencePhotoSizing.plan(4000, 3000, exifOrientation = 6)
+        val m = plan.matrixValues(2000, 1500)
+        // Bitmap.createBitmap sizes its result from where the source corners land.
+        val landed = listOf(0f to 0f, 2000f to 0f, 0f to 1500f, 2000f to 1500f).map { (x, y) -> landing(m, x, y) }
+        assertEquals(0f, landed.minOf { it.first }, 0.01f)
+        assertEquals(0f, landed.minOf { it.second }, 0.01f)
+        assertEquals(1200f, landed.maxOf { it.first }, 0.01f)
+        assertEquals(1600f, landed.maxOf { it.second }, 0.01f)
+    }
+
+    @Test
+    fun everyExifOrientationPutsTheStoredCornersWhereTheExifStandardSays() {
+        // From the EXIF orientation tag's meaning (which side row 0 and column 0 belong on), not from the code:
+        // where the stored image's top-left, top-right and bottom-left corners end up in the upright photo.
+        val expected = mapOf(
+            1 to listOf("TL", "TR", "BL"),
+            2 to listOf("TR", "TL", "BR"),
+            3 to listOf("BR", "BL", "TR"),
+            4 to listOf("BL", "BR", "TL"),
+            5 to listOf("TL", "BL", "TR"),
+            6 to listOf("TR", "BR", "TL"),
+            7 to listOf("BR", "TR", "BL"),
+            8 to listOf("BL", "TL", "BR")
+        )
+        for ((orientation, want) in expected) {
+            val plan = EvidencePhotoSizing.plan(4000, 3000, orientation)
+            val m = plan.matrixValues(2000, 1500)
+            val got = listOf(0f to 0f, 2000f to 0f, 0f to 1500f).map { (x, y) -> corner(plan, m, x, y) }
+            assertEquals("EXIF orientation $orientation", want, got)
+        }
+    }
+
+    @Test
+    fun aShrunkPhotoReplacesTheOriginalAndLeavesNoTempFile() {
+        val photo = folder.newFile("SYN-photo.jpg").apply { writeText("SYN-original 12 MP photo") }
+        assertTrue(replaceFileSafely(photo) { it.write("SYN-shrunk photo".toByteArray()); true })
+        assertEquals("SYN-shrunk photo", photo.readText())
+        assertFalse(File(photo.path + ".tmp").exists())
+    }
+
+    @Test
+    fun theOriginalPhotoIsKeptWhenShrinkingFails() {
+        val photo = folder.newFile("SYN-photo.jpg").apply { writeText("SYN-original 12 MP photo") }
+        // The JPEG encoder reports failure after writing part of the file.
+        assertFalse(replaceFileSafely(photo) { it.write("SYN-partial".toByteArray()); false })
+        // Nothing was written.
+        assertFalse(replaceFileSafely(photo) { true })
+        // Out of memory mid-write reaches EvidencePhoto's catch, which keeps the photo.
+        assertThrows(OutOfMemoryError::class.java) {
+            replaceFileSafely(photo) { it.write("SYN-partial".toByteArray()); throw OutOfMemoryError("SYN-test") }
+        }
+        assertEquals("SYN-original 12 MP photo", photo.readText())
+        assertFalse(File(photo.path + ".tmp").exists())
+    }
+
+    @Test
+    fun theStoredPhotoUsesTheTestedMatrixAndTheSafeReplace() {
+        val source = File(appDir, "src/main/java/shop/youthnic/returnscan/util/EvidencePhoto.kt").readText()
+        val downscale = source.substringAfter("fun downscaleInPlace(").substringBefore("internal fun replaceFileSafely(")
+        assertTrue(downscale.contains("setValues(plan.matrixValues(src.width, src.height))"))
+        assertTrue(downscale.contains("replaceFileSafely(file)"))
+        assertFalse("the photo must only be replaced through replaceFileSafely", downscale.contains("renameTo("))
     }
 
     @Test

@@ -6,6 +6,7 @@ import android.graphics.Matrix
 import android.media.ExifInterface
 import shop.youthnic.returnscan.data.ImageCache
 import java.io.File
+import java.io.OutputStream
 
 /** Shrinks a camera photo in place following [EvidencePhotoSizing]. Blocking: call it off the main thread. */
 object EvidencePhoto {
@@ -17,7 +18,6 @@ object EvidencePhoto {
      * original photo is kept untouched: a large photo is better than lost evidence.
      */
     fun downscaleInPlace(file: File): Boolean {
-        val tmp = File(file.parentFile, file.name + ".tmp")
         var decoded: Bitmap? = null
         var output: Bitmap? = null
         return try {
@@ -33,17 +33,12 @@ object EvidencePhoto {
                 file.absolutePath, plan.targetWidth, plan.targetHeight, Bitmap.Config.ARGB_8888
             ) ?: return false
             decoded = src
-            val matrix = Matrix().apply {
-                postScale(plan.targetWidth.toFloat() / src.width, plan.targetHeight.toFloat() / src.height)
-                postRotate(plan.rotationDegrees.toFloat())
-                if (plan.mirror) postScale(-1f, 1f)
-            }
+            val matrix = Matrix().apply { setValues(plan.matrixValues(src.width, src.height)) }
             val out = Bitmap.createBitmap(src, 0, 0, src.width, src.height, matrix, true)
             output = out
-            val written = tmp.outputStream().use { stream ->
+            replaceFileSafely(file) { stream ->
                 out.compress(Bitmap.CompressFormat.JPEG, EvidencePhotoSizing.JPEG_QUALITY, stream)
             }
-            written && tmp.length() > 0 && tmp.renameTo(file)
         } catch (_: Exception) {
             false
         } catch (_: OutOfMemoryError) {
@@ -51,7 +46,21 @@ object EvidencePhoto {
         } finally {
             if (output !== decoded) output?.recycle()
             decoded?.recycle()
-            if (tmp.exists()) tmp.delete()
         }
+    }
+}
+
+/**
+ * Replaces [file] with what [write] produces, through a sibling `.tmp` that is renamed over [file] only when
+ * [write] returns true and wrote at least one byte. Otherwise, or when [write] throws, [file] is left untouched
+ * and the `.tmp` is removed (an exception still reaches the caller). Plain java.io, so JVM tests cover it.
+ */
+internal fun replaceFileSafely(file: File, write: (OutputStream) -> Boolean): Boolean {
+    val tmp = File(file.parentFile, file.name + ".tmp")
+    return try {
+        val written = tmp.outputStream().use { stream -> write(stream) }
+        written && tmp.length() > 0 && tmp.renameTo(file)
+    } finally {
+        if (tmp.exists()) tmp.delete()
     }
 }
