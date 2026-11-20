@@ -15,15 +15,13 @@ import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import androidx.activity.addCallback
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
+import androidx.lifecycle.Observer
 import androidx.lifecycle.lifecycleScope
-import androidx.work.BackoffPolicy
-import androidx.work.Constraints
-import androidx.work.Data
-import androidx.work.NetworkType
-import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.snackbar.Snackbar
@@ -33,6 +31,10 @@ import kotlinx.coroutines.withContext
 import shop.youthnic.returnscan.R
 import shop.youthnic.returnscan.ReturnScanApp
 import shop.youthnic.returnscan.claim.ClaimEvidenceUploadWorker
+import shop.youthnic.returnscan.claim.DraftFile
+import shop.youthnic.returnscan.claim.EvidenceDraft
+import shop.youthnic.returnscan.claim.EvidenceDraftStore
+import shop.youthnic.returnscan.claim.EvidenceUploads
 import shop.youthnic.returnscan.data.ClaimFieldTemplate
 import shop.youthnic.returnscan.data.ClaimFormInput
 import shop.youthnic.returnscan.data.ClaimPayload
@@ -46,7 +48,6 @@ import shop.youthnic.returnscan.util.EvidencePhoto
 import shop.youthnic.returnscan.util.EvidencePhotoSizing
 import java.io.File
 import java.util.UUID
-import java.util.concurrent.TimeUnit
 
 class ClaimCaptureActivity : AppCompatActivity() {
 
@@ -86,6 +87,8 @@ class ClaimCaptureActivity : AppCompatActivity() {
     )
     private val capturedFiles = mutableMapOf<String, MutableList<CapturedFile>>()
     private val evidenceCardBindings = mutableMapOf<String, ItemClaimEvidenceCardBinding>()
+    /** Each slot's maxCount, so an empty Product images card shows 0 / 10 and Attachments 0 / 5. */
+    private val evidenceMaxCounts = mutableMapOf<String, Int>()
 
     private var pendingFieldKey = ""
     private var pendingPhotoFile: File? = null
@@ -93,30 +96,39 @@ class ClaimCaptureActivity : AppCompatActivity() {
     private var evidenceGeneration = 0
     /** Camera photos still being shrunk; Submit waits for them so none is left off the claim. */
     private var photosBeingSaved = 0
+    /** Captured evidence and the photo being taken, saved on every change so killing the app loses neither. */
+    private val evidenceDraftStore by lazy { EvidenceDraftStore(File(filesDir, EvidenceUploads.DRAFT_FILE)) }
+    /** The return the captured evidence belongs to (ClaimPayload.returnKey), saved with it. */
+    private var evidenceReturnKey = ""
 
     // Activity Result Launchers
     private val takePhotoLauncher = registerForActivityResult(ActivityResultContracts.TakePicture()) { success ->
         val file = pendingPhotoFile
         pendingPhotoFile = null
         if (success && file != null && file.exists()) {
-            val fieldKey = pendingFieldKey
-            val generation = evidenceGeneration
-            photosBeingSaved++
-            // The camera app writes the photo at full resolution (12 MP and up); shrink it off the main thread first.
-            lifecycleScope.launch {
-                try {
-                    withContext(Dispatchers.IO) { EvidencePhoto.downscaleInPlace(file) }
-                    if (generation == evidenceGeneration) {
-                        recordCapturedEvidence(fieldKey, file, "image/jpeg")
-                    } else {
-                        file.delete()
-                    }
-                } finally {
-                    photosBeingSaved--
-                }
-            }
+            acceptCameraPhoto(file, pendingFieldKey)
         } else {
             file?.delete()
+            saveEvidenceDraft()
+        }
+    }
+
+    /** Shrinks a camera photo off the main thread, then adds it to [fieldKey] unless the evidence was cleared meanwhile. */
+    private fun acceptCameraPhoto(file: File, fieldKey: String) {
+        val generation = evidenceGeneration
+        photosBeingSaved++
+        // The camera app writes the photo at full resolution (12 MP and up); shrink it off the main thread first.
+        lifecycleScope.launch {
+            try {
+                withContext(Dispatchers.IO) { EvidencePhoto.downscaleInPlace(file) }
+                if (generation == evidenceGeneration) {
+                    recordCapturedEvidence(fieldKey, file, "image/jpeg")
+                } else {
+                    file.delete()
+                }
+            } finally {
+                photosBeingSaved--
+            }
         }
     }
 
@@ -200,6 +212,8 @@ class ClaimCaptureActivity : AppCompatActivity() {
 
         // Initialize evidence cards immediately with standard Meesho evidence slots
         buildDynamicEvidenceCards(getMeeshoStandardEvidenceFields())
+        restoreEvidenceDraft()
+        observeQueuedUploads()
 
         // 1. The return to claim comes only from the Intent, all of it from one scan. A remembered return is never mixed
         //    in field by field; the server lookup below fills in the rest, and Proceed and Submit wait for it.
@@ -433,9 +447,12 @@ class ClaimCaptureActivity : AppCompatActivity() {
     private fun populateReturnDetails(data: ClaimReturnLookup) {
         // Captured evidence belongs to the return it was captured for. The same return keeps it and its cards as they
         // are; a different one (the sub order was corrected or changed) drops it, so it never goes on this claim.
+        // Evidence restored after the app was killed stays on the first lookup only if it is the return it was saved for.
         val sameReturn = ClaimPayload.sameReturn(lookupData, data)
-        val droppedEvidence = if (sameReturn) 0 else clearCapturedEvidence()
+        val keepEvidence = sameReturn || (lookupData == null && ClaimPayload.isReturn(evidenceReturnKey, data))
+        val droppedEvidence = if (keepEvidence) 0 else clearCapturedEvidence()
         lookupData = data
+        evidenceReturnKey = ClaimPayload.returnKey(data)
         binding.layoutStepReturnDetails.visibility = View.VISIBLE
 
         // Top Order Summary Card
@@ -696,6 +713,7 @@ class ClaimCaptureActivity : AppCompatActivity() {
     private fun buildDynamicEvidenceCards(fields: List<ClaimFieldTemplate>) {
         binding.layoutDynamicEvidenceCards.removeAllViews()
         evidenceCardBindings.clear()
+        evidenceMaxCounts.clear()
 
         // Ensure all 5 standard Meesho slots exist if template is generic
         val effectiveFields = if (fields.size < 4) getMeeshoStandardEvidenceFields() else fields
@@ -706,24 +724,20 @@ class ClaimCaptureActivity : AppCompatActivity() {
             val isRequired = field.required
             val reqSuffix = if (isRequired) " *" else ""
             card.tvEvidenceLabel.text = "${field.fieldLabel}$reqSuffix"
-            card.tvEvidenceCount.text = "0 / ${field.maxCount}"
+            evidenceMaxCounts[field.fieldKey] = field.maxCount
 
             val isVideo = field.fieldType == "video"
             if (isVideo) {
                 card.btnCapturePrimary.text = "Record Video (480p SD)"
                 card.btnCapturePrimary.setOnClickListener {
-                    pendingFieldKey = field.fieldKey
-                    checkAndRun(
-                        arrayOf(
-                            android.Manifest.permission.CAMERA,
-                            android.Manifest.permission.RECORD_AUDIO
-                        )
-                    ) {
+                    startCaptureFor(field.fieldKey)
+                    // The unpacking video has no sound track, so only the camera permission is needed.
+                    checkAndRun(arrayOf(android.Manifest.permission.CAMERA)) {
                         recordVideoLauncher.launch(Intent(this, ClaimVideoCaptureActivity::class.java))
                     }
                 }
                 card.btnPickGallery.setOnClickListener {
-                    pendingFieldKey = field.fieldKey
+                    startCaptureFor(field.fieldKey)
                     val perms = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                         arrayOf(android.Manifest.permission.READ_MEDIA_VIDEO)
                     } else {
@@ -736,13 +750,13 @@ class ClaimCaptureActivity : AppCompatActivity() {
             } else {
                 card.btnCapturePrimary.text = "Take Photo"
                 card.btnCapturePrimary.setOnClickListener {
-                    pendingFieldKey = field.fieldKey
+                    startCaptureFor(field.fieldKey)
                     checkAndRun(arrayOf(android.Manifest.permission.CAMERA)) {
                         launchCameraPhoto(field.fieldKey)
                     }
                 }
                 card.btnPickGallery.setOnClickListener {
-                    pendingFieldKey = field.fieldKey
+                    startCaptureFor(field.fieldKey)
                     val perms = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                         arrayOf(android.Manifest.permission.READ_MEDIA_IMAGES)
                     } else {
@@ -760,12 +774,21 @@ class ClaimCaptureActivity : AppCompatActivity() {
 
             evidenceCardBindings[field.fieldKey] = card
             binding.layoutDynamicEvidenceCards.addView(card.root)
+            renderEvidenceCard(field.fieldKey)
         }
+    }
+
+    /** Remembers, on disk too, which slot the camera, recorder or picker fills: Android may kill the app meanwhile. */
+    private fun startCaptureFor(fieldKey: String) {
+        pendingFieldKey = fieldKey
+        saveEvidenceDraft()
     }
 
     private fun launchCameraPhoto(fieldKey: String) {
         val file = createEvidenceFile(fieldKey, ".jpg")
         pendingPhotoFile = file
+        pendingFieldKey = fieldKey
+        saveEvidenceDraft()
         val uri = FileProvider.getUriForFile(this, "$packageName.updates", file)
         takePhotoLauncher.launch(uri)
     }
@@ -813,15 +836,29 @@ class ClaimCaptureActivity : AppCompatActivity() {
             list.clear()
         }
         list.add(CapturedFile(file, mimeType, fieldKey))
+        saveEvidenceDraft()
+        renderEvidenceCard(fieldKey)
+        showMessage("Saved ${file.name}")
+    }
 
+    /** Shows the slot's latest captured file on its card, or an empty card when it has none. */
+    private fun renderEvidenceCard(fieldKey: String) {
         val card = evidenceCardBindings[fieldKey] ?: return
+        val list = capturedFiles[fieldKey].orEmpty()
+        val latest = list.lastOrNull()
+        if (latest == null) {
+            card.layoutEvidencePreview.visibility = View.GONE
+            card.tvEvidenceCount.text = "0 / ${evidenceMaxCounts[fieldKey] ?: 1}"
+            return
+        }
+        val file = latest.file
         card.layoutEvidencePreview.visibility = View.VISIBLE
         card.tvEvidenceFileName.text = file.name
         val sizeMb = file.length().toDouble() / (1024.0 * 1024.0)
         card.tvEvidenceFileSize.text = String.format("%.2f MB · Ready for upload", sizeMb)
         card.tvEvidenceCount.text = "${list.size} / 1"
 
-        if (mimeType.startsWith("image/")) {
+        if (latest.mimeType.startsWith("image/")) {
             // Placeholder first, so the previous return's photo never shows; a failed decode leaves the placeholder.
             card.ivEvidenceThumb.setImageResource(R.drawable.ic_camera)
             // Sampled decode off the main thread: a full-size decode here froze the screen and could run out of memory.
@@ -845,8 +882,6 @@ class ClaimCaptureActivity : AppCompatActivity() {
         } else {
             card.ivEvidenceThumb.setImageResource(android.R.drawable.ic_media_play)
         }
-
-        showMessage("Saved ${file.name}")
     }
 
     private fun removeEvidence(fieldKey: String) {
@@ -855,10 +890,8 @@ class ClaimCaptureActivity : AppCompatActivity() {
             item.file.delete()
         }
         list.clear()
-
-        val card = evidenceCardBindings[fieldKey] ?: return
-        card.layoutEvidencePreview.visibility = View.GONE
-        card.tvEvidenceCount.text = "0 / 1"
+        saveEvidenceDraft()
+        renderEvidenceCard(fieldKey)
     }
 
     /** Deletes every captured evidence file, from memory and disk, and empties the cards. Returns how many were dropped. */
@@ -875,15 +908,57 @@ class ClaimCaptureActivity : AppCompatActivity() {
             list.clear()
         }
         capturedFiles.clear()
-        for ((_, card) in evidenceCardBindings) {
-            card.layoutEvidencePreview.visibility = View.GONE
-            card.tvEvidenceCount.text = "0 / 1"
-        }
+        saveEvidenceDraft()
+        for (fieldKey in evidenceCardBindings.keys) renderEvidenceCard(fieldKey)
         return dropped
     }
 
+    /** Saves the captured evidence, the photo being taken and the slot being filled (see [EvidenceDraft]). */
+    private fun saveEvidenceDraft() {
+        val files = capturedFiles.values.flatten().map { DraftFile(it.file.absolutePath, it.mimeType, it.fieldKey) }
+        try {
+            evidenceDraftStore.save(
+                EvidenceDraft(evidenceReturnKey, files, pendingPhotoFile?.absolutePath.orEmpty(), pendingFieldKey)
+            )
+        } catch (_: Exception) {}
+    }
+
+    /**
+     * Puts back the evidence saved before the app was killed (by Android while the camera was open, or force-stopped).
+     * The first lookup keeps it only if it is the return it was captured for.
+     */
+    private fun restoreEvidenceDraft() {
+        val draft = evidenceDraftStore.load() ?: return
+        evidenceReturnKey = draft.returnKey
+        pendingFieldKey = draft.pendingFieldKey
+        val restored = draft.restorableFiles()
+        for (saved in restored) {
+            recordCapturedEvidence(saved.fieldKey, File(saved.path), saved.mimeType)
+        }
+        // The camera app may have saved its photo after this app was killed; that result never arrives, so take the file.
+        val photo = draft.takenPendingPhoto()
+        if (photo != null) {
+            acceptCameraPhoto(photo, draft.pendingFieldKey)
+        } else if (draft.pendingPhotoPath.isNotBlank()) {
+            File(draft.pendingPhotoPath).delete()
+        }
+        saveEvidenceDraft()
+        val count = restored.size + (if (photo != null) 1 else 0)
+        if (count > 0) showMessage("Restored $count evidence file(s) captured before the app closed.")
+    }
+
+    /** Shows the evidence uploads still queued (they run in the background) and any the server refused. */
+    private fun observeQueuedUploads() {
+        WorkManager.getInstance(this).getWorkInfosByTagLiveData(ClaimEvidenceUploadWorker.ALL_UPLOADS_TAG).observe(this) { infos ->
+            val summary = EvidenceUploads.summarize(infos.map { ClaimEvidenceUploadWorker.uploadOf(it) })
+            val notice = EvidenceUploads.pendingNotice(summary)
+            binding.tvPendingUploads.text = notice.orEmpty()
+            binding.tvPendingUploads.visibility = if (notice == null) View.GONE else View.VISIBLE
+        }
+    }
+
     private fun createEvidenceFile(fieldKey: String, extension: String): File {
-        val dir = File(filesDir, "claim-evidence").apply { mkdirs() }
+        val dir = File(filesDir, EvidenceUploads.DIR).apply { mkdirs() }
         return File(dir, "claim-evidence-${fieldKey}-${UUID.randomUUID()}$extension")
     }
 
@@ -993,96 +1068,17 @@ class ClaimCaptureActivity : AppCompatActivity() {
 
             createResult.onSuccess { result ->
                 val claimId = result.claimId
-
-                // Flatten all captured files
-                val allFiles = mutableListOf<CapturedFile>()
-                for (list in capturedFiles.values) {
-                    allFiles.addAll(list)
+                // Every file becomes its own upload job straight away. WorkManager keeps the jobs through app kills and
+                // network loss and retries them, and each job deletes its file once uploaded, so the screen lets go of
+                // the files here without deleting them.
+                val allFiles = capturedFiles.values.flatten()
+                for (cf in allFiles) {
+                    ClaimEvidenceUploadWorker.enqueue(this@ClaimCaptureActivity, claimId, cf.fieldKey, cf.file, cf.mimeType)
                 }
-                val totalCount = allFiles.size
-
-                // Construct visual upload progress dialog
-                val container = android.widget.LinearLayout(this@ClaimCaptureActivity).apply {
-                    orientation = android.widget.LinearLayout.VERTICAL
-                    setPadding(60, 40, 60, 40)
-                }
-                val tvStatus = android.widget.TextView(this@ClaimCaptureActivity).apply {
-                    text = "Uploading evidence files (0 / $totalCount)..."
-                    textSize = 14f
-                    setTextColor(android.graphics.Color.parseColor("#334155"))
-                    setPadding(0, 0, 0, 24)
-                }
-                val progressBar = android.widget.ProgressBar(
-                    this@ClaimCaptureActivity,
-                    null,
-                    android.R.attr.progressBarStyleHorizontal
-                ).apply {
-                    isIndeterminate = false
-                    max = 100
-                    progress = 0
-                    progressTintList = ColorStateList.valueOf(android.graphics.Color.parseColor("#059669"))
-                }
-                val tvPercent = android.widget.TextView(this@ClaimCaptureActivity).apply {
-                    text = "0%"
-                    textSize = 12f
-                    setTextColor(android.graphics.Color.parseColor("#64748b"))
-                    gravity = android.view.Gravity.END
-                    setPadding(0, 12, 0, 0)
-                }
-                container.addView(tvStatus)
-                container.addView(progressBar)
-                container.addView(tvPercent)
-
-                val progressDialog = MaterialAlertDialogBuilder(this@ClaimCaptureActivity)
-                    .setTitle("Uploading Claim Evidence")
-                    .setView(container)
-                    .setCancelable(false)
-                    .create()
-
-                progressDialog.show()
-
-                lifecycleScope.launch {
-                    var uploadedCount = 0
-                    val failedFiles = mutableListOf<CapturedFile>()
-
-                    for (cf in allFiles) {
-                        tvStatus.text = "Uploading ${uploadedCount + 1} of $totalCount (${cf.fieldKey})..."
-                        val uploadRes = api.uploadClaimEvidence(claimId, cf.fieldKey, cf.file, cf.mimeType)
-                        if (uploadRes.isSuccess) {
-                            uploadedCount++
-                            try { if (cf.file.exists()) cf.file.delete() } catch (_: Exception) {}
-                        } else {
-                            failedFiles.add(cf)
-                        }
-                        val pct = if (totalCount > 0) ((uploadedCount.toFloat() / totalCount.toFloat()) * 100).toInt() else 100
-                        progressBar.progress = pct
-                        tvPercent.text = "$pct%"
-                    }
-
-                    if (failedFiles.isNotEmpty()) {
-                        queueFilesForUpload(claimId, failedFiles)
-                    }
-
-                    try { progressDialog.dismiss() } catch (_: Exception) {}
-
-                    val successMessage = if (failedFiles.isEmpty()) {
-                        "Meesho claim #$claimId created successfully! All $uploadedCount evidence files uploaded to cloud storage."
-                    } else {
-                        "Meesho claim #$claimId created. $uploadedCount files uploaded, ${failedFiles.size} queued for background retry."
-                    }
-
-                    MaterialAlertDialogBuilder(this@ClaimCaptureActivity)
-                        .setTitle("Claim Submitted Successfully")
-                        .setMessage(successMessage)
-                        .setPositiveButton("File Next Return (Start Again)") { _, _ ->
-                            resetFormForNextClaim()
-                        }
-                        .setNegativeButton("Done") { _, _ ->
-                            finish()
-                        }
-                        .setCancelable(false)
-                        .show()
-                }
+                capturedFiles.clear()
+                pendingFieldKey = ""
+                saveEvidenceDraft()
+                showUploadProgress(claimId, allFiles.size)
             }.onFailure { err ->
                 binding.btnSubmitClaim.isEnabled = true
                 showMessage(err.message ?: "Failed to submit claim.")
@@ -1090,24 +1086,77 @@ class ClaimCaptureActivity : AppCompatActivity() {
         }
     }
 
-    private fun queueFilesForUpload(claimId: Int, filesToQueue: List<CapturedFile>) {
-        val wm = WorkManager.getInstance(this)
-        for (cf in filesToQueue) {
-            val inputData = Data.Builder()
-                .putInt(ClaimEvidenceUploadWorker.KEY_CLAIM_ID, claimId)
-                .putString(ClaimEvidenceUploadWorker.KEY_FIELD_KEY, cf.fieldKey)
-                .putString(ClaimEvidenceUploadWorker.KEY_FILE_PATH, cf.file.absolutePath)
-                .putString(ClaimEvidenceUploadWorker.KEY_MIME_TYPE, cf.mimeType)
-                .build()
-
-            val workRequest = OneTimeWorkRequestBuilder<ClaimEvidenceUploadWorker>()
-                .setInputData(inputData)
-                .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
-                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 15, TimeUnit.SECONDS)
-                .build()
-
-            wm.enqueue(workRequest)
+    /** Shows the claim's upload jobs as they run. Closing it leaves them running; the result dialog follows either way. */
+    private fun showUploadProgress(claimId: Int, expected: Int) {
+        val container = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            setPadding(60, 40, 60, 40)
         }
+        val tvStatus = android.widget.TextView(this).apply {
+            text = "Uploading evidence files (0 / $expected)..."
+            textSize = 14f
+            setTextColor(android.graphics.Color.parseColor("#334155"))
+            setPadding(0, 0, 0, 24)
+        }
+        val progressBar = android.widget.ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            isIndeterminate = false
+            max = 100
+            progress = 0
+            progressTintList = ColorStateList.valueOf(android.graphics.Color.parseColor("#059669"))
+        }
+        val tvPercent = android.widget.TextView(this).apply {
+            text = "0%"
+            textSize = 12f
+            setTextColor(android.graphics.Color.parseColor("#64748b"))
+            gravity = android.view.Gravity.END
+            setPadding(0, 12, 0, 0)
+        }
+        container.addView(tvStatus)
+        container.addView(progressBar)
+        container.addView(tvPercent)
+
+        val uploads = WorkManager.getInstance(this).getWorkInfosByTagLiveData(EvidenceUploads.claimTag(claimId))
+        var latest = EvidenceUploads.Summary(uploaded = 0, waiting = expected, failures = emptyList())
+        lateinit var progressDialog: AlertDialog
+        val observer = object : Observer<List<WorkInfo>> {
+            override fun onChanged(value: List<WorkInfo>) {
+                latest = EvidenceUploads.summarize(value.map { ClaimEvidenceUploadWorker.uploadOf(it) })
+                tvStatus.text = EvidenceUploads.progressText(latest, expected)
+                val pct = EvidenceUploads.percent(latest, expected)
+                progressBar.progress = pct
+                tvPercent.text = "$pct%"
+                if (EvidenceUploads.isDone(latest, expected)) {
+                    uploads.removeObserver(this)
+                    try { progressDialog.dismiss() } catch (_: Exception) {}
+                    showClaimSubmitted(claimId, latest)
+                }
+            }
+        }
+        progressDialog = MaterialAlertDialogBuilder(this)
+            .setTitle("Uploading Claim Evidence")
+            .setView(container)
+            .setCancelable(false)
+            .setNeutralButton("Continue in background") { _, _ ->
+                uploads.removeObserver(observer)
+                showClaimSubmitted(claimId, latest)
+            }
+            .create()
+        progressDialog.show()
+        uploads.observe(this, observer)
+    }
+
+    private fun showClaimSubmitted(claimId: Int, summary: EvidenceUploads.Summary) {
+        MaterialAlertDialogBuilder(this)
+            .setTitle(if (summary.failures.isEmpty()) "Claim Submitted Successfully" else "Claim Submitted: Evidence Refused")
+            .setMessage(EvidenceUploads.resultMessage(claimId, summary))
+            .setPositiveButton("File Next Return (Start Again)") { _, _ ->
+                resetFormForNextClaim()
+            }
+            .setNegativeButton("Done") { _, _ ->
+                finish()
+            }
+            .setCancelable(false)
+            .show()
     }
 
     private fun resetFormForNextClaim() {
@@ -1125,6 +1174,7 @@ class ClaimCaptureActivity : AppCompatActivity() {
 
         // 3. Reset state variables
         lookupData = null
+        evidenceReturnKey = ""
         binding.cardProductPreview.visibility = View.GONE
         binding.cardOrderSummary.visibility = View.GONE
         selectedIssueCode = "wrong_return"

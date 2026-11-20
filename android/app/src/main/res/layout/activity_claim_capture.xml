@@ -146,6 +146,18 @@
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
 
+            <!-- Evidence uploads still queued in the background, or refused by the server (ClaimEvidenceUploadWorker) -->
+            <TextView
+                android:id="@+id/tvPendingUploads"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="8dp"
+                android:background="@color/verdict_check_bg"
+                android:padding="10dp"
+                android:textColor="@color/verdict_check"
+                android:textSize="13sp"
+                android:visibility="gone" />
+
             <!-- Status Message / Alerts -->
             <TextView
                 android:id="@+id/tvClaimMessage"

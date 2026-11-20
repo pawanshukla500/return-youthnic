@@ -29,8 +29,12 @@ object ClaimPayload {
     private fun formKey(subOrderId: String, awb: String): String = subOrderId.trim().ifBlank { awb.trim() }
 
     /** The same key for a lookup: the sub order (or order) it fills in, or its AWB when there is none. */
-    private fun lookupKey(lookup: ClaimReturnLookup): String =
+    fun returnKey(lookup: ClaimReturnLookup): String =
         formKey(lookup.subOrderId.ifBlank { lookup.orderId }, lookup.awb.ifBlank { lookup.trackingNumber })
+
+    /** True when [lookup] is the return [key] ([returnKey]) names, such as the one saved evidence was captured for. */
+    fun isReturn(key: String, lookup: ClaimReturnLookup): Boolean =
+        key.isNotBlank() && key.equals(returnKey(lookup), ignoreCase = true)
 
     /**
      * [lookup] when it found a return and the form still shows the sub order (or AWB) that lookup filled in, otherwise
@@ -39,7 +43,7 @@ object ClaimPayload {
     fun confirmedLookup(lookup: ClaimReturnLookup?, subOrderId: String, awb: String): ClaimReturnLookup? {
         if (lookup == null || !lookup.found) return null
         val key = formKey(subOrderId, awb)
-        return lookup.takeIf { key.isNotBlank() && key.equals(lookupKey(lookup), ignoreCase = true) }
+        return lookup.takeIf { isReturn(key, it) }
     }
 
     /**
@@ -47,11 +51,8 @@ object ClaimPayload {
      * evidence step for a confirmed lookup), so it may stay only when the new lookup is that same return; otherwise the
      * screen drops it, or it would be uploaded with another return's claim.
      */
-    fun sameReturn(previous: ClaimReturnLookup?, next: ClaimReturnLookup): Boolean {
-        if (previous == null) return false
-        val key = lookupKey(previous)
-        return key.isNotBlank() && key.equals(lookupKey(next), ignoreCase = true)
-    }
+    fun sameReturn(previous: ClaimReturnLookup?, next: ClaimReturnLookup): Boolean =
+        previous != null && isReturn(returnKey(previous), next)
 
     /** The SKU a claim names: the looked-up return's first item, master SKU first. Blank without a lookup. */
     fun sku(lookup: ClaimReturnLookup?): String {
