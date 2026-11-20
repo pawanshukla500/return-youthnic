@@ -145,7 +145,7 @@ logger.onLog((entry) => {
  * supplier profile must test this instead. See poll-guard.ts for the tested rule.
  */
 function engineBusy(): boolean {
-  return engineBusyWith({ isCurrentlyProcessing, pollInFlight, portalTestInFlight, followUpInFlight })
+  return checkingLoginPanels.size > 0 || engineBusyWith({ isCurrentlyProcessing, pollInFlight, portalTestInFlight, followUpInFlight })
 }
 
 /**
@@ -206,6 +206,8 @@ export async function checkPanelLoginAndResume(panelKey: string): Promise<{ ok: 
   }
 
   checkingLoginPanels.add(key)
+  let triggerRunOnce = false
+  let resumedOutcome = false
   try {
     const readJs = `(() => ({ href: window.location.href || "", text: (document.body && document.body.innerText) || "", hasPassword: Boolean(document.querySelector('input[type="password"], input[name="password"]')) }))()`
     const snapshot =
@@ -239,12 +241,14 @@ export async function checkPanelLoginAndResume(panelKey: string): Promise<{ ok: 
     logger.info(
       `${panelName} session is active and cookies are saved.${requeued > 0 ? ` Re-queued ${requeued} paused claim(s) — carrying on automatically.` : ""}`,
     )
-    if (wasWaitingRelogin || requeued > 0) {
-      void engineRunOnceNow()
-    }
-    return { ok: true, loggedIn: true, resumed: wasWaitingRelogin || requeued > 0 }
+    resumedOutcome = wasWaitingRelogin || requeued > 0
+    triggerRunOnce = resumedOutcome
+    return { ok: true, loggedIn: true, resumed: resumedOutcome }
   } finally {
     checkingLoginPanels.delete(key)
+    if (triggerRunOnce) {
+      void engineRunOnceNow()
+    }
   }
 }
 
@@ -903,17 +907,21 @@ async function pollAndProcessFollowUp(): Promise<boolean> {
       } else {
         const statusText = String(result.statusText || "").trim()
         if (!statusText) {
-          if (String(result.note || "").toLowerCase().includes("session expired")) {
+          const isLoginExpired = result.loginRequired === true || String(result.note || "").toLowerCase().includes("session expired")
+          if (isLoginExpired) {
             clearSessionMarker(supplierSessionDir(config.userDataDir, followUp.marketplace, resolveBrowserAdapterKind()))
             markPanelResult(panelKey, "manual_action", result.note || "Session expired — log in again to continue.", { loginRequired: true })
           }
+          const outcome = isLoginExpired ? "login_required" : "not_found"
           await client.reportFollowUp(followUp.followUpId, {
-            outcome: "not_found",
+            outcome,
             note: result.note || "The panel opened but no ticket state was found for this reference.",
             screenshotPath: result.screenshotPath,
           })
-          lastFollowUpResult = `${followUp.marketplace}: ticket state not found`
-          await runFollowUpAssist({ followUpId: followUp.followUpId, claimId: followUp.claimId, marketplace: followUp.marketplace, marketplaceClaimId: followUp.marketplaceClaimId, ...assistClientHooks(client, followUp.claimId, followUp.marketplace), outcome: "not_found", note: result.note || "ticket state not found on panel", statusText: "", normalizedStatus: "", statusChanged: false })
+          lastFollowUpResult = isLoginExpired
+            ? `${followUp.marketplace}: session expired — log in again`
+            : `${followUp.marketplace}: ticket state not found`
+          await runFollowUpAssist({ followUpId: followUp.followUpId, claimId: followUp.claimId, marketplace: followUp.marketplace, marketplaceClaimId: followUp.marketplaceClaimId, ...assistClientHooks(client, followUp.claimId, followUp.marketplace), outcome, note: result.note || "ticket state not found on panel", statusText: "", normalizedStatus: "", statusChanged: false })
         } else {
           const followUpReport = await client.reportFollowUp(followUp.followUpId, {
             outcome: "status_read",

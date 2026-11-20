@@ -1068,9 +1068,12 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
     if (!ticketId) return { supported: true, statusText: "", note: "Empty marketplace ticket reference; nothing to read." }
     try {
       let panelUrl = await this.browser.evaluate<string>(`window.location.href`)
+      const panelAuth = await this.browser.evaluate<{ text: string; hasPassword: boolean }>(`
+        ({ text: (document.body && document.body.innerText) || '', hasPassword: Boolean(document.querySelector('input[type="password"], input[name="password"]')) })
+      `).catch(() => ({ text: "", hasPassword: false }))
       let slug = panelUrl.match(/\/(?:growth|experience)\/([^/]+)/)?.[1]
         || this.job.portalUrl.match(/\/(?:growth|experience)\/([^/]+)/)?.[1]
-      if (!slug) {
+      if (!slug || !isPortalLoggedIn("Meesho", panelUrl, panelAuth.text, panelAuth.hasPassword)) {
         const login = await completePortalLogin(this.browser, {
           marketplace: "Meesho",
           portalUrl: "https://supplier.meesho.com/panel/v3/new/root/login",
@@ -1080,10 +1083,10 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
           waitMs: 8000,
         })
         if (!login.ok) {
-          return { supported: true, statusText: "", note: "Meesho session expired; sign in again to check ticket status." }
+          return { supported: true, statusText: "", loginRequired: true, note: "Meesho session expired; sign in again to check ticket status." }
         }
         panelUrl = await this.browser.evaluate<string>(`window.location.href`)
-        slug = panelUrl.match(/\/(?:growth|experience)\/([^/]+)/)?.[1]
+        slug = panelUrl.match(/\/(?:growth|experience)\/([^/]+)/)?.[1] || slug
       }
       if (!slug) {
         return { supported: true, statusText: "", note: "Meesho panel address not found; open the supplier panel first." }
@@ -1149,6 +1152,12 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
       const shot = path.join(this.workDir, `ticket-status-${safeId}.png`)
       await this.browser.captureScreenshot(shot)
       if (!parsed) {
+        const postAuth = await this.browser.evaluate<{ href: string; text: string; hasPassword: boolean }>(`
+          ({ href: window.location.href || '', text: (document.body && document.body.innerText) || '', hasPassword: Boolean(document.querySelector('input[type="password"], input[name="password"]')) })
+        `).catch(() => ({ href: "", text: "", hasPassword: false }))
+        if (!isPortalLoggedIn("Meesho", postAuth.href, postAuth.text, postAuth.hasPassword)) {
+          return { supported: true, statusText: "", loginRequired: true, screenshotPath: shot, note: "Meesho session expired; sign in again to check ticket status." }
+        }
         return { supported: true, statusText: "", screenshotPath: shot, note: `Ticket ${ticketId} was not found on the Meesho Support page.` }
       }
 
