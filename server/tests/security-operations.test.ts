@@ -1,9 +1,13 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
+import { once } from "node:events"
 import fs from "node:fs"
+import type { AddressInfo } from "node:net"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
+import express from "express"
 import { RateLimiter } from "../rate-limit.js"
+import { applySecurityHeaders, ENFORCED_CSP, REPORT_ONLY_CSP } from "../security-headers.js"
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..")
 
@@ -102,4 +106,53 @@ test("[Security/AppSec] The server exposes no /api/debug routes (the unauthentic
     .filter((name) => name.endsWith(".ts") && !name.split(path.sep).includes("tests"))
     .filter((name) => fs.readFileSync(path.join(serverDir, name), "utf-8").includes("/api/debug"))
   assert.deepEqual(offenders, [], "a debug route can be called by anyone; Sentry is checked by server/tests/sentry.test.ts")
+})
+
+test("[Security/AppSec] Responses hide X-Powered-By, enforce only the safe CSP, and report the full policy", async () => {
+  const app = express()
+  applySecurityHeaders(app)
+  app.get("/SYN-ping", (_req, res) => {
+    res.send("SYN-ok")
+  })
+  const server = app.listen(0, "127.0.0.1")
+  await once(server, "listening")
+  try {
+    const { port } = server.address() as AddressInfo
+    const res = await fetch(`http://127.0.0.1:${port}/SYN-ping`)
+    assert.equal(res.status, 200)
+    assert.equal(app.enabled("x-powered-by"), false)
+    assert.equal(res.headers.get("x-powered-by"), null)
+
+    // Enforced: exactly the three directives that cannot change how the console loads.
+    const enforced = res.headers.get("content-security-policy") ?? ""
+    assert.equal(enforced, ENFORCED_CSP)
+    assert.deepEqual(
+      enforced.split(";").map((d) => d.trim()),
+      ["frame-ancestors 'none'", "object-src 'none'", "base-uri 'self'"],
+    )
+
+    // Report-only: the full policy, with no eval and no wildcard source.
+    const reportOnly = res.headers.get("content-security-policy-report-only") ?? ""
+    assert.equal(reportOnly, REPORT_ONLY_CSP)
+    const directives = reportOnly.split(";").map((d) => d.trim().split(/\s+/))
+    assert.deepEqual(directives.find(([name]) => name === "script-src"), ["script-src", "'self'"])
+    assert.ok(!reportOnly.includes("'unsafe-eval'"))
+    assert.ok(directives.every((d) => !d.includes("*")), "no directive may allow every origin")
+
+    // The headers sent before the CSP was added are still sent.
+    assert.equal(res.headers.get("x-frame-options"), "DENY")
+    assert.equal(res.headers.get("x-content-type-options"), "nosniff")
+  } finally {
+    server.close()
+  }
+})
+
+test("[Security/AppSec] The production server applies the security headers before any route or static file", () => {
+  const source = fs.readFileSync(path.join(root, "server", "index.ts"), "utf-8")
+  const call = source.indexOf("applySecurityHeaders(app)")
+  assert.ok(call > 0, "server/index.ts calls applySecurityHeaders(app)")
+  for (const marker of ["app.get(", "app.post(", "express.static("]) {
+    const first = source.indexOf(marker)
+    if (first >= 0) assert.ok(call < first, `applySecurityHeaders(app) comes before the first ${marker}`)
+  }
 })
