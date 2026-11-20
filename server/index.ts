@@ -322,12 +322,6 @@ app.get("/api/health", async (_req, res, next) => {
   }
 })
 
-app.get("/api/debug/sentry-test", (_req, _res) => {
-  const testError = new Error("Sentry Test Error from Return App API - Verification")
-  Sentry.captureException(testError)
-  throw testError
-})
-
 app.get("/api/app/latest", handleLatestRelease)
 app.get("/download/return-scan.apk", handleApkDownload)
 
