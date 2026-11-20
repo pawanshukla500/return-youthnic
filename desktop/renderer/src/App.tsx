@@ -16,6 +16,7 @@ import {
   EngineApiError,
   getEngineBase,
   isNetworkError,
+  openPanelInBrowsers,
 } from './services/config'
 import type {
   OperatorSessionResponse,
@@ -23,6 +24,8 @@ import type {
   UpdateCheckResult,
   FollowUpRow,
   FollowUpsResponse,
+  PanelsResponse,
+  PanelStatus,
 } from './types/engine'
 import { Spinner } from './components/ui/Spinner'
 import { Badge } from './components/ui/Badge'
@@ -394,6 +397,89 @@ function useFollowUpNotifications(): void {
 }
 
 /* ------------------------------------------------------------------ */
+/* Expired supplier session prompt & auto-resume banner               */
+/* ------------------------------------------------------------------ */
+
+const RELOGIN_POLL_MS = 5_000
+
+function ReloginBanner({ onOpenBrowser }: { onOpenBrowser: (hash: string) => void }) {
+  const { user, handleAuthError } = useSession()
+  const [waitingPanels, setWaitingPanels] = useState<PanelStatus[]>([])
+  const notifiedKeysRef = useRef<Set<string>>(new Set())
+
+  useEffect(() => {
+    if (!user) {
+      setWaitingPanels([])
+      return
+    }
+    let cancelled = false
+    let timer: number | undefined
+
+    const check = async () => {
+      try {
+        const res = await apiGet<PanelsResponse>('/api/panels')
+        if (cancelled) return
+        const needing = (res?.panels ?? []).filter(
+          (panel) => panel.state === 'manual_action' && panel.reloginRequired === true,
+        )
+        setWaitingPanels(needing)
+        for (const panel of needing) {
+          const eventKey = `${panel.key}:${panel.lastResultAt ?? panel.lastResult ?? ''}`
+          if (!notifiedKeysRef.current.has(eventKey)) {
+            notifiedKeysRef.current.add(eventKey)
+            window.desktopApp?.sendNotification(
+              `${panel.name} login expired`,
+              `Log in to ${panel.name} inside Return App so your claim can continue automatically.`,
+            )
+          }
+        }
+      } catch (cause) {
+        if (cancelled) return
+        handleAuthError(cause)
+      } finally {
+        if (!cancelled) timer = window.setTimeout(() => void check(), RELOGIN_POLL_MS)
+      }
+    }
+
+    void check()
+    return () => {
+      cancelled = true
+      if (timer !== undefined) window.clearTimeout(timer)
+    }
+  }, [user, handleAuthError])
+
+  if (waitingPanels.length === 0) return null
+
+  return (
+    <div
+      role="alert"
+      className="flex flex-wrap items-center justify-between gap-3 border-b border-orange/30 bg-orange-soft px-4 py-2 text-sm text-ink"
+    >
+      <div className="min-w-0">
+        {waitingPanels.map((panel) => (
+          <div key={panel.key} className="truncate">
+            <strong className="text-orange">{panel.name} session expired:</strong>{' '}
+            <span>Log in again inside the Browsers tab and the paused claim will continue automatically.</span>
+          </div>
+        ))}
+      </div>
+      <div className="flex shrink-0 items-center gap-2">
+        {waitingPanels.map((panel) => (
+          <button
+            key={panel.key}
+            type="button"
+            onClick={() => void openPanelInBrowsers(panel, onOpenBrowser)}
+            className="rounded-lg bg-green px-3 py-1 text-xs font-semibold text-white hover:bg-green-dark"
+          >
+            Log in to {panel.name}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+/* ------------------------------------------------------------------ */
 /* Render error boundary — a page crash must never white-screen the app  */
 /* ------------------------------------------------------------------ */
 
@@ -593,6 +679,7 @@ export default function App() {
           </header>
 
           <UpdateBanner />
+          <ReloginBanner onOpenBrowser={navigate} />
 
           <main className="min-h-0 flex-1 overflow-y-auto p-4">
             <PageErrorBoundary key={activeTab.id}>

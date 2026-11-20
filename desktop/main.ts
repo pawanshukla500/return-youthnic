@@ -1418,6 +1418,9 @@ app.whenReady().then(async () => {
 app.on("before-quit", () => {
   isQuitting = true
   persistWindowBounds()
+  for (const panelKey of ["meesho", "flipkart", "amazon", "myntra_vb", "myntra_ej", "ajio"]) {
+    void session.fromPartition(`persist:supplier-${panelKey}`).cookies.flushStore().catch(() => undefined)
+  }
   notifyWindowLifecycleFromShell("before-quit")
   disposeDetachedSupplierViews()
 })

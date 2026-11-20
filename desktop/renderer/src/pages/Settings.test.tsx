@@ -35,6 +35,7 @@ test('channelStatusLabel follows session > configured > missing', () => {
   assert.equal(channelStatusLabel(channel({})), 'Not connected')
   assert.equal(channelStatusLabel(channel({ configured: true, usernameMasked: 'ab***' })), 'ID saved')
   assert.equal(channelStatusLabel(channel({ configured: true, sessionSavedAt: '2026-11-04T00:00:00Z' })), 'Connected — cookies saved')
+  assert.equal(channelStatusLabel(channel({ configured: true, sessionSavedAt: '2026-11-04T00:00:00Z', autoSubmit: true })), 'Connected — cookies saved · claims submit automatically')
 })
 
 test('pingLabel reports latency on success and the message on failure', () => {

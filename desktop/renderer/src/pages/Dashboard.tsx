@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useEngineStatus } from '../hooks/useEngineStatus'
 import { useEnginePolling } from '../hooks/useEnginePolling'
-import { apiGet, apiPost, EngineApiError } from '../services/engineApi'
+import { apiGet, apiPost, EngineApiError, openPanelInBrowsers } from '../services/engineApi'
 import type {
   FollowUpsResponse,
   FollowUpsSummary,
@@ -372,6 +372,7 @@ export default function DashboardPage() {
                   </div>
                   <div className="mt-2 flex flex-wrap items-center gap-1.5">
                     {panel.automated ? <Badge variant="green">Automated</Badge> : <Badge>Assisted</Badge>}
+                    {panel.reloginRequired ? <Badge variant="orange">Login expired</Badge> : null}
                     {panel.sessionSavedAt ? (
                       <Badge variant="blue" title={`Session saved ${formatEngineTime(panel.sessionSavedAt)}`}>
                         cookies ✓
@@ -382,15 +383,26 @@ export default function DashboardPage() {
                     {panel.lastResult ? panel.lastResult : 'No result yet'}
                   </div>
                   {panel.state === 'manual_action' || panel.state === 'cooldown' || panel.state === 'prepared' ? (
-                    <button
-                      type="button"
-                      onClick={() => void rejoinRotation(panel.key)}
-                      disabled={clearingKey !== null}
-                      title={clearingKey !== null && clearingKey !== panel.key ? 'Another panel action is running' : undefined}
-                      className="mt-2 w-full rounded-lg border border-line bg-surface px-3 py-1.5 text-xs font-medium text-ink hover:bg-surface-2"
-                    >
-                      {clearingKey === panel.key ? 'Rejoining…' : 'Rejoin rotation'}
-                    </button>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {panel.reloginRequired ? (
+                        <button
+                          type="button"
+                          onClick={() => void openPanelInBrowsers(panel)}
+                          className="flex-1 rounded-lg bg-green px-3 py-1.5 text-xs font-semibold text-white hover:bg-green-dark"
+                        >
+                          Log in to {panel.name}
+                        </button>
+                      ) : null}
+                      <button
+                        type="button"
+                        onClick={() => void rejoinRotation(panel.key)}
+                        disabled={clearingKey !== null}
+                        title={clearingKey !== null && clearingKey !== panel.key ? 'Another panel action is running' : undefined}
+                        className="flex-1 rounded-lg border border-line bg-surface px-3 py-1.5 text-xs font-medium text-ink hover:bg-surface-2"
+                      >
+                        {clearingKey === panel.key ? 'Rejoining…' : 'Rejoin rotation'}
+                      </button>
+                    </div>
                   ) : null}
                 </div>
               ))}

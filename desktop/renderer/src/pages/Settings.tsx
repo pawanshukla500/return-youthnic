@@ -46,7 +46,7 @@ export function panelKeyForMarketplaceName(name: string): string {
 
 /** Onboarding row state, same thresholds as the old engine dashboard. */
 export function channelStatusLabel(channel: PortalChannelStatus): string {
-  if (channel.sessionSavedAt) return 'Connected — cookies saved'
+  if (channel.sessionSavedAt) return channel.autoSubmit ? 'Connected — cookies saved · claims submit automatically' : 'Connected — cookies saved'
   if (channel.configured) return 'ID saved'
   return 'Not connected'
 }
@@ -318,7 +318,7 @@ export default function SettingsPage() {
       })
       // Never keep the password in the form once the engine accepted it.
       setPassword('')
-      setSaveNotice({ tone: 'success', text: 'Supplier login saved. Test it, then run the waiting claim.' })
+      setSaveNotice({ tone: 'success', text: marketplace.toLowerCase().includes('meesho') ? 'Meesho login saved with full-auto on. Sign in once to save cookies, then claims submit automatically.' : 'Supplier login saved. Test it, then run the waiting claim.' })
       refreshChannels()
     } catch (cause) {
       if (handleAuthError(cause)) return
@@ -369,12 +369,13 @@ export default function SettingsPage() {
   }
 
   /** Onboarding row button — parity with the old dashboard wizard: an
-   * unconfigured panel opens the login form and focuses it; a configured one
-   * re-opens the supplier browser right away to refresh the saved cookies. */
+   * unconfigured panel opens the login form (and opens Meesho right away for
+   * one-time OTP/cookie login); a configured one re-opens the supplier browser
+   * right away to refresh saved cookies. */
   const connectChannel = (channel: PortalChannelStatus) => {
     setMarketplace(channel.name)
     openLoginForm('username')
-    if (channel.configured) {
+    if (channel.configured || channel.name.toLowerCase().includes('meesho')) {
       void runLoginTest(channel.name, '', '')
     }
   }
@@ -533,7 +534,7 @@ export default function SettingsPage() {
         {loginFormOpen ? (
           <>
             <p className="mt-1 text-xs text-muted">
-              Do one marketplace at a time. Leave the ID and password blank to use the login already saved on the server.
+              Do one marketplace at a time. Leave the ID and password blank to use the login already saved on the server. Meesho is full-auto: after this one manual sign-in, cookies stay saved on this PC and claims submit automatically with the ticket ID saved — no approval step.
               The password is sent to the engine once and is never shown again.
             </p>
             <form onSubmit={saveLogin} className="mt-3 flex flex-wrap items-end gap-3">
