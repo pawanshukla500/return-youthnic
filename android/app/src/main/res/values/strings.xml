@@ -166,4 +166,9 @@
     <string name="today_issue_iron_format">Issues %1$s · Iron %2$s</string>
     <string name="torch_needs_camera">The camera is not running, so the torch is not available.</string>
     <string name="torch_unavailable">This device has no torch.</string>
+
+    <!-- Evidence uploads: the notification shown while a big file (the unpacking video) uploads -->
+    <string name="evidence_upload_channel_name">Claim evidence uploads</string>
+    <string name="evidence_upload_title">Uploading claim evidence</string>
+    <string name="evidence_upload_progress">%1$d%% sent</string>
 </resources>

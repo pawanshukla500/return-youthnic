@@ -14,9 +14,10 @@ import java.io.File
 import java.util.concurrent.TimeUnit
 
 /**
- * Queued evidence uploads: one unique job per file, a 4xx shown to the operator instead of dropped, and old evidence
- * files cleaned up at start-up without touching any that a draft or an unfinished upload still needs. Test data is
- * synthetic: every file name and server message starts with SYN-.
+ * Queued evidence uploads: one unique job per file, a 4xx shown to the operator instead of dropped, old evidence
+ * files cleaned up at start-up without touching any that a draft or an unfinished upload still needs, progress by
+ * bytes, two files at a time and the video as foreground work. Test data is synthetic: every file name and server
+ * message starts with SYN-.
  */
 class EvidenceUploadsTest {
 
@@ -153,6 +154,103 @@ class EvidenceUploadsTest {
         assertTrue(EvidenceUploads.isDone(finished, expected = 5))
         assertEquals(80, EvidenceUploads.percent(finished, expected = 5))
         assertEquals(100, EvidenceUploads.percent(finished, expected = 0))
+    }
+
+    @Test
+    fun progressMovesWithTheBytesOfTheVideoNotOnlyWhenAFileFinishes() {
+        val photo = 512L * 1024
+        val video = 25L * 1024 * 1024
+        val expectedBytes = photo + photo + video // 26.0 MB
+        val halfway = EvidenceUploads.summarize(
+            listOf(
+                Upload(finished = true, succeeded = true, bytesSent = photo),
+                Upload(finished = false, succeeded = false), // waiting for one of the two upload slots
+                Upload(finished = false, succeeded = false, bytesSent = video / 2)
+            )
+        )
+        assertEquals(photo + video / 2, halfway.bytesSent)
+        assertEquals(50, EvidenceUploads.percent(halfway, expected = 3, expectedBytes = expectedBytes))
+        assertEquals("by files it would still read 33%", 33, EvidenceUploads.percent(halfway, expected = 3))
+        val text = EvidenceUploads.progressText(halfway, 3, expectedBytes)
+        assertTrue(text, text.contains("Uploaded 1 of 3 evidence file(s).\nSent 13.0 MB of 26.0 MB."))
+
+        val later = EvidenceUploads.summarize(
+            listOf(
+                Upload(finished = true, succeeded = true, bytesSent = photo),
+                Upload(finished = false, succeeded = false, bytesSent = 100L * 1024),
+                Upload(finished = false, succeeded = false, bytesSent = video / 2 + 300L * 1024)
+            )
+        )
+        assertTrue(EvidenceUploads.percent(later, 3, expectedBytes) > EvidenceUploads.percent(halfway, 3, expectedBytes))
+    }
+
+    @Test
+    fun aRefusedFileAddsNoBytesAndTheBarNeverPassesTheEnd() {
+        val refused = EvidenceUploads.summarize(
+            listOf(
+                Upload(finished = true, succeeded = true, bytesSent = 1_000),
+                Upload(finished = true, succeeded = false, error = "SYN-refused", bytesSent = 999)
+            )
+        )
+        assertEquals(1_000L, refused.bytesSent)
+        assertEquals(50, EvidenceUploads.percent(refused, expected = 2, expectedBytes = 2_000))
+
+        val mb = 1024L * 1024
+        val over = EvidenceUploads.summarize(listOf(Upload(finished = true, succeeded = true, bytesSent = 3 * mb)))
+        assertEquals(100, EvidenceUploads.percent(over, expected = 1, expectedBytes = 2 * mb))
+        val text = EvidenceUploads.progressText(over, 1, 2 * mb)
+        assertTrue(text, text.contains("Sent 2.0 MB of 2.0 MB."))
+
+        assertEquals(100, EvidenceUploads.percentOf(0, 0))
+        assertEquals(0, EvidenceUploads.percentOf(-5, 10))
+        assertEquals(99, EvidenceUploads.percentOf(999, 1_000))
+    }
+
+    @Test
+    fun aBigVideoSavesAboutAHundredProgressUpdatesNotThousands() {
+        val video = 25L * 1024 * 1024
+        var reported = 0L
+        var updates = 0
+        var sent = 0L
+        while (sent < video) {
+            sent = minOf(video, sent + 8 * 1024) // OkHttp writes about 8 KiB at a time: ~3,200 writes
+            if (EvidenceUploads.shouldReportBytes(reported, sent, video)) {
+                reported = sent
+                updates++
+            }
+        }
+        assertTrue("updates: $updates", updates in 90..101)
+        assertEquals("the last byte is always reported", video, reported)
+
+        // A photo still moves in steps of at least 128 KiB, and its last byte is reported.
+        val photo = 300_000L
+        assertFalse(EvidenceUploads.shouldReportBytes(0, 131_071, photo))
+        assertTrue(EvidenceUploads.shouldReportBytes(0, 131_072, photo))
+        assertTrue(EvidenceUploads.shouldReportBytes(262_144, photo, photo))
+    }
+
+    @Test
+    fun twoFilesUploadAtOnceAndTheVideoRunsAsForegroundWork() {
+        assertEquals(2, EvidenceUploads.PARALLEL_UPLOADS)
+        assertTrue("a 25 MB unpacking video", EvidenceUploads.needsForeground(25L * 1024 * 1024))
+        assertTrue(EvidenceUploads.needsForeground(2L * 1024 * 1024))
+        assertFalse("a downscaled photo", EvidenceUploads.needsForeground(600_000))
+
+        // WorkManager and the manifest cannot run in a unit test, so read them. Without the dataSync type and its
+        // permission, Android 14 refuses the foreground service.
+        val manifest = File(appDir, "src/main/AndroidManifest.xml").readText()
+        assertTrue(manifest.contains("android.permission.FOREGROUND_SERVICE\""))
+        assertTrue(manifest.contains("android.permission.FOREGROUND_SERVICE_DATA_SYNC"))
+        val service = manifest.substringAfter("androidx.work.impl.foreground.SystemForegroundService").substringBefore("/>")
+        assertTrue(service.contains("android:foregroundServiceType=\"dataSync\""))
+        assertTrue(service.contains("tools:node=\"merge\""))
+
+        val worker = File(appDir, "src/main/java/shop/youthnic/returnscan/claim/ClaimEvidenceUploadWorker.kt").readText()
+        assertTrue(worker.contains("Semaphore(EvidenceUploads.PARALLEL_UPLOADS)"))
+        val work = worker.substringAfter("override suspend fun doWork()").substringBefore("private suspend fun promoteToForeground(")
+        assertTrue("every upload waits for a slot", work.contains("uploadSlots.withPermit {"))
+        assertTrue(work.contains("EvidenceUploads.needsForeground(fileBytes) && promoteToForeground("))
+        assertTrue(worker.contains("ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC"))
     }
 
     @Test

@@ -1,16 +1,26 @@
 package shop.youthnic.returnscan.claim
 
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.content.Context
+import android.content.pm.ServiceInfo
+import android.os.Build
+import androidx.core.app.NotificationCompat
 import androidx.work.BackoffPolicy
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
 import androidx.work.Data
 import androidx.work.ExistingWorkPolicy
+import androidx.work.ForegroundInfo
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+import shop.youthnic.returnscan.R
 import shop.youthnic.returnscan.ReturnScanApp
 import shop.youthnic.returnscan.data.ApiException
 import java.io.File
@@ -32,15 +42,26 @@ class ClaimEvidenceUploadWorker(
 
         val file = File(filePath)
         if (!file.exists() || file.length() == 0L) return failed(claimId, fieldKey, "The evidence file is no longer on this phone.")
+        val fileBytes = file.length()
         val app = applicationContext as ReturnScanApp
-        val upload = app.apiClient.uploadClaimEvidence(claimId, fieldKey, file, mimeType)
+        val upload = uploadSlots.withPermit {
+            val foreground = EvidenceUploads.needsForeground(fileBytes) && promoteToForeground(foregroundInfo(0))
+            var reported = 0L
+            app.apiClient.uploadClaimEvidence(claimId, fieldKey, file, mimeType) { sent, total ->
+                if (EvidenceUploads.shouldReportBytes(reported, sent, total)) {
+                    reported = sent
+                    setProgressAsync(Data.Builder().putLong(KEY_BYTES_SENT, sent).build())
+                    if (foreground) setForegroundAsync(foregroundInfo(EvidenceUploads.percentOf(sent, total)))
+                }
+            }
+        }
         if (upload.isSuccess) {
             try {
                 if (file.exists()) {
                     file.delete()
                 }
             } catch (_: Exception) {}
-            return Result.success()
+            return Result.success(Data.Builder().putLong(KEY_BYTES_SENT, fileBytes).build())
         }
         val error = upload.exceptionOrNull()
         if (error is ApiException && EvidenceUploads.isPermanentFailure(error.code)) {
@@ -48,6 +69,47 @@ class ClaimEvidenceUploadWorker(
             return failed(claimId, fieldKey, error.message?.ifBlank { null } ?: "Refused with HTTP ${error.code}")
         }
         return Result.retry()
+    }
+
+    /**
+     * Makes this job foreground work (creating its quiet notification channel once), so Android's ~10-minute limit
+     * cannot stop a big upload half-way. Android 12+ refuses while the app is in the background (a retry, say); the
+     * upload then runs as ordinary work.
+     */
+    private suspend fun promoteToForeground(info: ForegroundInfo): Boolean = try {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val nm = applicationContext.getSystemService(NotificationManager::class.java)
+            if (nm != null && nm.getNotificationChannel(CHANNEL_ID) == null) {
+                nm.createNotificationChannel(
+                    NotificationChannel(CHANNEL_ID, applicationContext.getString(R.string.evidence_upload_channel_name), NotificationManager.IMPORTANCE_LOW)
+                )
+            }
+        }
+        setForeground(info)
+        true
+    } catch (e: CancellationException) {
+        throw e
+    } catch (_: Exception) {
+        false
+    }
+
+    private fun foregroundInfo(percent: Int): ForegroundInfo {
+        val context = applicationContext
+        val notification = NotificationCompat.Builder(context, CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.stat_sys_upload)
+            .setContentTitle(context.getString(R.string.evidence_upload_title))
+            .setContentText(context.getString(R.string.evidence_upload_progress, percent))
+            .setProgress(100, percent, false)
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .build()
+        // One notification per job: two big files can upload at once.
+        val notificationId = id.hashCode()
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ForegroundInfo(notificationId, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+        } else {
+            ForegroundInfo(notificationId, notification)
+        }
     }
 
     private fun failed(claimId: Int, fieldKey: String, reason: String): Result = Result.failure(
@@ -64,6 +126,13 @@ class ClaimEvidenceUploadWorker(
         const val KEY_FILE_PATH = "file_path"
         const val KEY_MIME_TYPE = "mime_type"
         const val KEY_ERROR = "error"
+        /** Bytes of the file sent so far: the job's progress while it runs, and the whole file once it succeeded. */
+        const val KEY_BYTES_SENT = "bytes_sent"
+
+        private const val CHANNEL_ID = "evidence_uploads"
+
+        /** Shared by every upload job in the app, so only [EvidenceUploads.PARALLEL_UPLOADS] files go at once. */
+        private val uploadSlots = Semaphore(EvidenceUploads.PARALLEL_UPLOADS)
 
         /** WorkManager tags every job with its worker's class name, so this lists every evidence upload, older builds' too. */
         val ALL_UPLOADS_TAG: String = ClaimEvidenceUploadWorker::class.java.name
@@ -96,7 +165,12 @@ class ClaimEvidenceUploadWorker(
             succeeded = info.state == WorkInfo.State.SUCCEEDED,
             claimId = info.outputData.getInt(KEY_CLAIM_ID, 0),
             fieldKey = info.outputData.getString(KEY_FIELD_KEY).orEmpty(),
-            error = info.outputData.getString(KEY_ERROR).orEmpty()
+            error = info.outputData.getString(KEY_ERROR).orEmpty(),
+            bytesSent = when (info.state) {
+                WorkInfo.State.SUCCEEDED -> info.outputData.getLong(KEY_BYTES_SENT, 0L)
+                WorkInfo.State.RUNNING -> info.progress.getLong(KEY_BYTES_SENT, 0L)
+                else -> 0L
+            }
         )
 
         /**

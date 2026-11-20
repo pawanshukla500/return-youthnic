@@ -1072,13 +1072,15 @@ class ClaimCaptureActivity : AppCompatActivity() {
                 // network loss and retries them, and each job deletes its file once uploaded, so the screen lets go of
                 // the files here without deleting them.
                 val allFiles = capturedFiles.values.flatten()
+                // Sized before queueing: a job deletes its file as soon as the server has it.
+                val totalBytes = allFiles.sumOf { it.file.length() }
                 for (cf in allFiles) {
                     ClaimEvidenceUploadWorker.enqueue(this@ClaimCaptureActivity, claimId, cf.fieldKey, cf.file, cf.mimeType)
                 }
                 capturedFiles.clear()
                 pendingFieldKey = ""
                 saveEvidenceDraft()
-                showUploadProgress(claimId, allFiles.size)
+                showUploadProgress(claimId, allFiles.size, totalBytes)
             }.onFailure { err ->
                 binding.btnSubmitClaim.isEnabled = true
                 showMessage(err.message ?: "Failed to submit claim.")
@@ -1086,8 +1088,11 @@ class ClaimCaptureActivity : AppCompatActivity() {
         }
     }
 
-    /** Shows the claim's upload jobs as they run. Closing it leaves them running; the result dialog follows either way. */
-    private fun showUploadProgress(claimId: Int, expected: Int) {
+    /**
+     * Shows the claim's upload jobs as they run, by bytes sent out of [expectedBytes]. Closing it leaves them running;
+     * the result dialog follows either way.
+     */
+    private fun showUploadProgress(claimId: Int, expected: Int, expectedBytes: Long) {
         val container = android.widget.LinearLayout(this).apply {
             orientation = android.widget.LinearLayout.VERTICAL
             setPadding(60, 40, 60, 40)
@@ -1121,8 +1126,8 @@ class ClaimCaptureActivity : AppCompatActivity() {
         val observer = object : Observer<List<WorkInfo>> {
             override fun onChanged(value: List<WorkInfo>) {
                 latest = EvidenceUploads.summarize(value.map { ClaimEvidenceUploadWorker.uploadOf(it) })
-                tvStatus.text = EvidenceUploads.progressText(latest, expected)
-                val pct = EvidenceUploads.percent(latest, expected)
+                tvStatus.text = EvidenceUploads.progressText(latest, expected, expectedBytes)
+                val pct = EvidenceUploads.percent(latest, expected, expectedBytes)
                 progressBar.progress = pct
                 tvPercent.text = "$pct%"
                 if (EvidenceUploads.isDone(latest, expected)) {
