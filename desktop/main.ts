@@ -1415,14 +1415,29 @@ app.whenReady().then(async () => {
   })
 })
 
-app.on("before-quit", () => {
+let cookiesFlushedBeforeQuit = false
+
+app.on("before-quit", (event) => {
+  if (!cookiesFlushedBeforeQuit) {
+    event.preventDefault()
+    isQuitting = true
+    persistWindowBounds()
+    notifyWindowLifecycleFromShell("before-quit")
+    disposeDetachedSupplierViews()
+    const flushes = ["meesho", "flipkart", "amazon", "myntra_vb", "myntra_ej", "ajio"].map((panelKey) =>
+      session.fromPartition(`persist:supplier-${panelKey}`).cookies.flushStore().catch(() => undefined),
+    )
+    Promise.race([
+      Promise.allSettled(flushes),
+      new Promise<void>((resolve) => setTimeout(resolve, 1500)),
+    ]).finally(() => {
+      cookiesFlushedBeforeQuit = true
+      app.quit()
+    })
+    return
+  }
   isQuitting = true
   persistWindowBounds()
-  for (const panelKey of ["meesho", "flipkart", "amazon", "myntra_vb", "myntra_ej", "ajio"]) {
-    void session.fromPartition(`persist:supplier-${panelKey}`).cookies.flushStore().catch(() => undefined)
-  }
-  notifyWindowLifecycleFromShell("before-quit")
-  disposeDetachedSupplierViews()
 })
 
 app.on("window-all-closed", () => {
