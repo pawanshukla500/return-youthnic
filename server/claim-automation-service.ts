@@ -3,7 +3,7 @@ import type pg from "pg"
 import { accountCondition, scopeFor, type AccountScope } from "./access.js"
 import { ServiceError, type Actor } from "./register-service.js"
 import { createFollowUpForJob } from "./claim-follow-up-service.js"
-import { listClaimTemplates } from "./claims-service.js"
+import { getClaimTemplate, resolveClaimTemplateId } from "./claims-service.js"
 import {
   MEESHO_TAT_DAYS,
   MEESHO_ISSUES,
@@ -1770,15 +1770,16 @@ export async function lookupReturnForClaim(
   const daysRemaining = daysBetween(today, dueDate)
   const overdue = daysRemaining < 0
 
-  // Fetch claim templates and fields for this marketplace
-  const templates = await listClaimTemplates(db, scope)
+  // The one template a claim for this marketplace uses, with its active fields only. Empty when claims for this
+  // marketplace are not supported yet (Amazon today), so a client never shows switched-off slots.
+  const templateId = await resolveClaimTemplateId(db, resolvedMktId)
+  const templates = templateId === null ? [] : [await getClaimTemplate(db, scope, templateId)]
   const mktTemplates = templates
-    .filter((t) => t.marketplaceId === resolvedMktId || t.marketplaceId === null)
     .map((t) => ({
       id: t.id,
       name: t.name,
       description: t.description,
-      fields: t.fields.map((f) => ({
+      fields: t.fields.filter((f) => f.active).map((f) => ({
         fieldKey: f.fieldKey,
         fieldLabel: f.fieldLabel,
         fieldType: f.fieldType,
