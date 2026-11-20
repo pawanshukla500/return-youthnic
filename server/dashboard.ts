@@ -119,6 +119,8 @@ export async function loadHeadline(db: pg.Pool, scope: AccountScope): Promise<He
   const openClaimsLegacy = accountCondition(scope, "ce2.marketplace_id", params)
   const approvedClaimsModern = accountCondition(scope, "c3.marketplace_id", params)
   const approvedClaimsLegacy = accountCondition(scope, "ce3.marketplace_id", params)
+  params.push(closedClaimStatuses())
+  const closedStatuses = `$${params.length}::text[]`
 
   const result = await db.query(
     `
@@ -139,7 +141,7 @@ export async function loadHeadline(db: pg.Pool, scope: AccountScope): Promise<He
          ) u1) AS claims,
       (SELECT COUNT(*)::int
          FROM (
-           SELECT c2.id FROM claims c2 WHERE c2.status NOT IN ('approved', 'reconciled', 'paid', 'rejected', 'failed') AND ${openClaimsModern}
+           SELECT c2.id FROM claims c2 WHERE c2.status <> ALL(${closedStatuses}) AND ${openClaimsModern}
            UNION ALL
            SELECT ct2.id FROM claim_tickets ct2
            JOIN receipt_scans cs2 ON cs2.id = ct2.receipt_scan_id
@@ -707,6 +709,12 @@ export function claimStatusesFor(outcome: ClaimOutcome): ClaimStatus[] {
   return (Object.keys(CLAIM_OUTCOMES) as ClaimStatus[]).filter((status) => CLAIM_OUTCOMES[status] === outcome)
 }
 
+// A claim stays open until the marketplace approves or rejects it. failed and manual_action_required still need a
+// person, so they count as open too (the same split as the Needs action column).
+export function closedClaimStatuses(): ClaimStatus[] {
+  return [...claimStatusesFor("approved"), ...claimStatusesFor("rejected")]
+}
+
 export type ClaimMarketCounts = {
   market: string
   raised: number
@@ -746,6 +754,8 @@ export function presentClaimMarkets(rows: ClaimMarketCounts[]) {
 export async function loadClaims(db: pg.Pool, scope: AccountScope) {
   const totalsParams: unknown[] = []
   const totalsCondition = accountCondition(scope, "c.marketplace_id", totalsParams)
+  totalsParams.push(closedClaimStatuses())
+  const totalsClosed = `$${totalsParams.length}::text[]`
 
   const sliceParams: unknown[] = []
   const sliceModernCondition = accountCondition(scope, "c.marketplace_id", sliceParams)
@@ -768,7 +778,7 @@ export async function loadClaims(db: pg.Pool, scope: AccountScope) {
       `
       SELECT
         COUNT(c.id)::int AS total_claims,
-        (COUNT(c.id) FILTER (WHERE c.status NOT IN ('approved', 'reconciled', 'paid', 'rejected', 'failed')))::int AS open_claims,
+        (COUNT(c.id) FILTER (WHERE c.status <> ALL(${totalsClosed})))::int AS open_claims,
         COALESCE(SUM(COALESCE(NULLIF(c.claim_amount, 0), c.total_price_snapshot)), 0)::numeric(12,2) AS total_value,
         COALESCE(SUM(c.paid_amount) FILTER (WHERE c.status = 'paid'), 0)::numeric(12,2) AS recovered_value
       FROM claims c

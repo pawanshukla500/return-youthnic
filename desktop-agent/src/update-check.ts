@@ -17,7 +17,8 @@ export const UPDATE_REPO = "return-youthnic"
 export function updateFeedUrl(): string {
   const override = process.env.DESKTOP_UPDATE_FEED_URL?.trim()
   if (override) return override
-  return `https://api.github.com/repos/${UPDATE_OWNER}/${UPDATE_REPO}/releases?per_page=20`
+  // 100 is GitHub's maximum page size, so the newest desktop release is found even if Android releases pile up.
+  return `https://api.github.com/repos/${UPDATE_OWNER}/${UPDATE_REPO}/releases?per_page=100`
 }
 
 /** "1.2.0" vs tag "desktop-v1.2.0.16" — true when the release is newer. */

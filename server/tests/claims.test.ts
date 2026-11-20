@@ -32,7 +32,10 @@ import {
   templateNameError,
 } from "../claims-service.js"
 import { meeshoClaimDescription, meeshoClaimDueDate, normalizeMeeshoPacketState } from "../meesho-claims.js"
-import { claimStatusesFor, loadClaims, presentClaimMarkets } from "../dashboard.js"
+import fs from "node:fs"
+import path from "node:path"
+import { fileURLToPath } from "node:url"
+import { claimStatusesFor, closedClaimStatuses, loadClaims, presentClaimMarkets } from "../dashboard.js"
 
 test("the complete claim lifecycle statuses are defined in order", () => {
   assert.deepEqual([...CLAIM_STATUSES], [
@@ -255,6 +258,18 @@ test("Meesho packet ID falls back to NA when omitted or empty", () => {
     packetId: "",
   })
   assert.match(description, /Packet ID: NA/)
+})
+
+test("claims analytics: a failed or manual-action claim still counts as open", () => {
+  // The open-claims headline and the Needs action column must agree: only approved and rejected claims are closed.
+  assert.deepEqual(closedClaimStatuses(), ["approved", "reconciled", "paid", "rejected"])
+  for (const status of ["failed", "manual_action_required"] as const) {
+    assert.ok(!closedClaimStatuses().includes(status), `${status} still needs a person, so it is open`)
+  }
+  // Both open-claim counts use this list instead of their own copy.
+  const source = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "dashboard.ts"), "utf8")
+  assert.equal(source.match(/status <> ALL\(\$\{(closedStatuses|totalsClosed)\}\)/g)?.length, 2)
+  assert.ok(!source.includes("NOT IN ('approved', 'reconciled', 'paid', 'rejected', 'failed')"))
 })
 
 test("claims analytics: only a marketplace rejection counts as rejected", () => {
