@@ -20,35 +20,21 @@ android {
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    // Release signing comes only from the environment: CI sets these four variables from GitHub
+    // secrets (.github/workflows/return-scan-apk.yml). No keystore file or password lives in this
+    // repository. Without all four, a release build is left unsigned. Debug builds keep Android's
+    // default debug key (signingConfigs.debug is not overridden here), never the release key.
     signingConfigs {
-        debug {
-            def ksFile = file("release.keystore")
-            def ksPath = System.getenv("RS_KEYSTORE")
-            if (ksPath && file(ksPath).exists()) {
-                storeFile file(ksPath)
-                storePassword(System.getenv("RS_KEYSTORE_PASSWORD") ?: "youthnicreturnscan")
-                keyAlias(System.getenv("RS_KEY_ALIAS") ?: "returnscan")
-                keyPassword(System.getenv("RS_KEY_PASSWORD") ?: "youthnicreturnscan")
-            } else if (ksFile.exists()) {
-                storeFile ksFile
-                storePassword "youthnicreturnscan"
-                keyAlias "returnscan"
-                keyPassword "youthnicreturnscan"
-            }
-        }
         release {
-            def ksFile = file("release.keystore")
             def ksPath = System.getenv("RS_KEYSTORE")
-            if (ksPath && file(ksPath).exists()) {
+            def ksPassword = System.getenv("RS_KEYSTORE_PASSWORD")
+            def ksAlias = System.getenv("RS_KEY_ALIAS")
+            def ksKeyPassword = System.getenv("RS_KEY_PASSWORD")
+            if (ksPath && ksPassword && ksAlias && ksKeyPassword) {
                 storeFile file(ksPath)
-                storePassword(System.getenv("RS_KEYSTORE_PASSWORD") ?: "youthnicreturnscan")
-                keyAlias(System.getenv("RS_KEY_ALIAS") ?: "returnscan")
-                keyPassword(System.getenv("RS_KEY_PASSWORD") ?: "youthnicreturnscan")
-            } else if (ksFile.exists()) {
-                storeFile ksFile
-                storePassword "youthnicreturnscan"
-                keyAlias "returnscan"
-                keyPassword "youthnicreturnscan"
+                storePassword ksPassword
+                keyAlias ksAlias
+                keyPassword ksKeyPassword
             }
         }
     }
@@ -63,7 +49,9 @@ android {
             minifyEnabled true
             shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-            signingConfig (signingConfigs.release.storeFile != null ? signingConfigs.release : signingConfigs.debug)
+            if (signingConfigs.release.storeFile != null) {
+                signingConfig signingConfigs.release
+            }
             def defaultApiUrl = System.getenv("API_URL") ?: "https://return.youthnic.shop"
             buildConfigField "String", "DEFAULT_API_URL", "\"${defaultApiUrl}\""
         }
