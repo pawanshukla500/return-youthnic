@@ -90,6 +90,24 @@ export async function writeAudit(
   )
 }
 
+// Runs a secondary write inside the caller's open transaction under a savepoint. A failure rolls back only that
+// write and is logged, and the transaction stays usable, so the caller's COMMIT still keeps everything written
+// before it. Without the savepoint a SQL error aborts the whole transaction and COMMIT silently becomes ROLLBACK.
+export async function runSecondaryWrite(
+  client: { query(text: string): Promise<unknown> },
+  label: string,
+  work: () => Promise<unknown>,
+): Promise<void> {
+  await client.query("SAVEPOINT secondary_write")
+  try {
+    await work()
+    await client.query("RELEASE SAVEPOINT secondary_write")
+  } catch (error) {
+    await client.query("ROLLBACK TO SAVEPOINT secondary_write")
+    console.error(label, error)
+  }
+}
+
 // ---------------------------------------------------------------------------------------------------------------
 // Accounts, shift and workspace figures
 // ---------------------------------------------------------------------------------------------------------------
@@ -1192,18 +1210,18 @@ export async function recordScan(
       flyerId,
       flyerState,
     })
-    try {
-      await syncScanToReturnTracking(
+    // Return tracking is secondary: an error there must never lose the scan, its items or its audit row.
+    await runSecondaryWrite(client, "[Return Tracking Sync Warning] Non-fatal tracking sync error:", () =>
+      syncScanToReturnTracking(
         client,
+        Number(shipment.marketplace_id),
         scanId,
         storedTracking,
         String(shipment.order_number),
         actor.id,
         hasIssue ? "issue" : "clear",
-      )
-    } catch (trackingErr) {
-      console.error("[Return Tracking Sync Warning] Non-fatal tracking sync error:", trackingErr)
-    }
+      ),
+    )
     await client.query("COMMIT")
     open = false
     return loadReceipt(db, scanId, false, scope)
