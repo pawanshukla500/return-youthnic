@@ -1,7 +1,7 @@
 import crypto from "node:crypto"
 import type pg from "pg"
 import { accountCondition, scopeFor, type AccountScope } from "./access.js"
-import { ServiceError, type Actor } from "./register-service.js"
+import { ServiceError, savedScansFor, type Actor } from "./register-service.js"
 import { createFollowUpForJob } from "./claim-follow-up-service.js"
 import { getClaimTemplate, resolveClaimTemplateId } from "./claims-service.js"
 import {
@@ -1053,48 +1053,14 @@ export async function syncClaimTicketToRegister(
     [scanId],
   )
 
-  // Ensure receipt_scan_items exists
+  // The issue links to the scan's first line. Lines come only from the bench scan with the operator's counts: a scan
+  // without one keeps just its ticket, and no line is ever invented with a received or verified quantity.
   const itemRes = await dbOrClient.query(
     `SELECT id FROM receipt_scan_items WHERE receipt_scan_id = $1 ORDER BY id ASC LIMIT 1`,
     [scanId],
   )
-
-  let itemId: number
-  if (!itemRes.rows[0]) {
-    const erInfo = await dbOrClient.query(
-      `SELECT eri.id AS eri_id, eri.order_line_id, eri.display_order_item_id,
-              eri.marketplace_sku_identifier, eri.channel_listing_id,
-              COALESCE(NULLIF(eri.label, ''), s.name, 'Returned Product') AS product_name,
-              COALESCE(s.code, '') AS sku_code,
-              eri.qty
-       FROM receipt_scans rs
-       JOIN expected_returns er ON er.id = rs.expected_return_id
-       LEFT JOIN expected_return_items eri ON eri.expected_return_id = er.id
-       LEFT JOIN skus s ON s.id = eri.sku_id
-       WHERE rs.id = $1
-       LIMIT 1`,
-      [scanId],
-    )
-    const orderItemId = erInfo.rows[0]?.display_order_item_id || erInfo.rows[0]?.order_line_id || ""
-    const skuCode = erInfo.rows[0]?.sku_code || ""
-    const eriId = erInfo.rows[0]?.eri_id ? Number(erInfo.rows[0].eri_id) : null
-    const productName = erInfo.rows[0]?.product_name || "Returned Product"
-    const expectedQty = Math.max(1, Number(erInfo.rows[0]?.qty || 1))
-
-    const itemInsert = await dbOrClient.query(
-      `INSERT INTO receipt_scan_items (
-         receipt_scan_id, expected_return_item_id, line_no, order_item_id,
-         marketplace_sku, product_sku, product_sku_source, product_name,
-         expected_qty, received_qty, verified
-       )
-       VALUES ($1, $2, 1, $3, $4, $5, 'unrecorded', $6, $7, 1, true)
-       RETURNING id`,
-      [scanId, eriId, orderItemId, skuCode, skuCode, productName, expectedQty],
-    )
-    itemId = Number(itemInsert.rows[0].id)
-  } else {
-    itemId = Number(itemRes.rows[0].id)
-  }
+  if (!itemRes.rows[0]) return ticketId
+  const itemId = Number(itemRes.rows[0].id)
 
   // Ensure receipt_scan_issues exists and links to ticketId
   const issueRes = await dbOrClient.query(
@@ -1541,6 +1507,8 @@ export async function listAutomationJobs(
 
 export type ClaimReturnLookupResult = {
   found: boolean
+  // False when the return was found by a partial (contains) match. A caller confirms it; nothing binds to it alone.
+  exactMatch: boolean
   scanId: number | null
   expectedReturnId: number
   marketplace: string
@@ -1608,6 +1576,37 @@ export type ClaimReturnLookupResult = {
   }>
 }
 
+// A contains-pattern for ILIKE that matches the text literally. % and _ are LIKE wildcards; backslash is LIKE's
+// default escape character, so each of the three is escaped with one.
+export function likeContains(value: string): string {
+  return `%${value.replace(/[\\%_]/g, "\\$&")}%`
+}
+
+// A claim always attaches to a saved bench scan in the caller's accounts (owner decision 2026-11-20): the claim flow
+// never creates a receipt scan and never records received quantities. An app that sends the saved scan's id uses it
+// (createClaim still checks its account). An older APK that sends none is matched by its first non-empty key (AWB,
+// then sub order, then order ID) to the saved scan, by the bench's exact rules. Only that key is tried: an older APK
+// can carry a previous return's sub order, which must never rescue an AWB that has no scan. A partial match never
+// binds, and neither does an ambiguous one.
+export async function resolveClaimScanId(
+  db: pg.Pool,
+  scope: AccountScope,
+  input: { scanId: number | null; keys: string[] },
+): Promise<number> {
+  if (input.scanId) return input.scanId
+  const key = input.keys.find(Boolean)
+  const scanIds = key ? await savedScansFor(db, key, scope) : []
+  if (scanIds.length === 1) return scanIds[0]
+  if (scanIds.length > 1) {
+    throw new ServiceError(409, `More than one saved scan matches ${key}. File the claim from the saved scan.`, {
+      extra: { code: "scan_ambiguous" },
+    })
+  }
+  throw new ServiceError(409, "This return has no saved bench scan. Save the bench scan first, then file the claim.", {
+    extra: { code: "bench_scan_required" },
+  })
+}
+
 export async function lookupReturnForClaim(
   db: pg.Pool,
   scope: AccountScope,
@@ -1617,11 +1616,9 @@ export async function lookupReturnForClaim(
   const value = query.trim()
   if (value.length < 3) return null
 
-  const params: unknown[] = []
+  // $1 and $2 first: the account list of a restricted user is pushed after them, so it never takes their numbers.
+  const params: unknown[] = [value, likeContains(value)]
   const scopeCondition = accountCondition(scope, "er.marketplace_id", params)
-
-  params.push(value)
-  params.push(`%${value}%`)
 
   let mktCondition = ""
   if (marketplaceId) {
@@ -1629,7 +1626,9 @@ export async function lookupReturnForClaim(
     mktCondition = `AND er.marketplace_id = $${params.length}`
   }
 
-  // 1. First look for already scanned returns in receipt_scans or lookup records
+  // Candidates are active lookup rows, plus rows the register already holds a saved scan for: every upload supersedes
+  // the account's active rows, scanned or not, and the scan stays the permanent record. Staging rows and superseded
+  // rows with no scan are never returned. Exact matches rank before partial (ILIKE) ones, then scanned before not.
   const scanQuery = `
     SELECT rs.id AS scan_id, er.id AS expected_return_id, er.marketplace_id, m.name AS marketplace,
            er.order_number, er.tracking_id, er.alt_tracking_id, rs.flyer_id, rs.scanned_at,
@@ -1646,13 +1645,14 @@ export async function lookupReturnForClaim(
              LIMIT 1
            ) AS detected_issue_code,
            c.id AS claim_id, c.status AS claim_status, c.claim_reason, c.claim_title,
-           (SELECT COUNT(*)::int FROM claim_media cm WHERE cm.claim_id = c.id AND cm.is_active = true) AS media_count
+           (SELECT COUNT(*)::int FROM claim_media cm WHERE cm.claim_id = c.id AND cm.is_active = true) AS media_count,
+           mt.exact
     FROM expected_returns er
     JOIN marketplaces m ON m.id = er.marketplace_id
     LEFT JOIN receipt_scans rs ON rs.expected_return_id = er.id
     LEFT JOIN claims c ON c.receipt_scan_id = rs.id
-    WHERE ${scopeCondition} ${mktCondition}
-      AND (
+    CROSS JOIN LATERAL (
+      SELECT (
         UPPER(er.tracking_id) = UPPER($1::text)
         OR UPPER(COALESCE(er.alt_tracking_id, '')) = UPPER($1::text)
         OR UPPER(COALESCE(er.forward_tracking_id, '')) = UPPER($1::text)
@@ -1660,8 +1660,6 @@ export async function lookupReturnForClaim(
         OR UPPER(er.order_number) = UPPER($1::text)
         OR UPPER(COALESCE(rs.flyer_id, '')) = UPPER($1::text)
         OR UPPER(COALESCE(rs.scanned_tracking, '')) = UPPER($1::text)
-        OR er.tracking_id ILIKE $2
-        OR er.order_number ILIKE $2
         OR (
           LENGTH(REPLACE(REPLACE($1::text, '-', ''), ' ', '')) >= 8
           AND REPLACE(REPLACE(UPPER(er.order_number), '-', ''), ' ', '') = REPLACE(REPLACE(UPPER($1::text), '-', ''), ' ', '')
@@ -1681,11 +1679,22 @@ export async function lookupReturnForClaim(
         )
         OR EXISTS (
           SELECT 1 FROM receipt_scan_items rsi
-          WHERE rsi.receipt_scan_id = rs.id
-            AND (UPPER(COALESCE(rsi.order_item_id, '')) = UPPER($1::text) OR rsi.order_item_id ILIKE $2)
+          WHERE rsi.receipt_scan_id = rs.id AND UPPER(COALESCE(rsi.order_item_id, '')) = UPPER($1::text)
+        )
+      ) AS exact
+    ) mt
+    WHERE ${scopeCondition} ${mktCondition}
+      AND (er.lookup_status = 'active' OR (er.lookup_status = 'superseded' AND rs.id IS NOT NULL))
+      AND (
+        mt.exact
+        OR er.tracking_id ILIKE $2
+        OR er.order_number ILIKE $2
+        OR EXISTS (
+          SELECT 1 FROM receipt_scan_items rsi
+          WHERE rsi.receipt_scan_id = rs.id AND rsi.order_item_id ILIKE $2
         )
       )
-    ORDER BY (rs.id IS NOT NULL) DESC, rs.scanned_at DESC NULLS LAST
+    ORDER BY mt.exact DESC, (rs.id IS NOT NULL) DESC, rs.scanned_at DESC NULLS LAST, er.id DESC
     LIMIT 1
   `
 
@@ -1888,6 +1897,7 @@ export async function lookupReturnForClaim(
 
   return {
     found: true,
+    exactMatch: Boolean(row.exact),
     scanId: row.scan_id ? Number(row.scan_id) : null,
     expectedReturnId,
     marketplace: marketplaceName,

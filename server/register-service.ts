@@ -513,6 +513,15 @@ const SCAN_MATCH_SQL = `
     AND ($3::integer[] IS NULL OR m.id = ANY($3::integer[]))
   ORDER BY rs.scanned_at DESC`
 
+// The ids of the saved scans in the user's accounts that match an AWB or order ID by the bench's own exact rules,
+// newest first. A scan on a superseded lookup row still counts: the scan is the permanent record.
+export async function savedScansFor(db: pg.Pool, tracking: string, scope: AccountScope): Promise<number[]> {
+  const normalized = normalizeTracking(tracking)
+  if (normalized.error) return []
+  const rows = (await db.query(SCAN_MATCH_SQL, [normalized.value, "", accountListParam(scope)])).rows
+  return rows.map((row) => Number(row.scan_id))
+}
+
 const SHIPMENT_HEADER_SQL = `
   SELECT er.id, er.tracking_id, er.alt_tracking_id, er.order_number, er.return_type, er.return_type_raw,
          er.return_reason, er.matched_from, er.product_title, er.lookup_status, er.tracking_source,
