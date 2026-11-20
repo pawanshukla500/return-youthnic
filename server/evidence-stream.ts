@@ -83,7 +83,12 @@ export function evidenceUpload(options: { dir?: string; maxBytes?: number } = {}
   const maxBytes = options.maxBytes ?? EVIDENCE_MAX_BYTES
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
   sweepStaleTempFiles(dir)
-  const single = multer({ storage: hashingDiskStorage(dir), limits: { fileSize: maxBytes, files: 1 } }).single("file")
+  // The phone and the console send `fieldKey`, `capturedAt` and the file; text fields stay small and few, so a crafted
+  // request cannot pile up fields in memory.
+  const single = multer({
+    storage: hashingDiskStorage(dir),
+    limits: { fileSize: maxBytes, files: 1, fields: 10, fieldSize: 16 * 1024, parts: 12 },
+  }).single("file")
   const tooLarge = `Evidence files can be up to ${Math.round(maxBytes / (1024 * 1024))} MB.`
 
   return (req, res, next) => {
@@ -101,6 +106,11 @@ export function evidenceUpload(options: { dir?: string; maxBytes?: number } = {}
       if (error && (error instanceof UploadInterruptedError || req.destroyed)) {
         // The client is gone; the partial temp file is already removed. Nothing to log or report.
         if (!res.headersSent) res.status(400).json({ error: "The upload was interrupted. Try again." })
+        return
+      }
+      if (error instanceof multer.MulterError) {
+        // Too many or too large form fields, or a file under another field name: the request is wrong, not the server.
+        res.status(400).json({ error: `The evidence upload was refused: ${error.message}.` })
         return
       }
       next(error)
@@ -136,7 +146,8 @@ export async function sendStoredEvidence(req: Request, res: Response, meta: Stor
   if (download.contentLength) res.setHeader("Content-Length", download.contentLength)
   if (download.contentRange) res.setHeader("Content-Range", download.contentRange)
   res.setHeader("Content-Disposition", `inline; filename*=UTF-8''${encodeURIComponent(meta.originalFilename)}`)
-  res.setHeader("Cache-Control", "private, max-age=3600")
+  // no-cache: the browser asks again each time, so the session, account scope and a deactivated file are re-checked.
+  res.setHeader("Cache-Control", "private, no-cache")
   await new Promise<void>((resolve) => {
     pipeline(download.body, res, (error) => {
       // A viewer seeking or closing the page cuts streams short all the time; only storage failures are news.

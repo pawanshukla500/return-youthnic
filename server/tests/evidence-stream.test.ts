@@ -349,6 +349,23 @@ test("multipart upload: a streamed file over the limit gets 413 and leaves no te
   assert.deepEqual(fs.readdirSync(dir), [])
 })
 
+test("multipart upload: too many form fields is a 400 and leaves no temp file", async () => {
+  const dir = fs.mkdtempSync(path.join(tempRoot, "SYN-fields-"))
+  const server = await startServer(uploadApp(dir))
+  try {
+    const form = new FormData()
+    for (let i = 0; i < 50; i += 1) form.append(`SYN-field-${i}`, "SYN-value")
+    form.append("file", new Blob([Buffer.from("SYN-SYN-SYN-SYN-")]), "SYN-photo.jpg")
+    const response = await fetch(`http://127.0.0.1:${server.port}/upload`, { method: "POST", body: form })
+    assert.equal(response.status, 400)
+    assert.match(((await response.json()) as { error: string }).error, /refused/)
+  } finally {
+    await server.close()
+  }
+  for (let i = 0; i < 100 && fs.readdirSync(dir).length > 0; i += 1) await new Promise((resolve) => setTimeout(resolve, 30))
+  assert.deepEqual(fs.readdirSync(dir), [], "no temp file is left")
+})
+
 test("multipart upload: a client that drops off halfway leaves no temp file behind", async () => {
   const dir = fs.mkdtempSync(path.join(tempRoot, "SYN-dropped-"))
   const app = uploadApp(dir)
@@ -449,6 +466,7 @@ test("download: a Range request is passed to storage and answered 206 with exact
     const whole = await fetch(base)
     assert.equal(whole.status, 200)
     assert.equal(whole.headers.get("accept-ranges"), "bytes", "tells the video player it can seek")
+    assert.equal(whole.headers.get("cache-control"), "private, no-cache", "the browser re-checks access instead of reusing a cached copy")
     assert.deepEqual(Buffer.from(await whole.arrayBuffer()), STORED)
 
     const past = await fetch(base, { headers: { Range: `bytes=${STORED.length + 10}-` } })
