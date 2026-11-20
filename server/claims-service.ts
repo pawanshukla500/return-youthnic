@@ -1191,6 +1191,23 @@ export async function updateClaimStatus(
 // Claim media: metadata storage and scoped retrieval
 // ---------------------------------------------------------------------------------------------------------------
 
+// Locks the scoped claim row so evidence writes on one claim run one after another. Without it, under READ COMMITTED,
+// two uploads that finish together each see only their own new row, both find the evidence incomplete, and a claim
+// with every required file stays in pending_evidence. Undefined when the claim is missing or out of scope.
+async function lockScopedClaim(
+  client: pg.PoolClient,
+  scope: AccountScope,
+  claimId: number,
+): Promise<{ marketplace_id: number } | undefined> {
+  const params: unknown[] = [claimId]
+  const scopeCondition = accountCondition(scope, "c.marketplace_id", params)
+  const result = await client.query<{ marketplace_id: number }>(
+    `SELECT c.id, c.marketplace_id FROM claims c WHERE c.id = $1 AND ${scopeCondition} FOR UPDATE`,
+    params,
+  )
+  return result.rows[0]
+}
+
 export async function addClaimMedia(
   db: pg.Pool,
   actor: Actor,
@@ -1214,10 +1231,8 @@ export async function addClaimMedia(
   try {
     await client.query("BEGIN")
 
-    const params: unknown[] = [claimId]
-    const scopeCondition = accountCondition(scope, "c.marketplace_id", params)
-    const claimResult = await client.query(`SELECT c.id, c.marketplace_id FROM claims c WHERE c.id = $1 AND ${scopeCondition}`, params)
-    if (!claimResult.rows[0]) throw new ServiceError(404, "Claim not found.")
+    const claim = await lockScopedClaim(client, scope, claimId)
+    if (!claim) throw new ServiceError(404, "Claim not found.")
 
     const result = await client.query<{ id: number }>(
       `INSERT INTO claim_media (claim_id, field_key, storage_object_path, content_hash, size_bytes, mime_type, original_filename, captured_at, uploaded_by, uploaded_at, is_active, retention_until)
@@ -1265,7 +1280,7 @@ export async function addClaimMedia(
     }
 
     await client.query("COMMIT")
-    return { id: result.rows[0].id, marketplaceId: Number(claimResult.rows[0].marketplace_id) }
+    return { id: result.rows[0].id, marketplaceId: Number(claim.marketplace_id) }
   } catch (error) {
     await client.query("ROLLBACK")
     throw error
@@ -1308,6 +1323,7 @@ export async function deactivateClaimMedia(
   const client = await db.connect()
   try {
     await client.query("BEGIN")
+    if (!(await lockScopedClaim(client, scope, claimId))) throw new ServiceError(404, "Media not found.")
     const params: unknown[] = [claimId, mediaId]
     const scopeCondition = accountCondition(scope, "c.marketplace_id", params)
     const result = await client.query(
