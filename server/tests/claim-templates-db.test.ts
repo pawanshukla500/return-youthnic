@@ -3,8 +3,9 @@
 // test database whose name contains "test"; otherwise they are skipped. Every value this file creates starts with SYN.
 //
 // What the database checks cover, against a real PostgreSQL:
-//  - Myntra VB, Myntra EJ and Ajio resolve to the one 'Standard Claim Template' with its five slots, Flipkart to its
-//    four (images only, no video). The older 'Default claim template' is switched off and kept with its fields.
+//  - Myntra VB, Myntra EJ, Ajio and Flipkart resolve to the one 'Standard Claim Template' with the same five slots
+//    (Flipkart's Unpacking Video is added last, after Attachments). The older 'Default claim template' is switched off
+//    and kept with its fields.
 //  - Amazon resolves to no template, and creating an Amazon claim is refused with 422 "not supported yet".
 //  - A requested switched-off template falls back to the marketplace's one template.
 //  - The claim return-lookup offers only that one template (active fields only), and none for Amazon.
@@ -42,7 +43,8 @@ const run = Date.now().toString(36).toUpperCase()
 const scope: AccountScope = { all: true }
 const SWITCH_OFF = "claim_template.seed_switch_off"
 const FIVE_SLOTS = ["product_images", "barcode_image", "reverse_waybill", "unboxing_video", "attachments"]
-const FLIPKART_SLOTS = ["product_images", "barcode_image", "reverse_waybill", "attachments"]
+// The same five slots; Flipkart's seed had Attachments at sort 4, so its added Unpacking Video sorts last.
+const FLIPKART_SLOTS = ["product_images", "barcode_image", "reverse_waybill", "attachments", "unboxing_video"]
 const MEESHO_SLOTS = ["barcode_image", "product_images", "reverse_waybill", "unboxing_video", "attachments"]
 
 let pool: pg.Pool

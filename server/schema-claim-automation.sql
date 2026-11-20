@@ -101,7 +101,7 @@ ON CONFLICT DO NOTHING;
 
 -- 6. Ensure default claim templates exist for all marketplaces
 -- Myntra VB, Myntra EJ, Meesho, Ajio: Images + Unpacking Video
--- Flipkart: Images Only
+-- Flipkart: Images Only at first; the Unpacking Video slot is added below (owner decision 2026-11-20)
 INSERT INTO claim_templates (marketplace_id, name, description, is_active, sort_order)
 SELECT m.id, 'Standard Claim Template', 'Default claim evidence template for ' || m.name, true, 1
 FROM marketplaces m
@@ -135,6 +135,15 @@ CROSS JOIN (VALUES
   ('attachments', 'Attachments', 'document', false, 0, 5, 25, 4)
 ) AS v(field_key, field_label, field_type, required, min_count, max_count, max_file_size_mb, sort_order)
 WHERE m.name = 'Flipkart'
+ON CONFLICT (template_id, field_key) DO NOTHING;
+
+-- Flipkart uses the same 5 slots as Myntra and Ajio (owner decision 2026-11-20): add its Unpacking Video slot.
+-- Added, never changed: an existing slot row is left as it is, so the video sorts after Attachments.
+INSERT INTO claim_template_fields (template_id, field_key, field_label, field_type, required, min_count, max_count, max_file_size_mb, sort_order)
+SELECT t.id, 'unboxing_video', 'Unpacking Video', 'video', true, 1, 1, 100, 5
+FROM claim_templates t
+JOIN marketplaces m ON m.id = t.marketplace_id
+WHERE m.name = 'Flipkart' AND t.name = 'Standard Claim Template'
 ON CONFLICT (template_id, field_key) DO NOTHING;
 
 -- One claim template per marketplace (owner decision 2026-11-20). Switched off, never deleted; fields are not touched.
