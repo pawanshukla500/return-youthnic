@@ -8,6 +8,8 @@ import { useWorkspace } from "./workspace"
 
 // The server refuses generate and send from any other role (server/omsguru-routes.ts); the screen says so up front.
 const SEND_LOCKED_TITLE = "Only a supervisor or administrator can generate or send the OMSGuru update."
+const WA_OFFLINE_TITLE =
+  "WhatsApp gateway is offline or not configured. An administrator can set it up under OMSGuru settings."
 
 export type SkuBreakdownItem = {
   sku: string
@@ -136,6 +138,9 @@ export function OmsguruDailyReport() {
     error?: string
   } | null>(null)
   const [testingWa, setTestingWa] = useState(false)
+  // Same status the header badge shows: a WhatsApp send is offered only while the gateway is online.
+  const waOnline = waStatus?.connected === true
+  const waSendLock = [!canSend && SEND_LOCKED_TITLE, !waOnline && WA_OFFLINE_TITLE].filter(Boolean).join(" ") || null
 
   const loadUnmappedCheck = async () => {
     try {
@@ -765,8 +770,8 @@ export function OmsguruDailyReport() {
                         type="button"
                         className="btn btn-secondary btn-sm"
                         onClick={() => handleSendWhatsApp(item.id)}
-                        disabled={sendingWaId === item.id || !canSend}
-                        title={!canSend ? SEND_LOCKED_TITLE : item.whatsappSent ? "Resend update CSV to WhatsApp group" : "Send update CSV to WhatsApp group"}
+                        disabled={sendingWaId === item.id || waSendLock !== null}
+                        title={waSendLock ?? (item.whatsappSent ? "Resend update CSV to WhatsApp group" : "Send update CSV to WhatsApp group")}
                       >
                         {sendingWaId === item.id ? "Sending WA..." : item.whatsappSent ? "Resend WA" : "WhatsApp"}
                       </button>
@@ -1157,7 +1162,8 @@ export function OmsguruDailyReport() {
                     type="button"
                     className="btn btn-secondary btn-sm"
                     onClick={handleSendTestWhatsApp}
-                    disabled={testingWa}
+                    disabled={testingWa || !waOnline}
+                    title={waOnline ? undefined : WA_OFFLINE_TITLE}
                   >
                     {testingWa ? "Sending Test Ping..." : "Send Test Ping to WhatsApp Group"}
                   </button>
