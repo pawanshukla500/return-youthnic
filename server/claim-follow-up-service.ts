@@ -1,5 +1,6 @@
 import type pg from "pg"
 import { accountCondition, type AccountScope } from "./access.js"
+import { claimTransitionError, isValidStatus, type ClaimStatus } from "./claims-service.js"
 import { ServiceError } from "./register-service.js"
 import { nextEligibleCheckAt } from "./nightly-window.js"
 
@@ -37,23 +38,46 @@ export const FOLLOW_UP_OUTCOMES: readonly FollowUpOutcome[] = [
 /**
  * Free text read from a supplier portal, mapped to one normalized ticket state. Ordered deliberately, and the
  * first match wins:
- *  1. A rejection or a negative reading first, so "not approved" and "closed without approval" are never read
- *     as approvals.
- *  2. The final positive states (approved, paid, reconciled), so "Claim approved, refund credited" is approved.
- *  3. The active states (escalated, reopened, under review, submitted).
+ *  1. An explicit rejection (rejected, declined, denied, closed without approval, not eligible), so a rejection
+ *     reason such as "Rejected - product not yet received" stays a rejection. "Not eligible" never means waiting.
+ *  2. Waiting wording ("Pending approval", "Awaiting approval", "Approval pending", "Not yet credited",
+ *     "Not approved yet", "Under review", "Accepted for review", "On hold", "In progress", "Verification",
+ *     "Action required"), so an approval word beside it never closes the ticket. It is looked for only before the
+ *     desktop's " | Reason: " suffix, which the desktop adds to rejections alone: a reason such as "pickup pending"
+ *     says why the claim was refused, not that it is still open.
+ *  3. A negated decision means the marketplace said no ("not approved", "has not been accepted", "could not be
+ *     approved", "isn't approved", "never accepted"): rejected. The negator may sit up to three words before the word.
+ *  4. Negated money ("not settled", "has not been credited", "not paid"): the claim is still open, so these are
+ *     under review. They are not rejections, because nothing says the claim was refused.
+ *  5. The final positive states (approved, paid, reconciled). "Approved" and "accepted" are whole words, so
+ *     "approval" or "acceptance" on their own (as in "sent for approval") never read as a decision.
+ *  6. The other active states (escalated, reopened, processing, submitted). "Approved - payment processing" stays
+ *     approved, because processing there is the payout, not the decision.
  * A state that matches nothing is "unknown", which keeps the follow-up running rather than closing it, because
  * wrongly closing a live ticket loses it while an extra check costs nothing.
  */
-const STATUS_PATTERNS: ReadonlyArray<{ key: string; test: RegExp }> = [
-  { key: "rejected", test: /\breject|\bdeclin|\bdenied|\bnot\s+eligible|\bnot\s+approved|\bclosed\s+without/i },
-  { key: "approved", test: /\bapprov|\baccept|\bsettled|\bcredited\b/i },
+const negated = (words: string): RegExp =>
+  new RegExp(`(?:\\bnot|\\bnever|\\bcannot|n['’]t)\\s+(?:\\w+\\s+){0,3}(?:${words})\\b`, "i")
+
+const STATUS_PATTERNS: ReadonlyArray<{ key: string; test: RegExp; beforeReasonOnly?: true }> = [
+  { key: "rejected", test: /\breject|\bdeclin|\bdenied|\bclosed\s+without|\bnot\s+eligible/i },
+  {
+    key: "under_review",
+    test: /\bpending\b|\bawait|\byet\b|\b(?:under|in|for)\s*review|in\s*progress|on\s*hold|verification|action\s+required/i,
+    beforeReasonOnly: true,
+  },
+  { key: "rejected", test: negated("approved|accepted|eligible") },
+  { key: "under_review", test: negated("settled|credited|paid") },
+  { key: "approved", test: /\bapproved\b|\baccepted\b|\bsettled\b|\bcredited\b/i },
   { key: "paid", test: /\bpaid\b|payment\s+(done|completed|released|processed)/i },
   { key: "reconciled", test: /\breconcil|\badjusted\b/i },
   { key: "escalated", test: /\bescalat/i },
   { key: "reclaim", test: /\breclaim|re-?opened?\b/i },
-  { key: "under_review", test: /\bunder\s*review|\bin\s*review|\bpending\b|processing|verification|in\s*progress|on\s*hold|action\s+required/i },
+  { key: "under_review", test: /processing/i },
   { key: "submitted", test: /\bsubmitted|\braised|\bcreated|ticket\s+open|\bopen\b/i },
 ]
+
+const KNOWN_READINGS: ReadonlySet<string> = new Set(STATUS_PATTERNS.map((pattern) => pattern.key))
 
 /**
  * Normalizes raw portal ticket status text into a standard lifecycle status key.
@@ -62,8 +86,10 @@ const STATUS_PATTERNS: ReadonlyArray<{ key: string; test: RegExp }> = [
 export function normalizeFollowUpStatus(raw: string): string {
   const value = String(raw || "").trim()
   if (!value) return "unknown"
+  // The desktop sends a rejection as "<status> | Reason: <reason>" (desktop-agent/src/marketplaces/meesho.ts).
+  const beforeReason = value.split(/\|\s*reason\s*:/i)[0]
   for (const pattern of STATUS_PATTERNS) {
-    if (pattern.test.test(value)) return pattern.key
+    if (pattern.test.test(pattern.beforeReasonOnly ? beforeReason : value)) return pattern.key
   }
   return "unknown"
 }
@@ -74,6 +100,32 @@ export function normalizeFollowUpStatus(raw: string): string {
 export function isTerminalFollowUpStatus(normalized: string): boolean {
   return (FOLLOW_UP_TERMINAL_STATUSES as readonly string[]).includes(String(normalized || "").trim())
 }
+
+/**
+ * The reading to keep when the server's reading of the ticket text and the desktop's reported normalizedStatus
+ * differ. The less final one is kept, so a disagreement never closes a ticket:
+ *  - server open: the server's reading stands (its wording rules are the authority between open states);
+ *  - server final, desktop open: the desktop's open reading is kept;
+ *  - approved against paid: both say the claim was granted, and a portal "paid" is recorded as approved anyway
+ *    (followUpClaimChange), so the less final of the two, approved, is kept;
+ *  - any other pair of final readings (approved against rejected) contradicts itself and stays "unknown".
+ * A desktop value the server does not recognize is ignored, as before.
+ */
+export function agreedFollowUpStatus(serverReading: string, reportedReading: string): string {
+  const reported = String(reportedReading || "").trim()
+  if (!reported || reported === serverReading || !KNOWN_READINGS.has(reported)) return serverReading
+  if (!isTerminalFollowUpStatus(serverReading)) return serverReading
+  if (!isTerminalFollowUpStatus(reported)) return reported
+  const granted = ["approved", "paid"]
+  if (granted.includes(serverReading) && granted.includes(reported)) return "approved"
+  return "unknown"
+}
+
+/** Claim states a person settles by hand. A follow-up never moves a claim out of them and stops chasing it. */
+const SETTLED_CLAIM_STATUSES: readonly string[] = ["reconciled", "paid"]
+
+export const PAID_WITHOUT_PAYOUT_NOTE =
+  "The portal reports the claim paid, but a ticket check carries no paid amount or payout reference, so the claim is recorded as approved. Record the payout to mark it paid."
 
 /**
  * The claim lifecycle status a normalized ticket state maps to, or null when the ticket state does not change
@@ -101,12 +153,30 @@ export function claimStatusForFollowUp(normalized: string): string | null {
 }
 
 /**
+ * The claim status change one ticket reading makes. Follow-ups go through CLAIM_TRANSITIONS
+ * (server/claims-service.ts), the same rules a person's status change follows, so a claim only moves forward.
+ * Paid needs a paid amount and a payout reference, which a ticket check never has, so a portal "paid" is recorded
+ * as approved with a note. A move the rules refuse changes nothing and returns the refusal as the note.
+ */
+export function followUpClaimChange(currentStatus: string, normalized: string): { toStatus: ClaimStatus | null; note: string } {
+  const mapped = claimStatusForFollowUp(normalized)
+  if (!mapped) return { toStatus: null, note: "" }
+  const target = mapped === "paid" ? "approved" : mapped
+  if (target === currentStatus || !isValidStatus(target) || !isValidStatus(currentStatus)) return { toStatus: null, note: "" }
+  const refused = claimTransitionError(currentStatus, target)
+  if (refused) return { toStatus: null, note: refused }
+  return { toStatus: target, note: mapped === "paid" ? PAID_WITHOUT_PAYOUT_NOTE : "" }
+}
+
+/**
  * Generates an operator-facing message describing why a follow-up stopped checking.
  */
 export function stopReasonMessage(stopReason: string, marketplace: string): string {
   switch (stopReason) {
     case "ticket_resolved":
       return "Ticket reached a final state. No further checks are needed."
+    case "claim_settled":
+      return "The claim is already reconciled or paid. No further checks are needed."
     case "check_not_supported":
       return `Automated ticket check is not implemented for ${marketplace || "this marketplace"} yet.`
     case "repeated_errors":
@@ -133,9 +203,15 @@ export function decideFollowUpStep(input: {
   normalizedStatus?: string
   checkCount: number
   errorStreak: number
+  claimStatus?: string
 }): FollowUpStep {
   const outcome = input.outcome
   const normalized = String(input.normalizedStatus || "")
+
+  // A person already reconciled or paid the claim. Nothing on the portal can move it, so stop chasing the ticket.
+  if (SETTLED_CLAIM_STATUSES.includes(String(input.claimStatus || ""))) {
+    return { stopReason: "claim_settled", countAsCheck: false, countAsError: false }
+  }
 
   // A marketplace whose status reader is not built yet cannot be chased; stop rather than open its portal every
   // two days for nothing. New submissions re-create an active follow-up, so building the reader is enough to
@@ -374,41 +450,48 @@ export async function recordFollowUpResult(
     if (!agentRes.rows[0]) throw new ServiceError(401, "Agent authentication failed.")
     const agentId = Number(agentRes.rows[0].id)
 
+    // The claim row is locked with the follow-up, so its status cannot change while this result is applied.
     const leaseRes = await client.query(
       `SELECT f.id, f.claim_id, f.check_count, f.error_streak, f.status_at_last_check, f.marketplace_claim_id,
-              f.marketplace_id, COALESCE(m.name, '') AS marketplace, c.status AS claim_status
+              f.marketplace_id, COALESCE(m.name, '') AS marketplace, c.status AS claim_status, c.remarks
        FROM claim_automation_follow_ups f
        JOIN claims c ON c.id = f.claim_id
        LEFT JOIN marketplaces m ON m.id = c.marketplace_id
        WHERE f.id = $1 AND f.agent_id = $2 AND f.is_active = true
-       FOR UPDATE OF f`,
+       FOR UPDATE OF f, c`,
       [followUpId, agentId],
     )
     const row = leaseRes.rows[0]
     if (!row) throw new ServiceError(404, "Follow-up not found or not leased by this agent.")
 
     const statusText = String(input.statusText || "").trim()
-    // Server-side text is authoritative: a client hint is accepted only when it agrees with
-    // the server normalization, so a bare "Resolved"/"Closed" portal row can never approve a
-    // claim or mark it paid without payment evidence.
-    const serverNormalized =
-      input.outcome === "status_read" ? normalizeFollowUpStatus(statusText) : ""
-    const hinted = String(input.normalizedStatus || "").trim()
-    const normalizedStatus = hinted && hinted === serverNormalized ? hinted : serverNormalized
+    // The server reads the ticket text itself (one place for the wording rules). When the desktop's reading
+    // differs, the less final of the two is kept, so a disagreement never closes a ticket.
+    const reportedStatus = String(input.normalizedStatus || "").trim()
+    const normalizedStatus =
+      input.outcome === "status_read" ? agreedFollowUpStatus(normalizeFollowUpStatus(statusText), reportedStatus) : ""
     const marketplace = String(row.marketplace || "")
+    const currentClaimStatus = String(row.claim_status || "")
 
     const decision = decideFollowUpStep({
       outcome: input.outcome,
       normalizedStatus,
       checkCount: Number(row.check_count || 0),
       errorStreak: Number(row.error_streak || 0),
+      claimStatus: currentClaimStatus,
     })
+    // A settled claim is never moved; any other claim moves only along the transition rules.
+    const claimChange =
+      input.outcome === "status_read" && decision.stopReason !== "claim_settled"
+        ? followUpClaimChange(currentClaimStatus, normalizedStatus)
+        : { toStatus: null, note: "" }
+    const refusedChange = claimChange.toStatus ? "" : claimChange.note
     const stopping = decision.stopReason !== ""
     const nextCheckCount = Number(row.check_count || 0) + (decision.countAsCheck ? 1 : 0)
     const nextErrorStreak = decision.countAsError ? Number(row.error_streak || 0) + 1 : 0
     const stopMessage = stopping ? stopReasonMessage(decision.stopReason, marketplace) : ""
     const lastError = stopping
-      ? stopMessage
+      ? (refusedChange ? `${stopMessage} The claim was not changed: ${refusedChange}` : stopMessage)
       : input.outcome === "status_read"
         ? ""
         : String(input.note || statusText || `Check reported ${input.outcome}.`).slice(0, 500)
@@ -419,6 +502,8 @@ export async function recordFollowUpResult(
         outcome: input.outcome,
         statusText: statusText.slice(0, 500),
         normalizedStatus,
+        reportedStatus: reportedStatus.slice(0, 50),
+        claimNote: claimChange.note,
         note: String(input.note || "").slice(0, 500),
         agentId,
       },
@@ -454,77 +539,69 @@ export async function recordFollowUpResult(
       ],
     )
 
-    // Advance the claim when the ticket state maps to a lifecycle status.
-    const claimStatus = input.outcome === "status_read" ? claimStatusForFollowUp(normalizedStatus) : null
+    // Advance the claim when the ticket state is an allowed forward move (followUpClaimChange).
+    const claimStatus = claimChange.toStatus
     if (claimStatus) {
-      // Lock the claim row and read its live status and remarks directly from the DB
-      const claimRes = await client.query<{ status: string; remarks: string }>(
-        `SELECT status, remarks FROM claims WHERE id = $1 FOR UPDATE`,
-        [row.claim_id],
-      )
-      const currentClaimStatus = claimRes.rows[0]?.status || ""
-      const currentRemarks = (claimRes.rows[0]?.remarks || "").trim()
+      const currentRemarks = String(row.remarks || "").trim()
+      let updateRes: { rowCount: number | null } = { rowCount: 0 }
+      let historyReason = `Follow-up check: ${statusText || normalizedStatus}`
 
-      if (claimStatus !== currentClaimStatus) {
-        let updateRes: { rowCount: number | null } = { rowCount: 0 }
-        let historyReason = `Follow-up check: ${statusText || normalizedStatus}`
+      if (claimStatus === "rejected") {
+        const rawNote = input.note || ""
+        let explicitReason = ""
+        if (rawNote.startsWith("Rejected:")) {
+          explicitReason = rawNote.replace(/^Rejected:\s*/, "").trim()
+        }
+        const rawReason = explicitReason || statusText || normalizedStatus
+        const rejectionReason = rawReason.slice(0, 500)
+        historyReason = `Follow-up check: Rejected - Reason: ${rejectionReason}`
+        const newRemarks = currentRemarks
+          ? (currentRemarks.includes(rejectionReason) ? currentRemarks : `${currentRemarks} | Rejection reason: ${rejectionReason}`.slice(0, 1000))
+          : `Rejection reason: ${rejectionReason}`.slice(0, 1000)
 
-        if (claimStatus === "rejected") {
-          const rawNote = input.note || ""
-          let explicitReason = ""
-          if (rawNote.startsWith("Rejected:")) {
-            explicitReason = rawNote.replace(/^Rejected:\s*/, "").trim()
-          }
-          const rawReason = explicitReason || statusText || normalizedStatus
-          const rejectionReason = rawReason.slice(0, 500)
-          historyReason = `Follow-up check: Rejected - Reason: ${rejectionReason}`
-          const newRemarks = currentRemarks
-            ? (currentRemarks.includes(rejectionReason) ? currentRemarks : `${currentRemarks} | Rejection reason: ${rejectionReason}`.slice(0, 1000))
-            : `Rejection reason: ${rejectionReason}`.slice(0, 1000)
-
+        updateRes = await client.query(
+          `UPDATE claims
+           SET status = $2,
+               remarks = $3,
+               updated_at = now()
+           WHERE id = $1 AND status <> $2`,
+          [row.claim_id, claimStatus, newRemarks],
+        )
+      } else if (claimStatus === "approved") {
+        const textToSearch = `${input.note || ""} ${statusText || ""}`
+        const amtMatch = textToSearch.match(/(?:approved(?:\s+(?:for|amount))?|refund\s+amount|compensation|credit(?:ed)?)\s*(?:is|of|:)?\s*(?:₹|rs\.?)\s*([\d,]+(?:\.\d+)?)/i)
+          || textToSearch.match(/(?:₹|rs\.?)\s*([\d,]+(?:\.\d+)?)\s*(?:approved|credited|refunded|compensation)/i)
+        const parsedAmount = amtMatch ? parseFloat(amtMatch[1].replace(/,/g, "")) : 0
+        if (parsedAmount > 0) {
+          historyReason = `Follow-up check: Approved (Amount: ₹${parsedAmount})`
           updateRes = await client.query(
             `UPDATE claims
              SET status = $2,
-                 remarks = $3,
+                 approved_amount = CASE WHEN $3::numeric > 0 THEN $3::numeric ELSE approved_amount END,
                  updated_at = now()
              WHERE id = $1 AND status <> $2`,
-            [row.claim_id, claimStatus, newRemarks],
+            [row.claim_id, claimStatus, parsedAmount],
           )
-        } else if (claimStatus === "approved" || claimStatus === "paid") {
-          const textToSearch = `${input.note || ""} ${statusText || ""}`
-          const amtMatch = textToSearch.match(/(?:approved(?:\s+(?:for|amount))?|refund\s+amount|compensation|credit(?:ed)?)\s*(?:is|of|:)?\s*(?:₹|rs\.?)\s*([\d,]+(?:\.\d+)?)/i)
-            || textToSearch.match(/(?:₹|rs\.?)\s*([\d,]+(?:\.\d+)?)\s*(?:approved|credited|refunded|compensation)/i)
-          const parsedAmount = amtMatch ? parseFloat(amtMatch[1].replace(/,/g, "")) : 0
-          if (parsedAmount > 0) {
-            historyReason = `Follow-up check: Approved (Amount: ₹${parsedAmount})`
-            updateRes = await client.query(
-              `UPDATE claims
-               SET status = $2,
-                   approved_amount = CASE WHEN $3::numeric > 0 THEN $3::numeric ELSE approved_amount END,
-                   updated_at = now()
-               WHERE id = $1 AND status <> $2`,
-              [row.claim_id, claimStatus, parsedAmount],
-            )
-          } else {
-            updateRes = await client.query(
-              `UPDATE claims SET status = $2, updated_at = now() WHERE id = $1 AND status <> $2`,
-              [row.claim_id, claimStatus],
-            )
-          }
         } else {
           updateRes = await client.query(
             `UPDATE claims SET status = $2, updated_at = now() WHERE id = $1 AND status <> $2`,
             [row.claim_id, claimStatus],
           )
         }
+      } else {
+        updateRes = await client.query(
+          `UPDATE claims SET status = $2, updated_at = now() WHERE id = $1 AND status <> $2`,
+          [row.claim_id, claimStatus],
+        )
+      }
 
-        if (updateRes && (updateRes.rowCount ?? 0) > 0) {
-          await client.query(
-            `INSERT INTO claim_status_history (claim_id, from_status, to_status, reason, changed_by)
-             VALUES ($1, $2, $3, $4, NULL)`,
-            [row.claim_id, currentClaimStatus, claimStatus, historyReason],
-          )
-        }
+      if (claimChange.note) historyReason = `${historyReason}. ${claimChange.note}`
+      if (updateRes && (updateRes.rowCount ?? 0) > 0) {
+        await client.query(
+          `INSERT INTO claim_status_history (claim_id, from_status, to_status, reason, changed_by)
+           VALUES ($1, $2, $3, $4, NULL)`,
+          [row.claim_id, currentClaimStatus, claimStatus, historyReason],
+        )
       }
     }
 

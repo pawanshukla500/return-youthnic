@@ -541,6 +541,40 @@ Every PR in this phase bumps the version (rule 20) and keeps both modes building
     - The existing tests still pass.
     - Then check production for follow-ups already closed this way. None is confirmed, because the auditors had no database access. Re-open any that are found.
   - **Needs you (optional):** one live Meesho ticket page to confirm the real wording, and approval to run the production check.
+  - **Production check (read-only, no writes).** `suspect` marks ticket text with waiting or negated wording that the fixed rules no longer read as approved. Query 1 reads every follow-up check the old rules took as approved or paid, query 2 the claims a follow-up moved to approved or paid, and query 3 (item 5.2) the claims a follow-up moved out of paid or reconciled, or set paid without payout data.
+
+    ```sql
+    -- 1
+    SELECT f.id AS follow_up_id, f.claim_id, c.status AS claim_status_now, f.marketplace_claim_id,
+           f.is_active, f.stop_reason, e->>'at' AS checked_at, e->>'normalizedStatus' AS read_as,
+           e->>'statusText' AS ticket_text,
+           (e->>'statusText') ~* 'pending|await|\myet\M|review|in\s*progress|on\s*hold|verification|action\s+required|(\mnot|\mnever|\mcannot|n[''’]t)\s+(\w+\s+){0,3}(approved|accepted|eligible|settled|credited|paid)\M' AS suspect
+    FROM claim_automation_follow_ups f
+    JOIN claims c ON c.id = f.claim_id
+    CROSS JOIN LATERAL jsonb_array_elements(f.history) AS e
+    WHERE e->>'outcome' = 'status_read' AND e->>'normalizedStatus' IN ('approved', 'paid')
+    ORDER BY suspect DESC, checked_at DESC;
+
+    -- 2
+    SELECT h.claim_id, h.from_status, h.to_status, h.changed_at, h.reason, c.status AS claim_status_now,
+           h.reason ~* 'pending|await|\myet\M|review|in\s*progress|on\s*hold|verification|action\s+required|(\mnot|\mnever|\mcannot|n[''’]t)\s+(\w+\s+){0,3}(approved|accepted|eligible|settled|credited|paid)\M' AS suspect
+    FROM claim_status_history h
+    JOIN claims c ON c.id = h.claim_id
+    WHERE h.changed_by IS NULL AND h.reason LIKE 'Follow-up check:%' AND h.to_status IN ('approved', 'paid')
+    ORDER BY suspect DESC, h.changed_at DESC;
+
+    -- 3
+    SELECT h.claim_id, h.from_status, h.to_status, h.changed_at, h.reason, c.status AS claim_status_now,
+           c.paid_amount, c.payout_reference
+    FROM claim_status_history h
+    JOIN claims c ON c.id = h.claim_id
+    WHERE h.changed_by IS NULL AND h.reason LIKE 'Follow-up check:%'
+      AND (h.from_status IN ('paid', 'reconciled')
+           OR (h.to_status = 'paid' AND (c.paid_amount = 0 OR c.payout_reference = '')))
+    ORDER BY h.changed_at DESC;
+    ```
+
+    If rows are found, delete nothing (rule 3). Open each ticket on the supplier portal and note its real state; a claim the portal really approved or paid needs nothing. The app cannot undo a wrong approval (`CLAIM_TRANSITIONS` lets approved move only to reconciled, and follow-ups refuse backward moves), so a wrong one needs a one-off correction you approve, run in one transaction after a backup: set the claim's true status, add a `claim_status_history` row (`changed_by` = your user, reason naming checklist 5.1 and the ticket text) and a `register_audit_log` row, and, when the ticket is still open, re-arm its follow-up (`is_active = true`, `stage = 'scheduled'`, `stop_reason = ''`, `next_check_at = now()`, `lease_expires_at = NULL`, `agent_id = NULL`).
 
 - [ ] **5.2 Follow-ups only move a claim's status forward.** P1, S, confirmed.
   - **Why:** SRV-02. `server/claim-follow-up-service.ts:458-520` writes any status that differs, without checking the transition rules. It bypasses `CLAIM_TRANSITIONS` (`claims-service.ts:152-167`) and the rule that "paid" needs payout data (`:1148-1149`). Nothing stops a follow-up after a claim is settled by hand.
