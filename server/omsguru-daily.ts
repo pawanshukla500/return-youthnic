@@ -1064,7 +1064,7 @@ export async function runScheduledOmsguruUpdate(
     // Send email
     const emailResult = await sendOmsguruDailyEmail(db, updateRecord.id, { force: options.force })
 
-    // Dispatch to WhatsApp group (Inventory Management) with CSV attachment & tagging Pandit Vishal Tiwari
+    // Dispatch the CSV to the configured WhatsApp group (sends nothing when it is not configured)
     let waResult: { sent: boolean; messageId?: string; error?: string } | null = null
     try {
       waResult = await sendOmsguruDailyToWhatsApp(db, updateRecord, { force: options.force })
