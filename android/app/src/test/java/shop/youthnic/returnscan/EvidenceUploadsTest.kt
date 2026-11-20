@@ -249,7 +249,13 @@ class EvidenceUploadsTest {
         assertTrue(worker.contains("Semaphore(EvidenceUploads.PARALLEL_UPLOADS)"))
         val work = worker.substringAfter("override suspend fun doWork()").substringBefore("private suspend fun promoteToForeground(")
         assertTrue("every upload waits for a slot", work.contains("uploadSlots.withPermit {"))
-        assertTrue(work.contains("EvidenceUploads.needsForeground(fileBytes) && promoteToForeground("))
+        val promote = work.indexOf("EvidenceUploads.needsForeground(fileBytes) && promoteToForeground(")
+        assertTrue(
+            "a big file asks for foreground as its job starts, not after waiting for a slot (the app may be in the background by then)",
+            promote >= 0 && promote < work.indexOf("uploadSlots.withPermit {")
+        )
+        val onBytes = work.substringAfter("uploadClaimEvidence(").substringBefore("EvidenceUploads.shouldReportBytes(")
+        assertTrue("a stopped job fails its write, so the blocking call ends and frees its slot", onBytes.contains("if (isStopped) throw IOException("))
         assertTrue(worker.contains("ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC"))
     }
 

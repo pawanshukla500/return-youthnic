@@ -25,7 +25,8 @@ object UploadRequests {
 
 /**
  * [delegate] that reports how many of its bytes have been written to the connection, so an upload can show progress
- * by bytes. A new attempt at the same request counts from zero again.
+ * by bytes. A new attempt at the same request counts from zero again. If [onBytes] throws, the write stops there and
+ * OkHttp drops the call: a stopped upload job uses this, since a blocking call ignores coroutine cancellation.
  */
 class ProgressRequestBody(
     private val delegate: RequestBody,

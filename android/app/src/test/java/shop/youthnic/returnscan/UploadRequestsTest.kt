@@ -8,6 +8,7 @@ import okio.Buffer
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -15,6 +16,7 @@ import org.junit.rules.TemporaryFolder
 import shop.youthnic.returnscan.data.ProgressRequestBody
 import shop.youthnic.returnscan.data.UploadRequests
 import java.io.File
+import java.io.IOException
 import java.util.concurrent.TimeUnit
 
 /**
@@ -110,6 +112,24 @@ class UploadRequestsTest {
         assertEquals(50_000L, lastTotal)
         assertEquals("the parts after the file are still written", multipart.contentLength(), sink.size)
         assertTrue(sink.readUtf8().trimEnd().endsWith("--"))
+    }
+
+    @Test
+    fun aListenerThatThrowsStopsTheUploadAtOnce() {
+        // A stopped upload job throws from its listener so the blocking call ends instead of sending the rest.
+        val file = synFile("SYN-unpacking-stopped.mp4", 1_000_000)
+        var calls = 0
+        val body = ProgressRequestBody(file.asRequestBody("video/mp4".toMediaType())) { _, _ ->
+            calls++
+            throw IOException("Upload stopped")
+        }
+
+        val sink = Buffer()
+        val error = assertThrows(IOException::class.java) { body.writeTo(sink) }
+
+        assertEquals("Upload stopped", error.message)
+        assertEquals(1, calls)
+        assertTrue("only the first chunk went out: ${sink.size}", sink.size in 1L until 1_000_000L)
     }
 
     @Test

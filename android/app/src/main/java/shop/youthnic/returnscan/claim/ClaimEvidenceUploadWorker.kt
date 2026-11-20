@@ -24,6 +24,7 @@ import shop.youthnic.returnscan.R
 import shop.youthnic.returnscan.ReturnScanApp
 import shop.youthnic.returnscan.data.ApiException
 import java.io.File
+import java.io.IOException
 import java.util.concurrent.TimeUnit
 
 class ClaimEvidenceUploadWorker(
@@ -44,10 +45,14 @@ class ClaimEvidenceUploadWorker(
         if (!file.exists() || file.length() == 0L) return failed(claimId, fieldKey, "The evidence file is no longer on this phone.")
         val fileBytes = file.length()
         val app = applicationContext as ReturnScanApp
+        // Asked as the job starts, while the claim screen is usually still on top: after waiting for a slot the
+        // app may be in the background, where Android 12+ refuses.
+        val foreground = EvidenceUploads.needsForeground(fileBytes) && promoteToForeground(foregroundInfo(0))
         val upload = uploadSlots.withPermit {
-            val foreground = EvidenceUploads.needsForeground(fileBytes) && promoteToForeground(foregroundInfo(0))
             var reported = 0L
             app.apiClient.uploadClaimEvidence(claimId, fieldKey, file, mimeType) { sent, total ->
+                // A blocking OkHttp call ignores coroutine cancellation: failing the write drops the call and frees the slot.
+                if (isStopped) throw IOException("Upload stopped")
                 if (EvidenceUploads.shouldReportBytes(reported, sent, total)) {
                     reported = sent
                     setProgressAsync(Data.Builder().putLong(KEY_BYTES_SENT, sent).build())
@@ -74,7 +79,7 @@ class ClaimEvidenceUploadWorker(
     /**
      * Makes this job foreground work (creating its quiet notification channel once), so Android's ~10-minute limit
      * cannot stop a big upload half-way. Android 12+ refuses while the app is in the background (a retry, say); the
-     * upload then runs as ordinary work.
+     * upload then runs as ordinary work. A promoted job waiting for a slot shows 0% until its upload starts.
      */
     private suspend fun promoteToForeground(info: ForegroundInfo): Boolean = try {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
