@@ -295,7 +295,7 @@ export function Admin() {
     setShowCredPassword(false)
     setCredAutomationMode(existing?.automationMode || "assisted")
     setCredAutoPrepare(existing ? existing.autoPrepare : true)
-    setCredRequireApproval(existing ? existing.requireApprovalBeforeSubmit : true)
+    setCredRequireApproval(existing ? existing.requireApprovalBeforeSubmit : !account.name.toLowerCase().includes("meesho"))
     setCredNotice("")
     setCredError("")
     setCredModalOpen(true)

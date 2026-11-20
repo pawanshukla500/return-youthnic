@@ -85,15 +85,15 @@ ALTER TABLE claims ADD COLUMN IF NOT EXISTS evidence_summary jsonb NOT NULL DEFA
 INSERT INTO marketplace_credentials (marketplace_id, account_name, portal_url, automation_mode, require_approval_before_submit, auto_prepare)
 SELECT m.id, m.name,
   CASE
-    WHEN m.name = 'Meesho' THEN 'https://supplier.meesho.com/panel/v2/new/returns/claims'
+    WHEN m.name = 'Meesho' THEN 'https://supplier.meesho.com/panel/v3/new/root/login'
     WHEN m.name = 'Flipkart' THEN 'https://seller.flipkart.com/index.html#dashboard/returns-v2'
     WHEN m.name LIKE 'Myntra%' THEN 'https://partners.myntra.com/returns'
     WHEN m.name = 'Ajio' THEN 'https://supplier.ajio.com/returns'
     WHEN m.name = 'Amazon' THEN 'https://sellercentral.amazon.in/safet-claims'
     ELSE 'https://supplier.portal.local'
   END,
-  'assisted',
-  true,
+  CASE WHEN m.name = 'Meesho' THEN 'autonomous' ELSE 'assisted' END,
+  CASE WHEN m.name = 'Meesho' THEN false ELSE true END,
   true
 FROM marketplaces m
 WHERE m.name IN ('Myntra VB', 'Myntra EJ', 'Meesho', 'Ajio', 'Flipkart', 'Amazon')
