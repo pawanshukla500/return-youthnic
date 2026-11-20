@@ -137,6 +137,49 @@ CROSS JOIN (VALUES
 WHERE m.name = 'Flipkart'
 ON CONFLICT (template_id, field_key) DO NOTHING;
 
+-- One claim template per marketplace (owner decision 2026-11-20). Switched off, never deleted; fields are not touched.
+--  - Myntra VB, Myntra EJ, Ajio, Flipkart: the older 'Default claim template' (schema-claims.sql) is switched off so the
+--    'Standard Claim Template' above is the one they use, but only while that Standard template is active and has an
+--    active required field.
+--  - Amazon: Amazon claims are out of scope for now, so its empty 'Standard Claim Template' is switched off.
+--  - Meesho is not touched.
+-- Only seeded rows are switched off (created_by NULL), and only once: a template with any audit row of its own or
+-- of its fields (an Admin edit, or this switch-off) is left as it is, so an Admin who turns one back on keeps it on.
+WITH switched AS (
+  UPDATE claim_templates t
+  SET is_active = false, updated_at = now()
+  FROM marketplaces m
+  WHERE m.id = t.marketplace_id
+    AND t.is_active = true
+    AND t.created_by IS NULL
+    AND NOT EXISTS (
+      SELECT 1 FROM register_audit_log a
+      WHERE (a.entity_type = 'claim_template' AND a.entity_id = t.id::text)
+         OR (a.entity_type = 'claim_template_field'
+             AND a.entity_id IN (SELECT f.id::text FROM claim_template_fields f WHERE f.template_id = t.id))
+    )
+    AND (
+      (m.name IN ('Myntra VB', 'Myntra EJ', 'Ajio', 'Flipkart')
+        AND t.name = 'Default claim template'
+        AND EXISTS (
+          SELECT 1 FROM claim_templates s
+          JOIN claim_template_fields sf ON sf.template_id = s.id AND sf.is_active = true AND sf.required = true
+          WHERE s.marketplace_id = t.marketplace_id AND s.name = 'Standard Claim Template' AND s.is_active = true
+        ))
+      OR (m.name = 'Amazon'
+        AND t.name = 'Standard Claim Template'
+        AND NOT EXISTS (SELECT 1 FROM claim_template_fields f WHERE f.template_id = t.id))
+    )
+  RETURNING t.id, t.name, m.name AS marketplace_name
+)
+INSERT INTO register_audit_log (actor_user_id, action, entity_type, entity_id, details)
+SELECT NULL, 'claim_template.seed_switch_off', 'claim_template', s.id::text,
+       jsonb_build_object(
+         'template', s.name, 'marketplace', s.marketplace_name, 'isActive', false,
+         'reason', 'One claim template per marketplace (owner decision 2026-11-20). The template and its fields are kept.'
+       )
+FROM switched s;
+
 -- 7. Claim follow-ups (ticket tracking)
 -- After a claim is filed the marketplace ticket is not final. A follow-up row is created when the filing job
 -- completes, and the desktop re-opens the supplier portal on a cadence (default every 48 hours), reads the
