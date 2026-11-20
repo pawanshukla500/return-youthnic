@@ -29,11 +29,12 @@ import androidx.work.WorkManager
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.snackbar.Snackbar
 import kotlinx.coroutines.launch
-import org.json.JSONObject
 import shop.youthnic.returnscan.R
 import shop.youthnic.returnscan.ReturnScanApp
 import shop.youthnic.returnscan.claim.ClaimEvidenceUploadWorker
 import shop.youthnic.returnscan.data.ClaimFieldTemplate
+import shop.youthnic.returnscan.data.ClaimFormInput
+import shop.youthnic.returnscan.data.ClaimPayload
 import shop.youthnic.returnscan.data.ClaimProductItem
 import shop.youthnic.returnscan.data.ClaimReturnLookup
 import shop.youthnic.returnscan.data.ClaimTemplate
@@ -177,27 +178,17 @@ class ClaimCaptureActivity : AppCompatActivity() {
         // Initialize evidence cards immediately with standard Meesho evidence slots
         buildDynamicEvidenceCards(getMeeshoStandardEvidenceFields())
 
-        // 1. Extract values from Intent extras with fallback to SessionManager's cached last-scanned return
-        val extraAwb = intent.getStringExtra(EXTRA_TRACKING_AWB).orEmpty().trim()
-        val extraOrder = intent.getStringExtra(EXTRA_ORDER_ID).orEmpty().trim()
-        val extraSubOrder = intent.getStringExtra(EXTRA_SUB_ORDER_ID).orEmpty().trim()
-        val extraPacketId = intent.getStringExtra(EXTRA_PACKET_ID).orEmpty().trim()
-        val extraMarketplace = intent.getStringExtra(EXTRA_MARKETPLACE).orEmpty().trim()
-        val extraTitle = intent.getStringExtra(EXTRA_PRODUCT_TITLE).orEmpty().trim()
-        val extraSku = intent.getStringExtra(EXTRA_PRODUCT_SKU).orEmpty().trim()
-        val extraMasterSku = intent.getStringExtra(EXTRA_MASTER_SKU).orEmpty().trim()
-        val extraImage = intent.getStringExtra(EXTRA_IMAGE_URL).orEmpty().trim()
-        val extraIssue = intent.getStringExtra(EXTRA_ISSUE_CODE).orEmpty().trim()
-
-        val awb = extraAwb.ifBlank { sessionManager.lastScannedAwb }
-        val order = extraOrder.ifBlank { sessionManager.lastScannedOrderId }
-        val subOrder = extraSubOrder.ifBlank { sessionManager.lastScannedSubOrderId }.ifBlank { order }
-        val packetId = extraPacketId.ifBlank { sessionManager.lastScannedFlyerId }
-        val title = extraTitle.ifBlank { sessionManager.lastScannedProductTitle }
-        val sku = extraSku.ifBlank { sessionManager.lastScannedSku }
-        val masterSku = extraMasterSku.ifBlank { sessionManager.lastScannedMasterSku }
-        val imageUrl = extraImage.ifBlank { sessionManager.lastScannedImageUrl }
-        val issueCode = extraIssue.ifBlank { sessionManager.lastScannedIssueCode }
+        // 1. The return to claim comes only from the Intent, all of it from one scan. A remembered return is never mixed
+        //    in field by field; the server lookup below fills in the rest, and Proceed and Submit wait for it.
+        val awb = intent.getStringExtra(EXTRA_TRACKING_AWB).orEmpty().trim()
+        val order = intent.getStringExtra(EXTRA_ORDER_ID).orEmpty().trim()
+        val subOrder = intent.getStringExtra(EXTRA_SUB_ORDER_ID).orEmpty().trim().ifBlank { order }
+        val packetId = intent.getStringExtra(EXTRA_PACKET_ID).orEmpty().trim()
+        val title = intent.getStringExtra(EXTRA_PRODUCT_TITLE).orEmpty().trim()
+        val sku = intent.getStringExtra(EXTRA_PRODUCT_SKU).orEmpty().trim()
+        val masterSku = intent.getStringExtra(EXTRA_MASTER_SKU).orEmpty().trim()
+        val imageUrl = intent.getStringExtra(EXTRA_IMAGE_URL).orEmpty().trim()
+        val issueCode = intent.getStringExtra(EXTRA_ISSUE_CODE).orEmpty().trim()
 
         // 2. Prefill Return Details IMMEDIATELY in UI
         if (awb.isNotBlank()) binding.etAwbNumber.setText(awb)
@@ -507,7 +498,7 @@ class ClaimCaptureActivity : AppCompatActivity() {
         // Update Title & Description with all loaded details
         updateDescriptionAndTitle(selectedIssueCode)
 
-        // Save fresh details to SessionManager
+        // This return replaces the remembered one whole, so nothing from an earlier return is left beside it
         sessionManager.saveLastScannedReturn(
             awb = resolvedAwb,
             orderId = data.orderId,
@@ -518,8 +509,7 @@ class ClaimCaptureActivity : AppCompatActivity() {
             sku = item?.sku.orEmpty(),
             masterSku = item?.masterSku.orEmpty(),
             imageUrl = item?.imageUrl.orEmpty(),
-            customerName = data.customerName,
-            totalPrice = data.totalPrice
+            issueCode = data.detectedIssueCode.orEmpty()
         )
 
         // Select or create Meesho Evidence Template
@@ -538,24 +528,20 @@ class ClaimCaptureActivity : AppCompatActivity() {
 
     private fun updateDescriptionAndTitle(code: String) {
         val data = lookupData
+        // Only the form and the looked-up return feed the description; a remembered earlier return never does.
         val subOrder = binding.etSubOrderNumber.text?.toString()?.trim().orEmpty()
             .ifBlank { data?.subOrderId?.ifBlank { data.orderId } ?: "" }
-            .ifBlank { sessionManager.lastScannedSubOrderId.ifBlank { sessionManager.lastScannedOrderId } }
 
         val awb = binding.etAwbNumber.text?.toString()?.trim().orEmpty()
             .ifBlank { data?.awb?.ifBlank { data.trackingNumber } ?: "" }
-            .ifBlank { sessionManager.lastScannedAwb }
 
         val packetId = binding.etPacketId.text?.toString()?.trim().orEmpty()
             .ifBlank { data?.packetId ?: "" }
-            .ifBlank { sessionManager.lastScannedFlyerId }
             .ifBlank { "NA" }
 
         val packetState = selectedPacketState
 
-        val item = data?.items?.firstOrNull()
-        val masterSku = item?.masterSku?.ifBlank { item.sku }.orEmpty()
-            .ifBlank { sessionManager.lastScannedMasterSku.ifBlank { sessionManager.lastScannedSku } }
+        val masterSku = ClaimPayload.sku(data)
 
         if (subOrder.isNotBlank()) {
             binding.etClaimTitle.setText("$selectedIssueLabel - Sub Order $subOrder")
@@ -859,6 +845,14 @@ class ClaimCaptureActivity : AppCompatActivity() {
             binding.etClaimContent.requestFocus()
             return false
         }
+        // The claim carries the looked-up return's details, so the form must show a return the server found. When it
+        // does not (the lookup failed, or the sub order was changed), look it up now and let the operator check it.
+        if (ClaimPayload.confirmedLookup(lookupData, subOrder, awb) == null) {
+            showMessage("Checking Sub Order $subOrder with the server. Review the details it loads, then tap Proceed again.")
+            binding.etClaimSearch.setText(subOrder)
+            searchReturn(subOrder)
+            return false
+        }
         return true
     }
 
@@ -885,9 +879,25 @@ class ClaimCaptureActivity : AppCompatActivity() {
     }
 
     private fun submitCompleteClaim() {
-        val subOrder = binding.etSubOrderNumber.text?.toString()?.trim().orEmpty()
-        val awb = binding.etAwbNumber.text?.toString()?.trim().orEmpty()
-        val packetId = binding.etPacketId.text?.toString()?.trim().orEmpty().ifBlank { "NA" }
+        val form = ClaimFormInput(
+            subOrderId = binding.etSubOrderNumber.text?.toString()?.trim().orEmpty(),
+            awb = binding.etAwbNumber.text?.toString()?.trim().orEmpty(),
+            packetId = binding.etPacketId.text?.toString()?.trim().orEmpty().ifBlank { "NA" },
+            packetState = selectedPacketState,
+            issueCode = selectedIssueCode,
+            issueLabel = selectedIssueLabel,
+            title = binding.etClaimTitle.text?.toString()?.trim().orEmpty(),
+            content = binding.etClaimContent.text?.toString()?.trim().orEmpty(),
+            templateId = selectedTemplate?.id
+        )
+        // Only a lookup that found this form's return may supply its details. Without one nothing is sent: no invented
+        // return, and no customer, price, SKU or packet ID remembered from an earlier scan.
+        val body = ClaimPayload.build(lookupData, form)
+        if (body == null) {
+            showStep(1)
+            showMessage("The return for Sub Order ${form.subOrderId} is not confirmed yet. Tap Proceed to look it up, then submit again.")
+            return
+        }
 
         // Validate required evidence fields (Product images, Reverse Waybill, Unpacking Video)
         val requiredKeys = listOf(
@@ -907,62 +917,6 @@ class ClaimCaptureActivity : AppCompatActivity() {
         binding.btnSubmitClaim.isEnabled = false
 
         lifecycleScope.launch {
-            var data = lookupData
-            if (data == null) {
-                val query = subOrder.ifBlank { awb }
-                val lookupResult = api.lookupClaimReturn(query)
-                data = lookupResult.getOrNull()
-                if (data == null) {
-                    data = ClaimReturnLookup(
-                        found = true,
-                        expectedReturnId = 0,
-                        subOrderId = subOrder,
-                        orderId = subOrder,
-                        trackingNumber = awb,
-                        awb = awb,
-                        packetId = packetId,
-                        marketplace = "Meesho",
-                        marketplaceId = 1,
-                        customerName = sessionManager.lastScannedCustomerName.ifBlank { "Customer" },
-                        totalPrice = sessionManager.lastScannedTotalPrice
-                    )
-                }
-                lookupData = data
-            }
-
-            val item = data.items.firstOrNull()
-            val masterSku = item?.masterSku?.ifBlank { item.sku }.orEmpty()
-                .ifBlank { sessionManager.lastScannedMasterSku.ifBlank { sessionManager.lastScannedSku } }
-
-            val currentScanId = data.scanId
-            val body = JSONObject().apply {
-                if (currentScanId != null && currentScanId > 0) {
-                    put("receiptScanId", currentScanId)
-                }
-                if (data.expectedReturnId > 0) {
-                    put("expectedReturnId", data.expectedReturnId)
-                }
-                put("claimReason", selectedIssueLabel)
-                put("marketplaceIssueCode", selectedIssueCode)
-                put("claimTitle", binding.etClaimTitle.text?.toString()?.trim().orEmpty())
-                put("claimDescription", binding.etClaimContent.text?.toString()?.trim().orEmpty())
-                put("claimContent", binding.etClaimContent.text?.toString()?.trim().orEmpty())
-                put("remarks", "")
-                val tplId = selectedTemplate?.id
-                if (tplId != null && tplId > 0) {
-                    put("claimTemplateId", tplId)
-                }
-                put("customerName", data.customerName)
-                put("totalPrice", data.totalPrice)
-                put("shippedDate", data.shippedDate ?: "")
-                put("sku", masterSku)
-                put("subOrderId", subOrder)
-                put("packetState", selectedPacketState)
-                put("packetId", packetId)
-                put("awb", awb)
-                put("missingAmount", data.missingAmount)
-            }
-
             val createResult = api.unifiedCreateClaim(body)
             binding.progressClaim.visibility = View.GONE
 
