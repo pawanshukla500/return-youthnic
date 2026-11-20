@@ -72,26 +72,49 @@ jobs:
       - name: Run Android Lint
         run: ./gradlew lintDebug --no-daemon
 
+      # Release APKs are signed only from repository secrets: no keystore file or password is in the repo.
+      # A missing secret stops the job here, before the release APK is built or signed. Pull requests never get here:
+      # they build without any signing secret (see the review build below), so pull-request code never runs next to
+      # the release key, and fork pull requests, which receive no secrets, still build.
       - name: Prepare Signing Keystore
+        if: github.event_name != 'pull_request'
         env:
-          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          KEYSTORE_PATH: ${{ runner.temp }}/release.keystore
         run: |
-          if [ -n "$KEYSTORE_B64" ]; then
-            echo "Decoding warehouse keystore from ANDROID_KEYSTORE_B64 secret..."
-            echo "$KEYSTORE_B64" | base64 -d > app/release.keystore
-          fi
-          if [ ! -f "app/release.keystore" ]; then
-            echo "::error::release.keystore is missing! Release APK must be signed with consistent key."
+          missing=""
+          for name in ANDROID_KEYSTORE_B64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Repository secret $name is not set. Release APKs are signed only from GitHub secrets (Settings > Secrets and variables > Actions)."
+              missing="$missing $name"
+            fi
+          done
+          if [ -n "$missing" ]; then
             exit 1
           fi
-          echo "Warehouse release keystore ready at app/release.keystore."
+          echo "$ANDROID_KEYSTORE_B64" | base64 -d > "$KEYSTORE_PATH"
+          if [ ! -s "$KEYSTORE_PATH" ]; then
+            echo "::error::Secret ANDROID_KEYSTORE_B64 did not decode to a keystore file."
+            exit 1
+          fi
+          echo "Release keystore decoded from ANDROID_KEYSTORE_B64 into the runner temp directory."
 
       - name: Assemble Release APK (R8 & Resource Shrink)
+        if: github.event_name != 'pull_request'
         env:
-          RS_KEYSTORE: app/release.keystore
-          RS_KEYSTORE_PASSWORD: youthnicreturnscan
-          RS_KEY_ALIAS: returnscan
-          RS_KEY_PASSWORD: youthnicreturnscan
+          RS_KEYSTORE: ${{ runner.temp }}/release.keystore
+          RS_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          RS_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          RS_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: ./gradlew assembleRelease --no-daemon
+
+      # Same release variant for pull requests, with no signing secret in the environment. build.gradle signs it with
+      # Android's debug key: installable for testing, never a valid update for the warehouse app.
+      - name: Assemble Release APK for review (debug-signed, no secrets)
+        if: github.event_name == 'pull_request'
         run: ./gradlew assembleRelease --no-daemon
 
       - name: Find Release APK
@@ -129,11 +152,39 @@ jobs:
           }
           echo "Camera permission verified in APK."
 
+      # Installed devices accept an update only when it is signed by the same certificate, so pin the signer.
+      # Set repository variable ANDROID_SIGNER_SHA256 to turn the pin on; until then the job only warns.
       - name: Verify APK Signing Certificate
+        env:
+          EXPECTED_SIGNER_SHA256: ${{ vars.ANDROID_SIGNER_SHA256 }}
+          IS_PULL_REQUEST: ${{ github.event_name == 'pull_request' }}
         run: |
           APKSIGNER="$ANDROID_SDK_ROOT/build-tools/34.0.0/apksigner"
-          "$APKSIGNER" verify --verbose "$RELEASE_APK"
-          echo "APK Signature verification PASSED."
+          if ! "$APKSIGNER" verify --verbose --print-certs "$RELEASE_APK" > /tmp/apksigner.txt 2>&1; then
+            grep -v ' certificate DN: ' /tmp/apksigner.txt || true
+            echo "::error::apksigner could not verify the release APK signature."
+            exit 1
+          fi
+          grep -v ' certificate DN: ' /tmp/apksigner.txt
+          ACTUAL=$(sed -n 's/^Signer #1 certificate SHA-256 digest: *//p' /tmp/apksigner.txt | head -1 | tr -d ' :\r' | tr 'A-F' 'a-f')
+          if [ -z "$ACTUAL" ]; then
+            echo "::error::Could not read the signing certificate SHA-256 from the apksigner output."
+            exit 1
+          fi
+          echo "Signing certificate SHA-256: $ACTUAL"
+          if [ "$IS_PULL_REQUEST" = "true" ]; then
+            echo "::notice::Pull-request build, signed with the debug key for testing only. The release signer pin applies to builds from main and manual runs."
+            exit 0
+          fi
+          EXPECTED=$(printf '%s' "$EXPECTED_SIGNER_SHA256" | tr -d ' :\r\n' | tr 'A-F' 'a-f')
+          if [ -z "$EXPECTED" ]; then
+            echo "::warning::Repository variable ANDROID_SIGNER_SHA256 is not set, so the release signer is not pinned. Once you confirm this is the warehouse release key, set it to $ACTUAL."
+          elif [ "$ACTUAL" != "$EXPECTED" ]; then
+            echo "::error::Release APK is signed by certificate $ACTUAL but ANDROID_SIGNER_SHA256 pins $EXPECTED. Installed devices would refuse this update."
+            exit 1
+          else
+            echo "Signing certificate matches ANDROID_SIGNER_SHA256."
+          fi
 
       - name: "Measure APK Byte and MB Size (Budget: <= 5 MB target, <= 10 MB ceiling)"
         run: |
