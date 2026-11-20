@@ -506,7 +506,7 @@ test("a return tracking sync error rolls back only the sync: the scan, its items
   const logged = t.mock.method(console, "error", () => undefined)
   let receipt: Awaited<ReturnType<typeof recordScan>>
   try {
-    receipt = await recordScan(pool, actor, { submission: submission(shipment.shipmentId, `${KEY_PREFIX}-SAVEPOINT`, items), photoCount: 0, hasVideo: false })
+    receipt = await recordScan(pool, actor, { submission: submission(shipment.shipmentId, `${KEY_PREFIX}-SAVEPOINT`, items), photoCount: 0, hasVideo: false }, ALL_ACCOUNTS)
   } finally {
     await pool.query("DROP TRIGGER IF EXISTS syn_fail_tracking_sync ON return_tracking_records")
     await pool.query("DROP FUNCTION IF EXISTS syn_fail_tracking_sync()")
@@ -547,7 +547,7 @@ test("one AWB in Myntra EJ and Myntra VB: a scan in one account leaves the other
 
   const shipment = await found(tracking, "Myntra EJ")
   const items = shipment.items.map((item) => ({ itemId: item.itemId, receivedQty: item.expectedQty, verified: true, issues: [] }))
-  const receipt = await recordScan(pool, actor, { submission: submission(shipment.shipmentId, `${KEY_PREFIX}-TWIN`, items), photoCount: 0, hasVideo: false })
+  const receipt = await recordScan(pool, actor, { submission: submission(shipment.shipmentId, `${KEY_PREFIX}-TWIN`, items), photoCount: 0, hasVideo: false }, ALL_ACCOUNTS)
 
   const ej = await trackingState(ejTracking)
   assert.equal(ej.is_physically_received, true, "the scanned account's tracking row is reconciled")
