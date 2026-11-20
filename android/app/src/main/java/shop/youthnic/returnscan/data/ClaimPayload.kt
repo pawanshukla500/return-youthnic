@@ -16,6 +16,20 @@ data class ClaimFormInput(
 )
 
 /**
+ * The bench scan File Claim saved before it opened the claim screen (ReturnVerificationBottomSheet): its register row id
+ * and the return it was saved for, by the sub order (or order) and AWB the scanner had. A claim filed from the bench is
+ * filed on this scan and on no other.
+ */
+data class BenchScan(val scanId: Int, val subOrderId: String, val awb: String) {
+    /** True when [lookup] is the return this scan was saved for: the same sub order (or order), or the same AWB. */
+    fun isFor(lookup: ClaimReturnLookup): Boolean =
+        same(subOrderId, lookup.subOrderId.ifBlank { lookup.orderId }) || same(awb, lookup.awb) || same(awb, lookup.trackingNumber)
+
+    private fun same(mine: String, theirs: String): Boolean =
+        mine.isNotBlank() && mine.trim().equals(theirs.trim(), ignoreCase = true)
+}
+
+/**
  * Builds the body of POST /api/claims/unified-create (server/claim-automation-routes.ts).
  *
  * The return's own details (its scan, expected return, customer, price, SKU and missing amount) come only from a server
@@ -60,11 +74,16 @@ object ClaimPayload {
         return item.masterSku.ifBlank { item.sku }
     }
 
-    /** The request body, or null when [lookup] is not a confirmed lookup for the return on [form]. */
-    fun build(lookup: ClaimReturnLookup?, form: ClaimFormInput): JSONObject? {
+    /**
+     * The request body, or null when [lookup] is not a confirmed lookup for the return on [form]. A screen opened by File
+     * Claim passes its [bench] scan: the claim is filed on that scan, never on the one the lookup names, and there is no
+     * body when the bench scan has no id or the form shows another return.
+     */
+    fun build(lookup: ClaimReturnLookup?, form: ClaimFormInput, bench: BenchScan? = null): JSONObject? {
         val found = confirmedLookup(lookup, form.subOrderId, form.awb) ?: return null
+        if (bench != null && (bench.scanId <= 0 || !bench.isFor(found))) return null
         return JSONObject().apply {
-            val scanId = found.scanId
+            val scanId = bench?.scanId ?: found.scanId
             if (scanId != null && scanId > 0) put("receiptScanId", scanId)
             if (found.expectedReturnId > 0) put("expectedReturnId", found.expectedReturnId)
             put("claimReason", form.issueLabel)

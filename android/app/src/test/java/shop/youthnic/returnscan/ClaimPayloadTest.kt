@@ -6,6 +6,7 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import shop.youthnic.returnscan.data.BenchScan
 import shop.youthnic.returnscan.data.ClaimFormInput
 import shop.youthnic.returnscan.data.ClaimPayload
 import shop.youthnic.returnscan.data.ClaimProductItem
@@ -131,6 +132,60 @@ class ClaimPayloadTest {
         assertFalse(body.has("receiptScanId"))
         assertFalse(body.has("expectedReturnId"))
         assertFalse(body.has("claimTemplateId"))
+    }
+
+    // File Claim on the bench saves the scan first and opens the claim screen with that scan's id (EXTRA_SCAN_ID).
+    private val bench = BenchScan(scanId = 1234, subOrderId = "SYN-SUB-1", awb = "SYN-AWB-0001")
+
+    @Test
+    fun fileClaimsBenchScanIsTheClaimsScanEvenWhenTheLookupNamesAnother() {
+        // The lookup can name another scan of the same return (an older one); the claim goes on the scan just saved.
+        val body = requireNotNull(ClaimPayload.build(lookup, form, bench))
+        assertEquals(1234, body.getInt("receiptScanId"))
+        assertEquals(501, body.getInt("expectedReturnId"))
+        assertEquals("SYN-Customer", body.getString("customerName"))
+    }
+
+    @Test
+    fun fileClaimsBenchScanIsSentWhenTheLookupHasNoScan() {
+        // Before the server lookup sees the new register row it may answer with no scan: the bench id is still sent, so
+        // the server never makes a Draft scan for a claim filed from the bench.
+        val body = requireNotNull(ClaimPayload.build(lookup.copy(scanId = null), form, bench))
+        assertEquals(1234, body.getInt("receiptScanId"))
+    }
+
+    @Test
+    fun theBenchPathNeverBuildsABodyWithoutAScanId() {
+        assertNull(ClaimPayload.build(lookup, form, bench.copy(scanId = 0)))
+        assertNull(ClaimPayload.build(lookup.copy(scanId = null), form, bench.copy(scanId = -1)))
+        // Still no body without a confirmed lookup: the bench scan id alone does not make up the return's details.
+        assertNull(ClaimPayload.build(null, form, bench))
+        assertNull(ClaimPayload.build(lookup.copy(found = false), form, bench))
+    }
+
+    @Test
+    fun aBenchScanIsNeverPutOnAnotherReturnsClaim() {
+        // The form now shows another return (searched on the claim screen): the bench scan is not that return's scan.
+        val other = lookup.copy(scanId = 77, subOrderId = "SYN-SUB-2", orderId = "SYN-ORDER-2", awb = "SYN-AWB-0002", trackingNumber = "SYN-AWB-0002")
+        val otherForm = form.copy(subOrderId = "SYN-SUB-2", awb = "SYN-AWB-0002")
+        assertNull(ClaimPayload.build(other, otherForm, bench))
+        // Opened another way (no bench scan), the same form files on the lookup's own scan, as before.
+        assertEquals(77, ClaimPayload.build(other, otherForm)!!.getInt("receiptScanId"))
+    }
+
+    @Test
+    fun theBenchScanMatchesItsReturnBySubOrderOrAwb() {
+        assertTrue(bench.isFor(lookup))
+        // By sub order alone (the bench AWB left out), ignoring case and spaces.
+        assertTrue(bench.copy(awb = "").isFor(lookup.copy(subOrderId = " syn-sub-1 ")))
+        // The scanner had the order ID (no order item ID): the lookup's sub order falls back to its order the same way.
+        assertTrue(bench.copy(subOrderId = "SYN-ORDER-1", awb = "").isFor(lookup.copy(subOrderId = "")))
+        // A different sub order spelling on the server still matches by the parcel's AWB, either field.
+        assertTrue(bench.isFor(lookup.copy(subOrderId = "SYN-SUB-1-X")))
+        assertTrue(bench.isFor(lookup.copy(subOrderId = "SYN-SUB-1-X", awb = "")))
+        assertFalse(bench.isFor(lookup.copy(subOrderId = "SYN-SUB-2", awb = "SYN-AWB-0002", trackingNumber = "SYN-AWB-0002")))
+        // Blank values never match anything.
+        assertFalse(BenchScan(1234, "", "").isFor(lookup.copy(subOrderId = "", orderId = "", awb = "", trackingNumber = "")))
     }
 
     @Test

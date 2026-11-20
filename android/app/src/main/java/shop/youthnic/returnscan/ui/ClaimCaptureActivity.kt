@@ -35,6 +35,7 @@ import shop.youthnic.returnscan.claim.DraftFile
 import shop.youthnic.returnscan.claim.EvidenceDraft
 import shop.youthnic.returnscan.claim.EvidenceDraftStore
 import shop.youthnic.returnscan.claim.EvidenceUploads
+import shop.youthnic.returnscan.data.BenchScan
 import shop.youthnic.returnscan.data.ClaimFieldTemplate
 import shop.youthnic.returnscan.data.ClaimFormInput
 import shop.youthnic.returnscan.data.ClaimPayload
@@ -57,6 +58,11 @@ class ClaimCaptureActivity : AppCompatActivity() {
     private val sessionManager get() = (application as ReturnScanApp).sessionManager
 
     private var lookupData: ClaimReturnLookup? = null
+    /**
+     * The bench scan File Claim saved before opening this screen (EXTRA_SCAN_ID), or null when the screen was opened
+     * another way. The claim for that return is filed on this scan, whatever scan the lookup names.
+     */
+    private var benchScan: BenchScan? = null
     private var selectedTemplate: ClaimTemplate? = null
     private var currentStep = 1 // 1: Return Details, 2: Upload Images
 
@@ -226,6 +232,8 @@ class ClaimCaptureActivity : AppCompatActivity() {
         val masterSku = intent.getStringExtra(EXTRA_MASTER_SKU).orEmpty().trim()
         val imageUrl = intent.getStringExtra(EXTRA_IMAGE_URL).orEmpty().trim()
         val issueCode = intent.getStringExtra(EXTRA_ISSUE_CODE).orEmpty().trim()
+        val scanId = intent.getIntExtra(EXTRA_SCAN_ID, 0)
+        benchScan = if (scanId > 0) BenchScan(scanId, subOrder, awb) else null
 
         // 2. Prefill Return Details IMMEDIATELY in UI
         if (awb.isNotBlank()) binding.etAwbNumber.setText(awb)
@@ -995,7 +1003,24 @@ class ClaimCaptureActivity : AppCompatActivity() {
             searchReturn(subOrder)
             return false
         }
+        val otherReturn = benchMismatchMessage(subOrder, awb)
+        if (otherReturn != null) {
+            showMessage(otherReturn)
+            return false
+        }
         return true
+    }
+
+    /**
+     * On a screen File Claim opened, the message to show when the form's confirmed return is not the one whose bench scan
+     * File Claim saved; null otherwise. That claim cannot be filed here: its return has no bench scan on this screen.
+     */
+    private fun benchMismatchMessage(subOrder: String, awb: String): String? {
+        val bench = benchScan ?: return null
+        val found = ClaimPayload.confirmedLookup(lookupData, subOrder, awb) ?: return null
+        if (bench.isFor(found)) return null
+        val saved = bench.subOrderId.ifBlank { bench.awb }
+        return "File Claim saved the bench scan for $saved, so this claim is for $saved. Search $saved again, or go back and tap File Claim on the other return's scan."
     }
 
     private fun showStep(step: Int) {
@@ -1038,10 +1063,14 @@ class ClaimCaptureActivity : AppCompatActivity() {
         )
         // Only a lookup that found this form's return may supply its details. Without one nothing is sent: no invented
         // return, and no customer, price, SKU or packet ID remembered from an earlier scan.
-        val body = ClaimPayload.build(lookupData, form)
+        // A screen File Claim opened files the claim on the bench scan it saved (receiptScanId), not on the lookup's scan.
+        val body = ClaimPayload.build(lookupData, form, benchScan)
         if (body == null) {
             showStep(1)
-            showMessage("The return for Sub Order ${form.subOrderId} is not confirmed yet. Tap Proceed to look it up, then submit again.")
+            showMessage(
+                benchMismatchMessage(form.subOrderId, form.awb)
+                    ?: "The return for Sub Order ${form.subOrderId} is not confirmed yet. Tap Proceed to look it up, then submit again."
+            )
             return
         }
 
@@ -1177,8 +1206,9 @@ class ClaimCaptureActivity : AppCompatActivity() {
         // 2. Clear captured evidence files from memory and disk, and reset the evidence cards
         clearCapturedEvidence()
 
-        // 3. Reset state variables
+        // 3. Reset state variables. The next return was not saved by File Claim, so it has no bench scan here.
         lookupData = null
+        benchScan = null
         evidenceReturnKey = ""
         binding.cardProductPreview.visibility = View.GONE
         binding.cardOrderSummary.visibility = View.GONE
