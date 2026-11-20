@@ -2,12 +2,13 @@
 // Follows strict Return App invariants:
 // - All data read/written respects authenticated user sessions
 // - Configuration mutation strictly requires Admin role
+// - Generating the daily file and sending it (email, WhatsApp) requires Supervisor or Admin (owner decision 2026-11-20)
 // - Full audit logging for manual generation, config updates, and email dispatches
 
 import type { Express, Request, Response, NextFunction } from "express"
 import type pg from "pg"
 import { getPool } from "./db.js"
-import { requireAdmin } from "./http.js"
+import { requireAdmin, requireSupervisorOrAdmin } from "./http.js"
 import {
   getOmsguruConfig,
   updateOmsguruConfig,
@@ -300,7 +301,7 @@ export function mountOmsguruRoutes(
   })
 
   // POST /api/omsguru/daily/generate - Manual trigger to build & upload daily file now
-  app.post("/api/omsguru/daily/generate", requireUser, async (req, res, next) => {
+  app.post("/api/omsguru/daily/generate", requireUser, requireSupervisorOrAdmin, async (req, res, next) => {
     try {
       const db = getPool()
       const actorUserId = (req as SessionRequest).user.id
@@ -347,7 +348,7 @@ export function mountOmsguruRoutes(
   })
 
   // POST /api/omsguru/daily/:id/send - Send or re-send update email via Resend & WhatsApp
-  app.post("/api/omsguru/daily/:id/send", requireUser, async (req, res, next) => {
+  app.post("/api/omsguru/daily/:id/send", requireUser, requireSupervisorOrAdmin, async (req, res, next) => {
     try {
       const db = getPool()
       const id = Number(req.params.id)
@@ -389,7 +390,7 @@ export function mountOmsguruRoutes(
   })
 
   // POST /api/omsguru/daily/:id/send-whatsapp - Send update CSV & briefing to WhatsApp group
-  app.post("/api/omsguru/daily/:id/send-whatsapp", requireUser, async (req, res, next) => {
+  app.post("/api/omsguru/daily/:id/send-whatsapp", requireUser, requireSupervisorOrAdmin, async (req, res, next) => {
     try {
       const db = getPool()
       const id = Number(req.params.id)

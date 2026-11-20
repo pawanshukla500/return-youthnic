@@ -97,9 +97,9 @@ test("[Database Optimizer] Schema register contains high-performance indexes for
 
 test("[Security/AppSec] The server exposes no /api/debug routes (the unauthenticated Sentry test route is gone)", () => {
   const serverDir = path.join(root, "server")
-  const offenders = fs
-    .readdirSync(serverDir)
-    .filter((name) => name.endsWith(".ts"))
+  // Every .ts file under server/, subfolders included, except the tests (this one names the path it forbids).
+  const offenders = (fs.readdirSync(serverDir, { recursive: true }) as string[])
+    .filter((name) => name.endsWith(".ts") && !name.split(path.sep).includes("tests"))
     .filter((name) => fs.readFileSync(path.join(serverDir, name), "utf-8").includes("/api/debug"))
   assert.deepEqual(offenders, [], "a debug route can be called by anyone; Sentry is checked by server/tests/sentry.test.ts")
 })
