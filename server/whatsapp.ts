@@ -43,7 +43,11 @@ export function whatsAppConfigFromEnv(env: Record<string, string | undefined> = 
   }
 }
 
-export const DEFAULT_WHATSAPP_CONFIG: WhatsAppConfig = whatsAppConfigFromEnv()
+/** The config as the UI and audit log may see it: the gateway login is never returned, only whether it is set. */
+export function redactWhatsAppConfig(cfg: WhatsAppConfig): Omit<WhatsAppConfig, "basicAuth"> & { basicAuthSet: boolean } {
+  const { basicAuth, ...rest } = cfg
+  return { ...rest, basicAuthSet: Boolean(basicAuth.trim()) }
+}
 
 /** Why nothing can be sent with this config, or null when the gateway login and group ID are both set. */
 export function whatsAppNotConfiguredReason(cfg: WhatsAppConfig): string | null {
@@ -57,6 +61,8 @@ export function whatsAppNotConfiguredReason(cfg: WhatsAppConfig): string | null 
 const fmt = (n: number) => n.toLocaleString("en-IN")
 
 export async function getWhatsAppConfig(db: pg.Pool): Promise<WhatsAppConfig> {
+  // Read the environment on every call, not at import: server/index.ts loads .env after its imports run.
+  const fromEnv = whatsAppConfigFromEnv()
   try {
     const result = await db.query(
       "SELECT setting_value FROM app_system_settings WHERE setting_key = 'whatsapp_config'",
@@ -64,19 +70,19 @@ export async function getWhatsAppConfig(db: pg.Pool): Promise<WhatsAppConfig> {
     if (result.rows[0]?.setting_value) {
       const stored = result.rows[0].setting_value as Partial<WhatsAppConfig>
       return {
-        enabled: stored.enabled ?? DEFAULT_WHATSAPP_CONFIG.enabled,
-        apiUrl: (stored.apiUrl || DEFAULT_WHATSAPP_CONFIG.apiUrl).replace(/\/+$/, ""),
-        basicAuth: stored.basicAuth || DEFAULT_WHATSAPP_CONFIG.basicAuth,
-        groupJid: stored.groupJid || DEFAULT_WHATSAPP_CONFIG.groupJid,
-        tagUserJid: stored.tagUserJid || DEFAULT_WHATSAPP_CONFIG.tagUserJid,
-        tagUserLid: stored.tagUserLid || DEFAULT_WHATSAPP_CONFIG.tagUserLid,
-        tagUserName: stored.tagUserName || DEFAULT_WHATSAPP_CONFIG.tagUserName,
+        enabled: stored.enabled ?? fromEnv.enabled,
+        apiUrl: (stored.apiUrl || fromEnv.apiUrl).replace(/\/+$/, ""),
+        basicAuth: stored.basicAuth || fromEnv.basicAuth,
+        groupJid: stored.groupJid || fromEnv.groupJid,
+        tagUserJid: stored.tagUserJid || fromEnv.tagUserJid,
+        tagUserLid: stored.tagUserLid || fromEnv.tagUserLid,
+        tagUserName: stored.tagUserName || fromEnv.tagUserName,
       }
     }
   } catch {
     // ignore
   }
-  return DEFAULT_WHATSAPP_CONFIG
+  return fromEnv
 }
 
 export async function updateWhatsAppConfig(
@@ -88,7 +94,8 @@ export async function updateWhatsAppConfig(
   const updated: WhatsAppConfig = {
     enabled: config.enabled ?? current.enabled,
     apiUrl: (config.apiUrl ?? current.apiUrl).trim().replace(/\/+$/, ""),
-    basicAuth: (config.basicAuth ?? current.basicAuth).trim(),
+    // The UI never receives the login, so a save without one keeps the current login.
+    basicAuth: (config.basicAuth?.trim() || current.basicAuth).trim(),
     groupJid: (config.groupJid ?? current.groupJid).trim(),
     tagUserJid: (config.tagUserJid ?? current.tagUserJid).trim(),
     tagUserLid: (config.tagUserLid ?? current.tagUserLid).trim(),
@@ -106,7 +113,7 @@ export async function updateWhatsAppConfig(
   await db.query(
     `INSERT INTO register_audit_log (actor_user_id, action, entity_type, entity_id, details)
      VALUES ($1, 'system.update_whatsapp_config', 'whatsapp_config', 'default', $2::jsonb)`,
-    [actorUserId, JSON.stringify(updated)],
+    [actorUserId, JSON.stringify(redactWhatsAppConfig(updated))],
   )
 
   return updated
@@ -124,7 +131,7 @@ export async function checkWhatsAppConnection(config?: WhatsAppConfig): Promise<
   deviceId?: string
   error?: string
 }> {
-  const cfg = config || DEFAULT_WHATSAPP_CONFIG
+  const cfg = config || whatsAppConfigFromEnv()
   const notConfigured = whatsAppNotConfiguredReason(cfg)
   if (notConfigured) {
     return { connected: false, loggedIn: false, error: notConfigured }
@@ -172,7 +179,7 @@ export async function sendWhatsAppTextMessage(
   customConfig?: WhatsAppConfig,
   maxRetries = 3,
 ): Promise<{ success: boolean; messageId?: string; error?: string }> {
-  const cfg = customConfig || DEFAULT_WHATSAPP_CONFIG
+  const cfg = customConfig || whatsAppConfigFromEnv()
   const notConfigured = whatsAppNotConfiguredReason(cfg)
   if (notConfigured) {
     return { success: false, error: notConfigured }
@@ -238,7 +245,7 @@ export async function sendWhatsAppDocument(
   customConfig?: WhatsAppConfig,
   maxRetries = 3,
 ): Promise<{ success: boolean; messageId?: string; error?: string }> {
-  const cfg = customConfig || DEFAULT_WHATSAPP_CONFIG
+  const cfg = customConfig || whatsAppConfigFromEnv()
   const notConfigured = whatsAppNotConfiguredReason(cfg)
   if (notConfigured) {
     return { success: false, error: notConfigured }

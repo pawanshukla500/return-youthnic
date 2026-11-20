@@ -13,6 +13,9 @@ import {
   sendWhatsAppDocument,
   sendOmsguruDailyToWhatsApp,
   checkWhatsAppConnection,
+  getWhatsAppConfig,
+  updateWhatsAppConfig,
+  redactWhatsAppConfig,
   whatsAppConfigFromEnv,
   type WhatsAppConfig,
 } from "../whatsapp.js"
@@ -76,6 +79,45 @@ async function withFetchSpy(run: () => Promise<void>): Promise<number> {
   return calls
 }
 
+const WHATSAPP_ENV_KEYS = [
+  "WHATSAPP_API_URL",
+  "WHATSAPP_BASIC_AUTH",
+  "WHATSAPP_GROUP_JID",
+  "WHATSAPP_TAG_USER_JID",
+  "WHATSAPP_TAG_USER_LID",
+  "WHATSAPP_TAG_USER_NAME",
+]
+
+// Runs with exactly these WHATSAPP_* values in process.env, then restores what the shell had.
+async function withWhatsAppEnv(values: Record<string, string>, run: () => Promise<void>): Promise<void> {
+  const saved = Object.fromEntries(WHATSAPP_ENV_KEYS.map((key) => [key, process.env[key]]))
+  for (const key of WHATSAPP_ENV_KEYS) delete process.env[key]
+  Object.assign(process.env, values)
+  try {
+    await run()
+  } finally {
+    for (const key of WHATSAPP_ENV_KEYS) {
+      if (saved[key] === undefined) delete process.env[key]
+      else process.env[key] = saved[key]
+    }
+  }
+}
+
+// A pg.Pool stand-in that records every query and answers the settings read with `stored`.
+function fakeDb(stored?: Partial<WhatsAppConfig>) {
+  const queries: { sql: string; params?: unknown[] }[] = []
+  const db = {
+    query: async (sql: string, params?: unknown[]) => {
+      queries.push({ sql, params })
+      if (sql.includes("FROM app_system_settings")) {
+        return { rows: stored ? [{ setting_value: stored }] : [] }
+      }
+      return { rows: [] }
+    },
+  } as unknown as pg.Pool
+  return { db, queries }
+}
+
 test("WhatsApp Gateway — default config from an empty environment is disabled with no login, group or tagged user", () => {
   const config = whatsAppConfigFromEnv({})
   assert.equal(config.enabled, false)
@@ -135,27 +177,64 @@ test("WhatsApp Gateway — sends and status checks with a missing login or group
 })
 
 test("WhatsApp Gateway — a forced OMSGuru dispatch with a stored config missing the login sends nothing", async () => {
-  // Stored settings say enabled, but carry no login: the dispatch must still fail closed.
-  const queries: string[] = []
-  const db = {
-    query: async (sql: string) => {
-      queries.push(sql)
-      if (sql.includes("FROM app_system_settings")) {
-        return { rows: [{ setting_value: { enabled: true, groupJid: "SYN-GROUP@g.us" } }] }
-      }
-      return { rows: [] }
-    },
-  } as unknown as pg.Pool
+  // Stored settings say enabled, but carry no login, and the environment has none: the dispatch must still fail closed.
+  const { db, queries } = fakeDb({ enabled: true, groupJid: "SYN-GROUP@g.us" })
 
   let result: Awaited<ReturnType<typeof sendOmsguruDailyToWhatsApp>> | undefined
-  const calls = await withFetchSpy(async () => {
-    result = await sendOmsguruDailyToWhatsApp(db, syntheticRecord, { force: true })
+  let calls = -1
+  await withWhatsAppEnv({}, async () => {
+    calls = await withFetchSpy(async () => {
+      result = await sendOmsguruDailyToWhatsApp(db, syntheticRecord, { force: true })
+    })
   })
   assert.equal(calls, 0)
   assert.equal(result?.sent, false)
   assert.match(result?.error || "", /not configured: missing gateway login/)
   // Only the settings read ran: no audit row and no "sent" update.
   assert.equal(queries.length, 1)
+})
+
+test("WhatsApp Gateway — WHATSAPP_* values set after import are read at call time", async () => {
+  // server/index.ts loads .env after its imports have run, so the config must not be fixed at import.
+  await withWhatsAppEnv({ WHATSAPP_BASIC_AUTH: "SYN-USER:SYN-PASS", WHATSAPP_GROUP_JID: "SYN-GROUP@g.us" }, async () => {
+    const config = await getWhatsAppConfig(fakeDb().db)
+    assert.equal(config.enabled, true)
+    assert.equal(config.basicAuth, "SYN-USER:SYN-PASS")
+    assert.equal(config.groupJid, "SYN-GROUP@g.us")
+
+    // A stored row still overrides the environment, and fills its blanks from it.
+    const stored = await getWhatsAppConfig(fakeDb({ enabled: false, groupJid: "SYN-OTHER-GROUP@g.us" }).db)
+    assert.equal(stored.enabled, false)
+    assert.equal(stored.groupJid, "SYN-OTHER-GROUP@g.us")
+    assert.equal(stored.basicAuth, "SYN-USER:SYN-PASS")
+  })
+})
+
+test("WhatsApp Gateway — redactWhatsAppConfig never returns the gateway login", () => {
+  const redacted = redactWhatsAppConfig(SYN_CONFIG)
+  assert.equal("basicAuth" in redacted, false)
+  assert.equal(redacted.basicAuthSet, true)
+  assert.equal(redacted.groupJid, "SYN-GROUP@g.us")
+  assert.equal(redactWhatsAppConfig({ ...SYN_CONFIG, basicAuth: " " }).basicAuthSet, false)
+})
+
+test("WhatsApp Gateway — saving settings without a login keeps the stored login and keeps it out of the audit log", async () => {
+  const { db, queries } = fakeDb({ ...SYN_CONFIG })
+  // What the settings page posts back: the redacted config it was given, with one field changed.
+  const posted = { ...redactWhatsAppConfig(SYN_CONFIG), enabled: false } as Partial<WhatsAppConfig>
+  const updated = await updateWhatsAppConfig(db, posted, 1)
+  assert.equal(updated.basicAuth, "SYN-USER:SYN-PASS")
+  assert.equal(updated.enabled, false)
+
+  const settingsWrite = queries.find((q) => q.sql.includes("INSERT INTO app_system_settings"))
+  assert.equal(JSON.parse(String(settingsWrite?.params?.[0])).basicAuth, "SYN-USER:SYN-PASS")
+  const auditWrite = queries.find((q) => q.sql.includes("INSERT INTO register_audit_log"))
+  const auditDetails = String(auditWrite?.params?.[1])
+  assert.equal(auditDetails.includes("SYN-PASS"), false)
+  assert.equal(JSON.parse(auditDetails).basicAuthSet, true)
+
+  // An empty login in the body is treated as "not sent", not as "clear it".
+  assert.equal((await updateWhatsAppConfig(db, { basicAuth: "" }, 1)).basicAuth, "SYN-USER:SYN-PASS")
 })
 
 test("WhatsApp Gateway — renderOmsguruWhatsAppCaption generates rich briefing with mentions and tags", () => {
