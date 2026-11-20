@@ -10,11 +10,12 @@ STATE_FILE="/var/run/return-app-watchdog.state"
 APP_DIR="/opt/return-app/Return-App"
 CONTAINER_NAME="Return-App"
 
-# WhatsApp Alert Configuration
+# WhatsApp alert configuration. The login, group and tagged user come only from the
+# app's .env (WHATSAPP_*); with no login or group the alert is skipped, never sent.
 WA_URL="https://wa.youthnic.shop"
-WA_AUTH="returnorders@vbexports.co.in:Xchange4WA$"
-WA_GROUP="919825149497-1631941133@g.us"
-WA_TAG_USER="916306361624@s.whatsapp.net"
+WA_AUTH=""
+WA_GROUP=""
+WA_TAG_USER=""
 
 # Check if overridden in .env
 if [ -f "${APP_DIR}/.env" ]; then
@@ -32,18 +33,24 @@ NOW_ISO=$(date '+%Y-%m-%d %H:%M:%S')
 
 send_whatsapp_alert() {
   local msg="$1"
+  if [ -z "$WA_AUTH" ] || [ -z "$WA_GROUP" ]; then
+    echo "[$NOW_ISO] [WHATSAPP] Alert skipped: WHATSAPP_BASIC_AUTH or WHATSAPP_GROUP_JID is not set in ${APP_DIR}/.env"
+    return 0
+  fi
   local auth_b64
   auth_b64=$(printf '%s' "$WA_AUTH" | base64 | tr -d '\n')
+  local mentions_json=""
+  [ -n "$WA_TAG_USER" ] && mentions_json="\"$WA_TAG_USER\""
   local payload
   payload=$(node -e '
     const [msg, group, tag] = process.argv.slice(1);
     console.log(JSON.stringify({
       phone: group,
       message: msg,
-      mentions: [tag]
+      mentions: tag ? [tag] : []
     }));
   ' "$msg" "$WA_GROUP" "$WA_TAG_USER" 2>/dev/null || cat <<EOF
-{"phone":"$WA_GROUP","message":"$msg","mentions":["$WA_TAG_USER"]}
+{"phone":"$WA_GROUP","message":"$msg","mentions":[$mentions_json]}
 EOF
   )
 

@@ -13,12 +13,20 @@ echo ">>> [2/7] Configuring environment and certificates..."
 cd "$APP_DIR"
 if [ -f "${APP_ROOT}/uploaded.env" ]; then
   if [ -f .env ]; then
-    while IFS='=' read -r key val || [ -n "$key" ]; do
-      [[ "$key" =~ ^#.*$ ]] && continue
+    # Values are copied verbatim: split on the first "=" only (a trailing "=" such as base64 padding is kept),
+    # and replace the line with awk reading the value from the environment, never as a sed replacement, where
+    # "&", "|" or "\" in a secret (a password, a URL with query parameters) would corrupt .env.
+    while IFS= read -r line || [ -n "$line" ]; do
+      line="${line%$'\r'}"
+      [[ "$line" =~ ^[[:space:]]*# ]] && continue
+      [[ "$line" == *=* ]] || continue
+      key="${line%%=*}"
+      val="${line#*=}"
       [ -z "$key" ] && continue
       if [ -n "$val" ]; then
         if grep -q "^${key}=" .env; then
-          sed -i "s|^${key}=.*|${key}=${val}|" .env
+          KEY="$key" VAL="$val" awk 'BEGIN { k = ENVIRON["KEY"]; v = ENVIRON["VAL"] }
+            index($0, k "=") == 1 { print k "=" v; next } { print }' .env > .env.merge && mv .env.merge .env
         else
           printf '%s=%s\n' "$key" "$val" >> .env
         fi

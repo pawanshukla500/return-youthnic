@@ -28,7 +28,7 @@ import {
   checkWhatsAppConnection,
   sendOmsguruDailyToWhatsApp,
   sendWhatsAppTextMessage,
-  DEFAULT_WHATSAPP_CONFIG,
+  redactWhatsAppConfig,
 } from "./whatsapp.js"
 
 type SessionRequest = Request & {
@@ -54,7 +54,7 @@ export function mountOmsguruRoutes(
       res.json({
         config,
         firebaseConfigured: isFirebaseConfigured(),
-        whatsappConfig: waConfig,
+        whatsappConfig: redactWhatsAppConfig(waConfig),
         whatsappStatus: waStatus,
         currentTimeIst: getIstDateParts().timeStr,
         currentDateIst: getIstDateParts().dateStr,
@@ -440,7 +440,7 @@ export function mountOmsguruRoutes(
       const db = getPool()
       const config = await getWhatsAppConfig(db)
       const status = await checkWhatsAppConnection(config)
-      res.json({ config, status })
+      res.json({ config: redactWhatsAppConfig(config), status })
     } catch (error) {
       next(error)
     }
@@ -453,7 +453,7 @@ export function mountOmsguruRoutes(
       const actorUserId = (req as SessionRequest).user.id
       const updated = await updateWhatsAppConfig(db, req.body || {}, actorUserId)
       const status = await checkWhatsAppConnection(updated)
-      res.json({ ok: true, config: updated, status })
+      res.json({ ok: true, config: redactWhatsAppConfig(updated), status })
     } catch (error) {
       next(error)
     }

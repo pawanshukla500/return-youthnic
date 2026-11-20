@@ -1,14 +1,17 @@
-// WhatsApp Enterprise Gateway & Group Dispatcher for Return App.
+// WhatsApp gateway and group dispatcher for Return App.
 //
-// Interfaces with the self-hosted go-whatsapp-web-multidevice (GOWA) service in Docker
-// over secure HTTPS at https://wa.youthnic.shop.
+// Talks to the self-hosted go-whatsapp-web-multidevice (GOWA) gateway over HTTPS.
 //
 // Capabilities:
-// - Dispatches daily OMSGuru inventory update CSVs directly to the "Inventory Management" group (919825149497-1631941133@g.us)
-// - Tags Pandit Vishal Tiwari (@916306361624 / @214250249314376) with active WhatsApp mentions
-// - Dispatches daily returns reconciliation summary CSVs
-// - Verifies connection status and group membership
-// - Full audit logging and persistent settings via app_system_settings
+// - Sends the daily OMSGuru inventory update CSV to the configured WhatsApp group
+// - Optionally tags one configured user with WhatsApp mentions
+// - Sends the daily returns reconciliation summary CSV (only when forced)
+// - Checks gateway connection status
+// - Audit logging and persistent settings via app_system_settings
+//
+// The gateway login, group ID and tagged user come only from WHATSAPP_* environment
+// variables or the stored settings. Nothing is sent until both the login and the group ID
+// are set: every send path then returns a "not configured" result without a network call.
 
 import type pg from "pg"
 import type { OmsguruDailyUpdateRecord } from "./omsguru-daily.js"
@@ -24,19 +27,42 @@ export type WhatsAppConfig = {
   tagUserName: string
 }
 
-export const DEFAULT_WHATSAPP_CONFIG: WhatsAppConfig = {
-  enabled: true,
-  apiUrl: process.env.WHATSAPP_API_URL?.trim() || "https://wa.youthnic.shop",
-  basicAuth: process.env.WHATSAPP_BASIC_AUTH?.trim() || "returnorders@vbexports.co.in:Xchange4WA$",
-  groupJid: process.env.WHATSAPP_GROUP_JID?.trim() || "919825149497-1631941133@g.us",
-  tagUserJid: process.env.WHATSAPP_TAG_USER_JID?.trim() || "916306361624@s.whatsapp.net",
-  tagUserLid: process.env.WHATSAPP_TAG_USER_LID?.trim() || "214250249314376@lid",
-  tagUserName: "Pandit Vishal Tiwari",
+/** Builds the default config from WHATSAPP_* variables; only the gateway URL has a fallback. */
+export function whatsAppConfigFromEnv(env: Record<string, string | undefined> = process.env): WhatsAppConfig {
+  const read = (key: string) => env[key]?.trim() || ""
+  const basicAuth = read("WHATSAPP_BASIC_AUTH")
+  const groupJid = read("WHATSAPP_GROUP_JID")
+  return {
+    enabled: Boolean(basicAuth && groupJid),
+    apiUrl: read("WHATSAPP_API_URL") || "https://wa.youthnic.shop",
+    basicAuth,
+    groupJid,
+    tagUserJid: read("WHATSAPP_TAG_USER_JID"),
+    tagUserLid: read("WHATSAPP_TAG_USER_LID"),
+    tagUserName: read("WHATSAPP_TAG_USER_NAME"),
+  }
+}
+
+/** The config as the UI and audit log may see it: the gateway login is never returned, only whether it is set. */
+export function redactWhatsAppConfig(cfg: WhatsAppConfig): Omit<WhatsAppConfig, "basicAuth"> & { basicAuthSet: boolean } {
+  const { basicAuth, ...rest } = cfg
+  return { ...rest, basicAuthSet: Boolean(basicAuth.trim()) }
+}
+
+/** Why nothing can be sent with this config, or null when the gateway login and group ID are both set. */
+export function whatsAppNotConfiguredReason(cfg: WhatsAppConfig): string | null {
+  const missing = [
+    cfg.basicAuth.trim() ? "" : "gateway login (WHATSAPP_BASIC_AUTH)",
+    cfg.groupJid.trim() ? "" : "group ID (WHATSAPP_GROUP_JID)",
+  ].filter(Boolean)
+  return missing.length ? `WhatsApp is not configured: missing ${missing.join(" and ")}` : null
 }
 
 const fmt = (n: number) => n.toLocaleString("en-IN")
 
 export async function getWhatsAppConfig(db: pg.Pool): Promise<WhatsAppConfig> {
+  // Read the environment on every call, not at import: server/index.ts loads .env after its imports run.
+  const fromEnv = whatsAppConfigFromEnv()
   try {
     const result = await db.query(
       "SELECT setting_value FROM app_system_settings WHERE setting_key = 'whatsapp_config'",
@@ -44,19 +70,19 @@ export async function getWhatsAppConfig(db: pg.Pool): Promise<WhatsAppConfig> {
     if (result.rows[0]?.setting_value) {
       const stored = result.rows[0].setting_value as Partial<WhatsAppConfig>
       return {
-        enabled: stored.enabled ?? DEFAULT_WHATSAPP_CONFIG.enabled,
-        apiUrl: (stored.apiUrl || DEFAULT_WHATSAPP_CONFIG.apiUrl).replace(/\/+$/, ""),
-        basicAuth: stored.basicAuth || DEFAULT_WHATSAPP_CONFIG.basicAuth,
-        groupJid: stored.groupJid || DEFAULT_WHATSAPP_CONFIG.groupJid,
-        tagUserJid: stored.tagUserJid || DEFAULT_WHATSAPP_CONFIG.tagUserJid,
-        tagUserLid: stored.tagUserLid || DEFAULT_WHATSAPP_CONFIG.tagUserLid,
-        tagUserName: stored.tagUserName || DEFAULT_WHATSAPP_CONFIG.tagUserName,
+        enabled: stored.enabled ?? fromEnv.enabled,
+        apiUrl: (stored.apiUrl || fromEnv.apiUrl).replace(/\/+$/, ""),
+        basicAuth: stored.basicAuth || fromEnv.basicAuth,
+        groupJid: stored.groupJid || fromEnv.groupJid,
+        tagUserJid: stored.tagUserJid || fromEnv.tagUserJid,
+        tagUserLid: stored.tagUserLid || fromEnv.tagUserLid,
+        tagUserName: stored.tagUserName || fromEnv.tagUserName,
       }
     }
   } catch {
     // ignore
   }
-  return DEFAULT_WHATSAPP_CONFIG
+  return fromEnv
 }
 
 export async function updateWhatsAppConfig(
@@ -68,7 +94,8 @@ export async function updateWhatsAppConfig(
   const updated: WhatsAppConfig = {
     enabled: config.enabled ?? current.enabled,
     apiUrl: (config.apiUrl ?? current.apiUrl).trim().replace(/\/+$/, ""),
-    basicAuth: (config.basicAuth ?? current.basicAuth).trim(),
+    // The UI never receives the login, so a save without one keeps the current login.
+    basicAuth: (config.basicAuth?.trim() || current.basicAuth).trim(),
     groupJid: (config.groupJid ?? current.groupJid).trim(),
     tagUserJid: (config.tagUserJid ?? current.tagUserJid).trim(),
     tagUserLid: (config.tagUserLid ?? current.tagUserLid).trim(),
@@ -86,7 +113,7 @@ export async function updateWhatsAppConfig(
   await db.query(
     `INSERT INTO register_audit_log (actor_user_id, action, entity_type, entity_id, details)
      VALUES ($1, 'system.update_whatsapp_config', 'whatsapp_config', 'default', $2::jsonb)`,
-    [actorUserId, JSON.stringify(updated)],
+    [actorUserId, JSON.stringify(redactWhatsAppConfig(updated))],
   )
 
   return updated
@@ -104,7 +131,11 @@ export async function checkWhatsAppConnection(config?: WhatsAppConfig): Promise<
   deviceId?: string
   error?: string
 }> {
-  const cfg = config || DEFAULT_WHATSAPP_CONFIG
+  const cfg = config || whatsAppConfigFromEnv()
+  const notConfigured = whatsAppNotConfiguredReason(cfg)
+  if (notConfigured) {
+    return { connected: false, loggedIn: false, error: notConfigured }
+  }
   try {
     const res = await fetch(`${cfg.apiUrl}/app/status`, {
       method: "GET",
@@ -148,7 +179,11 @@ export async function sendWhatsAppTextMessage(
   customConfig?: WhatsAppConfig,
   maxRetries = 3,
 ): Promise<{ success: boolean; messageId?: string; error?: string }> {
-  const cfg = customConfig || DEFAULT_WHATSAPP_CONFIG
+  const cfg = customConfig || whatsAppConfigFromEnv()
+  const notConfigured = whatsAppNotConfiguredReason(cfg)
+  if (notConfigured) {
+    return { success: false, error: notConfigured }
+  }
   if (!cfg.enabled) {
     return { success: false, error: "WhatsApp notifications are disabled in configuration" }
   }
@@ -210,7 +245,11 @@ export async function sendWhatsAppDocument(
   customConfig?: WhatsAppConfig,
   maxRetries = 3,
 ): Promise<{ success: boolean; messageId?: string; error?: string }> {
-  const cfg = customConfig || DEFAULT_WHATSAPP_CONFIG
+  const cfg = customConfig || whatsAppConfigFromEnv()
+  const notConfigured = whatsAppNotConfiguredReason(cfg)
+  if (notConfigured) {
+    return { success: false, error: notConfigured }
+  }
   if (!cfg.enabled) {
     return { success: false, error: "WhatsApp notifications are disabled in configuration" }
   }
@@ -282,8 +321,8 @@ export function renderOmsguruWhatsAppCaption(
   if (config.tagUserJid) mentions.push(config.tagUserJid)
   if (config.tagUserLid) mentions.push(config.tagUserLid)
 
-  // Extract phone number digits for in-text tag (e.g. 916306361624)
-  // WhatsApp automatically maps @916306361624 to the contact name in the group without brackets
+  // In-text tag: the digits before "@" in the tagged user JID
+  // WhatsApp maps @<digits> to the contact name in the group without brackets
   const tagPhoneOnly = config.tagUserJid.replace(/@.*$/, "")
   const tagLine = tagPhoneOnly ? `@${tagPhoneOnly}` : ""
 
@@ -304,6 +343,17 @@ export async function sendOmsguruDailyToWhatsApp(
   options: { force?: boolean } = {},
 ): Promise<{ sent: boolean; messageId?: string; error?: string }> {
   const config = await getWhatsAppConfig(db)
+  const notConfigured = whatsAppNotConfiguredReason(config)
+  if (notConfigured) {
+    // No network call, but record why, so the history row shows the reason instead of staying pending.
+    await db.query(
+      `UPDATE omsguru_daily_inventory_updates
+       SET whatsapp_sent = false, whatsapp_error = $1
+       WHERE id = $2`,
+      [notConfigured, record.id],
+    ).catch(() => {})
+    return { sent: false, error: notConfigured }
+  }
   if (!config.enabled && !options.force) {
     return { sent: false, error: "WhatsApp notifications disabled in settings" }
   }
@@ -381,6 +431,10 @@ export async function sendDailyReportToWhatsApp(
     return { sent: false, error: "Daily return report WhatsApp notification disabled per policy (OMSGuru stock update with CSV only)" }
   }
   const config = await getWhatsAppConfig(db)
+  const notConfigured = whatsAppNotConfiguredReason(config)
+  if (notConfigured) {
+    return { sent: false, error: notConfigured }
+  }
   if (!config.enabled) {
     return { sent: false, error: "WhatsApp notifications disabled in settings" }
   }
@@ -414,9 +468,10 @@ export async function sendDailyReportToWhatsApp(
     `🏢 *Marketplace Performance:*`,
     channelText,
     ``,
-    `👤 *CC / Attention:* @${tagPhoneOnly} (${config.tagUserName})`,
+    // The tagged user is optional now that it has no built-in default.
+    tagPhoneOnly ? `👤 *CC / Attention:* @${tagPhoneOnly}${config.tagUserName ? ` (${config.tagUserName})` : ""}` : null,
     `🌐 *Portal:* https://return.youthnic.shop/register`,
-  ].join("\n").trim()
+  ].filter((line) => line !== null).join("\n").trim()
 
   // Generate lightweight summary CSV
   const csvRows = [

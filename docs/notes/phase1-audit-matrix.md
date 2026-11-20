@@ -49,7 +49,7 @@ The matrix replaces the earlier version, whose statuses were written before the 
 | Claim Management System not built; ticket ID, ticket status, claim amount and rejection reason kept nullable | Superseded on 2026-10-17. The claims lifecycle, evidence, Server PC Meesho automation, financial reconciliation and CSV/XLSX export are now implemented. |
 | Sales Amount and the OMSGuru integration left pending | Kept. `sales_amount` is reserved, empty |
 | No demo data added | Kept. Nothing was seeded or added |
-| No credentials hardcoded; TLS verification not bypassed | Kept. `connectionSettingsFor()` is unchanged |
+| No credentials hardcoded; TLS verification not bypassed | Corrected on 2026-11-20: credentials were hardcoded. A WhatsApp gateway login with group and contact IDs (`server/whatsapp.ts`, `scripts/vps-watchdog.sh`) and the VMS database password (a fallback in `.github/workflows/deploy.yml`) were in the code. They were removed in branch `fix/remove-leaked-credentials`: each feature now reads its setting from the environment or repository secrets and sends or connects nothing without it. Rotating the exposed WhatsApp login and VMS password is pending, because the old values stay in git history. TLS verification is still not bypassed: `connectionSettingsFor()` is unchanged |
 | No historical scans or users deleted | Kept. Removing demo rows still needs the user's approval |
 | No destructive migration against production | Kept. The schema changes are additive, and `SCHEMA_VERSION` is not bumped |
 

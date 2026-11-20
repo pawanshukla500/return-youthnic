@@ -317,7 +317,7 @@ export function OmsguruDailyReport() {
 
   const handleSendWhatsApp = async (id: number) => {
     setSendingWaId(id)
-    setActionNotice("Dispatching update CSV to WhatsApp Inventory Management group...")
+    setActionNotice("Dispatching update CSV to WhatsApp group...")
     try {
       const res = await api<{ ok: boolean; result: { sent: boolean; messageId?: string; error?: string } }>(
         `/api/omsguru/daily/${id}/send-whatsapp`,
@@ -345,7 +345,7 @@ export function OmsguruDailyReport() {
         {
           method: "POST",
           body: JSON.stringify({
-            message: `🔔 Return App WhatsApp Test Ping\nTimestamp: ${new Date().toISOString()}\nTarget: Inventory Management Group`,
+            message: `🔔 Return App WhatsApp Test Ping\nTimestamp: ${new Date().toISOString()}\nTarget: configured WhatsApp group`,
           }),
         },
       )
@@ -1144,11 +1144,11 @@ export function OmsguruDailyReport() {
                 <div style={{ gridTemplateColumns: "1fr 1fr", display: "grid", gap: "10px", fontSize: "12px", background: "#f8fafc", padding: "10px", borderRadius: "6px", marginBottom: "14px" }}>
                   <div>
                     <span style={{ color: "var(--muted)" }}>Target Group:</span>
-                    <div style={{ fontWeight: 600, wordBreak: "break-all" }}>{waConfig?.groupJid || "Inventory Management (919825149497-1631941133@g.us)"}</div>
+                    <div style={{ fontWeight: 600, wordBreak: "break-all" }}>{waConfig?.groupJid || "Not configured"}</div>
                   </div>
                   <div>
                     <span style={{ color: "var(--muted)" }}>Tagged Team Member:</span>
-                    <div style={{ fontWeight: 600 }}>{waConfig?.tagUserName || "Pandit Vishal Tiwari"} (@{waConfig?.tagUserJid?.replace(/@.*$/, "") || "916306361624"})</div>
+                    <div style={{ fontWeight: 600 }}>{waConfig?.tagUserJid ? `${waConfig.tagUserName || "Tagged user"} (@${waConfig.tagUserJid.replace(/@.*$/, "")})` : "None"}</div>
                   </div>
                 </div>
 

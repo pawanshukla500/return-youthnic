@@ -98,11 +98,23 @@ jobs:
           FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON || '' }}
           PAYMENT_DATABASE_URL: ${{ secrets.PAYMENT_DATABASE_URL || '' }}
           PAYMENT_SSL_CA: ${{ secrets.PAYMENT_SSL_CA || '' }}
-          VMS_DATABASE_URL: ${{ secrets.VMS_DATABASE_URL || 'postgresql://pawanshukla:Xchange4SQL%24@postgres:5432/packing_database' }}
+          VMS_DATABASE_URL: ${{ secrets.VMS_DATABASE_URL }}
+          WHATSAPP_API_URL: ${{ secrets.WHATSAPP_API_URL || '' }}
+          WHATSAPP_BASIC_AUTH: ${{ secrets.WHATSAPP_BASIC_AUTH || '' }}
+          WHATSAPP_GROUP_JID: ${{ secrets.WHATSAPP_GROUP_JID || '' }}
+          WHATSAPP_TAG_USER_JID: ${{ secrets.WHATSAPP_TAG_USER_JID || '' }}
+          WHATSAPP_TAG_USER_LID: ${{ secrets.WHATSAPP_TAG_USER_LID || '' }}
+          WHATSAPP_TAG_USER_NAME: ${{ secrets.WHATSAPP_TAG_USER_NAME || '' }}
           SENTRY_DSN: ${{ secrets.SENTRY_DSN || vars.SENTRY_DSN || 'https://6be0da3edbd48f45d0b35f15e290e6e5@o4512423893925888.ingest.de.sentry.io/4512423934558288' }}
           PORT: ${{ vars.PORT || '3001' }}
           NODE_ENV: 'production'
         run: |
+          # A blank value leaves the server's current VMS_DATABASE_URL in place (deploy-remote.sh never
+          # overwrites a VPS value with a blank one), so deploys keep working until the rotated secret is set.
+          if [ -z "$VMS_DATABASE_URL" ]; then
+            echo "::warning::The VMS_DATABASE_URL repository secret is not set, so the server keeps its current value. Rotate the VMS database password and add the secret under Settings > Secrets and variables > Actions."
+          fi
+
           cat <<EOF > /tmp/return-app.env
           NODE_ENV=${NODE_ENV}
           PORT=${PORT}
@@ -124,6 +136,12 @@ jobs:
           PAYMENT_SSL_CA_FILE=certs/payment-ca.pem
           VMS_DATABASE_URL=${VMS_DATABASE_URL}
           VMS_SSL_CA_FILE=certs/vms-ca.pem
+          WHATSAPP_API_URL=${WHATSAPP_API_URL}
+          WHATSAPP_BASIC_AUTH=${WHATSAPP_BASIC_AUTH}
+          WHATSAPP_GROUP_JID=${WHATSAPP_GROUP_JID}
+          WHATSAPP_TAG_USER_JID=${WHATSAPP_TAG_USER_JID}
+          WHATSAPP_TAG_USER_LID=${WHATSAPP_TAG_USER_LID}
+          WHATSAPP_TAG_USER_NAME=${WHATSAPP_TAG_USER_NAME}
           SENTRY_DSN=${SENTRY_DSN}
           EOF
 
