@@ -12,6 +12,7 @@ export type MarketplaceAutomationResult = {
   screenshotPath?: string
   errorMessage?: string
   manualActionReason?: string
+  loginRequired?: boolean
 }
 
 /**
@@ -29,6 +30,7 @@ export type ClaimStatusCheckResult =
       statusText: string
       /** Optional normalized state when the portal wording is ambiguous. */
       normalizedStatus?: string
+      loginRequired?: boolean
       screenshotPath?: string
       note?: string
     }

@@ -8,6 +8,8 @@ import {
   lookupReturnForClaim,
   maskSecret,
   mapToReceiptIssueCategory,
+  defaultRequireApprovalBeforeSubmit,
+  isMeeshoAccountName,
   resolveClaimScanId,
   updateJobProgress,
 } from "../claim-automation-service.js"
@@ -51,6 +53,15 @@ function fakePool() {
   }
   return { pool: { connect: async () => client } as unknown as pg.Pool, queries }
 }
+
+test("new Meesho credentials default to full-auto; other marketplaces keep approval", () => {
+  assert.equal(isMeeshoAccountName("Meesho"), true)
+  assert.equal(isMeeshoAccountName("SYN-Meesho VB Exports"), true)
+  assert.equal(isMeeshoAccountName("Flipkart"), false)
+  assert.equal(defaultRequireApprovalBeforeSubmit("Meesho"), false)
+  assert.equal(defaultRequireApprovalBeforeSubmit("Flipkart"), true)
+  assert.equal(defaultRequireApprovalBeforeSubmit("Amazon"), true)
+})
 
 test("credentials encryption: round-trips plaintext correctly using AES-256-GCM", () => {
   const password = "SuperSecretMarketplacePassword#2026!"

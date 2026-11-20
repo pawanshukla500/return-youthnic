@@ -2,8 +2,8 @@ import "./load-env.js"
 import { loadAgentConfig } from "./config.js"
 import { operatorAuthorization } from "./operator-session.js"
 import { openSupplierBrowser, resolveBrowserAdapterKind, type SupplierBrowserApi } from "./browser-adapter.js"
-import { panelKeyForMarketplace } from "./panel-queue.js"
-import { profileDirFor, readSessionSavedAt, supplierSessionDir, writeSessionMarker } from "./supplier-session.js"
+import { clearPanelHold, panelKeyForMarketplace } from "./panel-queue.js"
+import { clearSessionMarker, profileDirFor, readSessionSavedAt, supplierSessionDir, writeSessionMarker } from "./supplier-session.js"
 import { logger } from "./logger.js"
 
 export const PORTAL_CHANNELS = [
@@ -22,6 +22,7 @@ export type PortalLoginRow = {
   accountName: string
   portalUrl: string
   usernameMasked: string
+  requireApprovalBeforeSubmit: boolean
   sessionSavedAt: string | null
 }
 
@@ -29,7 +30,48 @@ type PortalChannelStatus = {
   name: string
   configured: boolean
   usernameMasked: string
+  autoSubmit: boolean
   sessionSavedAt: string | null
+}
+
+/**
+ * Standing submission authorization sent when a supplier login is saved
+ * from the desktop app (M9: the saved login itself never authorizes; this
+ * flag is the authorization). Meesho is full-auto by operator decision:
+ * sign in manually once, cookies stay saved on this PC, claims then press
+ * Submit automatically and store the ticket ID. Other panels keep approval.
+ */
+export function requireApprovalBeforeSubmitForMarketplace(marketplace: string): boolean {
+  return !marketplace.toLowerCase().includes("meesho")
+}
+
+export const MEESHO_LOGIN_URL = "https://supplier.meesho.com/panel/v3/new/root/login"
+
+/** Normalizes legacy Meesho `/panel/v2/new/returns/claims` URLs to `/panel/v3/new/root/login`. */
+export function resolvePortalLoginUrl(accountName: string, portalUrl: string): string {
+  const url = (portalUrl || "").trim()
+  if (accountName.toLowerCase().includes("meesho")) {
+    if (!url || url.includes("/panel/v2/new/returns/claims")) return MEESHO_LOGIN_URL
+  }
+  return url
+}
+
+export function portalLoginSavePayload(row: PortalLoginRow, username?: string, password?: string): Record<string, unknown> {
+  const autoSubmit = !requireApprovalBeforeSubmitForMarketplace(row.accountName)
+  const portalUrl = autoSubmit ? resolvePortalLoginUrl(row.accountName, row.portalUrl) : row.portalUrl
+  const payload: Record<string, unknown> = {
+    id: row.id,
+    marketplaceId: row.marketplaceId,
+    accountName: row.accountName,
+    portalUrl,
+    automationMode: autoSubmit ? "autonomous" : "assisted",
+    requireApprovalBeforeSubmit: !autoSubmit,
+    autoPrepare: true,
+  }
+  const cleanUser = typeof username === "string" ? username.trim() : ""
+  if (cleanUser) payload.username = cleanUser
+  if (typeof password === "string" && password) payload.password = password
+  return payload
 }
 
 type PortalSecret = {
@@ -65,6 +107,7 @@ async function fetchPortalRows(): Promise<PortalLoginRow[]> {
       accountName,
       portalUrl: String(row.portalUrl || ""),
       usernameMasked: String(row.usernameMasked || ""),
+      requireApprovalBeforeSubmit: row.requireApprovalBeforeSubmit !== false,
       sessionSavedAt: readSessionSavedAt(supplierSessionDir(config.userDataDir, accountName, kind)),
     }
   })
@@ -80,6 +123,7 @@ export async function listPortalLogins(): Promise<{ channels: PortalChannelStatu
       name: channel.name,
       configured: Boolean(row?.usernameMasked),
       usernameMasked: row?.usernameMasked || "",
+      autoSubmit: row ? !row.requireApprovalBeforeSubmit : false,
       sessionSavedAt: row?.sessionSavedAt || readSessionSavedAt(supplierSessionDir(config.userDataDir, channel.name, kind)),
     }
   })
@@ -151,22 +195,12 @@ export function secretFromEnvironment(accountName: string): PortalSecret | null 
   return null
 }
 
-async function saveTypedLogin(row: PortalLoginRow, username: string, password: string): Promise<void> {
+async function saveTypedLogin(row: PortalLoginRow, username?: string, password?: string): Promise<void> {
   const headers = await authHeaders()
   const res = await fetch(`${backend()}/api/admin/automation/credentials`, {
     method: "POST",
     headers,
-    body: JSON.stringify({
-      id: row.id,
-      marketplaceId: row.marketplaceId,
-      accountName: row.accountName,
-      portalUrl: row.portalUrl,
-      username,
-      password,
-      automationMode: "assisted",
-      requireApprovalBeforeSubmit: true,
-      autoPrepare: true,
-    }),
+    body: JSON.stringify(portalLoginSavePayload(row, username, password)),
   })
   if (!res.ok) {
     const body = (await res.json().catch(() => ({}))) as { error?: string }
@@ -174,12 +208,37 @@ async function saveTypedLogin(row: PortalLoginRow, username: string, password: s
   }
 }
 
+export async function ensureMeeshoAutoSubmit(): Promise<boolean> {
+  try {
+    const rows = await fetchPortalRows()
+    const meeshoRow = rows.find((item) => !requireApprovalBeforeSubmitForMarketplace(item.accountName))
+    if (!meeshoRow) return false
+    if (!meeshoRow.requireApprovalBeforeSubmit) return true
+    await saveTypedLogin(meeshoRow)
+    return true
+  } catch (err) {
+    logger.warn(`Could not persist Meesho auto-submit authorization: ${err instanceof Error ? err.message : String(err)}`)
+    return false
+  }
+}
+
 export async function completePortalLogin(
   browser: SupplierBrowserApi,
-  input: { marketplace: string; portalUrl: string; username: string; password: string; waitMs?: number; sessionDir?: string },
-): Promise<{ ok: boolean; message: string }> {
+  input: {
+    marketplace: string
+    portalUrl: string
+    username: string
+    password: string
+    waitMs?: number
+    failFastOnManualPrompt?: boolean
+    sessionDir?: string
+  },
+): Promise<{ ok: boolean; loginRequired?: boolean; message: string }> {
   const portalUrl = input.portalUrl
   if (!portalUrl) return { ok: false, message: `${input.marketplace} has no supplier portal address.` }
+
+  const resolvedSessionDir =
+    input.sessionDir || supplierSessionDir(loadAgentConfig().userDataDir, input.marketplace, resolveBrowserAdapterKind())
 
   await browser.navigate(portalUrl)
   await browser.delay(1500)
@@ -189,22 +248,34 @@ export async function completePortalLogin(
   const password = input.password || envSecret?.password || ""
 
   let typed = false
+  let typedAt = 0
   let announcedOtp = false
-  const deadline = Date.now() + (input.waitMs ?? 180000)
+  let shownManualPrompt = false
+  const startedAt = Date.now()
+  const deadline = startedAt + (input.waitMs ?? 180000)
   const meesho = input.marketplace.toLowerCase().includes("meesho")
 
   while (Date.now() < deadline) {
+    if (await loggedIn(browser, input.marketplace)) {
+      writeSessionMarker(resolvedSessionDir, input.marketplace)
+      logger.info(`${input.marketplace} login saved in the browser profile on this PC.`)
+      return { ok: true, message: `${input.marketplace} is signed in and the cookies are saved on this PC.` }
+    }
+
     if (meesho) {
       const landing = await browser.evaluate<boolean>(`Boolean(document.querySelector('#loginbutton, a[href*="/login"]'))`)
-      const already = await loggedIn(browser, input.marketplace)
-      if (landing && !already) {
-        await browser.humanClick('#loginbutton, a[href*="/login"]')
-        await browser.delay(1500)
+      // Wait briefly before clicking #loginbutton on initial load so a valid cookie redirect settles untouched.
+      if (landing && Date.now() - startedAt >= 2000) {
+        const alreadyAfterGrace = await loggedIn(browser, input.marketplace)
+        if (!alreadyAfterGrace) {
+          await browser.humanClick('#loginbutton, a[href*="/login"]')
+          await browser.delay(1500)
+        }
       }
     }
 
     if (await loggedIn(browser, input.marketplace)) {
-      writeSessionMarker(input.sessionDir || supplierSessionDir(loadAgentConfig().userDataDir, input.marketplace, resolveBrowserAdapterKind()), input.marketplace)
+      writeSessionMarker(resolvedSessionDir, input.marketplace)
       logger.info(`${input.marketplace} login saved in the browser profile on this PC.`)
       return { ok: true, message: `${input.marketplace} is signed in and the cookies are saved on this PC.` }
     }
@@ -230,33 +301,76 @@ export async function completePortalLogin(
           })()
         `)
         typed = true
+        typedAt = Date.now()
         await browser.delay(3000)
+        continue
       }
     }
 
     const challenge = await browser.detectCaptchaOrOtp()
-    if (challenge.challengeDetected && !announcedOtp) {
-      announcedOtp = true
-      logger.info(`${input.marketplace} is asking for a code. Type it in the supplier browser window. This app will save the cookies when the supplier panel opens.`)
+    if (challenge.challengeDetected) {
+      if (!announcedOtp) {
+        announcedOtp = true
+        logger.info(`${input.marketplace} is asking for a code. Type it in the supplier browser window. This app will save the cookies when the supplier panel opens.`)
+      }
+      if (!shownManualPrompt) {
+        shownManualPrompt = true
+        await browser.showForManualStep?.()
+      }
+      if (input.failFastOnManualPrompt) {
+        clearSessionMarker(resolvedSessionDir)
+        return {
+          ok: false,
+          loginRequired: true,
+          message: `${input.marketplace} session expired and asks for verification. Log in inside the Browsers tab and the claim will continue automatically.`,
+        }
+      }
     }
 
-    await browser.delay(4000)
+    if (!username || !password) {
+      if (!shownManualPrompt) {
+        shownManualPrompt = true
+        await browser.showForManualStep?.()
+      }
+      if (input.failFastOnManualPrompt && Date.now() - startedAt >= 3500) {
+        clearSessionMarker(resolvedSessionDir)
+        return {
+          ok: false,
+          loginRequired: true,
+          message: `${input.marketplace} session expired. Log in to ${input.marketplace} in the app and the claim will continue automatically.`,
+        }
+      }
+    } else if (input.failFastOnManualPrompt && typed && typedAt > 0 && Date.now() - typedAt >= 10000) {
+      clearSessionMarker(resolvedSessionDir)
+      await browser.showForManualStep?.()
+      return {
+        ok: false,
+        loginRequired: true,
+        message: `${input.marketplace} needs you to finish logging in inside the Browsers tab before continuing the claim.`,
+      }
+    }
+
+    await browser.delay(2500)
   }
 
+  clearSessionMarker(resolvedSessionDir)
   if (!username || !password) {
     return {
       ok: false,
-      message: `${input.marketplace} has no bot password saved. Enter the ID and password in Marketplace logins, or configure MEESHOID & MEESHO_PWD in .env, then save the cookies.`,
+      loginRequired: true,
+      message: `${input.marketplace} did not finish signing in yet. Open the Meesho tab under Browsers and log in once so cookies stay saved.`,
     }
   }
   if (announcedOtp) {
     return {
       ok: false,
+      loginRequired: true,
       message: `${input.marketplace} is still waiting for the code in the supplier browser window. Type the code there. The cookies are saved when the supplier panel opens.`,
     }
   }
   return {
     ok: false,
+    loginRequired: true,
     message: `${input.marketplace} did not finish signing in. The saved bot ID was used. Open the supplier browser window and complete the login so the cookies can be saved.`,
   }
 }
@@ -268,7 +382,14 @@ export async function completePortalLogin(
  */
 export function isPortalLoggedIn(marketplace: string, url: string, text: string = "", hasPasswordInput: boolean = false): boolean {
   const lowerUrl = url.toLowerCase()
-  if (lowerUrl.includes("/login") || lowerUrl.includes("/root/login") || lowerUrl.includes("signin") || lowerUrl.includes("sign-in")) {
+  if (
+    lowerUrl.includes("/login") ||
+    lowerUrl.includes("/root/login") ||
+    lowerUrl.includes("/root/register") ||
+    lowerUrl.includes("/root/otp") ||
+    lowerUrl.includes("signin") ||
+    lowerUrl.includes("sign-in")
+  ) {
     return false
   }
   if (hasPasswordInput) {
@@ -305,6 +426,15 @@ export async function closePortalLoginBrowser(): Promise<void> {
   const browser = heldBrowser
   heldBrowser = null
   await browser.close()
+}
+
+export async function clearPortalLoginHold(closeIfExternal = true): Promise<void> {
+  if (!heldBrowser) return
+  const browser = heldBrowser
+  heldBrowser = null
+  if (closeIfExternal && browser.profileDirectory && !browser.profileDirectory.startsWith("persist:")) {
+    await browser.close().catch(() => undefined)
+  }
 }
 
 export async function savePortalLogin(
@@ -410,15 +540,25 @@ export async function signInMarketplace(input: {
   }
 
   if (!secret) {
-    return {
-      ok: false,
-      needsPassword: true,
-      message: `${row.accountName} needs the bot ID and password once. They will be saved with the other marketplace logins.`,
+    const defaultUrl = resolvePortalLoginUrl(row.accountName, row.portalUrl)
+    if (!defaultUrl) {
+      return {
+        ok: false,
+        needsPassword: true,
+        message: `${row.accountName} needs the bot ID and password once. They will be saved with the other marketplace logins.`,
+      }
+    }
+    secret = {
+      accountName: row.accountName,
+      portalUrl: defaultUrl,
+      username: "",
+      password: "",
     }
   }
 
   const config = loadAgentConfig()
   const kind = resolveBrowserAdapterKind()
+  const resolvedPortalUrl = resolvePortalLoginUrl(row.accountName, secret.portalUrl || row.portalUrl)
   // Supplier sign-in always goes through the selected adapter: the embedded
   // WebContentsView in the desktop app, the external system browser everywhere
   // else. A hardcoded BrowserRunner here used to
@@ -433,13 +573,29 @@ export async function signInMarketplace(input: {
   try {
     const result = await completePortalLogin(browser, {
       marketplace: row.accountName,
-      portalUrl: secret.portalUrl || row.portalUrl,
+      portalUrl: resolvedPortalUrl,
       username: secret.username,
       password: secret.password,
       sessionDir: supplierSessionDir(config.userDataDir, row.accountName, kind),
     })
     if (!result.ok && input.holdOnPrompt) {
       heldBrowser = browser
+    }
+    if (result.ok) {
+      clearPanelHold(panelKeyForMarketplace(row.accountName))
+    }
+    if (result.ok && !requireApprovalBeforeSubmitForMarketplace(row.accountName)) {
+      // Manual-login-once for Meesho: cookies are already saved above, so
+      // persist the standing auto-submit authorization on the credential.
+      // Best effort: a failed flag save must not fail a good sign-in.
+      try {
+        await saveTypedLogin(row, secret.username || undefined, secret.password || undefined)
+        result.message = `${result.message} Meesho full-auto is on: claims will submit automatically and the ticket ID will be saved.`
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err)
+        logger.warn(`Could not enable Meesho auto-submit for ${row.accountName}: ${reason}`)
+        result.message = `${result.message} Cookies are saved, but auto-submit could not be switched on (${reason}). Save the Meesho login once in Settings to enable it.`
+      }
     }
     if (result.ok && envSyncWarning) {
       result.message = `${result.message} Note: ${envSyncWarning}`
@@ -457,7 +613,7 @@ export async function requeueMarketplaceJobs(accountName: string): Promise<numbe
   const headers = await authHeaders()
   const config = loadAgentConfig()
   const jobsRes = await fetch(
-    `${backend()}/api/automation/agent/jobs?agentUuid=${encodeURIComponent(config.agentUuid)}`,
+    `${backend()}/api/automation/agent/jobs?agentUuid=${encodeURIComponent(config.agentUuid)}&stage=manual_intervention_required&pageSize=100`,
     { headers: { "X-Agent-UUID": config.agentUuid, "X-Agent-Key": config.apiKey } },
   )
   if (!jobsRes.ok) return 0

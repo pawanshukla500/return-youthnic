@@ -14,7 +14,7 @@ import { AgentBackendClient } from "./agent-client.js"
 import { BrowserRunner, findSystemBrowser } from "./browser-runner.js"
 import { getAutomationEngine, isMarketplaceSupported } from "./marketplaces/registry.js"
 import { currentOperator, loginOperator, logoutOperator } from "./operator-session.js"
-import { closePortalLoginBrowser, holdPortalBrowser, listPortalLogins, PORTAL_CHANNELS, queueOneClaim, savePortalLogin, testPortalLogin } from "./portal-login.js"
+import { clearPortalLoginHold, closePortalLoginBrowser, ensureMeeshoAutoSubmit, holdPortalBrowser, isPortalLoggedIn, listPortalLogins, PORTAL_CHANNELS, queueOneClaim, requeueMarketplaceJobs, savePortalLogin, testPortalLogin } from "./portal-login.js"
 import {
   activeSupplierTabPanelKey,
   attachSupplierViewForBackground,
@@ -22,6 +22,8 @@ import {
   detachSupplierTab,
   dockSupplierTab,
   ensureSupplierView,
+  evaluateSupplierView,
+  flushSupplierSessionCookies,
   focusDetachedSupplierTab,
   handleDetachedWindowClosed,
   hasSupplierView,
@@ -31,6 +33,7 @@ import {
   navigateSupplierTab,
   notifyWindowLifecycle,
   openSupplierTab,
+  registerSupplierViewSettledListener,
   reopenClosedSupplierTab,
   setSupplierTabWorkerState,
   showSupplierView,
@@ -41,13 +44,13 @@ import {
   tabIdForPanelKey,
   WORKER_ACTIVE_PAUSE_REQUIRED,
 } from "./native-browser-view.js"
-import { CLAIM_PANELS, clearPanelHold, getPanelRuntimeState, getPanelStatuses, isPanelHeld, markPanelBusy, markPanelResult, panelKeyForMarketplace, pollJobSkippingHeldPanels } from "./panel-queue.js"
+import { CLAIM_PANELS, clearPanelHold, getPanelRuntimeState, getPanelStatuses, isPanelHeld, isPanelWaitingRelogin, markPanelBusy, markPanelResult, panelKeyForMarketplace, pollJobSkippingHeldPanels } from "./panel-queue.js"
 import { localEncryptionAvailable } from "./local-secrets.js"
 import { checkForUpdates } from "./update-check.js"
 import { followUpExecutionBundle } from "./follow-up-bundle.js"
 import { isSafeToSubmitBundle } from "./submit-guard.js"
-import { describeBrowserAdapter, openSupplierBrowser, resolveBrowserAdapterKind } from "./browser-adapter.js"
-import { profileDirFor, readSessionSavedAt, supplierSessionDir } from "./supplier-session.js"
+import { describeBrowserAdapter, openSupplierBrowser, resolveBrowserAdapterKind, type SupplierBrowserHandle } from "./browser-adapter.js"
+import { clearSessionMarker, profileDirFor, readSessionSavedAt, supplierSessionDir, writeSessionMarker } from "./supplier-session.js"
 import { aiUsageSnapshot, ASSIST_SYSTEM_PROMPT, buildDiagnosticPrompt, decideFollowUpAssist, loadAiAssistConfig, providerFromConfig, requestAiProposal, validateAiProposal, type AssistanceContext } from "./ai-assistant.js"
 import { findApprovedProcedure, isCacheStale, loadLocalMemory, markSynced, pruneLocalEvents, recordLocalEvent, saveLocalMemory, upsertCachedProcedure } from "./ai-memory-cache.js"
 import type { CachedProcedure } from "./ai-memory-cache.js"
@@ -142,7 +145,7 @@ logger.onLog((entry) => {
  * supplier profile must test this instead. See poll-guard.ts for the tested rule.
  */
 function engineBusy(): boolean {
-  return engineBusyWith({ isCurrentlyProcessing, pollInFlight, portalTestInFlight, followUpInFlight })
+  return checkingLoginPanels.size > 0 || engineBusyWith({ isCurrentlyProcessing, pollInFlight, portalTestInFlight, followUpInFlight })
 }
 
 /**
@@ -166,6 +169,145 @@ function supplierProfileInUse(): boolean {
 function portalUrlForPanel(panelKey: string): string {
   return CLAIM_PANELS.find((candidate) => candidate.key === panelKey)?.portalUrl || ""
 }
+
+const heldReloginBrowserByPanel = new Map<string, SupplierBrowserHandle>()
+const checkingLoginPanels = new Set<string>()
+const viewSettleTimers = new Map<string, NodeJS.Timeout>()
+let reloginWatchTimer: NodeJS.Timeout | null = null
+
+function panelDisplayName(panelKey: string): string {
+  return CLAIM_PANELS.find((candidate) => candidate.key === panelKey)?.name || labelForPanelKey(panelKey)
+}
+
+async function releaseHeldReloginBrowser(panelKey: string, closeExternal: boolean): Promise<void> {
+  const held = heldReloginBrowserByPanel.get(panelKey)
+  if (!held) return
+  heldReloginBrowserByPanel.delete(panelKey)
+  if (closeExternal && held.kind !== "native") {
+    await held.close().catch(() => undefined)
+  }
+}
+
+/**
+ * Inspects an open supplier view or held browser for a completed sign-in.
+ * When a portal is newly signed in, saves the persistent session marker,
+ * flushes Chromium partition cookies to disk, ensures Meesho auto-submit,
+ * clears any expired-session hold, requeues paused claims, and nudges the worker.
+ */
+export async function checkPanelLoginAndResume(panelKey: string): Promise<{ ok: boolean; loggedIn: boolean; resumed: boolean }> {
+  const key = panelKeyForMarketplace(panelKey)
+  if (!operatorSignedIn || !key || key === "unknown" || checkingLoginPanels.has(key) || engineBusy()) {
+    return { ok: false, loggedIn: false, resumed: false }
+  }
+  const held = heldReloginBrowserByPanel.get(key)
+  const hasView = hasSupplierView(key)
+  if (!held && !hasView) {
+    return { ok: true, loggedIn: false, resumed: false }
+  }
+
+  checkingLoginPanels.add(key)
+  let triggerRunOnce = false
+  let resumedOutcome = false
+  try {
+    const readJs = `(() => ({ href: window.location.href || "", text: (document.body && document.body.innerText) || "", hasPassword: Boolean(document.querySelector('input[type="password"], input[name="password"]')) }))()`
+    const snapshot =
+      (held ? await held.browser.evaluate<{ href: string; text: string; hasPassword: boolean }>(readJs).catch(() => null) : null) ||
+      (await evaluateSupplierView<{ href: string; text: string; hasPassword: boolean }>(key, readJs))
+    if (!snapshot) return { ok: false, loggedIn: false, resumed: false }
+
+    const panelName = panelDisplayName(key)
+    const signedIn = isPortalLoggedIn(panelName, snapshot.href, snapshot.text, snapshot.hasPassword)
+    if (!signedIn) return { ok: true, loggedIn: false, resumed: false }
+
+    const adapterKind = resolveBrowserAdapterKind()
+    const sessionDir = supplierSessionDir(config.userDataDir, panelName, adapterKind)
+    const wasMissingOrRelogin = isPanelWaitingRelogin(key) || !readSessionSavedAt(sessionDir) || holdPortalBrowser()
+    if (!wasMissingOrRelogin) {
+      return { ok: true, loggedIn: true, resumed: false }
+    }
+
+    writeSessionMarker(sessionDir, panelName)
+    await flushSupplierSessionCookies(key)
+    await releaseHeldReloginBrowser(key, true)
+    await clearPortalLoginHold(true)
+
+    if (key === "meesho") {
+      await ensureMeeshoAutoSubmit().catch(() => false)
+    }
+
+    const wasWaitingRelogin = isPanelWaitingRelogin(key)
+    clearPanelHold(key)
+    const requeued = await requeueMarketplaceJobs(panelName).catch(() => 0)
+    logger.info(
+      `${panelName} session is active and cookies are saved.${requeued > 0 ? ` Re-queued ${requeued} paused claim(s) — carrying on automatically.` : ""}`,
+    )
+    resumedOutcome = wasWaitingRelogin || requeued > 0
+    triggerRunOnce = resumedOutcome
+    return { ok: true, loggedIn: true, resumed: resumedOutcome }
+  } finally {
+    checkingLoginPanels.delete(key)
+    if (triggerRunOnce) {
+      void engineRunOnceNow()
+    }
+  }
+}
+
+function panelsNeedingLoginWatch(): string[] {
+  const adapterKind = resolveBrowserAdapterKind()
+  const out = new Set<string>()
+  for (const panel of CLAIM_PANELS) {
+    if (isPanelWaitingRelogin(panel.key)) {
+      out.add(panel.key)
+      continue
+    }
+    const sessionDir = supplierSessionDir(config.userDataDir, panel.name, adapterKind)
+    if ((heldReloginBrowserByPanel.has(panel.key) || hasSupplierView(panel.key)) && !readSessionSavedAt(sessionDir)) {
+      out.add(panel.key)
+    }
+  }
+  return [...out]
+}
+
+function scheduleReloginWatch(panelKey?: string): void {
+  if (panelKey) {
+    const existingTimer = viewSettleTimers.get(panelKey)
+    if (existingTimer) clearTimeout(existingTimer)
+  }
+  if (reloginWatchTimer) return
+  reloginWatchTimer = setTimeout(() => {
+    reloginWatchTimer = null
+    void (async () => {
+      if (!operatorSignedIn) return
+      const watching = panelsNeedingLoginWatch()
+      if (!watching.length) return
+      for (const key of watching) {
+        await checkPanelLoginAndResume(key).catch(() => undefined)
+      }
+      if (operatorSignedIn && panelsNeedingLoginWatch().length > 0) {
+        scheduleReloginWatch()
+      }
+    })()
+  }, 2500)
+}
+
+registerSupplierViewSettledListener((panelKey) => {
+  if (!operatorSignedIn) return
+  const key = panelKeyForMarketplace(panelKey)
+  const existing = viewSettleTimers.get(key)
+  if (existing) clearTimeout(existing)
+  viewSettleTimers.set(
+    key,
+    setTimeout(() => {
+      viewSettleTimers.delete(key)
+      if (!operatorSignedIn || engineBusy()) return
+      void checkPanelLoginAndResume(key).then((res) => {
+        if (!res.loggedIn && panelsNeedingLoginWatch().includes(key)) {
+          scheduleReloginWatch(key)
+        }
+      }).catch(() => undefined)
+    }, 650),
+  )
+})
 
 /**
  * Ensure a manually opened tab has a real WebContentsView before it is shown,
@@ -385,14 +527,35 @@ async function pollAndProcessJob(manual = false): Promise<boolean> {
         // (the tab badges instead) and is fail-closed off the Browsers tab.
         showSupplierView(panelKey)
         await browserRunner.showForManualStep?.()
-        await client.createOperatorTask({ claimId: bundle.claimId, marketplace: bundle.marketplace, kind: "pending_approval", title: `${bundle.marketplace}: manual approval needed for claim #${bundle.claimId}`, note: "Filing paused for an operator action." })
-        markPanelResult(panelKey, "manual_action", result.manualActionReason || "Manual action required on portal.")
+        const isLoginPrompt = result.loginRequired === true
+        if (isLoginPrompt) {
+          clearSessionMarker(supplierSessionDir(config.userDataDir, bundle.marketplace, resolveBrowserAdapterKind()))
+          heldReloginBrowserByPanel.set(panelKey, supplierBrowser)
+        }
+        await client.createOperatorTask({
+          claimId: bundle.claimId,
+          marketplace: bundle.marketplace,
+          kind: isLoginPrompt ? "expired_session" : "pending_approval",
+          title: isLoginPrompt
+            ? `${bundle.marketplace}: session expired — log in again for claim #${bundle.claimId}`
+            : `${bundle.marketplace}: manual approval needed for claim #${bundle.claimId}`,
+          note: result.manualActionReason || (isLoginPrompt ? "Session expired. Log in again in the app to carry on with this claim." : "Filing paused for an operator action."),
+        })
+        markPanelResult(
+          panelKey,
+          "manual_action",
+          result.manualActionReason || "Manual action required on portal.",
+          isLoginPrompt ? { loginRequired: true } : undefined,
+        )
         await client.updateProgress(jobHeader.jobId, {
           stage: "manual_intervention_required",
           logMessage: result.manualActionReason || "Manual action required on portal.",
           screenshotPath: result.screenshotPath,
           manualActionReason: result.manualActionReason,
         })
+        if (isLoginPrompt) {
+          scheduleReloginWatch(panelKey)
+        }
       } else if (result.stage === "not_eligible") {
         logger.warn(`Job #${jobHeader.jobId} is not eligible for a claim. Kept for manual review; moving to the next job.`)
         markPanelResult(panelKey, "not_eligible", result.manualActionReason || "Marketplace says this order is not eligible.")
@@ -744,13 +907,21 @@ async function pollAndProcessFollowUp(): Promise<boolean> {
       } else {
         const statusText = String(result.statusText || "").trim()
         if (!statusText) {
+          const isLoginExpired = result.loginRequired === true || String(result.note || "").toLowerCase().includes("session expired")
+          if (isLoginExpired) {
+            clearSessionMarker(supplierSessionDir(config.userDataDir, followUp.marketplace, resolveBrowserAdapterKind()))
+            markPanelResult(panelKey, "manual_action", result.note || "Session expired — log in again to continue.", { loginRequired: true })
+          }
+          const outcome = isLoginExpired ? "login_required" : "not_found"
           await client.reportFollowUp(followUp.followUpId, {
-            outcome: "not_found",
-            note: "The panel opened but no ticket state was found for this reference.",
+            outcome,
+            note: result.note || "The panel opened but no ticket state was found for this reference.",
             screenshotPath: result.screenshotPath,
           })
-          lastFollowUpResult = `${followUp.marketplace}: ticket state not found`
-          await runFollowUpAssist({ followUpId: followUp.followUpId, claimId: followUp.claimId, marketplace: followUp.marketplace, marketplaceClaimId: followUp.marketplaceClaimId, ...assistClientHooks(client, followUp.claimId, followUp.marketplace), outcome: "not_found", note: "ticket state not found on panel", statusText: "", normalizedStatus: "", statusChanged: false })
+          lastFollowUpResult = isLoginExpired
+            ? `${followUp.marketplace}: session expired — log in again`
+            : `${followUp.marketplace}: ticket state not found`
+          await runFollowUpAssist({ followUpId: followUp.followUpId, claimId: followUp.claimId, marketplace: followUp.marketplace, marketplaceClaimId: followUp.marketplaceClaimId, ...assistClientHooks(client, followUp.claimId, followUp.marketplace), outcome, note: result.note || "ticket state not found on panel", statusText: "", normalizedStatus: "", statusChanged: false })
         } else {
           const followUpReport = await client.reportFollowUp(followUp.followUpId, {
             outcome: "status_read",
@@ -3701,9 +3872,21 @@ export function startDesktopAppServer(bind: EngineBind = resolveEngineBind()): P
           return
         }
         const key = decodeURIComponent(url.pathname.split("/")[3] || "")
+        await releaseHeldReloginBrowser(key, true)
         clearPanelHold(key)
         logger.info(`Panel hold cleared by operator: ${key}`)
         sendJson(res, 200, { ok: true, panels: getPanelStatuses(config.userDataDir) })
+        return
+      }
+
+      if (url.pathname.startsWith("/api/panels/") && url.pathname.endsWith("/check-login") && req.method === "POST") {
+        if (!operatorSignedIn) {
+          sendJson(res, 401, { error: "Sign in before checking a supplier login." })
+          return
+        }
+        const key = decodeURIComponent(url.pathname.split("/")[3] || "")
+        const outcome = await checkPanelLoginAndResume(key)
+        sendJson(res, 200, { ...outcome, panels: getPanelStatuses(config.userDataDir) })
         return
       }
 
@@ -3870,9 +4053,19 @@ export function startDesktopAppServer(bind: EngineBind = resolveEngineBind()): P
         // would leave a 24/7 bot paused with no obvious cause.
         const wasRunning = isWorkerRunning
         isWorkerRunning = false
+        let testPassed = false
+        let testedPanelKey = ""
         try {
           const body = await readJson(req)
-          const result = await testPortalLogin(String(body.marketplace || "Meesho"), String(body.username || ""), String(body.password || ""))
+          const marketplaceName = String(body.marketplace || "Meesho")
+          testedPanelKey = panelKeyForMarketplace(marketplaceName)
+          const result = await testPortalLogin(marketplaceName, String(body.username || ""), String(body.password || ""))
+          if (result.ok) {
+            testPassed = true
+            await releaseHeldReloginBrowser(testedPanelKey, true)
+            clearPanelHold(testedPanelKey)
+            await flushSupplierSessionCookies(testedPanelKey)
+          }
           sendJson(res, result.ok ? 200 : 400, result)
         } catch (error) {
           logger.error("Supplier login test failed.", error)
@@ -3881,6 +4074,9 @@ export function startDesktopAppServer(bind: EngineBind = resolveEngineBind()): P
           portalTestInFlight = false
           if (wasRunning && operatorSignedIn) {
             engineStart()
+          }
+          if (testPassed && operatorSignedIn) {
+            void engineRunOnceNow()
           }
         }
         return
@@ -3928,6 +4124,7 @@ export function startDesktopAppServer(bind: EngineBind = resolveEngineBind()): P
           const shown = wantsFocus
             ? showSupplierViewForUser(panelKey, { focus: true })
             : showSupplierView(panelKey)
+          scheduleReloginWatch(panelKey)
           if (shown) {
             sendJson(res, 200, { ok: true, panelKey, ...portalBrowserSnapshot() })
           } else {
@@ -3968,6 +4165,7 @@ export function startDesktopAppServer(bind: EngineBind = resolveEngineBind()): P
             accountName: typeof body.accountName === "string" && body.accountName ? String(body.accountName) : label,
           })
           showSupplierView(panelKey)
+          scheduleReloginWatch(panelKey)
           sendJson(res, 200, { ok: true, tab, ...portalBrowserSnapshot() })
         } catch (error) {
           sendJson(res, 400, { error: error instanceof Error ? error.message : "Could not open the supplier browser tab." })
@@ -4026,6 +4224,7 @@ export function startDesktopAppServer(bind: EngineBind = resolveEngineBind()): P
             sendJson(res, 409, { code: result.code, error: result.error })
             return
           }
+          await releaseHeldReloginBrowser(result.tab.panelKey, true)
           sendJson(res, 200, { ok: true, closed: result.tab.tabId, tab: result.tab, ...portalBrowserSnapshot() })
         } catch (error) {
           sendJson(res, 400, { error: error instanceof Error ? error.message : "Could not close the supplier browser tab." })

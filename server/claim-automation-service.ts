@@ -317,6 +317,21 @@ export async function getPortalLoginForSetup(
   }
 }
 
+export function isMeeshoAccountName(accountName: string): boolean {
+  return accountName.toLowerCase().includes("meesho")
+}
+
+/**
+ * Standing submission authorization for a new credential (M9: a saved login
+ * never authorizes; this flag is the authorization). Meesho runs full-auto
+ * by operator decision: the operator signs in manually once, the cookies
+ * stay saved on the PC, and claims then submit automatically with the
+ * ticket ID stored. Every other marketplace keeps approval-before-submit.
+ */
+export function defaultRequireApprovalBeforeSubmit(accountName: string): boolean {
+  return !isMeeshoAccountName(accountName)
+}
+
 export function defaultMarketplacePortalUrl(accountName: string): string {
   const n = accountName.toLowerCase()
   if (n.includes("meesho")) return "https://supplier.meesho.com/panel/v3/new/root/login"
@@ -414,7 +429,9 @@ export async function saveMarketplaceCredential(
         userEnc || "",
         passEnc || "",
         data.automationMode || "assisted",
-        data.requireApprovalBeforeSubmit !== false,
+        data.requireApprovalBeforeSubmit !== undefined
+          ? data.requireApprovalBeforeSubmit
+          : defaultRequireApprovalBeforeSubmit(name),
         data.autoPrepare !== false,
       ],
     )

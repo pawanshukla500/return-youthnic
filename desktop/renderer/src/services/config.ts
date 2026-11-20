@@ -13,4 +13,5 @@ export {
   apiGet,
   apiPost,
   apiDelete,
+  openPanelInBrowsers,
 } from './engineApi'

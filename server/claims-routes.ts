@@ -45,6 +45,7 @@ import {
 } from "./claims-service.js"
 import { ServiceError } from "./register-service.js"
 import { getMeeshoClaimDraft } from "./meesho-claims.js"
+import { createOrQueueAutomationJob } from "./claim-automation-service.js"
 
 function text(value: unknown): string {
   return typeof value === "string" ? value : ""
@@ -199,8 +200,14 @@ export function mountClaimsRoutes(app: Express, requireUser: RequestHandler): vo
         marketplaceIssueCode: text(body.marketplaceIssueCode),
         packetState: text(body.packetState),
       })
+      let jobId: number | null = null
+      try {
+        jobId = await createOrQueueAutomationJob(getPool(), result.id)
+      } catch (err) {
+        console.warn("[claims-create] createOrQueueAutomationJob warning:", err)
+      }
       publishChange({ kind: "claim.updated", marketplaceId: result.marketplaceId, actorId: actorOf(req).id })
-      res.status(201).json({ claim: result })
+      res.status(201).json(jobId ? { claim: result, jobId } : { claim: result })
     } catch (error) {
       sendError(res, error, next)
     }

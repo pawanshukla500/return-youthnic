@@ -485,7 +485,8 @@ export function mountClaimAutomationRoutes(app: Express, requireUser: RequestHan
         username: text(body.username) || undefined,
         password: text(body.password) || undefined,
         automationMode: text(body.automationMode) || undefined,
-        requireApprovalBeforeSubmit: body.requireApprovalBeforeSubmit !== false,
+        requireApprovalBeforeSubmit:
+          typeof body.requireApprovalBeforeSubmit === "boolean" ? body.requireApprovalBeforeSubmit : undefined,
         autoPrepare: body.autoPrepare !== false,
       })
       res.json({ id: credId })

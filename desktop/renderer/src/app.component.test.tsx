@@ -300,3 +300,68 @@ describe('Modal', () => {
     assert.equal(document.activeElement, trigger, 'focus returns to the trigger')
   })
 })
+
+describe('Expired session ReloginBanner', () => {
+  it('shows the expired Meesho login banner and opens the Meesho browser tab on click', async () => {
+    window.location.hash = '#dashboard'
+    installFetchStub((method, pathname) => {
+      if (method === 'GET' && pathname === '/api/operator/session') return { body: { signedIn: true, user: OPERATOR } }
+      if (method === 'GET' && pathname === '/api/status') return { body: makeStatus({ signedIn: true, isRunning: true }) }
+      if (method === 'GET' && pathname === '/api/panels') {
+        return {
+          body: {
+            panels: [
+              {
+                key: 'meesho',
+                name: 'Meesho',
+                portalUrl: 'https://supplier.meesho.com/panel/v3/new/root/login',
+                automated: true,
+                profileDir: 'SYN-profile',
+                sessionSavedAt: null,
+                state: 'manual_action',
+                reloginRequired: true,
+                activeJobId: null,
+                consecutiveErrors: 0,
+                lastResult: 'Meesho session expired.',
+                lastResultAt: '2026-11-20T00:00:00Z',
+              },
+            ],
+          },
+        }
+      }
+      if (method === 'GET' && pathname === '/api/portal-browser') {
+        return { body: { views: [], tabs: [], activeTabId: null, open: false, held: false, reason: null } }
+      }
+      if (method === 'POST' && pathname === '/api/portal-browser/open') {
+        return { body: { ok: true, views: [], tabs: [], activeTabId: 'tab-meesho', open: true } }
+      }
+      if (method === 'POST' && pathname === '/api/portal-browser/show') {
+        return { body: { ok: true, views: [], tabs: [], activeTabId: 'tab-meesho', open: true } }
+      }
+      const page = shellPageRoutes(method, pathname)
+      if (page) return page
+      return { status: 404, body: { error: 'not stubbed' } }
+    })
+
+    render(
+      <ThemeProvider>
+        <SessionProvider>
+          <App />
+        </SessionProvider>
+      </ThemeProvider>,
+    )
+
+    const loginBtns = await screen.findAllByRole('button', { name: 'Log in to Meesho' })
+    assert.equal(loginBtns.length, 2, 'shown in both global banner and Dashboard panel card')
+    fireEvent.click(loginBtns[0])
+
+    assert.equal(window.location.hash, '#browsers')
+    await new Promise((r) => setTimeout(r, 20))
+    const openCall = fetchCalls.find((c) => c.method === 'POST' && c.pathname === '/api/portal-browser/open')
+    const showCall = fetchCalls.find((c) => c.method === 'POST' && c.pathname === '/api/portal-browser/show')
+    assert.ok(openCall, 'clicking banner opens Meesho browser tab')
+    assert.ok(showCall, 'clicking banner focuses Meesho browser view')
+    cleanup()
+    restoreFetch()
+  })
+})

@@ -13,6 +13,7 @@ import {
   findExistingTicketForOrder,
   parseMeeshoTicketRow,
   extractMeeshoResolution,
+  extractTicketIdFromConfirmation,
   resolveMeeshoIssueLabel,
   resolveMeeshoPacketLabel,
   resolveMeeshoUploadField,
@@ -277,5 +278,81 @@ describe("MeeshoAutomation and BaseMarketplaceAutomation defaults", () => {
     assert.ok(automation.getExposedEvidenceMap() instanceof Map)
     assert.equal(automation.getExposedEvidenceMap().size, 0)
     assert.equal(automation.getExposedWorkDir(), os.tmpdir())
+  })
+})
+
+describe("extractTicketIdFromConfirmation", () => {
+  it("extracts ticket ID from confirmation URL or body text while excluding order/AWB IDs", () => {
+    const exclude = new Set(["123456789012", "999888777666"])
+    assert.equal(
+      extractTicketIdFromConfirmation("https://supplier.meesho.com/panel/v3/new/experience/abc/support/ticket/98765432101", "", exclude),
+      "98765432101",
+    )
+    assert.equal(
+      extractTicketIdFromConfirmation(
+        "https://supplier.meesho.com/panel/v3/new/experience/abc/support",
+        "Sub Order 123456789012 Ticket ID: 98765432102 raised successfully",
+        exclude,
+      ),
+      "98765432102",
+    )
+    assert.equal(
+      extractTicketIdFromConfirmation(
+        "https://supplier.meesho.com/panel/v3/new/experience/abc/support",
+        "Ticket for order 123456789012 is pending",
+        exclude,
+      ),
+      "",
+    )
+  })
+
+  it("checkClaimStatus triggers loginRequired when session expired even if stored portalUrl already has a seller slug", async () => {
+    const envKeys = ["MEESHOID", "MEESHO_ID", "MEESHO_USERNAME", "MEESHO_PWD", "MEESHO_PASSWORD", "MEESHO_PASS"] as const
+    const savedEnv: Record<string, string | undefined> = {}
+    for (const k of envKeys) {
+      savedEnv[k] = process.env[k]
+      delete process.env[k]
+    }
+    const origNow = Date.now
+    let fakeNow = 100_000
+    Date.now = () => {
+      fakeNow += 2000
+      return fakeNow
+    }
+    try {
+      const mockBrowser: any = {
+        async navigate() {},
+        async evaluate(script: string) {
+          if (script.trim() === "window.location.href") return "https://supplier.meesho.com/panel/v3/new/root/login"
+          if (script.includes("isPortalLoggedIn")) return false
+          if (script.includes("hasPassword")) return { text: "", hasPassword: true }
+          return false
+        },
+        async humanClick() { return true },
+        async detectCaptchaOrOtp() { return { challengeDetected: false } },
+        async showForManualStep() {},
+        async delay() {},
+      }
+      const mockJob: any = {
+        jobId: 1,
+        claimId: 1,
+        portalUrl: "https://supplier.meesho.com/panel/v3/new/experience/SYN-SLUG/support",
+        credentials: { username: "", password: "" },
+        claim: {},
+      }
+      const automation = new MeeshoAutomation(mockBrowser, mockJob)
+      const res = await automation.checkClaimStatus("98765432101")
+      assert.equal(res.supported, true)
+      if (res.supported) {
+        assert.equal(res.statusText, "")
+        assert.equal(res.loginRequired, true)
+      }
+    } finally {
+      Date.now = origNow
+      for (const k of envKeys) {
+        if (savedEnv[k] !== undefined) process.env[k] = savedEnv[k]
+        else delete process.env[k]
+      }
+    }
   })
 })

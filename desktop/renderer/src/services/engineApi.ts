@@ -101,3 +101,18 @@ export function apiPost<T>(path: string, body?: unknown): Promise<T> {
 export function apiDelete<T>(path: string): Promise<T> {
   return request<T>('DELETE', path)
 }
+
+/** Switches to #browsers and asks the engine to open and focus a supplier panel tab. */
+export async function openPanelInBrowsers(
+  panel: { key: string; name: string },
+  navigate?: (hash: string) => void,
+): Promise<void> {
+  if (navigate) navigate('#browsers')
+  else window.location.hash = '#browsers'
+  try {
+    await apiPost('/api/portal-browser/open', { panelKey: panel.key, marketplace: panel.name })
+    await apiPost('/api/portal-browser/show', { panelKey: panel.key, marketplace: panel.name, focus: true })
+  } catch {
+    // Switching to #browsers still shows live state if worker owns the view.
+  }
+}

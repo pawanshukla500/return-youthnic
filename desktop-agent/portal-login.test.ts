@@ -3,8 +3,8 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import test from "node:test"
-import { profileDirFor, readSessionSavedAt, sessionMarkerPath, supplierSessionDir } from "./src/supplier-session.ts"
-import { isPortalLoggedIn, secretFromEnvironment } from "./src/portal-login.ts"
+import { clearSessionMarker, profileDirFor, readSessionSavedAt, sessionMarkerPath, supplierSessionDir, writeSessionMarker } from "./src/supplier-session.ts"
+import { completePortalLogin, isPortalLoggedIn, portalLoginSavePayload, requireApprovalBeforeSubmitForMarketplace, secretFromEnvironment, type PortalLoginRow } from "./src/portal-login.ts"
 
 test("marketplace profile folders stay stable for saved cookies", () => {
   const root = path.join(os.tmpdir(), "return-app-profiles")
@@ -118,6 +118,28 @@ test("secretFromEnvironment resolves Meesho credentials when environment variabl
   }
 })
 
+test("Meesho login save enables full-auto; other panels keep approval", () => {
+  const row = (accountName: string): PortalLoginRow => ({
+    id: 7,
+    marketplaceId: 3,
+    marketplaceName: accountName,
+    accountName,
+    portalUrl: "https://supplier.meesho.com/panel/v3/new/root/login",
+    usernameMasked: "SY-***",
+    requireApprovalBeforeSubmit: true,
+    sessionSavedAt: null,
+  })
+  assert.equal(requireApprovalBeforeSubmitForMarketplace("Meesho"), false)
+  assert.equal(requireApprovalBeforeSubmitForMarketplace("SYN-Meesho VB Exports"), false)
+  assert.equal(requireApprovalBeforeSubmitForMarketplace("Flipkart"), true)
+  const meesho = portalLoginSavePayload(row("Meesho"), "SYN-user", "SYN-pass")
+  assert.equal(meesho.requireApprovalBeforeSubmit, false)
+  assert.equal(meesho.automationMode, "autonomous")
+  const flipkart = portalLoginSavePayload(row("Flipkart"), "SYN-user", "SYN-pass")
+  assert.equal(flipkart.requireApprovalBeforeSubmit, true)
+  assert.equal(flipkart.automationMode, "assisted")
+})
+
 test("secretFromEnvironment respects alias fallback precedence for Meesho credentials", () => {
   const envKeys = [
     "MEESHOID",
@@ -165,5 +187,83 @@ test("secretFromEnvironment respects alias fallback precedence for Meesho creden
         delete process.env[key]
       }
     }
+  }
+})
+
+test("clearSessionMarker clears expired session markers cleanly and tolerates missing markers", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "SYN-session-clear-"))
+  assert.equal(clearSessionMarker(dir), false)
+  writeSessionMarker(dir, "Meesho")
+  assert.ok(readSessionSavedAt(dir))
+  assert.equal(clearSessionMarker(dir), true)
+  assert.equal(readSessionSavedAt(dir), null)
+})
+
+test("isPortalLoggedIn rejects Meesho OTP and registration routes", () => {
+  assert.equal(isPortalLoggedIn("Meesho", "https://supplier.meesho.com/panel/v3/new/root/otp", "Enter OTP", false), false)
+  assert.equal(isPortalLoggedIn("Meesho", "https://supplier.meesho.com/panel/v3/new/root/register", "Register", false), false)
+})
+
+test("portalLoginSavePayload omits empty secrets when upgrading Meesho to autonomous and upgrades v2 portal URL", () => {
+  const legacyRow: PortalLoginRow = {
+    id: 9,
+    marketplaceId: 3,
+    marketplaceName: "Meesho",
+    accountName: "Meesho",
+    portalUrl: "https://supplier.meesho.com/panel/v2/new/returns/claims",
+    usernameMasked: "SY-***",
+    requireApprovalBeforeSubmit: true,
+    sessionSavedAt: null,
+  }
+  const upgraded = portalLoginSavePayload(legacyRow)
+  assert.equal(upgraded.portalUrl, "https://supplier.meesho.com/panel/v3/new/root/login")
+  assert.equal(upgraded.automationMode, "autonomous")
+  assert.equal(upgraded.requireApprovalBeforeSubmit, false)
+  assert.equal("username" in upgraded, false)
+  assert.equal("password" in upgraded, false)
+})
+
+test("completePortalLogin fails fast on expired session when failFastOnManualPrompt is true and clears stale marker", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "SYN-failfast-"))
+  writeSessionMarker(dir, "Meesho")
+  let shownManual = false
+  const stubBrowser: any = {
+    profileDirectory: dir,
+    async navigate() {},
+    async evaluate(script: string) {
+      if (script.includes("isPortalLoggedIn")) return false
+      if (script.includes("#loginbutton")) return false
+      if (script.includes('input[type="password"]')) return true
+      return false
+    },
+    async humanClick() { return true },
+    async humanType() { return true },
+    async detectCaptchaOrOtp() { return { challengeDetected: false } },
+    async showForManualStep() { shownManual = true },
+    async delay() {},
+    async close() {},
+  }
+  const origNow = Date.now
+  let fakeNow = 10_000
+  Date.now = () => {
+    fakeNow += 2000
+    return fakeNow
+  }
+  try {
+    const res = await completePortalLogin(stubBrowser, {
+      marketplace: "Meesho",
+      portalUrl: "https://supplier.meesho.com/panel/v3/new/root/login",
+      username: "",
+      password: "",
+      failFastOnManualPrompt: true,
+      waitMs: 60000,
+      sessionDir: dir,
+    })
+    assert.equal(res.ok, false)
+    assert.equal(res.loginRequired, true)
+    assert.equal(shownManual, true)
+    assert.equal(readSessionSavedAt(dir), null, "stale session marker must be removed on expiry")
+  } finally {
+    Date.now = origNow
   }
 })

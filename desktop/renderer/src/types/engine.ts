@@ -159,6 +159,7 @@ export type PanelStatus = {
   profileDir: string
   sessionSavedAt: string | null
   state: PanelRuntimeState
+  reloginRequired?: boolean
   activeJobId: number | null
   consecutiveErrors: number
   lastResult: string | null
@@ -263,6 +264,8 @@ export type PortalChannelStatus = {
   name: string
   configured: boolean
   usernameMasked: string
+  /** True when claims on this panel submit without a per-claim approval (Meesho full-auto). Absent on older engines. */
+  autoSubmit?: boolean
   sessionSavedAt: string | null
 }
 
