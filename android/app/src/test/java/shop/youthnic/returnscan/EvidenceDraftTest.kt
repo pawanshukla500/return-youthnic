@@ -132,6 +132,53 @@ class EvidenceDraftTest {
     }
 
     @Test
+    fun aPhotoStillBeingShrunkComesBackAfterTheAppIsKilled() {
+        // Restored from the camera's pending photo, the photo is shrunk in the background and the draft is saved at once.
+        // That save used to have no pending photo and no file for it, so a second kill during the shrink lost the photo.
+        val shrinking = evidence("SYN-reverse_waybill-3.jpg", "SYN-jpeg still being shrunk")
+        val saving = DraftFile(shrinking.absolutePath, "image/jpeg", "reverse_waybill")
+        val draft = EvidenceDraft("SYN-SUB-1", emptyList(), photosBeingSaved = listOf(saving))
+        assertFalse("a draft holding only a photo being shrunk is not empty", draft.isEmpty)
+        store().save(draft)
+
+        val restored = store().load()!!
+        assertEquals(listOf(saving), restored.photosToShrink())
+        assertEquals("the start-up clean-up keeps it", setOf("SYN-reverse_waybill-3.jpg"), restored.fileNames())
+        // Gone or emptied since the save (deleted as a stale capture): nothing to shrink.
+        assertTrue(shrinking.delete())
+        assertEquals(emptyList<DraftFile>(), store().load()!!.photosToShrink())
+        // A draft saved by an older build has no photos being shrunk.
+        assertEquals(emptyList<DraftFile>(), EvidenceDraft.fromJson("""{"returnKey":"SYN-SUB-1","files":[]}""")!!.photosBeingSaved)
+    }
+
+    @Test
+    fun theClaimScreenKeepsAPhotoInTheDraftUntilItIsRecorded() {
+        // The screen cannot be inflated in a unit test, so read its source.
+        val appDir = listOf(File("."), File("app"), File("android/app"))
+            .first { File(it, "src/main/res/values/strings.xml").isFile }
+        val source = File(appDir, "src/main/java/shop/youthnic/returnscan/ui/ClaimCaptureActivity.kt").readText()
+        val accept = source.substringAfter("private fun acceptCameraPhoto(").substringBefore("private var pendingPermissionAction")
+        val beforeShrink = accept.substringBefore("lifecycleScope.launch")
+        assertTrue("listed before the shrink starts", beforeShrink.contains("photosBeingSaved.add(saving)"))
+        assertTrue("and saved in the draft", beforeShrink.indexOf("photosBeingSaved.add(saving)") < beforeShrink.indexOf("saveEvidenceDraft()"))
+        val afterShrink = accept.substringAfter("EvidencePhoto.downscaleInPlace(file)")
+        assertTrue(
+            "taken off the list before it is recorded, so the draft never names it twice",
+            afterShrink.indexOf("photosBeingSaved.remove(saving)") in 0 until afterShrink.indexOf("recordCapturedEvidence(")
+        )
+        val save = source.substringAfter("private fun saveEvidenceDraft(").substringBefore("private fun restoreEvidenceDraft(")
+        assertTrue("every draft save lists the photos still being shrunk", save.contains("photosBeingSaved.toList()"))
+        val restore = source.substringAfter("private fun restoreEvidenceDraft(").substringBefore("private fun observeQueuedUploads(")
+        assertTrue("a restore shrinks them again", restore.contains("for (saving in shrinking) acceptCameraPhoto(File(saving.path), saving.fieldKey)"))
+        assertTrue(restore.contains("val shrinking = draft.photosToShrink()"))
+        val clear = source.substringAfter("private fun clearCapturedEvidence(").substringBefore("private fun saveEvidenceDraft(")
+        assertTrue(
+            "cleared evidence drops them from the draft, so a kill cannot restore them onto the next return",
+            clear.indexOf("photosBeingSaved.clear()") in 0 until clear.indexOf("saveEvidenceDraft()")
+        )
+    }
+
+    @Test
     fun theDraftNamesEveryFileTheStartUpCleanUpMustKeep() {
         val draft = EvidenceDraft(
             "SYN-SUB-1",

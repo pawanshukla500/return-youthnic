@@ -188,7 +188,7 @@ class EvidencePhotoSizingTest {
         val submitStart = source.substringAfter("private fun submitCompleteClaim(").substringBefore("ClaimPayload.build(")
         assertTrue(
             "Submit must wait while a photo is still being shrunk, or that photo is left off the claim",
-            photoResult.contains("photosBeingSaved++") && submitStart.contains("if (photosBeingSaved > 0)")
+            photoResult.contains("photosBeingSaved.add(saving)") && submitStart.contains("if (photosBeingSaved.isNotEmpty())")
         )
 
         val record = source.substringAfter("private fun recordCapturedEvidence(").substringBefore("private fun removeEvidence(")

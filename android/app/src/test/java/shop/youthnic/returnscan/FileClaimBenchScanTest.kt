@@ -65,6 +65,21 @@ class FileClaimBenchScanTest {
     }
 
     @Test
+    fun aPlainSaveAlsoLocksTheSheetUntilTheServerAnswers() {
+        // Closed during a plain Save, the sheet was gone when a failure came back: only a banner showed, and the counts,
+        // issues, flyer and notes (and the same-key retry) were lost. Both saves now lock Cancel, close, back and swipe.
+        val sheet = source("ReturnVerificationBottomSheet.kt")
+        val submit = sheet.substringAfter("private fun submitScan(").substringBefore("onSave(")
+        val bothSaves = submit.substringBefore("if (afterSave")
+        for (lock in listOf("binding.btnCancelVerification.isEnabled = false", "binding.btnCloseSheet.isEnabled = false", "setCancelable(false)")) {
+            assertTrue("$lock must apply to Save and File Claim alike", bothSaves.contains(lock))
+        }
+        val error = sheet.substringAfter("fun showSaveError(").substringBefore("private fun showError(")
+        assertTrue(error.contains("binding.btnCancelVerification.isEnabled = true"))
+        assertTrue(error.contains("binding.btnCloseSheet.isEnabled = true"))
+    }
+
+    @Test
     fun theClaimScreenOpensWithTheSavedScansId() {
         val sheet = source("ReturnVerificationBottomSheet.kt")
         val open = sheet.substringAfter("private fun openClaimCapture(scanId: Int)").substringBefore("private fun validateInputs(")

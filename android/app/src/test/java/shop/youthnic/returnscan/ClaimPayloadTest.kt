@@ -105,6 +105,22 @@ class ClaimPayloadTest {
     }
 
     @Test
+    fun anAwbScannedOverTheLookedUpOneBlocksTheClaim() {
+        // The lookup filled SYN-SUB-1 and SYN-AWB-0001; the operator then scanned another label into the AWB field. The
+        // sub order still matches, but SYN-AWB-0002 was never checked against the return, so nothing is sent with it.
+        assertNull(ClaimPayload.confirmedLookup(lookup, "SYN-SUB-1", "SYN-AWB-0002"))
+        assertNull(ClaimPayload.build(lookup, form.copy(awb = "SYN-AWB-0002")))
+        assertNull(ClaimPayload.build(lookup, form.copy(awb = "SYN-AWB-0002"), bench))
+        assertNull(ClaimPayload.build(lookup, form.copy(awb = "")))
+        // Either of the lookup's AWB fields is the return's AWB, ignoring case and spaces.
+        val twoLegs = lookup.copy(awb = "SYN-AWB-RET", trackingNumber = "SYN-AWB-FWD")
+        assertNotNull(ClaimPayload.confirmedLookup(twoLegs, "SYN-SUB-1", " syn-awb-ret "))
+        assertNotNull(ClaimPayload.confirmedLookup(twoLegs, "SYN-SUB-1", "SYN-AWB-FWD"))
+        // A lookup with no AWB has nothing to check the form's against.
+        assertNotNull(ClaimPayload.confirmedLookup(lookup.copy(awb = "", trackingNumber = ""), "SYN-SUB-1", "SYN-AWB-0002"))
+    }
+
+    @Test
     fun theFormMatchesItsLookupIgnoringCaseAndSpaces() {
         assertNotNull(ClaimPayload.confirmedLookup(lookup, " syn-sub-1 ", "SYN-AWB-0001"))
     }

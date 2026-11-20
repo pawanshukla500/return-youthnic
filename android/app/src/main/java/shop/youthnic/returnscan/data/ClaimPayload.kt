@@ -61,11 +61,15 @@ object ClaimPayload {
     /**
      * [lookup] when it found a return and the form still shows the sub order (or AWB) that lookup filled in, otherwise
      * null. A search that found nothing, or a lookup for a sub order the operator has since changed, supplies nothing.
+     * The form's AWB must also be one of the lookup's (either field) when the lookup has one: an AWB scanned or typed
+     * over the looked-up one is not checked against the return, and the claim would send it as the ticket's tracking ID.
      */
     fun confirmedLookup(lookup: ClaimReturnLookup?, subOrderId: String, awb: String): ClaimReturnLookup? {
         if (lookup == null || !lookup.found) return null
         val key = formKey(subOrderId, awb)
-        return lookup.takeIf { isReturn(key, it) }
+        val known = listOf(lookup.awb, lookup.trackingNumber).map { it.trim() }.filter { it.isNotBlank() }
+        val awbChecked = known.isEmpty() || known.any { it.equals(awb.trim(), ignoreCase = true) }
+        return lookup.takeIf { awbChecked && isReturn(key, it) }
     }
 
     /**

@@ -36,10 +36,12 @@ object EvidenceUploads {
     val REPLACED_SLOTS: Set<String> = setOf("unboxing_video", "reverse_waybill", "barcode_image")
 
     /**
-     * True when a slot holding [count] files may take one more capture: it replaces its one file, or it is under its
-     * [maxCount]. The server refuses a file past a field's max_count (409), and that file would be left off the claim.
+     * True when a slot holding [count] files, plus [beingSaved] camera photos still being shrunk into it, may take one
+     * more capture: it replaces its one file, or it is under its [maxCount]. The server refuses a file past a field's
+     * max_count (409), and that file would be left off the claim.
      */
-    fun canCapture(fieldKey: String, count: Int, maxCount: Int): Boolean = fieldKey in REPLACED_SLOTS || count < maxCount
+    fun canCapture(fieldKey: String, count: Int, maxCount: Int, beingSaved: Int = 0): Boolean =
+        fieldKey in REPLACED_SLOTS || count + beingSaved < maxCount
 
     /** The first slot in [counts] holding more files than its maximum in [maxCounts], or null. A slot with no maximum is left alone. */
     fun overfullSlot(counts: Map<String, Int>, maxCounts: Map<String, Int>): String? =

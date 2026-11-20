@@ -365,20 +365,21 @@ class ReturnVerificationBottomSheet(
 
     /**
      * Validates the sheet and hands the scan to [onSave], the one save both buttons use. While it runs both buttons are
-     * disabled, so a second tap cannot start a second save. During a File Claim save the sheet also cannot be swiped or
-     * backed away, so the claim screen opens from the sheet the operator is looking at.
+     * disabled, so a second tap cannot start a second save, and the sheet cannot be cancelled, closed, swiped or backed
+     * away: the reply comes back to the sheet the operator is looking at, so File Claim opens the claim screen from it
+     * and a failed save keeps what was entered, with the retry on the same key ([showSaveError]).
      */
     private fun submitScan(afterSave: ((ScanReceipt) -> Unit)?) {
         if (!validateInputs()) return
         binding.btnSaveVerification.isEnabled = false
         binding.btnFileClaim.isEnabled = false
+        binding.btnCancelVerification.isEnabled = false
+        binding.btnCloseSheet.isEnabled = false
+        setCancelable(false)
         if (afterSave == null) {
             binding.btnSaveVerification.text = "Saving..."
         } else {
             binding.btnFileClaim.text = "Saving scan..."
-            binding.btnCancelVerification.isEnabled = false
-            binding.btnCloseSheet.isEnabled = false
-            setCancelable(false)
         }
         for (item in itemStates) {
             IssueCategoryUi.recordUsage(activity, item.category.code)

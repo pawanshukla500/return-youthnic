@@ -47,6 +47,7 @@ import shop.youthnic.returnscan.databinding.ActivityClaimCaptureBinding
 import shop.youthnic.returnscan.databinding.ItemClaimEvidenceCardBinding
 import shop.youthnic.returnscan.util.EvidencePhoto
 import shop.youthnic.returnscan.util.EvidencePhotoSizing
+import shop.youthnic.returnscan.util.NewestWins
 import java.io.File
 import java.util.UUID
 
@@ -102,8 +103,15 @@ class ClaimCaptureActivity : AppCompatActivity() {
     private var pendingPhotoFile: File? = null
     /** Bumped each time captured evidence is cleared, so a photo still being shrunk never joins another return's claim. */
     private var evidenceGeneration = 0
-    /** Camera photos still being shrunk; Submit waits for them so none is left off the claim. */
-    private var photosBeingSaved = 0
+    /**
+     * Camera photos still being shrunk. Submit waits for them so none is left off the claim, a slot's maximum counts
+     * them, and the draft lists them so a kill while one is shrunk does not lose it.
+     */
+    private val photosBeingSaved = mutableListOf<DraftFile>()
+    /** Orders captures per slot, so a photo that finishes shrinking late never replaces a newer one in a one-file slot. */
+    private val slotCaptureOrder = NewestWins()
+    /** Orders return lookups, so only the newest one's answer fills the form. */
+    private val lookupOrder = NewestWins()
     /** Captured evidence and the photo being taken, saved on every change so killing the app loses neither. */
     private val evidenceDraftStore by lazy { EvidenceDraftStore(File(filesDir, EvidenceUploads.DRAFT_FILE)) }
     /** The return the captured evidence belongs to (ClaimPayload.returnKey), saved with it. */
@@ -121,21 +129,29 @@ class ClaimCaptureActivity : AppCompatActivity() {
         }
     }
 
-    /** Shrinks a camera photo off the main thread, then adds it to [fieldKey] unless the evidence was cleared meanwhile. */
+    /**
+     * Shrinks a camera photo off the main thread, then adds it to [fieldKey] unless the evidence was cleared meanwhile
+     * or, in a one-file slot, a later capture for that slot has started (recording this one would delete the newer file).
+     * Until then the photo is listed in the draft, so a kill while it is shrunk keeps it: the restore shrinks it again.
+     */
     private fun acceptCameraPhoto(file: File, fieldKey: String) {
         val generation = evidenceGeneration
-        photosBeingSaved++
+        val ticket = slotCaptureOrder.next(fieldKey)
+        val saving = DraftFile(file.absolutePath, "image/jpeg", fieldKey)
+        photosBeingSaved.add(saving)
+        saveEvidenceDraft()
         // The camera app writes the photo at full resolution (12 MP and up); shrink it off the main thread first.
         lifecycleScope.launch {
-            try {
-                withContext(Dispatchers.IO) { EvidencePhoto.downscaleInPlace(file) }
-                if (generation == evidenceGeneration) {
-                    recordCapturedEvidence(fieldKey, file, "image/jpeg")
-                } else {
-                    file.delete()
-                }
-            } finally {
-                photosBeingSaved--
+            withContext(Dispatchers.IO) { EvidencePhoto.downscaleInPlace(file) }
+            // Off the list before it is recorded, so the draft never names it twice. A shrink cancelled because the
+            // screen closed never gets here, and the saved draft still lists the photo.
+            photosBeingSaved.remove(saving)
+            val newest = fieldKey !in EvidenceUploads.REPLACED_SLOTS || slotCaptureOrder.isNewest(fieldKey, ticket)
+            if (generation == evidenceGeneration && newest) {
+                recordCapturedEvidence(fieldKey, file, "image/jpeg")
+            } else {
+                // A saved draft that still lists it names a deleted file, which a restore skips (photosToShrink).
+                file.delete()
             }
         }
     }
@@ -434,11 +450,15 @@ class ClaimCaptureActivity : AppCompatActivity() {
     }
 
     private fun searchReturn(query: String) {
+        // Only the newest lookup may fill the form. An earlier one answering late would replace the return being
+        // reviewed, and lookupData with it, so Proceed and Submit would confirm and file that other return.
+        val ticket = lookupOrder.next(LOOKUP)
         binding.progressClaim.visibility = View.VISIBLE
         binding.btnClaimSearch.isEnabled = false
 
         lifecycleScope.launch {
             val result = api.lookupClaimReturn(query)
+            if (!lookupOrder.isNewest(LOOKUP, ticket)) return@launch
             binding.progressClaim.visibility = View.GONE
             binding.btnClaimSearch.isEnabled = true
 
@@ -800,8 +820,11 @@ class ClaimCaptureActivity : AppCompatActivity() {
      */
     private fun startCaptureFor(fieldKey: String): Boolean {
         val max = evidenceMaxCounts[fieldKey] ?: 1
-        if (!EvidenceUploads.canCapture(fieldKey, capturedFiles[fieldKey]?.size ?: 0, max)) {
-            showMessage("${evidenceLabels[fieldKey] ?: fieldKey} already has its maximum of $max file(s). Remove them with the card's X to capture again.")
+        // Photos still being shrunk count too: each joins the slot when it is done and could take it past its maximum.
+        val saving = photosBeingSaved.count { it.fieldKey == fieldKey }
+        if (!EvidenceUploads.canCapture(fieldKey, capturedFiles[fieldKey]?.size ?: 0, max, saving)) {
+            val stillSaving = if (saving > 0) ", counting $saving photo(s) still being saved" else ""
+            showMessage("${evidenceLabels[fieldKey] ?: fieldKey} already has its maximum of $max file(s)$stillSaving. Remove them with the card's X to capture again.")
             return false
         }
         pendingFieldKey = fieldKey
@@ -848,6 +871,8 @@ class ClaimCaptureActivity : AppCompatActivity() {
     }
 
     private fun recordCapturedEvidence(fieldKey: String, file: File, mimeType: String) {
+        // Now the slot's newest capture, so a camera photo taken before it and still being shrunk never replaces it.
+        slotCaptureOrder.next(fieldKey)
         val list = capturedFiles.getOrPut(fieldKey) { mutableListOf() }
         // Clean up replaced file for single-item evidence slots to keep device storage clean
         if (fieldKey in EvidenceUploads.REPLACED_SLOTS) {
@@ -922,6 +947,9 @@ class ClaimCaptureActivity : AppCompatActivity() {
     /** Deletes every captured evidence file, from memory and disk, and empties the cards. Returns how many were dropped. */
     private fun clearCapturedEvidence(): Int {
         evidenceGeneration++
+        // Photos still being shrunk are deleted when they finish (the generation check). They leave the draft now, so a
+        // kill before then cannot restore them onto the next return's claim.
+        photosBeingSaved.clear()
         var dropped = 0
         for (list in capturedFiles.values) {
             for (item in list) {
@@ -943,7 +971,9 @@ class ClaimCaptureActivity : AppCompatActivity() {
         val files = capturedFiles.values.flatten().map { DraftFile(it.file.absolutePath, it.mimeType, it.fieldKey) }
         try {
             evidenceDraftStore.save(
-                EvidenceDraft(evidenceReturnKey, files, pendingPhotoFile?.absolutePath.orEmpty(), pendingFieldKey)
+                EvidenceDraft(
+                    evidenceReturnKey, files, pendingPhotoFile?.absolutePath.orEmpty(), pendingFieldKey, photosBeingSaved.toList()
+                )
             )
         } catch (_: Exception) {}
     }
@@ -960,6 +990,9 @@ class ClaimCaptureActivity : AppCompatActivity() {
         for (saved in restored) {
             recordCapturedEvidence(saved.fieldKey, File(saved.path), saved.mimeType)
         }
+        // Photos still being shrunk when the app was killed: shrink them again (one already shrunk is left as it is).
+        val shrinking = draft.photosToShrink()
+        for (saving in shrinking) acceptCameraPhoto(File(saving.path), saving.fieldKey)
         // The camera app may have saved its photo after this app was killed; that result never arrives, so take the file.
         val photo = draft.takenPendingPhoto()
         if (photo != null) {
@@ -967,8 +1000,9 @@ class ClaimCaptureActivity : AppCompatActivity() {
         } else if (draft.pendingPhotoPath.isNotBlank()) {
             File(draft.pendingPhotoPath).delete()
         }
+        // acceptCameraPhoto lists each photo in photosBeingSaved, so this save keeps them until they are recorded.
         saveEvidenceDraft()
-        val count = restored.size + (if (photo != null) 1 else 0)
+        val count = restored.size + shrinking.size + (if (photo != null) 1 else 0)
         if (count > 0) showMessage("Restored $count evidence file(s) captured before the app closed.")
     }
 
@@ -1064,7 +1098,7 @@ class ClaimCaptureActivity : AppCompatActivity() {
     }
 
     private fun submitCompleteClaim() {
-        if (photosBeingSaved > 0) {
+        if (photosBeingSaved.isNotEmpty()) {
             showMessage("A photo is still being saved. Try again in a moment.")
             return
         }
@@ -1106,8 +1140,8 @@ class ClaimCaptureActivity : AppCompatActivity() {
                 return
             }
         }
-        // A photo taken while another was still being shrunk can push a slot past its maximum; the server would refuse
-        // the extra file, so nothing is sent until the slot is back within it.
+        // A last check before anything is sent: restored evidence can exceed the maximum of the template the lookup
+        // loaded, and the server would refuse the extra file, so nothing is sent until the slot is back within it.
         val overfull = EvidenceUploads.overfullSlot(capturedFiles.mapValues { it.value.size }, evidenceMaxCounts)
         if (overfull != null) {
             showMessage(
@@ -1273,6 +1307,9 @@ class ClaimCaptureActivity : AppCompatActivity() {
         private const val TARGET_SEARCH = 0
         private const val TARGET_PACKET_ID = 1
         private const val TARGET_AWB = 2
+
+        /** The one key [lookupOrder] orders return lookups under. */
+        private const val LOOKUP = "return_lookup"
 
         private const val MAX_IMAGE_BYTES = 25L * 1024L * 1024L
         private const val MAX_VIDEO_BYTES = 25L * 1024L * 1024L

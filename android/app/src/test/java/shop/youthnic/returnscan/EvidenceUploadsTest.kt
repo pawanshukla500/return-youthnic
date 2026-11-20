@@ -298,6 +298,22 @@ class EvidenceUploadsTest {
     }
 
     @Test
+    fun photosStillBeingSavedCountTowardsTheSlotsMaximum() {
+        // Product images holds 9 of 10 and the 10th photo is still being shrunk: a second Take Photo or Gallery tap would
+        // make 11, which Submit refuses and the card's X can only fix by deleting all of them.
+        assertFalse(EvidenceUploads.canCapture("product_images", 9, 10, beingSaved = 1))
+        assertTrue(EvidenceUploads.canCapture("product_images", 8, 10, beingSaved = 1))
+        assertFalse(EvidenceUploads.canCapture("attachments", 3, 5, beingSaved = 2))
+        // A one-file slot replaces its file, so a capture still fits.
+        assertTrue(EvidenceUploads.canCapture("reverse_waybill", 1, 1, beingSaved = 1))
+        // The screen counts the photos still being shrunk into that slot (read from source: it cannot be inflated here).
+        val source = File(appDir, "src/main/java/shop/youthnic/returnscan/ui/ClaimCaptureActivity.kt").readText()
+        val start = source.substringAfter("private fun startCaptureFor(").substringBefore("private fun launchCameraPhoto(")
+        assertTrue(start.contains("val saving = photosBeingSaved.count { it.fieldKey == fieldKey }"))
+        assertTrue(start.contains("EvidenceUploads.canCapture(fieldKey, capturedFiles[fieldKey]?.size ?: 0, max, saving)"))
+    }
+
+    @Test
     fun submitFindsASlotPastItsMaximum() {
         val max = mapOf("product_images" to 10, "attachments" to 5, "unboxing_video" to 1)
         assertNull(EvidenceUploads.overfullSlot(mapOf("product_images" to 10, "attachments" to 5, "unboxing_video" to 1), max))
@@ -320,7 +336,7 @@ class EvidenceUploadsTest {
             Regex("""if \(!startCaptureFor\(field\.fieldKey\)\) return@setOnClickListener""").findAll(cards).count()
         )
         val start = source.substringAfter("private fun startCaptureFor(").substringBefore("private fun launchCameraPhoto(")
-        assertTrue(start.contains("EvidenceUploads.canCapture(fieldKey, capturedFiles[fieldKey]?.size ?: 0, max)"))
+        assertTrue(start.contains("EvidenceUploads.canCapture(fieldKey, capturedFiles[fieldKey]?.size ?: 0, max, saving)"))
         val record = source.substringAfter("private fun recordCapturedEvidence(").substringBefore("private fun renderEvidenceCard(")
         assertTrue("one list of replaced slots", record.contains("fieldKey in EvidenceUploads.REPLACED_SLOTS"))
         val submit = source.substringAfter("private fun submitCompleteClaim(").substringBefore("lifecycleScope.launch {")
