@@ -284,6 +284,52 @@ class EvidenceUploadsTest {
     }
 
     @Test
+    fun aSlotTakesNoCapturePastItsMaximum() {
+        // The server refuses an 11th product image (max 10) with a 409, so that photo would be left off the claim.
+        assertTrue(EvidenceUploads.canCapture("product_images", 9, 10))
+        assertFalse(EvidenceUploads.canCapture("product_images", 10, 10))
+        assertFalse(EvidenceUploads.canCapture("attachments", 5, 5))
+        // A one-file slot of any other name is full at 1 too.
+        assertFalse(EvidenceUploads.canCapture("SYN-extra-slot", 1, 1))
+        // The video, waybill and barcode slots replace their one file, so a new capture always fits.
+        for (key in listOf("unboxing_video", "reverse_waybill", "barcode_image")) {
+            assertTrue(key, EvidenceUploads.canCapture(key, 1, 1))
+        }
+    }
+
+    @Test
+    fun submitFindsASlotPastItsMaximum() {
+        val max = mapOf("product_images" to 10, "attachments" to 5, "unboxing_video" to 1)
+        assertNull(EvidenceUploads.overfullSlot(mapOf("product_images" to 10, "attachments" to 5, "unboxing_video" to 1), max))
+        assertEquals("product_images", EvidenceUploads.overfullSlot(mapOf("product_images" to 11, "attachments" to 2), max))
+        assertEquals("attachments", EvidenceUploads.overfullSlot(mapOf("product_images" to 3, "attachments" to 6), max))
+        // A slot the template does not list has no card to fix it from, so it never blocks the claim.
+        assertNull(EvidenceUploads.overfullSlot(mapOf("SYN-unknown-slot" to 3), max))
+    }
+
+    @Test
+    fun theClaimScreenRefusesACapturePastTheSlotsMaximum() {
+        // The screen cannot be inflated in a unit test, so read its source.
+        val source = File(appDir, "src/main/java/shop/youthnic/returnscan/ui/ClaimCaptureActivity.kt").readText()
+        val cards = source.substringAfter("private fun buildDynamicEvidenceCards(").substringBefore("    private fun startCaptureFor(")
+        val starts = Regex("""startCaptureFor\(field\.fieldKey\)""").findAll(cards).count()
+        assertEquals("Take Photo, Record Video and both Gallery buttons", 4, starts)
+        assertEquals(
+            "every capture button stops when the slot is full",
+            starts,
+            Regex("""if \(!startCaptureFor\(field\.fieldKey\)\) return@setOnClickListener""").findAll(cards).count()
+        )
+        val start = source.substringAfter("private fun startCaptureFor(").substringBefore("private fun launchCameraPhoto(")
+        assertTrue(start.contains("EvidenceUploads.canCapture(fieldKey, capturedFiles[fieldKey]?.size ?: 0, max)"))
+        val record = source.substringAfter("private fun recordCapturedEvidence(").substringBefore("private fun renderEvidenceCard(")
+        assertTrue("one list of replaced slots", record.contains("fieldKey in EvidenceUploads.REPLACED_SLOTS"))
+        val submit = source.substringAfter("private fun submitCompleteClaim(").substringBefore("lifecycleScope.launch {")
+        val check = submit.indexOf("EvidenceUploads.overfullSlot(")
+        assertTrue("Submit checks every slot against its maximum", check >= 0)
+        assertTrue("before anything is sent", submit.substring(check).contains("return"))
+    }
+
+    @Test
     fun theUnpackingVideoNeedsNoMicrophonePermission() {
         // The video is recorded without sound, so the app neither declares nor asks for the microphone: a denied
         // microphone permission can never block the evidence step.

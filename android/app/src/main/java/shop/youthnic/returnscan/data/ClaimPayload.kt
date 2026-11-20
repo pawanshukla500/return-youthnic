@@ -17,13 +17,21 @@ data class ClaimFormInput(
 
 /**
  * The bench scan File Claim saved before it opened the claim screen (ReturnVerificationBottomSheet): its register row id
- * and the return it was saved for, by the sub order (or order) and AWB the scanner had. A claim filed from the bench is
- * filed on this scan and on no other.
+ * and the return it was saved for, by its expected return id (the scanner's shipmentId) and the sub order (or order)
+ * and AWB the scanner had. A claim filed from the bench is filed on this scan and on no other.
  */
-data class BenchScan(val scanId: Int, val subOrderId: String, val awb: String) {
-    /** True when [lookup] is the return this scan was saved for: the same sub order (or order), or the same AWB. */
-    fun isFor(lookup: ClaimReturnLookup): Boolean =
-        same(subOrderId, lookup.subOrderId.ifBlank { lookup.orderId }) || same(awb, lookup.awb) || same(awb, lookup.trackingNumber)
+data class BenchScan(val scanId: Int, val subOrderId: String, val awb: String, val expectedReturnId: Int = 0) {
+    /**
+     * True when [lookup] is the return this scan was saved for. Several returns can share one parcel AWB (the scanner's
+     * "choose" list), so the AWB never decides it when both sides name the return: the expected return id when both
+     * have one, else the sub order (or order), and the AWB only when one side has no sub order.
+     */
+    fun isFor(lookup: ClaimReturnLookup): Boolean {
+        if (expectedReturnId > 0 && lookup.expectedReturnId > 0) return expectedReturnId == lookup.expectedReturnId
+        val theirSubOrder = lookup.subOrderId.ifBlank { lookup.orderId }
+        if (subOrderId.isNotBlank() && theirSubOrder.isNotBlank()) return same(subOrderId, theirSubOrder)
+        return same(awb, lookup.awb) || same(awb, lookup.trackingNumber)
+    }
 
     private fun same(mine: String, theirs: String): Boolean =
         mine.isNotBlank() && mine.trim().equals(theirs.trim(), ignoreCase = true)
@@ -83,6 +91,24 @@ object ClaimPayload {
     fun benchScanIdFor(bench: BenchScan?, lookup: ClaimReturnLookup): Int? {
         if (bench != null) return bench.scanId.takeIf { it > 0 && bench.isFor(lookup) }
         return lookup.scanId?.takeIf { it > 0 }
+    }
+
+    /** Said when the return has no saved bench scan and File Claim did not open the screen (the Claims card). */
+    const val NO_BENCH_SCAN_MESSAGE =
+        "This return has no saved bench scan. Save it on the scanner first (Save or File Claim), then file the claim."
+
+    /**
+     * Why the claim for the confirmed [lookup] cannot be filed, or null when it has a saved bench scan ([benchScanIdFor]).
+     * On a screen File Claim opened, the form shows another return than the one whose scan File Claim saved. A return
+     * that is already saved cannot get File Claim again (a rescan is a duplicate, with no sheet), so the message names
+     * the way that works: the Claims card, whose screen files on the searched return's own saved scan.
+     */
+    fun benchScanBlockMessage(bench: BenchScan?, lookup: ClaimReturnLookup): String? {
+        if (benchScanIdFor(bench, lookup) != null) return null
+        if (bench == null) return NO_BENCH_SCAN_MESSAGE
+        val saved = bench.subOrderId.ifBlank { bench.awb }
+        return "File Claim saved the bench scan for $saved, so this screen files the claim for $saved. Search $saved again. " +
+            "To claim the other return, open the Claims card and search it there (it needs its own saved bench scan)."
     }
 
     /**

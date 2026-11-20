@@ -95,6 +95,8 @@ class ClaimCaptureActivity : AppCompatActivity() {
     private val evidenceCardBindings = mutableMapOf<String, ItemClaimEvidenceCardBinding>()
     /** Each slot's maxCount, so a Product images card shows 0 / 10 (or 3 / 10) and Attachments 0 / 5. */
     private val evidenceMaxCounts = mutableMapOf<String, Int>()
+    /** Each slot's label, for the message that refuses a capture past its maximum. */
+    private val evidenceLabels = mutableMapOf<String, String>()
 
     private var pendingFieldKey = ""
     private var pendingPhotoFile: File? = null
@@ -233,7 +235,8 @@ class ClaimCaptureActivity : AppCompatActivity() {
         val imageUrl = intent.getStringExtra(EXTRA_IMAGE_URL).orEmpty().trim()
         val issueCode = intent.getStringExtra(EXTRA_ISSUE_CODE).orEmpty().trim()
         val scanId = intent.getIntExtra(EXTRA_SCAN_ID, 0)
-        benchScan = if (scanId > 0) BenchScan(scanId, subOrder, awb) else null
+        val expectedReturnId = intent.getIntExtra(EXTRA_EXPECTED_RETURN_ID, 0)
+        benchScan = if (scanId > 0) BenchScan(scanId, subOrder, awb, expectedReturnId) else null
 
         // 2. Prefill Return Details IMMEDIATELY in UI
         if (awb.isNotBlank()) binding.etAwbNumber.setText(awb)
@@ -724,6 +727,7 @@ class ClaimCaptureActivity : AppCompatActivity() {
         binding.layoutDynamicEvidenceCards.removeAllViews()
         evidenceCardBindings.clear()
         evidenceMaxCounts.clear()
+        evidenceLabels.clear()
 
         // Ensure all 5 standard Meesho slots exist if template is generic
         val effectiveFields = if (fields.size < 4) getMeeshoStandardEvidenceFields() else fields
@@ -735,19 +739,20 @@ class ClaimCaptureActivity : AppCompatActivity() {
             val reqSuffix = if (isRequired) " *" else ""
             card.tvEvidenceLabel.text = "${field.fieldLabel}$reqSuffix"
             evidenceMaxCounts[field.fieldKey] = field.maxCount
+            evidenceLabels[field.fieldKey] = field.fieldLabel
 
             val isVideo = field.fieldType == "video"
             if (isVideo) {
                 card.btnCapturePrimary.text = "Record Video (480p SD)"
                 card.btnCapturePrimary.setOnClickListener {
-                    startCaptureFor(field.fieldKey)
+                    if (!startCaptureFor(field.fieldKey)) return@setOnClickListener
                     // The unpacking video has no sound track, so only the camera permission is needed.
                     checkAndRun(arrayOf(android.Manifest.permission.CAMERA)) {
                         recordVideoLauncher.launch(Intent(this, ClaimVideoCaptureActivity::class.java))
                     }
                 }
                 card.btnPickGallery.setOnClickListener {
-                    startCaptureFor(field.fieldKey)
+                    if (!startCaptureFor(field.fieldKey)) return@setOnClickListener
                     val perms = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                         arrayOf(android.Manifest.permission.READ_MEDIA_VIDEO)
                     } else {
@@ -760,13 +765,13 @@ class ClaimCaptureActivity : AppCompatActivity() {
             } else {
                 card.btnCapturePrimary.text = "Take Photo"
                 card.btnCapturePrimary.setOnClickListener {
-                    startCaptureFor(field.fieldKey)
+                    if (!startCaptureFor(field.fieldKey)) return@setOnClickListener
                     checkAndRun(arrayOf(android.Manifest.permission.CAMERA)) {
                         launchCameraPhoto(field.fieldKey)
                     }
                 }
                 card.btnPickGallery.setOnClickListener {
-                    startCaptureFor(field.fieldKey)
+                    if (!startCaptureFor(field.fieldKey)) return@setOnClickListener
                     val perms = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                         arrayOf(android.Manifest.permission.READ_MEDIA_IMAGES)
                     } else {
@@ -788,10 +793,20 @@ class ClaimCaptureActivity : AppCompatActivity() {
         }
     }
 
-    /** Remembers, on disk too, which slot the camera, recorder or picker fills: Android may kill the app meanwhile. */
-    private fun startCaptureFor(fieldKey: String) {
+    /**
+     * Remembers, on disk too, which slot the camera, recorder or picker fills: Android may kill the app meanwhile.
+     * Returns false, and says why, when the slot already holds its maximum ([EvidenceUploads.canCapture]): the server
+     * would refuse the extra file and the claim would go out without it.
+     */
+    private fun startCaptureFor(fieldKey: String): Boolean {
+        val max = evidenceMaxCounts[fieldKey] ?: 1
+        if (!EvidenceUploads.canCapture(fieldKey, capturedFiles[fieldKey]?.size ?: 0, max)) {
+            showMessage("${evidenceLabels[fieldKey] ?: fieldKey} already has its maximum of $max file(s). Remove them with the card's X to capture again.")
+            return false
+        }
         pendingFieldKey = fieldKey
         saveEvidenceDraft()
+        return true
     }
 
     private fun launchCameraPhoto(fieldKey: String) {
@@ -835,7 +850,7 @@ class ClaimCaptureActivity : AppCompatActivity() {
     private fun recordCapturedEvidence(fieldKey: String, file: File, mimeType: String) {
         val list = capturedFiles.getOrPut(fieldKey) { mutableListOf() }
         // Clean up replaced file for single-item evidence slots to keep device storage clean
-        if (fieldKey == "unboxing_video" || fieldKey == "reverse_waybill" || fieldKey == "barcode_image") {
+        if (fieldKey in EvidenceUploads.REPLACED_SLOTS) {
             for (old in list) {
                 try {
                     if (old.file.exists() && old.file.absolutePath != file.absolutePath) {
@@ -1016,17 +1031,14 @@ class ClaimCaptureActivity : AppCompatActivity() {
 
     /**
      * The message to show when the form's confirmed return has no saved bench scan to file the claim on
-     * ([ClaimPayload.benchScanIdFor]); null when it has one, or when the return is not confirmed yet. A claim never exists
-     * without a saved bench scan (owner decision 2026-11-20). Two cases: on a screen File Claim opened, the form shows a
-     * different return from the one whose scan File Claim saved; opened from the Claims card (no EXTRA_SCAN_ID), the last
-     * scanned return may never have been saved, so the operator saves it on the scanner first.
+     * ([ClaimPayload.benchScanBlockMessage]); null when it has one, or when the return is not confirmed yet. A claim never
+     * exists without a saved bench scan (owner decision 2026-11-20). Two cases: on a screen File Claim opened, the form
+     * shows a different return from the one whose scan File Claim saved; opened from the Claims card (no EXTRA_SCAN_ID),
+     * the last scanned return may never have been saved, so the operator saves it on the scanner first.
      */
     private fun benchScanBlockMessage(subOrder: String, awb: String): String? {
         val found = ClaimPayload.confirmedLookup(lookupData, subOrder, awb) ?: return null
-        if (ClaimPayload.benchScanIdFor(benchScan, found) != null) return null
-        val bench = benchScan ?: return NO_BENCH_SCAN_MESSAGE
-        val saved = bench.subOrderId.ifBlank { bench.awb }
-        return "File Claim saved the bench scan for $saved, so this claim is for $saved. Search $saved again, or go back and tap File Claim on the other return's scan."
+        return ClaimPayload.benchScanBlockMessage(benchScan, found)
     }
 
     private fun showStep(step: Int) {
@@ -1093,6 +1105,16 @@ class ClaimCaptureActivity : AppCompatActivity() {
                 showMessage("Please provide required evidence: $label")
                 return
             }
+        }
+        // A photo taken while another was still being shrunk can push a slot past its maximum; the server would refuse
+        // the extra file, so nothing is sent until the slot is back within it.
+        val overfull = EvidenceUploads.overfullSlot(capturedFiles.mapValues { it.value.size }, evidenceMaxCounts)
+        if (overfull != null) {
+            showMessage(
+                "${evidenceLabels[overfull] ?: overfull} has ${capturedFiles[overfull]?.size ?: 0} files, more than its maximum of " +
+                    "${evidenceMaxCounts[overfull]}. Remove them with the card's X and capture again."
+            )
+            return
         }
 
         binding.progressClaim.visibility = View.VISIBLE
@@ -1200,37 +1222,18 @@ class ClaimCaptureActivity : AppCompatActivity() {
             .show()
     }
 
+    /**
+     * Opens a fresh claim screen with no extras and closes this one. Clearing this screen in place was undone whenever
+     * Android recreated it from its intent (killed while the camera app was open, or a theme, font or language change):
+     * the first return and its bench scan came back and the next return's evidence was deleted. The fresh screen has no
+     * bench scan, so the next return files on its own saved scan, and its cards show as on first load.
+     */
     private fun resetFormForNextClaim() {
-        // 1. Clear input text fields
-        binding.etClaimSearch.setText("")
-        binding.etSubOrderNumber.setText("")
-        binding.etAwbNumber.setText("")
-        binding.etPacketId.setText("")
-        binding.etClaimTitle.setText("")
-        binding.etClaimContent.setText("")
-        binding.tvClaimMessage.visibility = View.GONE
-
-        // 2. Clear captured evidence files from memory and disk, and reset the evidence cards
-        clearCapturedEvidence()
-
-        // 3. Reset state variables. The next return was not saved by File Claim, so it has no bench scan here.
-        lookupData = null
-        benchScan = null
+        // Submit has already handed every file to its upload job; this only drops a stray capture and the draft's return.
         evidenceReturnKey = ""
-        binding.cardProductPreview.visibility = View.GONE
-        binding.cardOrderSummary.visibility = View.GONE
-        selectedIssueCode = "wrong_return"
-        selectedIssueLabel = "I have received wrong return"
-        binding.spinnerMeeshoIssue.setSelection(0)
-        binding.btnSubmitClaim.isEnabled = true
-        binding.progressClaim.visibility = View.GONE
-
-        // 4. Switch back to Step 1: Return Details
-        showStep(1)
-
-        // 5. Request focus on search input
-        binding.etClaimSearch.requestFocus()
-        showMessage("Ready for next return claim. Enter or scan SubOrder ID / AWB.")
+        clearCapturedEvidence()
+        startActivity(Intent(this, ClaimCaptureActivity::class.java))
+        finish()
     }
 
     private fun showInfoDialog() {
@@ -1259,14 +1262,13 @@ class ClaimCaptureActivity : AppCompatActivity() {
         const val EXTRA_MARKETPLACE = "extra_marketplace"
         const val EXTRA_MARKETPLACE_ID = "extra_marketplace_id"
         const val EXTRA_SCAN_ID = "extra_scan_id"
+        /** The expected return (the scanner's shipmentId) File Claim saved the EXTRA_SCAN_ID scan on. */
+        const val EXTRA_EXPECTED_RETURN_ID = "extra_expected_return_id"
         const val EXTRA_PRODUCT_TITLE = "extra_product_title"
         const val EXTRA_PRODUCT_SKU = "extra_product_sku"
         const val EXTRA_MASTER_SKU = "extra_master_sku"
         const val EXTRA_IMAGE_URL = "extra_image_url"
         const val EXTRA_ISSUE_CODE = "extra_issue_code"
-
-        private const val NO_BENCH_SCAN_MESSAGE =
-            "This return has no saved bench scan. Save it on the scanner first (Save or File Claim), then file the claim."
 
         private const val TARGET_SEARCH = 0
         private const val TARGET_PACKET_ID = 1

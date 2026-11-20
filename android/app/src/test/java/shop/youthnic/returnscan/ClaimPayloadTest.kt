@@ -220,12 +220,62 @@ class ClaimPayloadTest {
         assertTrue(bench.copy(awb = "").isFor(lookup.copy(subOrderId = " syn-sub-1 ")))
         // The scanner had the order ID (no order item ID): the lookup's sub order falls back to its order the same way.
         assertTrue(bench.copy(subOrderId = "SYN-ORDER-1", awb = "").isFor(lookup.copy(subOrderId = "")))
-        // A different sub order spelling on the server still matches by the parcel's AWB, either field.
-        assertTrue(bench.isFor(lookup.copy(subOrderId = "SYN-SUB-1-X")))
-        assertTrue(bench.isFor(lookup.copy(subOrderId = "SYN-SUB-1-X", awb = "")))
+        // The AWB decides only when one side has no sub order, either AWB field.
+        assertTrue(bench.copy(subOrderId = "").isFor(lookup.copy(subOrderId = "SYN-SUB-1-X")))
+        assertTrue(bench.isFor(lookup.copy(subOrderId = "", orderId = "", awb = "")))
         assertFalse(bench.isFor(lookup.copy(subOrderId = "SYN-SUB-2", awb = "SYN-AWB-0002", trackingNumber = "SYN-AWB-0002")))
         // Blank values never match anything.
         assertFalse(BenchScan(1234, "", "").isFor(lookup.copy(subOrderId = "", orderId = "", awb = "", trackingNumber = "")))
+    }
+
+    // One parcel (AWB SYN-AWB-X) holds two returns: the scanner's "choose" list. The claim lookup gives both the parcel AWB.
+    private val parcelFirst = lookup.copy(expectedReturnId = 501, subOrderId = "SYN-SUB-1", awb = "SYN-AWB-X", trackingNumber = "SYN-AWB-X")
+    private val parcelSecond = lookup.copy(
+        scanId = null, expectedReturnId = 502, subOrderId = "SYN-SUB-2", orderId = "SYN-ORDER-2", awb = "SYN-AWB-X", trackingNumber = "SYN-AWB-X"
+    )
+
+    @Test
+    fun aBenchScanIsNeverPutOnTheOtherReturnInTheSameParcel() {
+        // File Claim saved scan 1234 for SYN-SUB-1; the operator then searched SYN-SUB-2 on the claim screen.
+        val fileClaim = BenchScan(1234, "SYN-SUB-1", "SYN-AWB-X", expectedReturnId = 501)
+        assertTrue(fileClaim.isFor(parcelFirst))
+        assertFalse(fileClaim.isFor(parcelSecond))
+        assertNull(ClaimPayload.benchScanIdFor(fileClaim, parcelSecond))
+        assertNull(ClaimPayload.build(parcelSecond, form.copy(subOrderId = "SYN-SUB-2", awb = "SYN-AWB-X"), fileClaim))
+        assertEquals(1234, ClaimPayload.build(parcelFirst, form.copy(awb = "SYN-AWB-X"), fileClaim)!!.getInt("receiptScanId"))
+        // Without the expected return id (an older intent), the sub orders still tell the two returns apart.
+        val noId = fileClaim.copy(expectedReturnId = 0)
+        assertTrue(noId.isFor(parcelFirst))
+        assertFalse(noId.isFor(parcelSecond))
+    }
+
+    @Test
+    fun theExpectedReturnIdDecidesWhenBothSidesHaveOne() {
+        val fileClaim = BenchScan(1234, "SYN-SUB-1", "SYN-AWB-X", expectedReturnId = 501)
+        // The server spells the sub order differently, but it is the same expected return.
+        assertTrue(fileClaim.isFor(parcelFirst.copy(subOrderId = "SYN-SUB-1-X")))
+        // Same sub order and AWB, another expected return: not this scan's return.
+        assertFalse(fileClaim.isFor(parcelFirst.copy(expectedReturnId = 777)))
+    }
+
+    @Test
+    fun theBlockMessageSaysWhyAndNamesAWayThatWorks() {
+        // A return with a saved scan, or File Claim's own return, is not blocked.
+        assertNull(ClaimPayload.benchScanBlockMessage(null, lookup))
+        assertNull(ClaimPayload.benchScanBlockMessage(bench, lookup))
+        // The Claims card on a return that was never saved.
+        assertEquals(
+            "This return has no saved bench scan. Save it on the scanner first (Save or File Claim), then file the claim.",
+            ClaimPayload.benchScanBlockMessage(null, lookup.copy(scanId = null))
+        )
+        // File Claim's screen showing another return: a saved return gets no File Claim again (a rescan is a duplicate),
+        // so the message sends the operator to the Claims card instead.
+        val other = lookup.copy(scanId = 77, expectedReturnId = 502, subOrderId = "SYN-SUB-2", orderId = "SYN-ORDER-2")
+        val message = requireNotNull(ClaimPayload.benchScanBlockMessage(bench, other))
+        assertTrue(message.contains("File Claim saved the bench scan for SYN-SUB-1"))
+        assertTrue(message.contains("Search SYN-SUB-1 again"))
+        assertTrue(message.contains("open the Claims card and search it there"))
+        assertFalse(message.contains("tap File Claim on the other return"))
     }
 
     @Test

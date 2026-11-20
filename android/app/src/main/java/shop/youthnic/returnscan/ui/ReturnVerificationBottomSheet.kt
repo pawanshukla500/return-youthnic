@@ -350,6 +350,12 @@ class ReturnVerificationBottomSheet(
 
         fileClaimLabel = binding.btnFileClaim.text
         binding.btnFileClaim.setOnClickListener {
+            // File Claim saves the scan for good, so a sheet still on "No issue" (or Iron Send only) would be saved CLEAR
+            // and filed under a default issue. The operator marks the item's issue first.
+            if (!hasRealIssue()) {
+                showError("Mark the item's issue first: File Claim saves the scan with it.")
+                return@setOnClickListener
+            }
             // The bench scan is saved first, with the operator's counts, sub-issues and flyer, and the claim is filed on it.
             submitScan(afterSave = { receipt -> openClaimCapture(receipt.id) })
         }
@@ -405,6 +411,8 @@ class ReturnVerificationBottomSheet(
 
         val intent = Intent(activity, ClaimCaptureActivity::class.java).apply {
             putExtra(ClaimCaptureActivity.EXTRA_SCAN_ID, scanId)
+            // The expected return the scan was saved on: it, not the parcel AWB, tells this return from the others in it.
+            putExtra(ClaimCaptureActivity.EXTRA_EXPECTED_RETURN_ID, lookup.shipmentId.toIntOrNull() ?: 0)
             putExtra(ClaimCaptureActivity.EXTRA_TRACKING_AWB, lookup.trackingNumber)
             putExtra(ClaimCaptureActivity.EXTRA_ORDER_ID, lookup.orderId)
             putExtra(ClaimCaptureActivity.EXTRA_SUB_ORDER_ID, subOrderId)

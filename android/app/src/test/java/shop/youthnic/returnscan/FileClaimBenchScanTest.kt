@@ -36,6 +36,22 @@ class FileClaimBenchScanTest {
     }
 
     @Test
+    fun fileClaimRefusesASheetWithNoRealIssueBeforeItSaves() {
+        // Every item starts on "No issue". File Claim saves the scan for good, so on that sheet it would save a CLEAR scan
+        // and file it under a default issue; the operator marks the issue first.
+        val sheet = source("ReturnVerificationBottomSheet.kt")
+        val fileClaim = sheet.substringAfter("binding.btnFileClaim.setOnClickListener")
+            .substringBefore("binding.btnSaveVerification.setOnClickListener")
+        val guard = fileClaim.indexOf("if (!hasRealIssue())")
+        val save = fileClaim.indexOf("submitScan(")
+        assertTrue("File Claim must check for a real issue", guard >= 0)
+        assertTrue("File Claim must check before it saves", guard < save)
+        assertTrue("File Claim must stop on a sheet with no real issue", fileClaim.substring(guard, save).contains("return@setOnClickListener"))
+        // Save is unchanged: a clear return is still saved with Save.
+        assertTrue(sheet.contains("binding.btnSaveVerification.setOnClickListener { submitScan(afterSave = null) }"))
+    }
+
+    @Test
     fun aSaveInProgressBlocksASecondTapAndAFailedSaveKeepsTheSheetOpen() {
         val sheet = source("ReturnVerificationBottomSheet.kt")
         val submit = sheet.substringAfter("private fun submitScan(").substringBefore("onSave(")
@@ -53,6 +69,8 @@ class FileClaimBenchScanTest {
         val sheet = source("ReturnVerificationBottomSheet.kt")
         val open = sheet.substringAfter("private fun openClaimCapture(scanId: Int)").substringBefore("private fun validateInputs(")
         assertTrue(open.contains("putExtra(ClaimCaptureActivity.EXTRA_SCAN_ID, scanId)"))
+        // The expected return the scan was saved on (the save's shipmentId), so a parcel's other return is told apart.
+        assertTrue(open.contains("putExtra(ClaimCaptureActivity.EXTRA_EXPECTED_RETURN_ID, lookup.shipmentId.toIntOrNull() ?: 0)"))
         // Only File Claim's afterSave opens the claim screen; nothing else in the sheet does.
         assertEquals(1, Regex("""ClaimCaptureActivity::class\.java""").findAll(sheet).count())
     }
@@ -77,10 +95,24 @@ class FileClaimBenchScanTest {
     fun theClaimScreenFilesOnTheBenchScanFromItsIntent() {
         val claim = source("ClaimCaptureActivity.kt")
         assertTrue(claim.contains("intent.getIntExtra(EXTRA_SCAN_ID, 0)"))
-        assertTrue(claim.contains("BenchScan(scanId, subOrder, awb)"))
+        assertTrue(claim.contains("intent.getIntExtra(EXTRA_EXPECTED_RETURN_ID, 0)"))
+        assertTrue(claim.contains("BenchScan(scanId, subOrder, awb, expectedReturnId)"))
         assertTrue(claim.contains("ClaimPayload.build(lookupData, form, benchScan)"))
+    }
+
+    @Test
+    fun fileNextReturnOpensAFreshScreenSoARecreationCannotBringTheFirstReturnBack() {
+        // Clearing the screen in place (benchScan = null) was undone when Android recreated it from the File Claim intent:
+        // the first return and its bench scan came back and the next return's evidence was deleted. A fresh screen with
+        // no extras has nothing of the first return to restore.
+        val claim = source("ClaimCaptureActivity.kt")
         val reset = claim.substringAfter("private fun resetFormForNextClaim(").substringBefore("private fun showInfoDialog(")
-        assertTrue("the next return filed on this screen has no bench scan", reset.contains("benchScan = null"))
+        assertTrue(reset.contains("startActivity(Intent(this, ClaimCaptureActivity::class.java))"))
+        assertTrue(reset.contains("finish()"))
+        assertFalse("the fresh screen carries no extras of the first return", reset.contains("putExtra"))
+        // The order and product cards were hidden for every later return and nothing showed them again.
+        assertFalse(claim.contains("cardProductPreview.visibility = View.GONE"))
+        assertFalse(claim.contains("cardOrderSummary.visibility = View.GONE"))
     }
 
     @Test
@@ -89,15 +121,12 @@ class FileClaimBenchScanTest {
         // been saved. Proceed (the way into the evidence step) and Submit both stop on ClaimPayload.benchScanIdFor.
         val claim = source("ClaimCaptureActivity.kt")
         val block = claim.substringAfter("private fun benchScanBlockMessage(").substringBefore("private fun showStep(")
-        assertTrue(block.contains("ClaimPayload.benchScanIdFor(benchScan, found)"))
-        assertTrue(block.contains("NO_BENCH_SCAN_MESSAGE"))
+        // The rule and its messages are ClaimPayload.benchScanBlockMessage, tested in ClaimPayloadTest.
+        assertTrue(block.contains("ClaimPayload.benchScanBlockMessage(benchScan, found)"))
         val proceed = claim.substringAfter("private fun validateStep1(").substringBefore("private fun benchScanBlockMessage(")
         assertTrue("Proceed must refuse a return with no saved bench scan", proceed.contains("benchScanBlockMessage(subOrder, awb)"))
         val submit = claim.substringAfter("private fun submitCompleteClaim(").substringBefore("Validate required evidence fields")
         assertTrue(submit.contains("ClaimPayload.build(lookupData, form, benchScan)"))
         assertTrue("Submit must say why it sent nothing", submit.contains("benchScanBlockMessage(form.subOrderId, form.awb)"))
-        assertTrue(
-            claim.contains("\"This return has no saved bench scan. Save it on the scanner first (Save or File Claim), then file the claim.\"")
-        )
     }
 }

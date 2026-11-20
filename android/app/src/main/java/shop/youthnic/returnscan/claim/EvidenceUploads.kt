@@ -32,6 +32,19 @@ object EvidenceUploads {
     /** One unique job per claim and file: queueing the same file again never uploads it twice. */
     fun workName(claimId: Int, fileName: String): String = "claim-evidence-$claimId-$fileName"
 
+    /** Slots that hold one file: a new capture replaces the old one, whose file ClaimCaptureActivity deletes. */
+    val REPLACED_SLOTS: Set<String> = setOf("unboxing_video", "reverse_waybill", "barcode_image")
+
+    /**
+     * True when a slot holding [count] files may take one more capture: it replaces its one file, or it is under its
+     * [maxCount]. The server refuses a file past a field's max_count (409), and that file would be left off the claim.
+     */
+    fun canCapture(fieldKey: String, count: Int, maxCount: Int): Boolean = fieldKey in REPLACED_SLOTS || count < maxCount
+
+    /** The first slot in [counts] holding more files than its maximum in [maxCounts], or null. A slot with no maximum is left alone. */
+    fun overfullSlot(counts: Map<String, Int>, maxCounts: Map<String, Int>): String? =
+        counts.entries.firstOrNull { (key, count) -> maxCounts[key]?.let { count > it } ?: false }?.key
+
     /** A 4xx other than 408 (timeout) and 429 (rate limit) would be refused again, so the upload stops and says why. */
     fun isPermanentFailure(httpCode: Int): Boolean = httpCode in 400..499 && httpCode != 408 && httpCode != 429
 
