@@ -1881,7 +1881,8 @@ export async function registerOptions(db: pg.Pool, scope: AccountScope) {
   })
 }
 
-// Used by the register screen to show the same shift figures as the scan screen.
+// Today's figures alone, the same as scanSession().shift: GET /api/scan/session?only=shift, which the phones refresh on
+// every live change.
 export async function todayShift(db: pg.Pool, scope: AccountScope) {
   return withClient(db, async (client) => presentShift(await shiftCounts(client, scope)))
 }

@@ -127,6 +127,19 @@ class ApiClient(private val sessionManager: SessionManager) {
     }
 
     /**
+     * Today's figures only (GET /api/scan/session?only=shift), for the live refresh. A server without that option ignores
+     * the parameter and sends the whole session, which still carries `shift`.
+     */
+    suspend fun getShiftProgress(): Result<ShiftProgress> = withContext(Dispatchers.IO) {
+        try {
+            val req = authorizedRequestBuilder("/api/scan/session?only=shift").get().build()
+            execute(req) { json -> ShiftProgress.fromJson(json.optJSONObject("shift")) }
+        } catch (e: Exception) {
+            Result.failure(mapException(e))
+        }
+    }
+
+    /**
      * Looks an AWB up in the active return data of one account. [marketplace] is the account name from GET /api/accounts
      * (blank = every account the user may use). [shipmentId] picks one return when the server answered "choose".
      */
