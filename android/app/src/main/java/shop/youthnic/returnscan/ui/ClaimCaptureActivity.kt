@@ -6,7 +6,6 @@ import android.content.ClipboardManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
-import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -28,7 +27,9 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.snackbar.Snackbar
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import shop.youthnic.returnscan.R
 import shop.youthnic.returnscan.ReturnScanApp
 import shop.youthnic.returnscan.claim.ClaimEvidenceUploadWorker
@@ -38,8 +39,11 @@ import shop.youthnic.returnscan.data.ClaimPayload
 import shop.youthnic.returnscan.data.ClaimProductItem
 import shop.youthnic.returnscan.data.ClaimReturnLookup
 import shop.youthnic.returnscan.data.ClaimTemplate
+import shop.youthnic.returnscan.data.ImageCache
 import shop.youthnic.returnscan.databinding.ActivityClaimCaptureBinding
 import shop.youthnic.returnscan.databinding.ItemClaimEvidenceCardBinding
+import shop.youthnic.returnscan.util.EvidencePhoto
+import shop.youthnic.returnscan.util.EvidencePhotoSizing
 import java.io.File
 import java.util.UUID
 import java.util.concurrent.TimeUnit
@@ -85,16 +89,35 @@ class ClaimCaptureActivity : AppCompatActivity() {
 
     private var pendingFieldKey = ""
     private var pendingPhotoFile: File? = null
+    /** Bumped each time captured evidence is cleared, so a photo still being shrunk never joins another return's claim. */
+    private var evidenceGeneration = 0
+    /** Camera photos still being shrunk; Submit waits for them so none is left off the claim. */
+    private var photosBeingSaved = 0
 
     // Activity Result Launchers
     private val takePhotoLauncher = registerForActivityResult(ActivityResultContracts.TakePicture()) { success ->
         val file = pendingPhotoFile
+        pendingPhotoFile = null
         if (success && file != null && file.exists()) {
-            recordCapturedEvidence(pendingFieldKey, file, "image/jpeg")
+            val fieldKey = pendingFieldKey
+            val generation = evidenceGeneration
+            photosBeingSaved++
+            // The camera app writes the photo at full resolution (12 MP and up); shrink it off the main thread first.
+            lifecycleScope.launch {
+                try {
+                    withContext(Dispatchers.IO) { EvidencePhoto.downscaleInPlace(file) }
+                    if (generation == evidenceGeneration) {
+                        recordCapturedEvidence(fieldKey, file, "image/jpeg")
+                    } else {
+                        file.delete()
+                    }
+                } finally {
+                    photosBeingSaved--
+                }
+            }
         } else {
             file?.delete()
         }
-        pendingPhotoFile = null
     }
 
     private var pendingPermissionAction: (() -> Unit)? = null
@@ -799,10 +822,26 @@ class ClaimCaptureActivity : AppCompatActivity() {
         card.tvEvidenceCount.text = "${list.size} / 1"
 
         if (mimeType.startsWith("image/")) {
-            try {
-                val bmp = BitmapFactory.decodeFile(file.absolutePath)
-                if (bmp != null) card.ivEvidenceThumb.setImageBitmap(bmp)
-            } catch (_: Exception) {}
+            // Placeholder first, so the previous return's photo never shows; a failed decode leaves the placeholder.
+            card.ivEvidenceThumb.setImageResource(R.drawable.ic_camera)
+            // Sampled decode off the main thread: a full-size decode here froze the screen and could run out of memory.
+            lifecycleScope.launch {
+                val thumb = withContext(Dispatchers.IO) {
+                    try {
+                        ImageCache.decodeSampledBitmap(
+                            file.absolutePath, EvidencePhotoSizing.THUMBNAIL_PX, EvidencePhotoSizing.THUMBNAIL_PX
+                        )
+                    } catch (_: Exception) {
+                        null
+                    } catch (_: OutOfMemoryError) {
+                        null
+                    }
+                }
+                // Show it only while this file is still the slot's latest capture.
+                if (thumb != null && capturedFiles[fieldKey]?.lastOrNull()?.file == file) {
+                    card.ivEvidenceThumb.setImageBitmap(thumb)
+                }
+            }
         } else {
             card.ivEvidenceThumb.setImageResource(android.R.drawable.ic_media_play)
         }
@@ -824,6 +863,7 @@ class ClaimCaptureActivity : AppCompatActivity() {
 
     /** Deletes every captured evidence file, from memory and disk, and empties the cards. Returns how many were dropped. */
     private fun clearCapturedEvidence(): Int {
+        evidenceGeneration++
         var dropped = 0
         for (list in capturedFiles.values) {
             for (item in list) {
@@ -906,6 +946,10 @@ class ClaimCaptureActivity : AppCompatActivity() {
     }
 
     private fun submitCompleteClaim() {
+        if (photosBeingSaved > 0) {
+            showMessage("A photo is still being saved. Try again in a moment.")
+            return
+        }
         val form = ClaimFormInput(
             subOrderId = binding.etSubOrderNumber.text?.toString()?.trim().orEmpty(),
             awb = binding.etAwbNumber.text?.toString()?.trim().orEmpty(),
