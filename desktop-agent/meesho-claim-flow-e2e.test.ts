@@ -390,7 +390,7 @@ describe("Meesho end-to-end claim automation flow", () => {
       req.on("end", () => {
         const url = new URL(req.url || "/", "http://stub")
         const send = (code: number, obj: unknown) => {
-          res.writeHead(code, { "Content-Type": "application/json" })
+          res.writeHead(code, { "Content-Type": "application/json", Connection: "close" })
           res.end(JSON.stringify(obj))
         }
         if (url.pathname === "/api/auth/login") {
@@ -438,7 +438,7 @@ describe("Meesho end-to-end claim automation flow", () => {
         flyerId: "",
         description: "",
         uploadedByInputId: {},
-        ticketsBefore: [],
+        ticketsBefore: ["91111111101"],
         ticketAfterSubmit: "98765432199",
         showTicketInline: true,
         formSubmitted: false,
@@ -503,11 +503,12 @@ describe("Meesho end-to-end claim automation flow", () => {
       assert.equal(resumedResult.marketplaceClaimId, "98765432199")
 
       // Report ticket back to backend like engine does
-      await fetch(`http://127.0.0.1:${port}/api/automation/jobs/701/complete`, {
+      const completeRes = await fetch(`http://127.0.0.1:${port}/api/automation/jobs/701/complete`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ marketplaceClaimId: resumedResult.marketplaceClaimId }),
       })
+      assert.equal(completeRes.status, 200)
       assert.equal(savedTicket, "98765432199")
       assert.equal(jobStage, "completed")
     } finally {
@@ -536,7 +537,7 @@ describe("Meesho end-to-end claim automation flow", () => {
       req.on("end", () => {
         const url = new URL(req.url || "/", "http://stub")
         const send = (code: number, obj: unknown) => {
-          res.writeHead(code, { "Content-Type": "application/json" })
+          res.writeHead(code, { "Content-Type": "application/json", Connection: "close" })
           res.end(JSON.stringify(obj))
         }
         if (url.pathname === "/api/auth/login") {
