@@ -93,7 +93,7 @@ class ClaimCaptureActivity : AppCompatActivity() {
     )
     private val capturedFiles = mutableMapOf<String, MutableList<CapturedFile>>()
     private val evidenceCardBindings = mutableMapOf<String, ItemClaimEvidenceCardBinding>()
-    /** Each slot's maxCount, so an empty Product images card shows 0 / 10 and Attachments 0 / 5. */
+    /** Each slot's maxCount, so a Product images card shows 0 / 10 (or 3 / 10) and Attachments 0 / 5. */
     private val evidenceMaxCounts = mutableMapOf<String, Int>()
 
     private var pendingFieldKey = ""
@@ -864,7 +864,7 @@ class ClaimCaptureActivity : AppCompatActivity() {
         card.tvEvidenceFileName.text = file.name
         val sizeMb = file.length().toDouble() / (1024.0 * 1024.0)
         card.tvEvidenceFileSize.text = String.format("%.2f MB · Ready for upload", sizeMb)
-        card.tvEvidenceCount.text = "${list.size} / 1"
+        card.tvEvidenceCount.text = "${list.size} / ${evidenceMaxCounts[fieldKey] ?: 1}"
 
         if (latest.mimeType.startsWith("image/")) {
             // Placeholder first, so the previous return's photo never shows; a failed decode leaves the placeholder.

@@ -162,18 +162,20 @@ class EvidenceDraftTest {
     }
 
     @Test
-    fun anEmptyEvidenceCardShowsItsSlotsRealMaximum() {
+    fun everyEvidenceCardShowsItsSlotsRealMaximum() {
         // The screen cannot be inflated in a unit test, so read its source.
         val appDir = listOf(File("."), File("app"), File("android/app"))
             .first { File(it, "src/main/res/values/strings.xml").isFile }
         val source = File(appDir, "src/main/java/shop/youthnic/returnscan/ui/ClaimCaptureActivity.kt").readText()
         assertFalse(
-            "an empty card must say 0 / its maxCount (Product images 10, Attachments 5), never a hard-coded 0 / 1",
-            source.contains("\"0 / 1\"")
+            "a card must say its count / its maxCount (Product images 10, Attachments 5), never a hard-coded / 1",
+            source.contains("/ 1\"")
         )
         val build = source.substringAfter("private fun buildDynamicEvidenceCards(").substringBefore("private fun startCaptureFor(")
         assertTrue(build.contains("evidenceMaxCounts[field.fieldKey] = field.maxCount"))
         val render = source.substringAfter("private fun renderEvidenceCard(").substringBefore("private fun removeEvidence(")
-        assertTrue(render.contains("\"0 / \${evidenceMaxCounts[fieldKey]"))
+        assertTrue("an empty card", render.contains("\"0 / \${evidenceMaxCounts[fieldKey]"))
+        // A filled card used to say 3 / 1 for three product images; it says 3 / 10.
+        assertTrue("a filled card", render.contains("\"\${list.size} / \${evidenceMaxCounts[fieldKey]"))
     }
 }
