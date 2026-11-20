@@ -113,7 +113,7 @@ Sign-in and mutating routes are login- and IP-rate-limited (`server/rate-limit.t
 | POST | `/api/claims/unified-create` | Yes | Phone and console claim submission: attaches the claim to a saved bench scan in the caller's accounts, queues automation, and synchronizes the Return Register ticket ID. Never creates a scan. |
 | POST | `/api/automation/agent/register` | Admin/Supervisor | Enrolls one Server PC and returns its API key once. |
 | POST | `/api/automation/agent/heartbeat` | Agent key | Reports online, busy, or offline state. |
-| GET | `/api/automation/agent/poll` | Agent key | Leases the oldest eligible Meesho job for this Server PC. Eligible claims are `ready_for_claim`, `processing`, `reclaim` or `escalated`; `submitting` is reached only through an approved lease (`FOR UPDATE SKIP LOCKED`). |
+| GET | `/api/automation/agent/poll` | Agent key | Leases the oldest eligible Meesho job for this Server PC. Eligible claims are `ready_for_claim`, `processing`, `reclaim` or `escalated`; `submitting` is reached only through an approved lease (`FOR UPDATE SKIP LOCKED`). Optional `skipMarketplaces` (comma-separated names, for example `Meesho,Myntra VB`): queued jobs for those marketplaces are not leased and keep their attempts; approved jobs still lease. The desktop sends the panels that are held or cooling down. |
 | GET | `/api/automation/follow-ups/due` | Agent key | Leases the next due ticket follow-up for this Server PC. |
 | POST | `/api/automation/follow-ups/:id/result` | Agent key | Records one ticket check and reschedules or stops it. |
 | GET | `/api/automation/follow-ups` | Signed-in user | Ticket follow-ups for the dashboard, scoped to the account. |
@@ -232,7 +232,7 @@ The Windows claim bot (Electron, `npm run desktop`) uses these agent routes. It 
 
 - `POST /api/automation/agent/register`: Admin/Supervisor enrollment. The client supplies its generated UUID; the returned API key is stored in the Windows user-data directory.
 - `POST /api/automation/agent/heartbeat`: agent UUID plus API key; marks the bot online, busy, or offline.
-- `GET /api/automation/agent/poll`: atomically leases the oldest queued or approved Meesho job. Expired leases retry up to the configured maximum.
+- `GET /api/automation/agent/poll`: atomically leases the oldest queued or approved Meesho job. Expired leases retry up to the configured maximum. Queued jobs for marketplaces named in `skipMarketplaces` (a held or cooling-down desktop panel) are left queued without spending an attempt.
 - `GET /api/automation/jobs/:id/bundle`: returns the claim, portal login, and evidence list for that job.
 - `POST /api/automation/jobs/:id/progress`: reports a stage such as prepared or manual action. Stage `not_eligible` (the marketplace refused the order) sets the claim to `manual_action_required` with the refusal text as a remark and clears any stale marketplace ticket id and completion time on the job.
 - `POST /api/automation/jobs/:id/complete`: stores the marketplace ticket id and marks the job completed, and creates the ticket follow-up that starts the 2-day status checks. Verifies the lease holder, lease liveness and the `submitting` stage atomically; replaying the same ticket id is idempotent, a different ticket or a claimed outcome is rejected.

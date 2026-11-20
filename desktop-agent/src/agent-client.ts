@@ -185,13 +185,15 @@ export class AgentBackendClient {
     }
   }
 
-  async pollJob(): Promise<JobPollResult> {
+  /** `skipMarketplaces`: marketplaces whose panel is held; the server leaves their queued jobs unleased. */
+  async pollJob(skipMarketplaces: readonly string[] = []): Promise<JobPollResult> {
     if (!this.isRegistered) {
       const ok = await this.register()
       if (!ok) return { hasJob: false }
     }
     try {
-      const url = `${this.config.backendUrl}/api/automation/agent/poll?agentUuid=${encodeURIComponent(this.config.agentUuid)}`
+      const skip = skipMarketplaces.length > 0 ? `&skipMarketplaces=${encodeURIComponent(skipMarketplaces.join(","))}` : ""
+      const url = `${this.config.backendUrl}/api/automation/agent/poll?agentUuid=${encodeURIComponent(this.config.agentUuid)}${skip}`
       const res = await fetch(url, {
         headers: {
           "X-Agent-UUID": this.config.agentUuid,

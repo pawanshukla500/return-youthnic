@@ -261,6 +261,11 @@ export function decideFollowUpAssist(input: FollowUpAssistInput): FollowUpAssist
   return { action: "human-review", reason: "no approved procedure and AI assistance is off" }
 }
 
+/** System prompt for the follow-up assistance pass. */
+export const ASSIST_SYSTEM_PROMPT =
+  "You assist a warehouse claim bot. Propose one safe, evidence-grounded recovery step. " +
+  "Never invent ticket IDs, evidence, or credentials. Reply with the proposed action text only."
+
 /**
  * Build the safe diagnostic context sent to the model. Contains the claim,
  * marketplace, step, error signature and approved-procedure outcome — never

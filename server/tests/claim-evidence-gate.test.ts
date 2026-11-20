@@ -60,3 +60,16 @@ test("evidence gate: ready claims remain leasable", async () => {
   assert.equal(result.stage, "downloading_media")
   assert.match(leaseSelectSql(queries), /c\.status IN \('ready_for_claim', 'processing', 'reclaim', 'escalated'\)/)
 })
+
+test("held panels (3.1): skipped marketplaces bind as a parameter and exclude only queued jobs", async () => {
+  const { pool, queries } = gatePool(null)
+  await pollNextAutomationJob(pool, "SYN-agent-uuid", { all: false, marketplaceIds: [3] }, [" Meesho ", "Myntra VB", ""])
+  const found = queries.find((q) => q.sql.includes("FROM claim_automation_jobs j"))
+  assert.ok(found)
+  assert.match(found.sql, /AND NOT \(j\.stage = 'queued' AND LOWER\(m\.name\) = ANY\(\$2::text\[\]\)\)/)
+  assert.deepEqual(found.params, [[3], ["meesho", "myntra vb"]], "account scope stays bound; names are trimmed and lower-cased")
+  // An old desktop sends nothing: the list is empty and every eligible job still leases.
+  const old = gatePool(null)
+  await pollNextAutomationJob(old.pool, "SYN-agent-uuid", SCOPE)
+  assert.deepEqual(old.queries.find((q) => q.sql.includes("FROM claim_automation_jobs j"))?.params, [[]])
+})
