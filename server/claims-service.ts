@@ -1097,10 +1097,13 @@ export async function updateClaimStatus(
   try {
     await client.query("BEGIN")
 
+    // Lock the claim row before reading its status. A follow-up result locks it too (recordFollowUpResult), so
+    // without this lock a manual change could check its move against a stale status and then overwrite a follow-up's
+    // committed approval, a move the transition rules forbid.
     const params: unknown[] = [claimId]
     const scopeCondition = accountCondition(scope, "c.marketplace_id", params)
     const result = await client.query(
-      `SELECT c.id, c.status, c.marketplace_id FROM claims c WHERE c.id = $1 AND ${scopeCondition}`,
+      `SELECT c.id, c.status, c.marketplace_id FROM claims c WHERE c.id = $1 AND ${scopeCondition} FOR UPDATE`,
       params,
     )
     if (!result.rows[0]) throw new ServiceError(404, "Claim not found.")

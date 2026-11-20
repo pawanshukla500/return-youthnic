@@ -24,6 +24,8 @@ import {
   PAID_WITHOUT_PAYOUT_NOTE,
   recordFollowUpResult,
 } from "../claim-follow-up-service.js"
+import { updateClaimStatus } from "../claims-service.js"
+import type { Actor } from "../register-service.js"
 
 test("the cadence is two days and a stopped follow-up is a documented state", () => {
   assert.equal(FOLLOW_UP_INTERVAL_HOURS, 48)
@@ -318,11 +320,15 @@ test("a ticket that cannot be found is retried, then stopped like a failure", ()
 
 type Captured = { sql: string; params: unknown[] }
 
-function fakeDb(options: { agentAuthorized?: boolean; due?: Record<string, unknown> | null; lease?: Record<string, unknown> | null } = {}) {
+function fakeDb(
+  options: { agentAuthorized?: boolean; due?: Record<string, unknown> | null; lease?: Record<string, unknown> | null; claim?: Record<string, unknown> } = {},
+) {
   const queries: Captured[] = []
   const client = {
     query: async (sql: string, params: unknown[] = []) => {
       queries.push({ sql, params })
+      // The manual status change's scoped claim read.
+      if (options.claim && /FROM claims c WHERE c\.id = \$1/.test(sql)) return { rows: [options.claim], rowCount: 1 }
       if (/FROM claim_automation_agents/.test(sql)) {
         const authorized = options.agentAuthorized !== false
         return { rows: authorized ? [{ id: 11 }] : [], rowCount: authorized ? 1 : 0 }
@@ -735,4 +741,15 @@ test("a final ticket the rules cannot apply stops the follow-up and says the cla
   assert.equal(matching(db.queries, /UPDATE claims/).length, 0)
   const params = matching(db.queries, /UPDATE claim_automation_follow_ups/)[0].params
   assert.match(String(params[8]), /The claim was not changed: A claim cannot move from submitted to reconciled\./)
+})
+
+test("a manual status change locks the claim row first, so a stale read cannot overwrite a follow-up's approval", async () => {
+  const db = fakeDb({ claim: { id: 4, status: "submitted", marketplace_id: 7 } })
+  await updateClaimStatus(db.pool, { id: 1, name: "SYN operator" } as Actor, oneAccount, 4, { status: "under_review" })
+
+  const read = db.queries.findIndex((q) => /FROM claims c WHERE c\.id = \$1/.test(q.sql))
+  assert.ok(read > 0, "expected the claim read inside the transaction")
+  assert.match(db.queries[read].sql, /FOR UPDATE$/)
+  assert.deepEqual(db.queries[read].params, [4, [7]])
+  assert.ok(read < db.queries.findIndex((q) => /UPDATE claims/.test(q.sql)), "the lock must come before the update")
 })
