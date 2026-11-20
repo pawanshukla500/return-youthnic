@@ -10,6 +10,7 @@ import {
   markPanelResult,
   marketplacesToSkip,
   nextReadyPanels,
+  PANEL_COOLDOWN_MS,
   panelKeyForMarketplace,
   pollJobSkippingHeldPanels,
   resetPanelRuntime,
@@ -115,6 +116,35 @@ describe("panel-wise continuous claim queue", () => {
     assert.deepEqual(marketplacesToSkip(), ["Meesho", "Myntra VB", "Ajio"])
     clearPanelHold("meesho")
     assert.deepEqual(marketplacesToSkip(), ["Myntra VB", "Ajio"])
+  })
+
+  it("Rejoin rotation clears a cooldown's error count, so one more failure does not cool it down again", () => {
+    resetPanelRuntime()
+    for (let i = 0; i < 3; i++) markPanelResult("meesho", "failed", `SYN-boom-${i}`)
+    assert.equal(getPanelRuntimeState("meesho"), "cooldown")
+    clearPanelHold("meesho")
+    markPanelResult("meesho", "failed", "SYN-boom-after-rejoin")
+    assert.equal(getPanelRuntimeState("meesho"), "idle")
+    assert.deepEqual(marketplacesToSkip(), [])
+  })
+
+  it("a cooldown ends on its own after PANEL_COOLDOWN_MS, and the next job is a single probe", (t) => {
+    resetPanelRuntime()
+    let now = Date.parse("2026-11-20T10:00:00Z")
+    t.mock.method(Date, "now", () => now)
+    for (let i = 0; i < 3; i++) markPanelResult("meesho", "failed", `SYN-boom-${i}`)
+    assert.deepEqual(marketplacesToSkip(), ["Meesho"])
+    now += PANEL_COOLDOWN_MS - 1
+    assert.deepEqual(marketplacesToSkip(), ["Meesho"], "still cooling down one millisecond before the end")
+    now += 1
+    assert.deepEqual(marketplacesToSkip(), [], "an expired cooldown is no longer skipped")
+    assert.equal(getPanelRuntimeState("meesho"), "idle")
+    markPanelResult("meesho", "failed", "SYN-probe-fails")
+    assert.equal(getPanelRuntimeState("meesho"), "cooldown", "a failed probe cools the panel down again")
+    now += PANEL_COOLDOWN_MS
+    markPanelResult("meesho", "completed", "SYN-ref-1")
+    assert.equal(getPanelRuntimeState("meesho"), "idle")
+    assert.equal(getPanelStatuses("C:/tmp-profiles").find((s) => s.key === "meesho")?.consecutiveErrors, 0, "a successful probe resets the count")
   })
 })
 

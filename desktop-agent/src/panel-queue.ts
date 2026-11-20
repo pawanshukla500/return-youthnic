@@ -44,14 +44,21 @@ export type PanelStatus = {
   lastResultAt: string | null
 }
 
-const runtime = new Map<string, { state: PanelRuntimeState; activeJobId: number | null; consecutiveErrors: number; lastResult: string | null; lastResultAt: string | null }>()
+/** How long a panel cools down after 3 straight failures before it takes queued jobs again. */
+export const PANEL_COOLDOWN_MS = 30 * 60_000
+
+const runtime = new Map<string, { state: PanelRuntimeState; activeJobId: number | null; consecutiveErrors: number; cooldownUntil: number; lastResult: string | null; lastResultAt: string | null }>()
 
 function runtimeFor(key: string) {
   let r = runtime.get(key)
   if (!r) {
-    r = { state: "idle", activeJobId: null, consecutiveErrors: 0, lastResult: null, lastResultAt: null }
+    r = { state: "idle", activeJobId: null, consecutiveErrors: 0, cooldownUntil: 0, lastResult: null, lastResultAt: null }
     runtime.set(key, r)
   }
+  // A cooled-down panel's queued jobs are skipped when polling, so no success
+  // can end the cooldown: it ends on its own. The error count stays, so the
+  // next job is a single probe: a success resets it, a failure cools again.
+  if (r.state === "cooldown" && Date.now() >= r.cooldownUntil) r.state = "idle"
   return r
 }
 
@@ -83,9 +90,15 @@ export function markPanelResult(panelKey: string, outcome: "completed" | "prepar
     r.lastResult = detail || "Waiting for operator in the supplier browser."
   } else {
     r.consecutiveErrors += 1
-    // After 3 straight failures the panel cools down so a broken portal
-    // layout does not spin the worker forever; other panels keep filing.
-    r.state = r.consecutiveErrors >= 3 ? "cooldown" : "idle"
+    // After 3 straight failures the panel cools down for PANEL_COOLDOWN_MS so a
+    // broken portal layout does not spin the worker or spend every queued job's
+    // attempts; other panels keep filing.
+    if (r.consecutiveErrors >= 3) {
+      r.state = "cooldown"
+      r.cooldownUntil = Date.now() + PANEL_COOLDOWN_MS
+    } else {
+      r.state = "idle"
+    }
     r.lastResult = detail || "failed"
   }
 }
@@ -93,7 +106,11 @@ export function markPanelResult(panelKey: string, outcome: "completed" | "prepar
 /** Operator resolved the manual step or approved/cleared the claim — the panel rejoins the rotation. */
 export function clearPanelHold(panelKey: string): void {
   const r = runtimeFor(panelKey)
-  if (r.state === "manual_action" || r.state === "cooldown" || r.state === "prepared") r.state = "idle"
+  if (r.state === "manual_action" || r.state === "cooldown" || r.state === "prepared") {
+    r.state = "idle"
+    // Rejoin starts the count again, or one more failure would cool the panel down at once.
+    r.consecutiveErrors = 0
+  }
   r.activeJobId = null
 }
 
@@ -105,7 +122,8 @@ export function isPanelHeld(panelKey: string): boolean {
 
 /**
  * Marketplace names whose panel must not take a new filing job: held for the
- * operator (prepared, manual_action) or cooling down after repeated failures.
+ * operator (prepared, manual_action) or cooling down after repeated failures
+ * (for PANEL_COOLDOWN_MS, or until Rejoin rotation).
  * Sent with every job poll so the server leaves those queued jobs alone instead
  * of leasing one (and spending one of its attempts) that the engine would drop.
  */
