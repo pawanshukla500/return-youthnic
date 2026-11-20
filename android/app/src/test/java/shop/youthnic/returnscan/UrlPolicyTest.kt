@@ -1,11 +1,13 @@
 package shop.youthnic.returnscan
 
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import shop.youthnic.returnscan.util.UrlPolicy
 import java.io.File
+import java.net.URLDecoder
 
 /**
  * The manifest allowed unencrypted traffic everywhere, the sign-in screen saved any server address (which then receives
@@ -79,12 +81,78 @@ class UrlPolicyTest {
         assertFalse(UrlPolicy.isLocalHost("10.syn.0.1"))
     }
 
+    // Product images: the web console sends every http(s) image link through the server's GET /api/catalog-image?url=,
+    // which fetches the link server-side. A release build does the same for an http link instead of fetching it in clear.
+    private val server = "https://syn-server.example"
+
     @Test
-    fun httpProductImagesAreAskedForOverHttpsInRelease() {
-        assertEquals("https://syn-cdn.example/SYN-SKU-1.jpg", UrlPolicy.forImage("http://syn-cdn.example/SYN-SKU-1.jpg", release))
-        assertEquals("https://syn-cdn.example/SYN-SKU-1.jpg", UrlPolicy.forImage("https://syn-cdn.example/SYN-SKU-1.jpg", release))
-        assertEquals("http://192.168.1.20:3001/SYN-SKU-1.jpg", UrlPolicy.forImage("http://192.168.1.20:3001/SYN-SKU-1.jpg", debug))
-        assertEquals("https://192.168.1.20:3001/SYN-SKU-1.jpg", UrlPolicy.forImage("http://192.168.1.20:3001/SYN-SKU-1.jpg", release))
+    fun httpProductImagesGoThroughTheServerImageProxyInRelease() {
+        val proxied = "https://syn-server.example/api/catalog-image?url=http%3A%2F%2Fsyn-cdn.example%2FSYN-SKU-1.jpg"
+        assertEquals(proxied, UrlPolicy.forImage("http://syn-cdn.example/SYN-SKU-1.jpg", server, release))
+        assertEquals(proxied, UrlPolicy.forImage("http://syn-cdn.example/SYN-SKU-1.jpg", "$server/", release))
+        // A LAN link is proxied too (the server then refuses a private host, as it does for the web console).
+        assertTrue(UrlPolicy.forImage("http://192.168.1.20:3001/SYN-SKU-1.jpg", server, release).startsWith("$server/api/catalog-image?url="))
+    }
+
+    @Test
+    fun theProxiedLinkCarriesTheOriginalLinkIntactAndStaysOnTheServer() {
+        for (link in listOf(
+            "http://syn-cdn.example/SYN-SKU-1.jpg?w=416&h=416#top",
+            "HTTP://syn-cdn.example/SYN SKU+2%20.jpg",
+            "http://syn-server.example.syn-evil.example/SYN-SKU-3.jpg",
+            "http://syn-evil.example/@syn-server.example/SYN-SKU-4.jpg",
+            "http://syn-user:syn-pass@syn-evil.example/SYN-SKU-5.jpg",
+            "http://syn-cdn.example/SYN-कुर्ता-6.jpg",
+        )) {
+            val proxied = UrlPolicy.forImage(link, server, release)
+            val parsed = proxied.toHttpUrl()
+            assertEquals("https", parsed.scheme)
+            assertEquals("syn-server.example", parsed.host)
+            assertEquals("/api/catalog-image", parsed.encodedPath)
+            assertEquals(setOf("url"), parsed.queryParameterNames)
+            // The server reads `url` as Express does (percent-decoding, + as a space) and must get the stored link back.
+            assertEquals(link, URLDecoder.decode(proxied.substringAfter("?url="), "UTF-8"))
+            assertTrue(UrlPolicy.isOnServer(proxied, server))
+        }
+    }
+
+    @Test
+    fun httpsProductImagesLoadDirectly() {
+        for (build in listOf(release, debug)) {
+            assertEquals("https://syn-cdn.example/SYN-SKU-1.jpg", UrlPolicy.forImage("https://syn-cdn.example/SYN-SKU-1.jpg", server, build))
+            assertEquals("HTTPS://syn-cdn.example/SYN-SKU-1.jpg", UrlPolicy.forImage("HTTPS://syn-cdn.example/SYN-SKU-1.jpg", server, build))
+        }
+        // Not a link at all: passed on unchanged (the request fails and the placeholder shows), never proxied.
+        assertEquals("SYN-not-a-link", UrlPolicy.forImage("SYN-not-a-link", server, release))
+    }
+
+    @Test
+    fun debugBuildStillLoadsLanImagesDirectly() {
+        assertEquals("http://192.168.1.20:3001/SYN-SKU-1.jpg", UrlPolicy.forImage("http://192.168.1.20:3001/SYN-SKU-1.jpg", server, debug))
+        assertEquals("http://10.0.2.2:3001/SYN-SKU-1.jpg", UrlPolicy.forImage("http://10.0.2.2:3001/SYN-SKU-1.jpg", "http://10.0.2.2:3001", debug))
+        // An http link to the internet goes through the image proxy of the (LAN) debug server.
+        assertEquals(
+            "http://192.168.1.20:3001/api/catalog-image?url=http%3A%2F%2Fsyn-cdn.example%2FSYN-SKU-1.jpg",
+            UrlPolicy.forImage("http://syn-cdn.example/SYN-SKU-1.jpg", "http://192.168.1.20:3001", debug),
+        )
+    }
+
+    @Test
+    fun theSessionTokenGoesOnlyToTheAppServer() {
+        assertTrue(UrlPolicy.isOnServer("https://syn-server.example/api/catalog-image?url=SYN-x", server))
+        assertTrue(UrlPolicy.isOnServer("https://SYN-SERVER.example:443/SYN-SKU-1.jpg", "$server/"))
+        for (other in listOf(
+            "https://syn-cdn.example/SYN-SKU-1.jpg",
+            "https://syn-server.example.syn-evil.example/SYN-SKU-1.jpg",
+            "https://syn-evil.example/syn-server.example/SYN-SKU-1.jpg",
+            "http://syn-server.example/SYN-SKU-1.jpg",
+            "https://syn-server.example:8443/SYN-SKU-1.jpg",
+            "SYN-not-a-link",
+            "",
+        )) {
+            assertFalse("$other must not receive the session token", UrlPolicy.isOnServer(other, server))
+        }
+        assertFalse(UrlPolicy.isOnServer("https://syn-server.example/SYN-SKU-1.jpg", "SYN-not-a-server"))
     }
 
     // A unit test cannot build the APK, so this reads the build files (as StringFormatsTest does).
@@ -113,5 +181,13 @@ class UrlPolicyTest {
         val updater = File(src, "update/AppUpdater.kt").readText()
         assertTrue(updater.contains("UrlPolicy.isAllowed(release.downloadUrl)"))
         assertTrue(updater.contains("UrlPolicy.isAllowed(release.pageUrl)"))
+    }
+
+    @Test
+    fun imageCacheProxiesHttpLinksAndSendsTheTokenOnlyToTheServer() {
+        val imageCache = File(appDir, "src/main/java/shop/youthnic/returnscan/data/ImageCache.kt").readText()
+        assertTrue(imageCache.contains("UrlPolicy.forImage(url, serverUrl)"))
+        assertTrue(imageCache.contains("UrlPolicy.isOnServer(fetchUrl, serverUrl)) builder.header(\"Authorization\""))
+        assertEquals(1, Regex("Authorization").findAll(imageCache).count())
     }
 }

@@ -28,7 +28,7 @@ class ReturnScanApp : Application() {
         sessionManager = SessionManager(this)
         apiClient = ApiClient(sessionManager)
         soundManager = SoundManager(this, sessionManager)
-        imageCache = ImageCache(this)
+        imageCache = ImageCache(this, sessionManager)
 
         AppUpdater.ensureChannel(this)
         AppUpdater.scheduleBackgroundCheck(this)

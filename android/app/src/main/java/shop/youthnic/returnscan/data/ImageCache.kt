@@ -17,7 +17,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.util.concurrent.Executors
 
-class ImageCache(context: Context, private val okHttpClient: OkHttpClient = OkHttpClient()) {
+class ImageCache(
+    context: Context,
+    private val sessionManager: SessionManager,
+    private val okHttpClient: OkHttpClient = OkHttpClient(),
+) {
 
     suspend fun getOrFetch(url: String?, maxDim: Int = 400): Bitmap? = withContext(Dispatchers.IO) {
         if (url.isNullOrBlank()) return@withContext null
@@ -99,12 +103,19 @@ class ImageCache(context: Context, private val okHttpClient: OkHttpClient = OkHt
         }
 
         return try {
-            val request = Request.Builder().url(UrlPolicy.forImage(url)).build()
-            val response = okHttpClient.newCall(request).execute()
-            if (!response.isSuccessful) return null
+            // An http link this build may not fetch goes through the server's image proxy (UrlPolicy.forImage). The
+            // session token goes only to the app's own server, never to a marketplace or CDN host.
+            val serverUrl = sessionManager.serverUrl
+            val fetchUrl = UrlPolicy.forImage(url, serverUrl)
+            val builder = Request.Builder().url(fetchUrl)
+            val token = sessionManager.authToken
+            if (token != null && UrlPolicy.isOnServer(fetchUrl, serverUrl)) builder.header("Authorization", "Bearer $token")
+            okHttpClient.newCall(builder.build()).execute().use { response ->
+                if (!response.isSuccessful) return null
 
-            val bytes = response.body?.bytes() ?: return null
-            FileOutputStream(file).use { it.write(bytes) }
+                val bytes = response.body?.bytes() ?: return null
+                FileOutputStream(file).use { it.write(bytes) }
+            }
 
             decodeSampledBitmap(file.absolutePath, maxDim, maxDim)
         } catch (_: Exception) {
