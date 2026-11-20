@@ -319,7 +319,8 @@ test("multipart upload: a 96 MiB file lands on disk with its hash while memory s
   } finally {
     await server.close()
   }
-  await new Promise((resolve) => setTimeout(resolve, 50))
+  // The removal is asynchronous and, on Windows, can wait out a brief antivirus hold on a 96 MiB file.
+  for (let i = 0; i < 100 && fs.readdirSync(dir).length > 0; i += 1) await new Promise((resolve) => setTimeout(resolve, 30))
   assert.deepEqual(fs.readdirSync(dir), [], "the temp file is removed after the request")
 })
 

@@ -21,6 +21,8 @@ const EVIDENCE_MAX_BYTES = 100 * 1024 * 1024
 const MULTIPART_SLACK_BYTES = 64 * 1024 // boundaries and the small text fields sent with the file
 const HEAD_BYTES = 16 // covers every file signature evidenceContentError checks
 const STALE_TEMP_MS = 24 * 60 * 60 * 1000
+// Windows can hold a just-written file for a moment (antivirus scan); retry instead of leaving it for the daily sweep.
+const RM_TEMP = { force: true, maxRetries: 5, retryDelay: 100 }
 
 export type EvidenceTempFile = Express.Multer.File & { contentHash: string; head: Buffer }
 
@@ -50,7 +52,7 @@ function hashingDiskStorage(dir: string): multer.StorageEngine {
       })
       pipeline(file.stream, tap, fs.createWriteStream(filePath, { mode: 0o600 }), (error) => {
         if (error) {
-          fs.rm(filePath, { force: true }, () => cb(error))
+          fs.rm(filePath, RM_TEMP, () => cb(error))
           return
         }
         const info = { path: filePath, size, contentHash: hash.digest("hex"), head: Buffer.concat(head) }
@@ -58,7 +60,7 @@ function hashingDiskStorage(dir: string): multer.StorageEngine {
       })
     },
     _removeFile(_req, file, cb) {
-      fs.rm(file.path, { force: true }, cb)
+      fs.rm(file.path, RM_TEMP, cb)
     },
   }
 }
@@ -107,7 +109,7 @@ export function evidenceUpload(options: { dir?: string; maxBytes?: number } = {}
 }
 
 export function removeEvidenceTempFile(file: Express.Multer.File | undefined): void {
-  if (file?.path) fs.rm(file.path, { force: true }, () => undefined)
+  if (file?.path) fs.rm(file.path, RM_TEMP, () => undefined)
 }
 
 // Only one plain byte range is passed to storage. Anything else is ignored and the whole file is sent,
