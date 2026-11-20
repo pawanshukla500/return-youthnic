@@ -1118,7 +1118,8 @@ Sentry.setupExpressErrorHandler(app)
 
 app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
   if (error instanceof multer.MulterError && error.code === "LIMIT_FILE_SIZE") {
-    return res.status(400).json({ error: "File is larger than 25 MB" })
+    // Limits differ by route (25 MB spreadsheets, 50 MB return tracking; evidence answers its own 413).
+    return res.status(400).json({ error: "The file is larger than this upload allows." })
   }
   console.error(error)
   Sentry.captureException(error)
