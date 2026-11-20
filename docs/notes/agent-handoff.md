@@ -1188,7 +1188,7 @@ Append new entries at the end. Do not edit earlier entries, except to correct a 
 - **Live Runtime & API Verification Results**:
   - Development Daemon: `npm.cmd run dev` running smoothly (`http://localhost:5173/` and `http://127.0.0.1:3001/`).
   - `GET /api/health`: HTTP 200 `{"ok":true,"database":"connected","name":"return-scan_youthnic"}`.
-  - `GET /api/auth/me`: Authenticated as `Pawan Shukla` (`returnorders@vbexports.co.in`, `Admin`).
+  - `GET /api/auth/me`: Authenticated as `Pawan Shukla` (`<redacted>`, `Admin`).
   - `GET /api/accounts`: HTTP 200 returning all 7 active marketplace accounts (`Amazon`, `Flipkart`, `Meesho`, `Myntra VB`, `Myntra EJ`, `Ajio`, and `Shopify`).
   - `GET /api/scan/session`: HTTP 200 returning shift metrics, active issue categories (`Normal Return`, `Damaged`, `Missing Item`, `Wrong Product`, `SKU Change`, `Size Change`), and sub-issues.
   - `POST /api/scan/lookup`: Looked up real Shopify return barcode `30100810011045` -> returned HTTP 200 `found`, Order `#26YOU5791`, product "Rust Cotton Blend Ajrak Print A-Line Front Slit Long Kurta", SKU `B170-Jodha-Rust_M`, resolved image from `product_master`.
@@ -2792,18 +2792,18 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
 
 ### 2026-11-02, Antigravity Agent: WhatsApp Gateway & OMSGuru Daily CSV Group Dispatch
 
-- **Task:** Verify and connect to the self-hosted WhatsApp Docker gateway deployed on OCI Mumbai, and integrate automated dispatch of OMSGuru daily inventory update CSV files (`UpdateInStockQtyAnd_orLastPurchasePrice.csv`) and return reports directly into the WhatsApp group `"Inventory Management"`, tagging Pandit Vishal Tiwari (`916306361624@s.whatsapp.net` / `214250249314376@lid`).
+- **Task:** Verify and connect to the self-hosted WhatsApp Docker gateway deployed on OCI Mumbai, and integrate automated dispatch of OMSGuru daily inventory update CSV files (`UpdateInStockQtyAnd_orLastPurchasePrice.csv`) and return reports directly into the WhatsApp group `"Inventory Management"`, tagging <redacted> (`<redacted>` / `<redacted>`).
 - **Infrastructure Verification:**
   - Connected via SSH to OCI Mumbai host `ubuntu@130.210.46.82` with private key `vbexport-oci-mumbai`.
   - Discovered Docker container `gowa` running `aldinokemal2104/go-whatsapp-web-multidevice:latest` (`/entrypoint.sh rest`) bound to `127.0.0.1:3000` behind Caddy reverse proxy serving `https://wa.youthnic.shop` with public TLS.
   - Authenticated with Basic Auth credentials extracted from container environment. Verified live WhatsApp session: `is_connected: true`, `is_logged_in: true`, bot JID `919998249498@s.whatsapp.net`.
-  - Queried group `919825149497-1631941133@g.us`: confirmed group name `"Inventory Management"` (21 participants, 6 admins). Verified Pandit Vishal Tiwari's participant entry: Phone `916306361624@s.whatsapp.net`, LID `214250249314376@lid`.
+  - Queried group `<redacted>`: confirmed group name `"Inventory Management"` (21 participants, 6 admins). Verified <redacted>'s participant entry: Phone `<redacted>`, LID `<redacted>`.
 - **Implementation:**
   - Created `server/whatsapp.ts`:
     - Full WhatsApp REST API client (`/app/status`, `/send/message`, `/send/file`).
     - Multipart form-data streaming for binary file attachments (CSV files).
-    - Dual addressing: in LID-addressed WhatsApp groups, sends both Phone JID (`916306361624@s.whatsapp.net`) and LID (`214250249314376@lid`) in the `mentions` array to ensure push notifications and highlights trigger across all mobile and web clients.
-    - `renderOmsguruWhatsAppCaption`: Rich briefing with date, request ID, warehouse code, good units received, master SKU count, marketplace channel breakdown, and `@916306361624 (Pandit Vishal Tiwari)` tag.
+    - Dual addressing: in LID-addressed WhatsApp groups, sends both Phone JID (`<redacted>`) and LID (`<redacted>`) in the `mentions` array to ensure push notifications and highlights trigger across all mobile and web clients.
+    - `renderOmsguruWhatsAppCaption`: Rich briefing with date, request ID, warehouse code, good units received, master SKU count, marketplace channel breakdown, and `@<redacted> (<redacted>)` tag.
     - Audit logging with database fallback, and `getWhatsAppConfig` / `updateWhatsAppConfig` helpers.
   - Updated `server/omsguru-daily.ts`:
     - Hooked `sendOmsguruDailyToWhatsApp` into `runScheduledOmsguruUpdate` so nightly 23:00 IST scheduled inventory generation automatically uploads the CSV directly to the WhatsApp group.
@@ -2825,7 +2825,7 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
   - `npm.cmd test`: 583 tests run: 543 passed, 0 failed, 40 skipped (37 local `TEST_DATABASE_URL` unset, 3 POSIX-only Windows skips).
 - **Live Dispatches Completed:**
   - Sent test message to `"Inventory Management"` group: ID `3EB072C0F64ECA35F5412B`.
-  - Sent production inventory update file for request `REQ-20261101-2356-CBAB9A` with simple/clean caption (`UpdateInStockQtyAnd_orLastPurchasePrice.csv` 50.9 KB, tagged `@Vishal Tiwari VB` without extra brackets or metrics dump): Message ID `3EB0908FF42E38E5EF471F`.
+  - Sent production inventory update file for request `REQ-20261101-2356-CBAB9A` with simple/clean caption (`UpdateInStockQtyAnd_orLastPurchasePrice.csv` 50.9 KB, tagged `@<redacted> <redacted> VB` without extra brackets or metrics dump): Message ID `3EB0908FF42E38E5EF471F`.
   - Configured exact dispatch timing in `server/omsguru-daily.ts` and `server/omsguru-routes.ts`: the WhatsApp document send executes immediately upon completion of `sendOmsguruDailyEmail` (both in the nightly 23:56 IST cron and manual resends).
   - Clean caption format adopted in `server/whatsapp.ts`: `@<userPhone>\nPlease update this inventory on Omsguru <requestId>`.
 - **The next agent must not:**
@@ -2958,8 +2958,8 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
   - On Nov 2 at 23:56:29 IST, the scheduled inventory job ran on production Hostinger VPS, successfully creating Record 21 (`REQ-20261102-2356-8298C4`, 805 good units across 451 SKUs) and sending the supervisor email (`email_sent: true`).
   - However, because the newly developed WhatsApp gateway integration (`server/whatsapp.ts`, `server/omsguru-daily.ts`) had been held uncommitted in the local worktree while peer agents worked on desktop/claims milestones, the production container on Hostinger VPS was still running the older build (`56fe5e9`), which lacked the WhatsApp dispatching code.
 - **Immediate Dispatches & Resolution:**
-  - **Yesterday's File Dispatched:** Sent Record 21 (`REQ-20261102-2356-8298C4`) with `UpdateInStockQtyAnd_orLastPurchasePrice.csv` (805 good units across 451 SKUs) to the `"Inventory Management"` WhatsApp group (`919825149497-1631941133@g.us`).
-  - **Tagged Recipient:** Pandit Vishal Tiwari (`@916306361624` / `@Vishal Tiwari VB`) via dual Phone JID (`916306361624@s.whatsapp.net`) and group LID (`214250249314376@lid`).
+  - **Yesterday's File Dispatched:** Sent Record 21 (`REQ-20261102-2356-8298C4`) with `UpdateInStockQtyAnd_orLastPurchasePrice.csv` (805 good units across 451 SKUs) to the `"Inventory Management"` WhatsApp group (`<redacted>`).
+  - **Tagged Recipient:** <redacted> (`@<redacted>` / `@<redacted> <redacted> VB`) via dual Phone JID (`<redacted>`) and group LID (`<redacted>`).
   - **Delivery Confirmation:** Message ID `3EB00D653B1DDAAFB0EE77` confirmed. Database updated: `whatsapp_sent = true`, `whatsapp_sent_at = '2026-11-03T09:46:19.951Z'`, `whatsapp_message_id = '3EB00D653B1DDAAFB0EE77'`.
   - **OCI Server 24/7 Self-Healing Watchdog:** Installed `/home/ubuntu/gowa/watchdog.sh` on OCI host `130.210.46.82` with cron schedule `*/2 * * * *` (every 2 minutes). Automatically tests Caddy and GOWA status; if disconnected, triggers `/app/reconnect`; if unresponsive, auto-restarts the `gowa` container and Caddy with full audit logging in `/home/ubuntu/gowa/watchdog.log`.
   - **Data Integrity & Retry Guarantees:** 3-attempt exponential backoff retry loop (`1.5s`, `3.0s`, `4.5s`) for HTTP 5xx/429/socket timeouts; defensive filter in `buildOmsguruCsv` eliminating any zero or negative quantities; scheduler catch-up for delayed dispatches.
@@ -3477,7 +3477,7 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
      - Created `/opt/return-app/watchdog.sh` deployed to root cron (`* * * * * /opt/return-app/watchdog.sh >> /var/log/return-app-watchdog.log 2>&1`).
      - Checks internal container state, internal API `http://127.0.0.1:3001/api/health`, and public SSL routing `https://return.youthnic.shop/api/health` every 60 seconds.
      - If degraded/unhealthy:
-       - Instantly dispatches a WhatsApp alert to the operations group (`919825149497-1631941133@g.us`) tagging Pandit Vishal Tiwari (`916306361624@s.whatsapp.net`).
+       - Instantly dispatches a WhatsApp alert to the operations group (`<redacted>`) tagging <redacted> (`<redacted>`).
        - Automatically self-heals by restarting `Return-App` container.
        - Re-evaluates health after 15 seconds: if recovered, dispatches an instant recovery WhatsApp confirmation; if still failing, dispatches a critical intervention alert.
      - Integrated watchdog deployment into `.github/scripts/deploy-remote.sh` for perpetual synchronization.
@@ -3506,7 +3506,7 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
 ### 2026-11-13, Antigravity, Sentry MCP Project & Uptime Monitor Provisioning, and Automated Google Drive Backup Restoration
 
 - **Sentry Project Provisioning via MCP (`sentry_sentry`):**
-  - Authenticated via Sentry MCP as Pawan Shukla (`returnorders@vbexports.co.in`) in Organization `vb-export` (`https://vb-export.sentry.io`).
+  - Authenticated via Sentry MCP as Pawan Shukla (`<redacted>`) in Organization `vb-export` (`https://vb-export.sentry.io`).
   - Created Sentry Project `return-app` (ID: `4512423934558288`, platform: `node-express`).
   - Generated Project DSN: `https://6be0da3edbd48f45d0b35f15e290e6e5@o4512423893925888.ingest.de.sentry.io/4512423934558288`.
   - Created Sentry HTTP Uptime Monitor `Return App Production Health` (ID: `2660748`, checking `https://return.youthnic.shop/api/health` every 60s, active and verified green).
@@ -3568,7 +3568,7 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
   - The database backup runs 100% silently every night at 23:45 IST via systemd timer `postgres-drive-backup.timer`, archiving to Google Drive folder `1xLtHfQvW70rV7VWVjtZP6u2S9ZqEKF_v` with 1-day retention and logging to `/var/log/postgres-drive-backup.log` without sending any WhatsApp messages.
 - **Enforced Exclusive WhatsApp Dispatch for OMSGuru Stock Update:**
   - Removed WhatsApp delivery of daily return reports from `server/email-reports.ts` and guarded `sendDailyReportToWhatsApp` in `server/whatsapp.ts`.
-  - Confirmed OMSGuru daily inventory update configuration: `dailyTime: "23:58"` (11:58 PM IST), `dailyEnabled: true`, target group `919825149497-1631941133@g.us`, tagging Pandit Vishal Tiwari (`@916306361624`), attaching `UpdateInStockQtyAnd_orLastPurchasePrice.csv`.
+  - Confirmed OMSGuru daily inventory update configuration: `dailyTime: "23:58"` (11:58 PM IST), `dailyEnabled: true`, target group `<redacted>`, tagging <redacted> (`@<redacted>`), attaching `UpdateInStockQtyAnd_orLastPurchasePrice.csv`.
   - Verified WhatsApp Gateway status at `https://wa.youthnic.shop/app/status` is active and connected.
 - **Files Changed:**
   - `scripts/vps-postgres-backup.js`
@@ -3672,3 +3672,12 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
 - Not run: `/understand-domain` (so `.ua/domain-graph.json` is still from 2026-11-02); `/understand-dashboard`; typecheck/build/tests (no app code changed).
 - Found while analyzing, NOT fixed here (each needs its own change): `scripts/vps-watchdog.sh:15` hardcodes a WhatsApp gateway `user:password` default (committed since `199f998`, 2026-11-13) — rotate it and read it only from `.env`; the lesson writers also flagged a stray unary `+` in `ASSIST_SYSTEM_PROMPT` in `desktop-agent/src/desktop-app-server.ts` (~L499-501, prompt ends in `NaN`), Meesho/Amazon claim templates seeded with no evidence field slots in `server/schema-claim-automation.sql`, and `syncScanToReturnTracking` in `server/register-service.ts` caught inside the transaction without a savepoint. These came from agent reading and are not verified.
 - The next agent must not: commit `.ua/tmp/`, `.ua/intermediate/` or `.ua/.trash-*`; remove the new `.understandignore` exclusions (they keep secrets and agent prompts out of the graph).
+
+### 2026-11-20, Claude Code, Phase 1 audit, leaked-credential fixes, register savepoint
+- Phase 1 (read-only): six parallel auditors (server/DB, Android, desktop shell + updater, engine + Meesho, CI/release, QA/docs/history), each using graphify and the Understand-Anything graph, then an independent refutation pass on every P0/P1 finding: 82 findings kept, 0 refuted, merged into 73 items in [phase1-implementation-checklist.md](phase1-implementation-checklist.md) (by plan phase, with evidence, acceptance criteria, proposed PRs and what needs the owner).
+- Ran (auditors, at `dbd7289`): `npm run typecheck` -> 0 errors (4 projects); `npm test` -> 1,003 tests, 956 pass, 0 fail, 47 skipped (44 need TEST_DATABASE_URL, 3 POSIX-only). CI run 44582743854 ran all 1,003 green.
+- P0 found and confirmed by hand: this public repo exposes the Android release keystore and its passwords (`android/app/release.keystore`, `android/app/build.gradle`, `.github/workflows/return-scan-apk.yml`), the VMS database password (`.github/workflows/deploy.yml`) and the WhatsApp gateway login plus contact IDs (`server/whatsapp.ts`, `scripts/vps-watchdog.sh`). Removing them from code does not undo the exposure: the owner must rotate all three.
+- This change: adds the checklist; redacts the personal data (WhatsApp group/contact IDs, phone digits, a name, the gateway username) from 11 lines of this file (28 replacements); corrects AGENTS.md Current state (test counts; latest Android release is v1.0.63, tag v1.2.0.82 does not exist).
+- Opened alongside (separate PRs, each reviewed by an independent agent): `fix/remove-leaked-credentials` (12.2, 12.3), `fix/android-signing-from-secrets` (12.1 code side), `fix/register-tracking-savepoint` (2.1). Secret scan of all branches: 0 old values in added lines or commit messages.
+- Not run: the DB tests locally (CI runs them); no Gradle build locally (no Android SDK/Java on this PC; CI builds the APK on the PR); no live Meesho, device or production checks.
+- The next agent must not: re-add any credential, phone number, WhatsApp ID or personal name to code, tests or docs; merge `fix/remove-leaked-credentials` before the `VMS_DATABASE_URL` secret exists, or `fix/android-signing-from-secrets` before the three signing-password secrets exist.
