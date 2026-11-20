@@ -18,21 +18,25 @@ export type MobileReleaseInfo = {
   pageUrl?: string
 }
 
-const DEFAULT_RELEASE: MobileReleaseInfo = {
-  versionCode: 10058,
-  versionName: "1.0.58",
+// Must stay identical to data/return-scan-release.json (a test checks it). Update both
+// when a newer Android release is published so the offline fallback never goes stale.
+export const DEFAULT_RELEASE: MobileReleaseInfo = {
+  versionCode: 10080,
+  versionName: "1.0.80",
   minRequiredVersionCode: 10001,
-  sha256: "c4c522dd83e2c8be711006f9d8914dbfc10e29c7afa750e7f5d39a002d0e69eb",
-  sizeBytes: 3847664,
-  notes: "Youthnic Native Android Return Scanner · Mobile Upload Progress & Zero-Reset\n- Live visual evidence upload progress dialog with percentage indicator\n- One-tap start-again reset to zero for scanning subsequent orders\n- Automatic local file cleanup after successful cloud upload\n- Fault-tolerant background retry via WorkManager",
-  publishedAt: "2026-10-17T09:57:55Z",
-  downloadUrl: "https://github.com/pawanshukla500/return-youthnic/releases/download/v1.0.58/ReturnScan-v1.0.58.apk",
+  sha256: "e1dd6b6bdbccc44264ba7ccaa058201f802d54501434429a2442d1170591e566",
+  sizeBytes: 3865402,
+  notes: "Official Android Release APK for Return Scanning App (v1.0.80).",
+  publishedAt: "2026-11-20T08:24:07Z",
+  downloadUrl: "https://github.com/pawanshukla500/return-youthnic/releases/download/v1.0.80/ReturnScan-v1.0.80.apk",
   pageUrl: "https://github.com/pawanshukla500/return-youthnic/releases",
 }
 
 let cachedRelease: MobileReleaseInfo | null = null
-let lastFetchTime = 0
-const GITHUB_CACHE_TTL_MS = 10 * 60 * 1000 // 10 minutes cache
+let nextFetchAt = 0
+const GITHUB_CACHE_TTL_MS = 10 * 60 * 1000 // a good answer is reused for 10 minutes
+const GITHUB_FAILURE_TTL_MS = 5 * 60 * 1000 // an outage is retried at most every 5 minutes
+const GITHUB_TIMEOUT_MS = 8000
 
 async function fetchLatestFromGitHub(): Promise<MobileReleaseInfo | null> {
   try {
@@ -44,6 +48,7 @@ async function fetchLatestFromGitHub(): Promise<MobileReleaseInfo | null> {
         "User-Agent": "Return-App-Server",
         "Accept": "application/vnd.github.v3+json",
       },
+      signal: AbortSignal.timeout(GITHUB_TIMEOUT_MS),
     })
     if (!res.ok) return null
     const list = (await res.json()) as any[]
@@ -69,19 +74,20 @@ async function fetchLatestFromGitHub(): Promise<MobileReleaseInfo | null> {
     const downloadUrl = apkAsset?.browser_download_url || 
       `https://github.com/pawanshukla500/return-youthnic/releases/download/${tagName}/ReturnScan-${tagName}.apk`
 
-    let sha256 = ""
-    if (apkAsset?.digest && typeof apkAsset.digest === "string") {
-      sha256 = apkAsset.digest.replace(/^sha256:/i, "")
-    }
+    // The phone refuses an APK whose hash does not match, so a release without its own
+    // digest is not offered at all: the caller keeps serving the last good release.
+    const sha256 = typeof apkAsset?.digest === "string" ? apkAsset.digest.replace(/^sha256:/i, "") : ""
+    if (!/^[a-f0-9]{64}$/i.test(sha256)) return null
 
     return {
       versionCode: vCode,
       versionName: vName,
       minRequiredVersionCode: 10001,
-      sha256: sha256 || DEFAULT_RELEASE.sha256,
-      sizeBytes: Number(apkAsset?.size || DEFAULT_RELEASE.sizeBytes),
-      notes: data.body || DEFAULT_RELEASE.notes,
-      publishedAt: data.published_at || DEFAULT_RELEASE.publishedAt,
+      sha256,
+      sizeBytes: Number(apkAsset.size) || 0,
+      // Never show another release's notes or date for this one.
+      notes: data.body || "",
+      publishedAt: data.published_at || "",
       downloadUrl,
       pageUrl: data.html_url || DEFAULT_RELEASE.pageUrl,
     }
@@ -113,17 +119,23 @@ export function getMobileReleaseInfo(): MobileReleaseInfo {
   return release
 }
 
-export async function handleLatestRelease(req: Request, res: Response) {
-  const now = Date.now()
-  if (!cachedRelease || now - lastFetchTime > GITHUB_CACHE_TTL_MS) {
+// One resolver for the manifest and the download link, so both always name the same
+// release: the live GitHub one when reachable and complete, else the last good one.
+export async function resolveMobileRelease(now = Date.now()): Promise<MobileReleaseInfo> {
+  if (now >= nextFetchAt) {
     const gh = await fetchLatestFromGitHub()
     if (gh && gh.versionCode >= DEFAULT_RELEASE.versionCode) {
       cachedRelease = gh
-      lastFetchTime = now
+      nextFetchAt = now + GITHUB_CACHE_TTL_MS
+    } else {
+      nextFetchAt = now + GITHUB_FAILURE_TTL_MS
     }
   }
+  return cachedRelease || getMobileReleaseInfo()
+}
 
-  const info = cachedRelease || getMobileReleaseInfo()
+export async function handleLatestRelease(req: Request, res: Response) {
+  const info = await resolveMobileRelease()
   const protocol = req.headers["x-forwarded-proto"] || req.protocol || "http"
   const host = req.headers["x-forwarded-host"] || req.headers.host || "localhost:3001"
   const baseUrl = `${protocol}://${host}`
@@ -136,8 +148,8 @@ export async function handleLatestRelease(req: Request, res: Response) {
   })
 }
 
-export function handleApkDownload(req: Request, res: Response) {
-  const info = cachedRelease || getMobileReleaseInfo()
+export async function handleApkDownload(req: Request, res: Response) {
+  const info = await resolveMobileRelease()
 
   // Look for APK in android release directory or dist directory
   const candidates = [

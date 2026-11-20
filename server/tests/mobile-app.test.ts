@@ -3,7 +3,8 @@ import assert from "node:assert/strict"
 import fs from "node:fs"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
-import { getMobileReleaseInfo } from "../mobile-release.js"
+import type { Request, Response } from "express"
+import { DEFAULT_RELEASE, getMobileReleaseInfo, handleApkDownload, handleLatestRelease, resolveMobileRelease } from "../mobile-release.js"
 import { submissionFrom } from "../register-routes.js"
 import { normalizeTracking, validateScanSubmission, type CategoryRule, type SubIssueRule } from "../register-rules.js"
 
@@ -236,4 +237,88 @@ test(".gitignore exempts no keystore", () => {
   const lines = readRepoFile(".gitignore").split(/\r?\n/)
   assert.ok(lines.includes("*.keystore"))
   assert.ok(!lines.some((line) => line.startsWith("!") && /\.(keystore|jks)$/.test(line)))
+})
+
+// Checklist 12.4: the fallback update manifest follows the published release and never
+// borrows another release's hash. These tests share the resolver's module cache and run in
+// order: the cache starts empty, and the first test uses past timestamps so the route test
+// after it still finds the cache due for a refresh.
+test("fallback manifest file and DEFAULT_RELEASE are identical and name v1.0.80", () => {
+  assert.deepEqual(JSON.parse(readRepoFile("data/return-scan-release.json")), DEFAULT_RELEASE)
+  assert.equal(DEFAULT_RELEASE.versionCode, 10080)
+  assert.equal(DEFAULT_RELEASE.versionName, "1.0.80")
+  assert.ok(DEFAULT_RELEASE.downloadUrl?.endsWith("/v1.0.80/ReturnScan-v1.0.80.apk"))
+  assert.match(DEFAULT_RELEASE.sha256, /^[a-f0-9]{64}$/)
+})
+
+const SYN_DIGEST = "a".repeat(64)
+const synRelease = (run: number, digest?: string) => ({
+  tag_name: `v1.0.${run}`,
+  draft: false,
+  prerelease: false,
+  body: `SYN-release ${run}`,
+  published_at: "2026-11-20T00:00:00Z",
+  html_url: `https://example.invalid/SYN-release-${run}`,
+  assets: [{
+    name: `SYN-ReturnScan-v1.0.${run}.apk`,
+    size: 1234,
+    browser_download_url: `https://example.invalid/SYN-ReturnScan-v1.0.${run}.apk`,
+    ...(digest ? { digest: `sha256:${digest}` } : {}),
+  }],
+})
+const githubReplies = (list: unknown[]) => async () => new Response(JSON.stringify(list), { status: 200 })
+
+function fakeRoute() {
+  const out: { json?: any; redirect?: string } = {}
+  const res = {
+    json: (body: unknown) => { out.json = body },
+    redirect: (url: string) => { out.redirect = url },
+    setHeader: () => {},
+    sendFile: () => {},
+  } as unknown as Response
+  return { req: { headers: {}, protocol: "https" } as unknown as Request, res, out }
+}
+
+test("a GitHub release without its own digest is not offered; the request times out and a failure is cached", async (t) => {
+  const timeout = t.mock.method(AbortSignal, "timeout")
+  const fetchMock = t.mock.method(globalThis, "fetch", githubReplies([synRelease(9001)]))
+  const t0 = Date.now() - 2 * 24 * 60 * 60 * 1000
+
+  const served = await resolveMobileRelease(t0)
+  assert.deepEqual(served, DEFAULT_RELEASE, "the fallback is served, not v1.0.9001 with a borrowed hash")
+  assert.equal(fetchMock.mock.callCount(), 1)
+  const init = fetchMock.mock.calls[0].arguments[1] as RequestInit
+  assert.ok(init.signal instanceof AbortSignal, "the GitHub request carries an abort signal")
+  const ms = Number(timeout.mock.calls[0].arguments[0])
+  assert.ok(ms > 0 && ms <= 10_000, `timeout is at most 10s (got ${ms})`)
+
+  await resolveMobileRelease(t0 + 60_000)
+  assert.equal(fetchMock.mock.callCount(), 1, "a failure is not retried on the next request")
+
+  fetchMock.mock.mockImplementation(async () => { throw new TypeError("SYN-network down") })
+  assert.deepEqual(await resolveMobileRelease(t0 + 5 * 60_000), DEFAULT_RELEASE, "an outage serves the fallback")
+  assert.equal(fetchMock.mock.callCount(), 2, "retried once the failure window passes")
+})
+
+test("the download route and the manifest route resolve the same live release", async (t) => {
+  const fetchMock = t.mock.method(globalThis, "fetch", githubReplies([synRelease(9002, SYN_DIGEST)]))
+
+  const download = fakeRoute()
+  await handleApkDownload(download.req, download.res)
+  assert.equal(download.out.redirect, "https://example.invalid/SYN-ReturnScan-v1.0.9002.apk", "download follows the live release, not the static default")
+
+  const manifest = fakeRoute()
+  await handleLatestRelease(manifest.req, manifest.res)
+  assert.equal(manifest.out.json.versionCode, 19002)
+  assert.equal(manifest.out.json.sha256, SYN_DIGEST)
+  assert.equal(manifest.out.json.downloadUrl, download.out.redirect)
+  assert.equal(fetchMock.mock.callCount(), 1, "a good answer is cached")
+})
+
+test("a newer release without a digest does not displace the last good release", async (t) => {
+  const fetchMock = t.mock.method(globalThis, "fetch", githubReplies([synRelease(9003), synRelease(9002, SYN_DIGEST)]))
+  const served = await resolveMobileRelease(Date.now() + 11 * 60_000)
+  assert.equal(fetchMock.mock.callCount(), 1, "the success cache expired, so GitHub was asked again")
+  assert.equal(served.versionCode, 19002)
+  assert.equal(served.sha256, SYN_DIGEST)
 })
