@@ -39,6 +39,7 @@ import shop.youthnic.returnscan.ReturnScanApp
 import shop.youthnic.returnscan.data.AppRelease
 import shop.youthnic.returnscan.databinding.DialogUpdateProgressBinding
 import shop.youthnic.returnscan.util.Ui
+import shop.youthnic.returnscan.util.UrlPolicy
 import java.io.File
 import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
@@ -209,7 +210,7 @@ object AppUpdater {
         } catch (_: Exception) {}
 
         val id = try {
-            if (release.downloadUrl.isBlank() || !release.downloadUrl.startsWith("http")) {
+            if (!UrlPolicy.isAllowed(release.downloadUrl)) {
                 openDownloadPage(activity, release)
                 return
             }
@@ -389,6 +390,10 @@ object AppUpdater {
     }
 
     fun openDownloadPage(activity: Activity, release: AppRelease) {
+        if (!UrlPolicy.isAllowed(release.pageUrl)) {
+            Toast.makeText(activity, R.string.update_link_not_https, Toast.LENGTH_LONG).show()
+            return
+        }
         try {
             activity.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(release.pageUrl)))
         } catch (_: Exception) {

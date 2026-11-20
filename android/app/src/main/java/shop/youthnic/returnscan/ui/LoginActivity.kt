@@ -14,6 +14,7 @@ import shop.youthnic.returnscan.R
 import shop.youthnic.returnscan.ReturnScanApp
 import shop.youthnic.returnscan.databinding.ActivityLoginBinding
 import shop.youthnic.returnscan.util.CameraPermission
+import shop.youthnic.returnscan.util.UrlPolicy
 
 class LoginActivity : AppCompatActivity() {
 
@@ -56,10 +57,15 @@ class LoginActivity : AppCompatActivity() {
                 return@setOnClickListener
             }
 
-            // Save server URL if modified
+            // Save server URL if modified. The password goes to this address, so one this build may not use (http:// in a
+            // release build) is refused before anything is sent.
             if (isServerConfigOpen) {
                 val inputUrl = binding.etServerUrl.text?.toString()?.trim().orEmpty()
                 if (inputUrl.isNotEmpty() && inputUrl != sm.serverUrl) {
+                    if (!UrlPolicy.isAllowed(inputUrl)) {
+                        showError(getString(R.string.error_server_url_not_https))
+                        return@setOnClickListener
+                    }
                     sm.serverUrl = inputUrl.removeSuffix("/")
                     binding.tvCurrentServerUrl.text = sm.serverUrl
                 }
