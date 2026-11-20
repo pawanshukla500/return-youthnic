@@ -28,7 +28,17 @@ type ClaimsData = {
   stats: Stat[]
   total: string
   slices: { name: string; count: string; pct: string; tone: string }[]
-  rows: { market: string; raised: string; approved: string; review: string; rejected: string; value: string; rate: number }[]
+  // rate is approved / (approved + rejected); null while the marketplace has decided nothing.
+  rows: {
+    market: string
+    raised: string
+    approved: string
+    review: string
+    rejected: string
+    needsAction: string
+    value: string
+    rate: number | null
+  }[]
 }
 
 const STATUS_VALUES: ClaimStatus[] = [
@@ -138,8 +148,17 @@ function Overview({
     saveCsv(
       "claims-by-marketplace.csv",
       toCsv(
-        ["marketplace", "claims_raised", "approved", "under_review", "rejected", "claim_value", "approval_rate_pct"],
-        data.rows.map((row) => [row.market, row.raised, row.approved, row.review, row.rejected, row.value, row.rate]),
+        ["marketplace", "claims_raised", "approved", "under_review", "rejected", "needs_action", "claim_value", "approval_rate_pct"],
+        data.rows.map((row) => [
+          row.market,
+          row.raised,
+          row.approved,
+          row.review,
+          row.rejected,
+          row.needsAction,
+          row.value,
+          row.rate ?? "",
+        ]),
       ),
     )
   }
@@ -215,18 +234,30 @@ function Overview({
             { key: "approved", header: "Approved", render: (row) => row.approved, cellClassName: "green-text" },
             { key: "review", header: "Under review", render: (row) => row.review },
             { key: "rejected", header: "Rejected", render: (row) => row.rejected, cellClassName: "red-text" },
+            {
+              key: "needsAction",
+              header: "Needs action",
+              render: (row) => (
+                <span title="Automation failed or needs a person before the claim reaches the marketplace">
+                  {row.needsAction}
+                </span>
+              ),
+            },
             { key: "value", header: "Claim value", render: (row) => <strong>{row.value}</strong> },
             {
               key: "rate",
               header: "Approval rate",
-              render: (row) => (
-                <div className="rate-cell">
-                  <i>
-                    <b style={{ width: `${row.rate}%` }} />
-                  </i>
-                  <span>{row.rate}%</span>
-                </div>
-              ),
+              render: (row) =>
+                row.rate === null ? (
+                  <span title="No claim has been approved or rejected by the marketplace yet">—</span>
+                ) : (
+                  <div className="rate-cell">
+                    <i>
+                      <b style={{ width: `${row.rate}%` }} />
+                    </i>
+                    <span>{row.rate}%</span>
+                  </div>
+                ),
             },
           ]}
           rows={data.rows}

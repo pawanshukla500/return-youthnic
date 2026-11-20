@@ -17,7 +17,8 @@ export const UPDATE_REPO = "return-youthnic"
 export function updateFeedUrl(): string {
   const override = process.env.DESKTOP_UPDATE_FEED_URL?.trim()
   if (override) return override
-  return `https://api.github.com/repos/${UPDATE_OWNER}/${UPDATE_REPO}/releases?per_page=20`
+  // 100 is GitHub's maximum page size, so the newest desktop release is found even if Android releases pile up.
+  return `https://api.github.com/repos/${UPDATE_OWNER}/${UPDATE_REPO}/releases?per_page=100`
 }
 
 /** "1.2.0" vs tag "desktop-v1.2.0.16" — true when the release is newer. */
@@ -53,6 +54,45 @@ export function selectWindowsSetupAsset(downloads: UpdateAsset[]): UpdateAsset |
   return downloads.find((asset) => Boolean(asset.url)) || null
 }
 
+type FeedRelease = {
+  tag_name?: string
+  draft?: boolean
+  prerelease?: boolean
+  assets?: Array<{ name?: string; browser_download_url?: string }>
+}
+
+/** Numeric, part by part (1.3.100 > 1.3.99); the run number breaks a tie. Never string order. */
+function compareDesktopTags(a: string, b: string): number {
+  const x = parseVersion(a.replace(/^desktop-v/, ""))
+  const y = parseVersion(b.replace(/^desktop-v/, ""))
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    const diff = (x[i] || 0) - (y[i] || 0)
+    if (diff !== 0) return diff
+  }
+  return 0
+}
+
+/**
+ * The GitHub release list is not newest-first: on 2026-11-20 it listed
+ * desktop-v1.3.9.154 before desktop-v1.3.10.157, so the first desktop-v tag
+ * is not the newest. Pick the highest published desktop release that ships
+ * the Windows setup .exe; drafts and prereleases never count.
+ */
+export function pickNewestDesktopRelease(releases: FeedRelease[]): (FeedRelease & { tag_name: string }) | null {
+  let best: (FeedRelease & { tag_name: string }) | null = null
+  for (const release of releases) {
+    const tag = release.tag_name
+    if (typeof tag !== "string" || !tag.startsWith("desktop-v")) continue
+    if (release.draft || release.prerelease) continue
+    const hasExe = (release.assets || []).some(
+      (a) => a.browser_download_url && (a.name || "").toLowerCase().endsWith(".exe"),
+    )
+    if (!hasExe) continue
+    if (!best || compareDesktopTags(tag, best.tag_name) > 0) best = { ...release, tag_name: tag }
+  }
+  return best
+}
+
 export type UpdateCheckResult = {
   ok: boolean
   currentVersion: string
@@ -80,9 +120,8 @@ export async function checkForUpdates(fetchImpl: typeof fetch = fetch): Promise<
     if (!res.ok) {
       return { ok: false, currentVersion, latestTag: null, downloadUrl: null, downloads: [], updateAvailable: false, error: `Release feed answered HTTP ${res.status}.` }
     }
-    const releases = (await res.json()) as Array<{ tag_name?: string; assets?: Array<{ name?: string; browser_download_url?: string }> }>
-    const desktop = releases.find((r) => typeof r.tag_name === "string" && r.tag_name.startsWith("desktop-v"))
-    if (!desktop?.tag_name) {
+    const desktop = pickNewestDesktopRelease((await res.json()) as FeedRelease[])
+    if (!desktop) {
       return { ok: true, currentVersion, latestTag: null, downloadUrl: null, downloads: [], updateAvailable: false }
     }
     const downloads = (desktop.assets || [])

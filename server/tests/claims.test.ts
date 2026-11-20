@@ -4,6 +4,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { EventEmitter } from "node:events"
+import type pg from "pg"
 import {
   CLAIM_STATUSES,
   claimDescriptionError,
@@ -31,6 +32,10 @@ import {
   templateNameError,
 } from "../claims-service.js"
 import { meeshoClaimDescription, meeshoClaimDueDate, normalizeMeeshoPacketState } from "../meesho-claims.js"
+import fs from "node:fs"
+import path from "node:path"
+import { fileURLToPath } from "node:url"
+import { claimStatusesFor, closedClaimStatuses, loadClaims, presentClaimMarkets } from "../dashboard.js"
 
 test("the complete claim lifecycle statuses are defined in order", () => {
   assert.deepEqual([...CLAIM_STATUSES], [
@@ -253,6 +258,72 @@ test("Meesho packet ID falls back to NA when omitted or empty", () => {
     packetId: "",
   })
   assert.match(description, /Packet ID: NA/)
+})
+
+test("claims analytics: a failed or manual-action claim still counts as open", () => {
+  // The open-claims headline and the Needs action column must agree: only approved and rejected claims are closed.
+  assert.deepEqual(closedClaimStatuses(), ["approved", "reconciled", "paid", "rejected"])
+  for (const status of ["failed", "manual_action_required"] as const) {
+    assert.ok(!closedClaimStatuses().includes(status), `${status} still needs a person, so it is open`)
+  }
+  // Both open-claim counts use this list instead of their own copy.
+  const source = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "dashboard.ts"), "utf8")
+  assert.equal(source.match(/status <> ALL\(\$\{(closedStatuses|totalsClosed)\}\)/g)?.length, 2)
+  assert.ok(!source.includes("NOT IN ('approved', 'reconciled', 'paid', 'rejected', 'failed')"))
+})
+
+test("claims analytics: only a marketplace rejection counts as rejected", () => {
+  assert.deepEqual(claimStatusesFor("rejected"), ["rejected"])
+  assert.deepEqual(claimStatusesFor("needs_action"), ["failed", "manual_action_required"])
+  assert.deepEqual(claimStatusesFor("approved"), ["approved", "reconciled", "paid"])
+  // Every lifecycle status lands in exactly one bucket, so the columns add up to "Claims raised".
+  const bucketed = (["approved", "review", "rejected", "needs_action"] as const).flatMap((o) => claimStatusesFor(o))
+  assert.deepEqual([...bucketed].sort(), [...CLAIM_STATUSES].sort())
+})
+
+test("claims analytics: approval rate is approved / (approved + rejected), open and failed claims excluded", () => {
+  // Meesho as seen on 2026-11-20: 12 raised, 2 approved, 4 open, 5 failed + 1 manual action, no real rejection.
+  const meesho = presentClaimMarkets([
+    { market: "SYN-Meesho", raised: 12, approved: 2, review: 4, rejected: 0, needs_action: 6, total_val: "0" },
+  ])
+  assert.equal(meesho.rows[0].rejected, "0")
+  assert.equal(meesho.rows[0].needsAction, "6")
+  assert.equal(meesho.rows[0].rate, 100)
+  assert.equal(meesho.approvalRate, "100.0%")
+
+  const mixed = presentClaimMarkets([
+    { market: "SYN-A", raised: 10, approved: 3, review: 5, rejected: 1, needs_action: 1, total_val: "1500.00" },
+    { market: "SYN-B", raised: 3, approved: 0, review: 3, rejected: 0, needs_action: 0, total_val: 0 },
+  ])
+  assert.equal(mixed.rows[0].rate, 75)
+  assert.equal(mixed.rows[1].rate, null, "nothing decided yet is no rate, not 0%")
+  assert.equal(mixed.approvalRate, "75.0%")
+  assert.equal(presentClaimMarkets([]).approvalRate, "—")
+})
+
+test("claims overview: the stat cards show one approval percentage; Amount recovered gives a count", async () => {
+  // The same Meesho numbers after one approved claim is paid. Each query is answered by what it selects.
+  const db = {
+    query: async (sql: string) => {
+      if (sql.includes("recovered_value")) {
+        return { rows: [{ total_claims: 12, open_claims: 4, total_value: "1200.00", recovered_value: "150.00" }] }
+      }
+      if (sql.includes("FROM marketplaces m")) {
+        return { rows: [{ market: "SYN-Meesho", raised: 12, approved: 2, review: 4, rejected: 0, needs_action: 6, total_val: "1200.00" }] }
+      }
+      if (sql.includes("status_name")) return { rows: [] }
+      if (sql.includes("AS received")) {
+        return { rows: [{ received: 0, issues: 0, clear: 0, received_today: 0, issues_today: 0, claims: 12, open_claims: 4, approved_claims: 2 }] }
+      }
+      throw new Error(`unexpected query: ${sql}`)
+    },
+  } as unknown as pg.Pool
+
+  const { stats } = await loadClaims(db, { all: true })
+  const card = (label: string) => stats.find((s) => s.label === label)!
+  assert.deepEqual(stats.filter((s) => `${s.value} ${s.delta}`.includes("%")).map((s) => s.label), ["Approval rate"])
+  assert.equal(card("Approval rate").value, "100.0%")
+  assert.equal(card("Amount recovered").delta, "Approved claims: 2", "the table's Approved column, as a count")
 })
 
 test("PostgreSQL pool catches idle client termination error and avoids unhandled process crash", () => {
