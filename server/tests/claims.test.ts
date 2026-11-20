@@ -31,6 +31,7 @@ import {
   templateNameError,
 } from "../claims-service.js"
 import { meeshoClaimDescription, meeshoClaimDueDate, normalizeMeeshoPacketState } from "../meesho-claims.js"
+import { claimStatusesFor, presentClaimMarkets } from "../dashboard.js"
 
 test("the complete claim lifecycle statuses are defined in order", () => {
   assert.deepEqual([...CLAIM_STATUSES], [
@@ -253,6 +254,35 @@ test("Meesho packet ID falls back to NA when omitted or empty", () => {
     packetId: "",
   })
   assert.match(description, /Packet ID: NA/)
+})
+
+test("claims analytics: only a marketplace rejection counts as rejected", () => {
+  assert.deepEqual(claimStatusesFor("rejected"), ["rejected"])
+  assert.deepEqual(claimStatusesFor("needs_action"), ["failed", "manual_action_required"])
+  assert.deepEqual(claimStatusesFor("approved"), ["approved", "reconciled", "paid"])
+  // Every lifecycle status lands in exactly one bucket, so the columns add up to "Claims raised".
+  const bucketed = (["approved", "review", "rejected", "needs_action"] as const).flatMap((o) => claimStatusesFor(o))
+  assert.deepEqual([...bucketed].sort(), [...CLAIM_STATUSES].sort())
+})
+
+test("claims analytics: approval rate is approved / (approved + rejected), open and failed claims excluded", () => {
+  // Meesho as seen on 2026-11-20: 12 raised, 2 approved, 4 open, 5 failed + 1 manual action, no real rejection.
+  const meesho = presentClaimMarkets([
+    { market: "SYN-Meesho", raised: 12, approved: 2, review: 4, rejected: 0, needs_action: 6, total_val: "0" },
+  ])
+  assert.equal(meesho.rows[0].rejected, "0")
+  assert.equal(meesho.rows[0].needsAction, "6")
+  assert.equal(meesho.rows[0].rate, 100)
+  assert.equal(meesho.approvalRate, "100.0%")
+
+  const mixed = presentClaimMarkets([
+    { market: "SYN-A", raised: 10, approved: 3, review: 5, rejected: 1, needs_action: 1, total_val: "1500.00" },
+    { market: "SYN-B", raised: 3, approved: 0, review: 3, rejected: 0, needs_action: 0, total_val: 0 },
+  ])
+  assert.equal(mixed.rows[0].rate, 75)
+  assert.equal(mixed.rows[1].rate, null, "nothing decided yet is no rate, not 0%")
+  assert.equal(mixed.approvalRate, "75.0%")
+  assert.equal(presentClaimMarkets([]).approvalRate, "—")
 })
 
 test("PostgreSQL pool catches idle client termination error and avoids unhandled process crash", () => {

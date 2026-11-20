@@ -7,6 +7,7 @@
 
 import type pg from "pg"
 import { accountCondition, type AccountScope } from "./access.js"
+import type { ClaimStatus } from "./claims-service.js"
 import { formatCount, formatInr, percentOf } from "./format.js"
 
 const TODAY_IST = "(now() AT TIME ZONE 'Asia/Kolkata')::date"
@@ -679,6 +680,69 @@ const STATUS_LABELS: Record<string, string> = {
   Raised: "Raised",
 }
 
+// Where each claim status counts on the claims overview, following CLAIM_TRANSITIONS in claims-service.ts. Only the
+// marketplace rejects a claim (submitted, under review, escalated or re-claim -> rejected). failed and
+// manual_action_required are automation states before submission that a person must act on, so they count as
+// needing action, never as rejections.
+export type ClaimOutcome = "approved" | "review" | "rejected" | "needs_action"
+
+const CLAIM_OUTCOMES: Record<ClaimStatus, ClaimOutcome> = {
+  pending_evidence: "review",
+  ready_for_claim: "review",
+  waiting_for_approval: "review",
+  processing: "review",
+  submitted: "review",
+  under_review: "review",
+  reclaim: "review",
+  escalated: "review",
+  approved: "approved",
+  reconciled: "approved",
+  paid: "approved",
+  rejected: "rejected",
+  failed: "needs_action",
+  manual_action_required: "needs_action",
+}
+
+export function claimStatusesFor(outcome: ClaimOutcome): ClaimStatus[] {
+  return (Object.keys(CLAIM_OUTCOMES) as ClaimStatus[]).filter((status) => CLAIM_OUTCOMES[status] === outcome)
+}
+
+export type ClaimMarketCounts = {
+  market: string
+  raised: number
+  approved: number
+  review: number
+  rejected: number
+  needs_action: number
+  total_val: string | number
+}
+
+// The per-marketplace table and the headline approval rate, from one set of counts so they always agree. The
+// approval rate is approved / (approved + rejected): only claims the marketplace decided. Claims still open or
+// waiting on a person after an automation failure are not decided, so they stay out of the denominator. A row with
+// nothing decided has no rate (null), not 0%.
+export function presentClaimMarkets(rows: ClaimMarketCounts[]) {
+  let approved = 0
+  let rejected = 0
+  const presented = rows.map((row) => {
+    const rowApproved = Number(row.approved)
+    const rowDecided = rowApproved + Number(row.rejected)
+    approved += rowApproved
+    rejected += Number(row.rejected)
+    return {
+      market: row.market,
+      raised: formatCount(row.raised),
+      approved: formatCount(row.approved),
+      review: formatCount(row.review),
+      rejected: formatCount(row.rejected),
+      needsAction: formatCount(row.needs_action),
+      value: Number(row.total_val) > 0 ? formatInr(Number(row.total_val)) : "—",
+      rate: rowDecided ? Math.round((rowApproved / rowDecided) * 100) : null,
+    }
+  })
+  return { rows: presented, approvalRate: percentOf(approved, approved + rejected) }
+}
+
 export async function loadClaims(db: pg.Pool, scope: AccountScope) {
   const totalsParams: unknown[] = []
   const totalsCondition = accountCondition(scope, "c.marketplace_id", totalsParams)
@@ -689,6 +753,14 @@ export async function loadClaims(db: pg.Pool, scope: AccountScope) {
 
   const rowParams: unknown[] = []
   const rowCondition = accountCondition(scope, "m.id", rowParams)
+  const statusIn = (outcome: ClaimOutcome) => {
+    rowParams.push(claimStatusesFor(outcome))
+    return `status = ANY($${rowParams.length}::text[])`
+  }
+  const approvedStatus = statusIn("approved")
+  const reviewStatus = statusIn("review")
+  const rejectedStatus = statusIn("rejected")
+  const needsActionStatus = statusIn("needs_action")
 
   const [headline, totalsRes, slices, rows] = await Promise.all([
     loadHeadline(db, scope),
@@ -731,14 +803,16 @@ export async function loadClaims(db: pg.Pool, scope: AccountScope) {
         (COALESCE(c.approved, 0) + COALESCE(ct.approved, 0))::int AS approved,
         (COALESCE(c.review, 0) + COALESCE(ct.review, 0))::int AS review,
         (COALESCE(c.rejected, 0) + COALESCE(ct.rejected, 0))::int AS rejected,
+        COALESCE(c.needs_action, 0)::int AS needs_action,
         COALESCE(c.total_val, 0)::numeric(12,2) AS total_val
       FROM marketplaces m
       LEFT JOIN (
         SELECT marketplace_id,
                COUNT(*)::int AS raised,
-               COUNT(*) FILTER (WHERE status IN ('approved', 'reconciled', 'paid'))::int AS approved,
-               COUNT(*) FILTER (WHERE status IN ('ready_for_claim', 'waiting_for_approval', 'processing', 'pending_evidence', 'submitted', 'under_review', 'reclaim', 'escalated'))::int AS review,
-               COUNT(*) FILTER (WHERE status IN ('rejected', 'failed', 'manual_action_required'))::int AS rejected,
+               COUNT(*) FILTER (WHERE ${approvedStatus})::int AS approved,
+               COUNT(*) FILTER (WHERE ${reviewStatus})::int AS review,
+               COUNT(*) FILTER (WHERE ${rejectedStatus})::int AS rejected,
+               COUNT(*) FILTER (WHERE ${needsActionStatus})::int AS needs_action,
                SUM(COALESCE(NULLIF(claim_amount, 0), total_price_snapshot))::numeric(12,2) AS total_val
         FROM claims
         GROUP BY marketplace_id
@@ -774,6 +848,7 @@ export async function loadClaims(db: pg.Pool, scope: AccountScope) {
   const totalVal = Number(totals.total_value)
   const recoveredVal = Number(totals.recovered_value)
   const approvedClaims = Number(totals.approved_claims)
+  const markets = presentClaimMarkets(rows.rows as ClaimMarketCounts[])
 
   return {
     stats: [
@@ -800,8 +875,8 @@ export async function loadClaims(db: pg.Pool, scope: AccountScope) {
       },
       {
         label: "Approval rate",
-        value: percentOf(Number(headline.approved_claims), claims),
-        delta: "Approved, reconciled, or paid out of all claims",
+        value: markets.approvalRate,
+        delta: "Approved, reconciled or paid, out of the claims the marketplace approved or rejected",
         icon: "alert",
         tone: "orange",
       },
@@ -813,14 +888,6 @@ export async function loadClaims(db: pg.Pool, scope: AccountScope) {
       pct: percentOf(row.claim_count, claims),
       tone: claimTone(row.status_name),
     })),
-    rows: rows.rows.map((row) => ({
-      market: row.market,
-      raised: formatCount(row.raised),
-      approved: formatCount(row.approved),
-      review: formatCount(row.review),
-      rejected: formatCount(row.rejected),
-      value: Number(row.total_val) > 0 ? formatInr(Number(row.total_val)) : "—",
-      rate: row.raised ? Math.round((row.approved / row.raised) * 100) : 0,
-    })),
+    rows: markets.rows,
   }
 }
