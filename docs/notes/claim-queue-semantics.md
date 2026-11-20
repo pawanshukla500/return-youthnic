@@ -18,6 +18,7 @@ How a claim captured on the warehouse phone reaches the desktop bot, and why **n
 - Uploading evidence late never loses a claim — the job stays queued until the evidence gate flips it eligible.
 - A claim missing mandatory evidence never gets half-filed on the portal: the desktop additionally refuses to submit with zero downloaded evidence, and any upload-box verification failure stops for the operator instead of pretending success.
 - Pause/stop: pausing the worker leaves queued jobs untouched; they resume on the next poll after start.
+- A held panel (a prepared claim waiting for approval, a *Needs you* step) or a panel cooling down after repeated failures is sent with every poll as `skipMarketplaces`. The server leaves that marketplace's queued jobs alone, so they keep all their attempts; the approved job that files the prepared claim still leases. *Rejoin rotation* puts the panel back and clears its failure count. A cooldown also ends on its own after 30 minutes; the next job is then a single probe (a success clears the count, a failure cools the panel down again).
 
 ## Rebuild this graph after code changes
 

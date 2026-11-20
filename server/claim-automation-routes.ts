@@ -239,7 +239,9 @@ export function mountClaimAutomationRoutes(app: Express, requireUser: RequestHan
       if (!agentUuid) throw new ServiceError(400, "Agent UUID required.")
       const db = getPool()
       await authenticateAutomationAgent(db, agentUuid, agentCredentials(req).apiKey)
-      const job = await pollNextAutomationJob(db, agentUuid, await scopeForAutomationAgent(db, agentUuid))
+      // Optional, comma separated: marketplaces whose desktop panel is held, so their queued jobs are not leased.
+      const skipMarketplaces = text(req.query.skipMarketplaces).split(",")
+      const job = await pollNextAutomationJob(db, agentUuid, await scopeForAutomationAgent(db, agentUuid), skipMarketplaces)
       res.json({ hasJob: Boolean(job), job })
     } catch (error) {
       sendError(res, error, next)

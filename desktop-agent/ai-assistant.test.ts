@@ -6,6 +6,7 @@ import test from "node:test"
 import assert from "node:assert/strict"
 import {
   aiUsageSnapshot,
+  ASSIST_SYSTEM_PROMPT,
   buildDiagnosticPrompt,
   decideFollowUpAssist,
   GatewayProvider,
@@ -177,4 +178,9 @@ test("proposals keep provider-reported usage in the result and ledger", async ()
   const answered = await requestAiProposal(provider, { prompt: "SYN-Hello" }, 1)
   assert.deepEqual(answered?.usage, { inputTokens: 11, outputTokens: 7, cachedTokens: 3, reasoningTokens: 2 })
   assert.deepEqual(aiUsageSnapshot().lastUsage, { inputTokens: 11, outputTokens: 7, cachedTokens: 3, reasoningTokens: 2 })
+})
+
+test("the assist system prompt keeps its never-invent instruction (no stray unary plus)", () => {
+  assert.ok(ASSIST_SYSTEM_PROMPT.includes("Never invent ticket IDs, evidence, or credentials."))
+  assert.ok(!ASSIST_SYSTEM_PROMPT.includes("NaN"))
 })

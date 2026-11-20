@@ -477,10 +477,16 @@ export async function createOrQueueAutomationJob(
   return Number(res.rows[0].id)
 }
 
+/**
+ * `skipMarketplaces` names the marketplaces whose desktop panel is held for the operator (prepared, manual action)
+ * or cooling down. Their queued jobs are not leased, so they keep every attempt instead of burning one per poll on a
+ * lease the desktop would drop. Approved jobs still lease: submitting is how a held panel's prepared claim is filed.
+ */
 export async function pollNextAutomationJob(
   db: pg.Pool,
   agentUuid: string,
   scope: AccountScope,
+  skipMarketplaces: readonly string[] = [],
 ): Promise<{
   jobId: number
   claimId: number
@@ -579,6 +585,13 @@ export async function pollNextAutomationJob(
     // Select oldest queued job or approved job ready for submission
     const jobParams: unknown[] = []
     const scopeCondition = accountCondition(scope, "c.marketplace_id", jobParams)
+    jobParams.push(
+      skipMarketplaces
+        .map((name) => String(name).trim().toLowerCase())
+        .filter(Boolean)
+        .slice(0, 20),
+    )
+    const skipParam = `$${jobParams.length}::text[]`
     const jobRes = await client.query(
       `SELECT j.id, j.claim_id, j.stage, m.name AS marketplace, er.order_number, er.tracking_id
        FROM claim_automation_jobs j
@@ -597,6 +610,7 @@ export async function pollNextAutomationJob(
          -- incomplete claims stay safely pending and become eligible automatically when
          -- addClaimMedia flips the claim to ready_for_claim.
          AND c.status IN ('ready_for_claim', 'processing', 'reclaim', 'escalated')
+         AND NOT (j.stage = 'queued' AND LOWER(m.name) = ANY(${skipParam}))
          AND ${scopeCondition}
        ORDER BY j.created_at ASC
        LIMIT 1
