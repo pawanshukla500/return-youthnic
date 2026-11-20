@@ -1,6 +1,7 @@
 package shop.youthnic.returnscan
 
 import android.app.Application
+import shop.youthnic.returnscan.claim.ClaimEvidenceUploadWorker
 import shop.youthnic.returnscan.data.ApiClient
 import shop.youthnic.returnscan.data.ImageCache
 import shop.youthnic.returnscan.data.SessionManager
@@ -31,6 +32,7 @@ class ReturnScanApp : Application() {
 
         AppUpdater.ensureChannel(this)
         AppUpdater.scheduleBackgroundCheck(this)
+        ClaimEvidenceUploadWorker.purgeUnusedFiles(this)
     }
 
     companion object {

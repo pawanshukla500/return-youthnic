@@ -39,6 +39,9 @@ class ApiClient(private val sessionManager: SessionManager) {
         })
         .build()
 
+    /** Evidence uploads only: the same connections and cookies, with a longer wait for the reply ([UploadRequests]). */
+    private val uploadHttpClient: OkHttpClient by lazy { UploadRequests.client(okHttpClient) }
+
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
 
     suspend fun login(email: String, pass: String, rememberDevice: Boolean = true): Result<LoginResponse> =
@@ -121,6 +124,19 @@ class ApiClient(private val sessionManager: SessionManager) {
 
                 ScanSessionData(shift, accounts, categories, subIssues)
             }
+        } catch (e: Exception) {
+            Result.failure(mapException(e))
+        }
+    }
+
+    /**
+     * Today's figures only (GET /api/scan/session?only=shift), for the live refresh. A server without that option ignores
+     * the parameter and sends the whole session, which still carries `shift`.
+     */
+    suspend fun getShiftProgress(): Result<ShiftProgress> = withContext(Dispatchers.IO) {
+        try {
+            val req = authorizedRequestBuilder("/api/scan/session?only=shift").get().build()
+            execute(req) { json -> ShiftProgress.fromJson(json.optJSONObject("shift")) }
         } catch (e: Exception) {
             Result.failure(mapException(e))
         }
@@ -287,11 +303,13 @@ class ApiClient(private val sessionManager: SessionManager) {
         }
     }
 
+    /** Uploads one evidence file. [onBytes] hears how much of the file has been sent, on the upload's own thread. */
     suspend fun uploadClaimEvidence(
         claimId: Int,
         fieldKey: String,
         file: File,
-        mimeType: String
+        mimeType: String,
+        onBytes: (sent: Long, total: Long) -> Unit
     ): Result<Unit> = withContext(Dispatchers.IO) {
         try {
             if (!file.exists() || file.length() == 0L) {
@@ -306,12 +324,12 @@ class ApiClient(private val sessionManager: SessionManager) {
                         timeZone = java.util.TimeZone.getTimeZone("UTC")
                     }.format(java.util.Date(file.lastModified()))
                 )
-                .addFormDataPart("file", file.name, file.asRequestBody(mimeType.toMediaType()))
+                .addFormDataPart("file", file.name, ProgressRequestBody(file.asRequestBody(mimeType.toMediaType()), onBytes))
                 .build()
             val request = authorizedRequestBuilder("/api/claims/$claimId/media/upload")
                 .post(body)
                 .build()
-            execute(request) { Unit }
+            execute(request, uploadHttpClient) { Unit }
         } catch (e: Exception) {
             Result.failure(mapException(e))
         }
@@ -359,8 +377,8 @@ class ApiClient(private val sessionManager: SessionManager) {
         return builder
     }
 
-    private fun <T> execute(request: Request, parser: (JSONObject) -> T): Result<T> {
-        val response = okHttpClient.newCall(request).execute()
+    private fun <T> execute(request: Request, client: OkHttpClient = okHttpClient, parser: (JSONObject) -> T): Result<T> {
+        val response = client.newCall(request).execute()
         val bodyStr = response.body?.string().orEmpty()
 
         if (response.code == 401) {

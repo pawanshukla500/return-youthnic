@@ -4,9 +4,18 @@
 import crypto from "node:crypto"
 import fs from "node:fs"
 import path from "node:path"
+import { Readable, Transform, pipeline } from "node:stream"
+import type { ReadableStream as WebReadableStream } from "node:stream/web"
 import { fileURLToPath } from "node:url"
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
+
+// Every storage call gets a deadline so a hung Google endpoint cannot hold a request open forever.
+const STORAGE_TIMEOUT_MS = 60_000
+// Resumable uploads send the file in chunks of this size; GCS needs each chunk but the last to be a
+// multiple of 256 KiB. Memory per upload stays at one chunk whatever the file size.
+const RESUMABLE_CHUNK_BYTES = 8 * 1024 * 1024
+const RESUMABLE_RETRIES = 4
 
 export type FirebaseConfig = {
   projectId: string
@@ -118,6 +127,7 @@ export async function getGoogleAccessToken(config: FirebaseConfig): Promise<stri
       grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
       assertion,
     }),
+    signal: AbortSignal.timeout(STORAGE_TIMEOUT_MS),
   })
 
   if (!response.ok) {
@@ -160,6 +170,7 @@ export async function uploadToFirebaseStorage(
       "Content-Type": contentType,
     },
     body: typeof content === "string" ? content : new Uint8Array(content),
+    signal: AbortSignal.timeout(STORAGE_TIMEOUT_MS),
   })
 
   if (!response.ok) {
@@ -177,25 +188,140 @@ export async function uploadToFirebaseStorage(
   }
 }
 
-// Downloads a file from Firebase Storage. Returns the content as a Buffer with its content type and size.
-// Used by the claims media route for secure scoped retrieval: the client never receives a direct public link.
-export async function downloadFromFirebaseStorage(
+export type FileUploadOptions = { timeoutMs?: number; retries?: number; retryDelayMs?: number }
+
+// A 308 "Resume Incomplete" answer carries `Range: bytes=0-N` for what GCS already holds; no header means nothing.
+function committedBytes(response: Response): number {
+  const match = /^bytes=0-(\d+)$/.exec(response.headers.get("range") ?? "")
+  return match ? Number(match[1]) + 1 : 0
+}
+
+// Uploads a file from disk with a GCS resumable upload: one chunk in memory at a time and every request on a
+// deadline. After a dropped, failed or timed-out chunk it asks the session how much arrived and resumes there.
+export async function uploadFileToFirebaseStorage(
   objectPath: string,
-): Promise<{ content: Buffer; contentType: string; size: number } | null> {
+  filePath: string,
+  contentType: string,
+  options: FileUploadOptions = {},
+): Promise<{ url: string; size: number }> {
+  const config = loadFirebaseConfig()
+  if (!config) throw new Error("Firebase Storage is not configured.")
+  const { timeoutMs = STORAGE_TIMEOUT_MS, retries = RESUMABLE_RETRIES, retryDelayMs = 1000 } = options
+  const handle = await fs.promises.open(filePath, "r")
+  try {
+    const size = (await handle.stat()).size
+    const token = await getGoogleAccessToken(config)
+    const start = await fetch(
+      `https://storage.googleapis.com/upload/storage/v1/b/${encodeURIComponent(config.bucket)}/o?uploadType=resumable&name=${encodeURIComponent(objectPath)}`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "X-Upload-Content-Type": contentType,
+          "X-Upload-Content-Length": String(size),
+        },
+        signal: AbortSignal.timeout(timeoutMs),
+      },
+    )
+    const sessionUrl = start.headers.get("location")
+    if (!start.ok || !sessionUrl) throw new Error(`Firebase Storage upload could not start (${start.status}).`)
+    const finish = async (response: Response) => {
+      await response.body?.cancel() // the object resource is not needed; release the connection
+      return { url: `gs://${config.bucket}/${objectPath}`, size }
+    }
+
+    let offset = 0
+    let failures = 0
+    for (;;) {
+      const length = Math.min(RESUMABLE_CHUNK_BYTES, size - offset)
+      const chunk = Buffer.allocUnsafe(length)
+      const { bytesRead } = await handle.read(chunk, 0, length, offset)
+      if (bytesRead !== length) throw new Error("The file changed while it was being uploaded.")
+      const response = await fetch(sessionUrl, {
+        method: "PUT",
+        headers: { "Content-Range": length > 0 ? `bytes ${offset}-${offset + length - 1}/${size}` : `bytes */${size}` },
+        body: chunk,
+        signal: AbortSignal.timeout(timeoutMs),
+      }).catch(() => null) // a dropped connection or a timeout is resumed below
+      if (response?.ok) return finish(response)
+      if (response?.status === 308 && committedBytes(response) > offset) {
+        offset = committedBytes(response)
+        continue
+      }
+      const retryable =
+        !response || [308, 408, 429].includes(response.status) || response.status >= 500
+      if (!retryable) throw new Error(`Firebase Storage upload failed (${response.status}).`)
+      failures += 1
+      if (failures > retries) throw new Error("Firebase Storage upload kept failing. Try again.")
+      await new Promise((resolve) => setTimeout(resolve, retryDelayMs * failures))
+      // Ask the session how many bytes it holds, then resume from there instead of starting over.
+      const status = await fetch(sessionUrl, {
+        method: "PUT",
+        headers: { "Content-Range": `bytes */${size}` },
+        signal: AbortSignal.timeout(timeoutMs),
+      }).catch(() => null)
+      if (status?.ok) return finish(status)
+      if (status?.status === 308) offset = committedBytes(status)
+    }
+  } finally {
+    await handle.close()
+  }
+}
+
+export type StorageDownload = {
+  status: number // 200 the whole file, 206 one byte range, 416 a range past the end
+  contentLength: string | null
+  contentRange: string | null
+  body: Readable
+}
+
+// Opens a file in Firebase Storage as a stream and passes one Range header through. Nothing is buffered: the
+// caller pipes `body` to its client. One timer covers the wait for headers and every gap between chunks, so a
+// read that stalls halfway also ends (as does a client that stops reading for that long; a video player that
+// resumes simply asks for a new range). Returns null when storage is not configured or the file is not there.
+export async function openFirebaseStorageDownload(
+  objectPath: string,
+  options: { range?: string; timeoutMs?: number } = {},
+): Promise<StorageDownload | null> {
   const config = loadFirebaseConfig()
   if (!config) return null
 
   const token = await getGoogleAccessToken(config)
-  const encodedName = encodeURIComponent(objectPath)
-  const url = `https://storage.googleapis.com/storage/v1/b/${encodeURIComponent(config.bucket)}/o/${encodedName}?alt=media`
-  const response = await fetch(url, {
-    headers: { Authorization: `Bearer ${token}` },
+  const url = `https://storage.googleapis.com/storage/v1/b/${encodeURIComponent(config.bucket)}/o/${encodeURIComponent(objectPath)}?alt=media`
+  const controller = new AbortController()
+  const timer = setTimeout(
+    () => controller.abort(new Error("Firebase Storage did not answer in time.")),
+    options.timeoutMs ?? STORAGE_TIMEOUT_MS,
+  )
+  let response: Response
+  try {
+    response = await fetch(url, {
+      // identity keeps the bytes and Content-Length exactly as stored, so a 206 can be passed straight through
+      headers: { Authorization: `Bearer ${token}`, "Accept-Encoding": "identity", ...(options.range ? { Range: options.range } : {}) },
+      signal: controller.signal,
+    })
+  } catch (error) {
+    clearTimeout(timer)
+    throw error
+  }
+  const contentLength = response.headers.get("content-length")
+  const contentRange = response.headers.get("content-range")
+  if (response.status !== 200 && response.status !== 206) {
+    clearTimeout(timer)
+    controller.abort() // drop the error body without reading it
+    if (response.status === 404) return null
+    if (response.status === 416) return { status: 416, contentLength: null, contentRange, body: Readable.from([]) }
+    throw new Error(`Firebase Storage download failed (${response.status}).`)
+  }
+  const refresh = new Transform({
+    transform(chunk, _encoding, next) {
+      timer.refresh()
+      next(null, chunk)
+    },
   })
-  if (!response.ok) return null
-
-  const contentType = response.headers.get("content-type") || "application/octet-stream"
-  const content = Buffer.from(await response.arrayBuffer())
-  return { content, contentType, size: content.length }
+  const source = response.body ? Readable.fromWeb(response.body as unknown as WebReadableStream) : Readable.from([])
+  pipeline(source, refresh, () => clearTimeout(timer))
+  return { status: response.status, contentLength, contentRange, body: refresh }
 }
 
 // Deletes a file from Firebase Storage
@@ -210,6 +336,7 @@ export async function deleteFromFirebaseStorage(objectPath: string): Promise<boo
     const response = await fetch(deleteUrl, {
       method: "DELETE",
       headers: { Authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(STORAGE_TIMEOUT_MS),
     })
     return response.ok || response.status === 404
   } catch (err) {
@@ -230,6 +357,7 @@ export async function listFirebaseStorageFiles(prefix = "inventory-update-file/"
     const listUrl = `https://storage.googleapis.com/storage/v1/b/${encodeURIComponent(config.bucket)}/o?prefix=${encodeURIComponent(prefix)}`
     const response = await fetch(listUrl, {
       headers: { Authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(STORAGE_TIMEOUT_MS),
     })
     if (!response.ok) return []
     const data = (await response.json()) as { items?: { name: string; size: string; updated: string }[] }

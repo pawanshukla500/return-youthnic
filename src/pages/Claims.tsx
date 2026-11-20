@@ -1456,7 +1456,13 @@ function CreateClaimModal({
 
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 16 }}>
               <button className="btn secondary" onClick={onClose} disabled={creating}>Cancel</button>
-              <button className="btn primary" onClick={handleCreate} disabled={creating || !subOrderNumber.trim() || !awbNumber.trim()}>
+              <button
+                className="btn primary"
+                onClick={handleCreate}
+                disabled={creating || !subOrderNumber.trim() || !awbNumber.trim() || !lookupResult.scanId}
+                // A claim always files on a saved bench scan; the server refuses one without it (409 bench_scan_required).
+                title={lookupResult.scanId ? undefined : "This return has no saved bench scan. Save the bench scan first, then file the claim."}
+              >
                 {creating ? "Creating Claim & Queueing…" : "Create Claim & Upload Evidence"}
               </button>
             </div>

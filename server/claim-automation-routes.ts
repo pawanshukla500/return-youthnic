@@ -1,5 +1,4 @@
 import type { Express, RequestHandler } from "express"
-import { accountCondition } from "./access.js"
 import { getPool } from "./db.js"
 import { actorOf, requireAdmin, requireSupervisorOrAdmin, scopeOf, sendError } from "./http.js"
 import { ServiceError } from "./register-service.js"
@@ -18,6 +17,7 @@ import {
   pollNextAutomationJob,
   recordAgentHeartbeat,
   registerOrUpdateAgent,
+  resolveClaimScanId,
   retryAutomationJob,
   saveMarketplaceCredential,
   scopeForAutomationAgent,
@@ -80,7 +80,8 @@ export function mountClaimAutomationRoutes(app: Express, requireUser: RequestHan
     }
   })
 
-  // Unified claim creation (handles both existing scan or automatically linking expected return)
+  // Unified claim creation (phone and console). The claim attaches to a saved bench scan in the caller's accounts:
+  // send its id as scanId (receiptScanId is the older name). This route never creates a receipt scan.
   app.post("/api/claims/unified-create", requireUser, async (req, res, next) => {
     try {
       const body = (req.body ?? {}) as Record<string, unknown>
@@ -88,131 +89,10 @@ export function mountClaimAutomationRoutes(app: Express, requireUser: RequestHan
       const actor = actorOf(req)
       const scope = scopeOf(req)
 
-      let receiptScanId = positiveId(body.receiptScanId)
-
-      // If receiptScanId is not yet created, resolve or create scan record from expectedReturnId
-      if (!receiptScanId) {
-        let expectedReturnId = positiveId(body.expectedReturnId)
-        if (!expectedReturnId) {
-          const lookupVal = text(body.subOrderId || body.awb || body.orderId)
-          if (lookupVal) {
-            const autoLookup = await lookupReturnForClaim(db, scope, lookupVal)
-            if (autoLookup) {
-              expectedReturnId = autoLookup.expectedReturnId
-              if (autoLookup.scanId) {
-                receiptScanId = autoLookup.scanId
-              }
-            }
-          }
-        }
-        if (!receiptScanId && !expectedReturnId) {
-          throw new ServiceError(400, "Provide either receiptScanId, expectedReturnId, or valid AWB/Sub Order ID.")
-        }
-
-        if (!receiptScanId && expectedReturnId) {
-          const client = await db.connect()
-          try {
-            await client.query("BEGIN")
-            const erParams: unknown[] = [expectedReturnId]
-            const erScope = accountCondition(scope, "er.marketplace_id", erParams)
-            const erRes = await client.query(
-              `SELECT er.id, er.marketplace_id, er.tracking_id, er.order_number, m.name AS marketplace
-               FROM expected_returns er
-               JOIN marketplaces m ON m.id = er.marketplace_id
-               WHERE er.id = $1 AND ${erScope}`,
-              erParams,
-            )
-            if (!erRes.rows[0]) throw new ServiceError(404, "Expected return record not found.")
-
-            // Check if receipt_scan already exists for this expected_return_id
-            const existingScan = await client.query(
-              `SELECT id FROM receipt_scans WHERE expected_return_id = $1`,
-              [expectedReturnId],
-            )
-            if (existingScan.rows[0]) {
-              receiptScanId = Number(existingScan.rows[0].id)
-            } else {
-              const scanTimeLabel = new Intl.DateTimeFormat("en-IN", {
-                timeZone: "Asia/Kolkata",
-                hour: "2-digit",
-                minute: "2-digit",
-                second: "2-digit",
-                hour12: true,
-              }).format(new Date())
-
-              const flyerVal = text(body.packetId)
-              const scanInsert = await client.query(
-                `INSERT INTO receipt_scans (
-                   expected_return_id, scanned_by, scanned_at, scanned_time_label,
-                   outcome, issue_label, status, scanned_tracking,
-                   matched_leg, tracking_validation_snapshot, flyer_id, flyer_state,
-                   tracking_id_snapshot, order_number_snapshot, marketplace_snapshot
-                 )
-                 VALUES ($1, $2, now(), $3, 'issue', $4, 'Draft', $5, 'return', 'match', $6, $7, $8, $9, $10)
-                 RETURNING id`,
-                [
-                  expectedReturnId,
-                  actor.id,
-                  scanTimeLabel,
-                  text(body.claimReason) || "Wrong Product",
-                  text(body.awb || erRes.rows[0].tracking_id),
-                  flyerVal,
-                  flyerVal ? "scanned" : "not_required",
-                  String(erRes.rows[0].tracking_id),
-                  String(erRes.rows[0].order_number),
-                  String(erRes.rows[0].marketplace),
-                ],
-              )
-              receiptScanId = Number(scanInsert.rows[0].id)
-
-              // Populate receipt_scan_items from expected_return_items
-              const eriList = await client.query(
-                `SELECT eri.id, eri.display_order_item_id, eri.order_line_id, eri.channel_listing_id,
-                        eri.marketplace_sku_identifier, eri.qty, COALESCE(eri.label, s.name, 'Returned Product') AS label,
-                        s.code AS sku_code
-                 FROM expected_return_items eri
-                 LEFT JOIN skus s ON s.id = eri.sku_id
-                 WHERE eri.expected_return_id = $1
-                 ORDER BY eri.id ASC`,
-                [expectedReturnId],
-              )
-              if (eriList.rows.length > 0) {
-                for (let i = 0; i < eriList.rows.length; i++) {
-                  const erRow = eriList.rows[i]
-                  await client.query(
-                    `INSERT INTO receipt_scan_items (
-                       receipt_scan_id, expected_return_item_id, line_no, order_item_id,
-                       marketplace_sku, product_sku, product_sku_source, product_name,
-                       expected_qty, received_qty, verified
-                     )
-                     VALUES ($1, $2, $3, $4, $5, $6, 'unrecorded', $7, $8, 1, true)`,
-                    [
-                      receiptScanId,
-                      Number(erRow.id),
-                      i + 1,
-                      String(erRow.display_order_item_id || erRow.order_line_id || ""),
-                      String(erRow.channel_listing_id || erRow.marketplace_sku_identifier || ""),
-                      String(erRow.sku_code || ""),
-                      String(erRow.label || "Returned Product"),
-                      Number(erRow.qty || 1),
-                    ],
-                  )
-                }
-              }
-            }
-            await client.query("COMMIT")
-          } catch (err) {
-            await client.query("ROLLBACK")
-            throw err
-          } finally {
-            client.release()
-          }
-        }
-      }
-
-      if (!receiptScanId) {
-        throw new ServiceError(400, "Failed to resolve or create receipt scan.")
-      }
+      const receiptScanId = await resolveClaimScanId(db, scope, {
+        scanId: positiveId(body.scanId) ?? positiveId(body.receiptScanId),
+        keys: [text(body.awb), text(body.subOrderId), text(body.orderId)],
+      })
 
       // Check if claim already exists for this receiptScanId
       const existingClaim = await db.query(
@@ -304,6 +184,7 @@ export function mountClaimAutomationRoutes(app: Express, requireUser: RequestHan
         console.warn("[unified-create] syncClaimTicketToRegister warning:", err)
       }
 
+      publishChange({ kind: "claim.updated", marketplaceId: claim.marketplaceId, actorId: actor.id })
       res.status(201).json({ claim, jobId, ticketCode: initialTicketCode })
     } catch (error) {
       console.error("[unified-create error]", error)

@@ -52,7 +52,7 @@ Errors are JSON with the message in `error`. Rule failures also list each proble
 | 500 | An unexpected error. The response carries the server's error message as it is. See [known risks](notes/agent-handoff.md#known-risks-and-gaps). |
 | 503 | The database is not connected yet. |
 
-An upload larger than 25 MB returns HTTP 400 with `File is larger than 25 MB`.
+An upload larger than its route's limit (25 MB for spreadsheets, 50 MB for return-tracking files) returns HTTP 400 with `The file is larger than this upload allows.` Claim evidence answers 413 with `Evidence files can be up to 100 MB.` instead (see the claim media routes).
 
 ## Rate limits and CORS
 
@@ -75,8 +75,8 @@ Sign-in and mutating routes are login- and IP-rate-limited (`server/rate-limit.t
 | POST | `/api/claims` | Yes | Creates one claim linked immutably to a scanned return. |
 | GET | `/api/claims/:id` | Yes | Claim details, evidence readiness, media metadata, and status history. |
 | PATCH | `/api/claims/:id/status` | Supervisor/Admin | Advances the approval-controlled claim lifecycle. |
-| POST | `/api/claims/:id/media/upload` | Yes | Validates and uploads one evidence file to Firebase Storage. |
-| GET | `/api/claims/:id/media/:mediaId` | Yes | Securely streams scoped evidence without exposing a public URL. |
+| POST | `/api/claims/:id/media/upload` | Yes | Validates and uploads one evidence file to Firebase Storage, streamed through a temp file (never held in memory). |
+| GET | `/api/claims/:id/media/:mediaId` | Yes | Securely streams scoped evidence without exposing a public URL; honours `Range` (206). |
 | PATCH | `/api/claims/:id/media/:mediaId/deactivate` | Yes | Deactivates an evidence record without deleting history. |
 | GET | `/api/accounts` | Yes | The accounts the user may use. |
 | GET | `/api/uploads` | Yes | Upload history for the user's accounts. |
@@ -85,7 +85,7 @@ Sign-in and mutating routes are login- and IP-rate-limited (`server/rate-limit.t
 | POST | `/api/uploads/import` | Yes | Activates a staged file as the account's lookup data. |
 | POST | `/api/uploads/scanner-list/preview` | Yes | Reads a multi-sheet scanner list and validates entries against active lookups. It never activates data or creates scans. |
 | POST | `/api/scan/lookup` | Yes | Finds the return for an AWB: found, duplicate, choose, or not found. |
-| GET | `/api/scan/session` | Yes | Today's scan counts, the accounts, the active issue categories, and the active sub-issues. |
+| GET | `/api/scan/session` | Yes | Today's scan counts, the accounts, the active issue categories, and the active sub-issues. `?only=shift` returns only `{shift}`. |
 | POST | `/api/scan/complete` | Yes | Records one physical scan with every item verified. A retry with the same key is safe. |
 | GET | `/api/register` | Yes | The return register: one row per verified item, with filters, sorting and paging. |
 | GET | `/api/register/export` | Yes | The register rows that match the filters, as CSV or Excel. |
@@ -110,7 +110,7 @@ Sign-in and mutating routes are login- and IP-rate-limited (`server/rate-limit.t
 | GET | `/api/admin/product-master` | Admin | The VB EXPORT product master as it stands, with sample rows. |
 | GET | `/api/admin/product-master/template` | Admin | A header-only CSV for the product SKU master. It has no data rows. |
 | POST | `/api/admin/product-master/preview` | Admin | Reads one file and reports what it holds, for a chosen marketplace. Changes nothing. |
-| POST | `/api/claims/unified-create` | Yes | Unified mobile claim submission: creates claim, records scan, attaches media, and synchronizes Return Register ticket ID. |
+| POST | `/api/claims/unified-create` | Yes | Phone and console claim submission: attaches the claim to a saved bench scan in the caller's accounts, queues automation, and synchronizes the Return Register ticket ID. Never creates a scan. |
 | POST | `/api/automation/agent/register` | Admin/Supervisor | Enrolls one Server PC and returns its API key once. |
 | POST | `/api/automation/agent/heartbeat` | Agent key | Reports online, busy, or offline state. |
 | GET | `/api/automation/agent/poll` | Agent key | Leases the oldest eligible Meesho job for this Server PC. Eligible claims are `ready_for_claim`, `processing`, `reclaim` or `escalated`; `submitting` is reached only through an approved lease (`FOR UPDATE SKIP LOCKED`). |
@@ -131,7 +131,7 @@ Sign-in and mutating routes are login- and IP-rate-limited (`server/rate-limit.t
 | GET | `/api/automation/credentials` | Yes | Marketplace credentials for the user's accounts (usernames masked). |
 | GET | `/api/automation/portal-login-secret` | Admin | Decrypts one stored portal password for the setup flow. |
 | POST | `/api/admin/automation/credentials` | Admin | Creates or updates a marketplace credential (needs `AUTOMATION_SECRET_KEY`). |
-| GET | `/api/claims/return-lookup` | Yes | Finds returns eligible for a claim by AWB or order. |
+| GET | `/api/claims/return-lookup` | Yes | Finds the return for a claim by AWB, packet or order: active lookup rows or saved scans only, exact matches first (`exactMatch: false` marks a partial match). `templates` holds only the one template a claim for that marketplace will use (active fields only), or is empty when claims for it are not supported yet (Amazon). |
 | GET | `/api/claims/export` | Yes | Scoped claim reconciliation rows as CSV/XLSX (same 50,000-row cap). |
 | GET | `/api/payment/status` | Yes | Payment sync status. |
 | GET | `/api/payment/runs` | Yes | Past payment sync runs. |
@@ -217,10 +217,11 @@ The scan, upload and register screens fill their account lists from this route. 
 
 Claim management links immutably to a verified `receipt_scans` row and does not modify received quantities.
 
-- `POST /api/claims`: accepts `receiptScanId`, `claimReason`, `claimTitle`, `claimDescription`, `remarks`, and `claimTemplateId`. One claim per scan. Auto-falls back to the marketplace's default active template if template ID is mismatched.
+- `POST /api/claims`: accepts `receiptScanId`, `claimReason`, `claimTitle`, `claimDescription`, `remarks`, and `claimTemplateId`. One claim per scan. Each marketplace uses one template: an active one with at least one active required field, its own before a global one. A `claimTemplateId` that does not qualify falls back to it. When no template qualifies (Amazon today: Amazon claims are out of scope) the request is refused with 422 `Claims for <marketplace> are not supported yet…` and no claim is created; no template is created on the fly.
 - `GET /api/claims/:id`: returns `{ claim, media, statusHistory }`. `claim` includes `totalPrice` (merchandise value), `trackingId`, `orderId`, `claimReason`, `status`, and linked `scan`. `media` contains uploaded photos and video entries.
-- `GET /api/claims/:id/media/:mediaId`: securely streams evidence files inline with MIME type (`image/jpeg`, `image/png`, `video/mp4`) and session/bearer authentication, allowing direct browser `<img>` rendering and `<video controls>` HTML5 streaming.
-- `POST /api/claims/unified-create`: mobile-first atomic submission endpoint. Accepts `expectedReturnId`, `receiptScanId`, `marketplaceId`, `trackingId`, `orderId`, `claimReason`, `claimTitle`, `claimDescription` and `claimTemplateId`. Atomically creates the `receipt_scan`, `receipt_scan_items`, `receipt_scan_issues` and `claims` rows, and calls `syncClaimTicketToRegister()` to link the ticket directly to the Return Register. Evidence files are NOT part of this body: each file is uploaded separately to `POST /api/claims/:id/media/upload`.
+- `GET /api/claims/:id/media/:mediaId`: securely streams evidence files inline with MIME type (`image/jpeg`, `image/png`, `video/mp4`) and session/bearer authentication, allowing direct browser `<img>` rendering and `<video controls>` HTML5 streaming. Every answer carries `Accept-Ranges: bytes`. One `Range: bytes=…` header is passed to storage and answered `206` with `Content-Range` (so the video player can seek), or `416` when it starts past the end; any other Range form gets the whole file (`200`). The bytes are piped from storage, never buffered, and a storage read that stalls for 60 seconds is cut off.
+- `POST /api/claims/:id/media/upload`: multipart with `fieldKey`, optional `capturedAt` and one `file`. The file is written to a private temp folder while its SHA-256 is computed, so server memory stays at a few buffers whatever its size; the temp file is removed after the request. A request whose `Content-Length` already exceeds 100 MB is refused with `413` before its body is read, and a streamed file that passes 100 MB is cut off with the same `413` (`Evidence files can be up to 100 MB.`). The field's own `max_file_size_mb`, the duplicate check and the file-signature check run before anything is sent to storage. The file then goes to Firebase with a resumable upload in 8 MiB chunks: every storage call has a 60-second deadline, and a dropped or timed-out chunk resumes from what storage already holds (up to 4 retries).
+- `POST /api/claims/unified-create`: phone and console submission endpoint. A claim always attaches to a saved bench scan in the caller's accounts; this route never creates a receipt scan and never records received or verified quantities. Send the saved scan's id as `scanId` (`receiptScanId` is the older name and still accepted). A body with neither (APKs already in the field) is matched to the saved scan by its first non-empty key (`awb`, else `subOrderId`, else `orderId`; only that key is tried) using the bench's exact rules; a partial match never binds. No saved scan returns 409 `{ error, code: "bench_scan_required" }` (save the bench scan first); two saved scans for one key return 409 `code: "scan_ambiguous"`. `expectedReturnId` is ignored. Also accepts `claimReason`, `claimTitle`, `claimDescription`, `claimTemplateId` and the snapshot fields. Calls `syncClaimTicketToRegister()` to link the ticket to the Return Register and publishes `claim.updated` on `/api/live`. Evidence files are NOT part of this body: each file is uploaded separately to `POST /api/claims/:id/media/upload`. Template resolution and the 422 for an unsupported marketplace are the same as `POST /api/claims`.
 - `GET /api/claims/queue`: accepts lifecycle, search, marketplace, `dateFrom`, and `dateTo` filters.
 - `GET /api/claims/export?format=csv|xlsx`: exports the same scoped and filtered reconciliation rows, up to 50,000 rows. Larger results return 413 and must be narrowed with date or marketplace filters.
 - `PATCH /api/claims/:id/status`: records lifecycle transitions plus the transition reason and, where applicable, approved amount, paid amount, payout reference, and payout date.
@@ -471,6 +472,8 @@ Lookup errors: 400 `Enter a tracking ID` for an empty value, and 400 with a mess
 ```
 
 The shift counts today's scans of the user's accounts, in IST. Only active categories and active sub-issues are listed.
+
+`GET /api/scan/session?only=shift` returns only `{"shift": {...}}`, with the same figures and the same account scope. The Android scanner uses it for its live refresh, at most once every 2 seconds. A server without this option ignores the parameter and sends the whole session, which still carries `shift`.
 
 ### `POST /api/scan/correct`
 

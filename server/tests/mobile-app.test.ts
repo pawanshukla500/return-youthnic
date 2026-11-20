@@ -1,5 +1,8 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
+import fs from "node:fs"
+import path from "node:path"
+import { fileURLToPath } from "node:url"
 import { getMobileReleaseInfo } from "../mobile-release.js"
 import { submissionFrom } from "../register-routes.js"
 import { normalizeTracking, validateScanSubmission, type CategoryRule, type SubIssueRule } from "../register-rules.js"
@@ -172,4 +175,65 @@ test("normalizeTracking cleans Amazon Order ID formats and barcode prefixes", ()
   assert.equal(normalizeTracking("#408-4485117-1368304").value, "408-4485117-1368304")
   assert.equal(normalizeTracking("ORDER: 40844851171368304").value, "408-4485117-1368304")
   assert.equal(normalizeTracking("40844851171368304").value, "408-4485117-1368304")
+})
+
+// Release APKs are signed only from GitHub secrets. These checks stop a keystore password, key alias
+// or keystore file from coming back into this public repository.
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..")
+const readRepoFile = (rel: string) => fs.readFileSync(path.join(repoRoot, rel), "utf8")
+
+test("build.gradle takes release signing only from the four RS_* variables", () => {
+  const gradle = readRepoFile("android/app/build.gradle")
+  const signing = gradle.slice(gradle.indexOf("signingConfigs {"), gradle.indexOf("buildTypes {"))
+  assert.ok(signing.length > 0, "signingConfigs block found")
+  assert.doesNotMatch(signing, /(storePassword|keyAlias|keyPassword)\s*\(?\s*["']/, "no literal password or alias")
+  assert.doesNotMatch(signing, /\?:/, "no literal fallback after System.getenv")
+  assert.doesNotMatch(signing, /\bdebug\s*\{/, "debug builds keep Android's default debug key")
+  assert.doesNotMatch(gradle, /release\.keystore/, "no committed keystore path")
+  for (const name of ["RS_KEYSTORE", "RS_KEYSTORE_PASSWORD", "RS_KEY_ALIAS", "RS_KEY_PASSWORD"]) {
+    assert.match(signing, new RegExp(`System\\.getenv\\("${name}"\\)`))
+  }
+  // A literal stored in a variable and then passed to a signing property must fail too. With the
+  // System.getenv("...") calls removed, the signing block holds no string literal at all, and every value
+  // given to a signing property is a variable read from System.getenv and assigned nowhere else in the file.
+  assert.doesNotMatch(signing.replace(/System\.getenv\("[A-Z_]+"\)/g, ""), /["']/, "no string literal in signingConfigs")
+  for (const use of signing.matchAll(/\b(?:storeFile file|storePassword|keyAlias|keyPassword)\s*\(?\s*([A-Za-z_]\w*)/g)) {
+    const id = use[1]
+    assert.match(signing, new RegExp(`\\bdef ${id} = System\\.getenv\\("RS_[A-Z_]+"\\)`), `${id} is read from System.getenv`)
+    assert.equal(gradle.match(new RegExp(`\\b${id}\\s*=(?!=)`, "g"))?.length, 1, `${id} is assigned only once`)
+  }
+})
+
+test("pull-request APK builds never receive the signing secrets", () => {
+  const workflow = readRepoFile(".github/workflows/return-scan-apk.yml")
+  const steps = workflow.split(/\n\s*- name: /).slice(1)
+  const withSecrets = steps.filter((step) => /secrets\.ANDROID_/.test(step))
+  assert.ok(withSecrets.length >= 2, "the keystore and signed-build steps are found")
+  for (const step of withSecrets) {
+    assert.match(step, /\n\s*if: github\.event_name != 'pull_request'/, `step "${step.split("\n")[0].trim()}" runs only outside pull requests`)
+  }
+  assert.ok(
+    steps.some((step) => /if: github\.event_name == 'pull_request'/.test(step) && /assembleRelease/.test(step) && !/secrets\./.test(step)),
+    "a secret-free review build exists for pull requests",
+  )
+})
+
+test("the APK workflow signs from secrets, fails on a missing one and pins the signer", () => {
+  const workflow = readRepoFile(".github/workflows/return-scan-apk.yml")
+  for (const match of workflow.matchAll(/^\s*(RS_[A-Z_]+):\s*(.+)$/gm)) {
+    assert.match(match[2], /^\$\{\{ (secrets\.|runner\.temp \}\}\/)/, `${match[1]} must come from a secret`)
+  }
+  assert.doesNotMatch(workflow, /app\/release\.keystore/, "no fallback to a committed keystore")
+  for (const name of ["ANDROID_KEYSTORE_B64", "ANDROID_KEYSTORE_PASSWORD", "ANDROID_KEY_ALIAS", "ANDROID_KEY_PASSWORD"]) {
+    assert.ok(workflow.includes(`\${{ secrets.${name} }}`), `${name} is read from secrets`)
+  }
+  assert.ok(workflow.includes("::error::Repository secret $name is not set"), "a missing secret fails loudly")
+  assert.ok(workflow.includes("--print-certs"), "the signing certificate is printed")
+  assert.ok(workflow.includes("${{ vars.ANDROID_SIGNER_SHA256 }}"), "the signer can be pinned")
+})
+
+test(".gitignore exempts no keystore", () => {
+  const lines = readRepoFile(".gitignore").split(/\r?\n/)
+  assert.ok(lines.includes("*.keystore"))
+  assert.ok(!lines.some((line) => line.startsWith("!") && /\.(keystore|jks)$/.test(line)))
 })

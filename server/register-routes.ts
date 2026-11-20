@@ -21,6 +21,7 @@ import {
   registerOptions,
   scanSession,
   ticketHistory,
+  todayShift,
   updateCategory,
   createCategory,
   updateTicketStatus,
@@ -238,6 +239,12 @@ export function mountRegisterRoutes(app: Express, requireUser: RequestHandler): 
 
   app.get("/api/scan/session", requireUser, async (req, res, next) => {
     try {
+      // ?only=shift returns just today's figures: the phones refresh them on every live change, and the accounts, issue
+      // categories and sub-issues do not change with a scan. Any other value returns the whole session.
+      if (req.query.only === "shift") {
+        res.json({ shift: await todayShift(getPool(), scopeOf(req)) })
+        return
+      }
       res.json(await scanSession(getPool(), scopeOf(req)))
     } catch (error) {
       sendError(res, error, next)

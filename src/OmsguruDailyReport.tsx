@@ -3,6 +3,11 @@ import { api, downloadFile } from "./api"
 import { DateField } from "./date-field"
 import { Loading } from "./shell"
 import { Badge, Icon, Modal } from "./ui"
+import { isSupervisorOrAdminUser } from "./access"
+import { useWorkspace } from "./workspace"
+
+// The server refuses generate and send from any other role (server/omsguru-routes.ts); the screen says so up front.
+const SEND_LOCKED_TITLE = "Only a supervisor or administrator can generate or send the OMSGuru update."
 
 export type SkuBreakdownItem = {
   sku: string
@@ -61,6 +66,8 @@ export type UnmappedScannedItem = {
 }
 
 export function OmsguruDailyReport() {
+  const { user } = useWorkspace()
+  const canSend = isSupervisorOrAdminUser(user)
   const [updates, setUpdates] = useState<OmsguruDailyUpdateItem[]>([])
   const [summary, setSummary] = useState<OmsguruSummary | null>(null)
   const [loading, setLoading] = useState(true)
@@ -457,8 +464,8 @@ export function OmsguruDailyReport() {
             type="button"
             className="btn btn-primary"
             onClick={() => handleGenerateNow(false)}
-            disabled={generating}
-            title="Force generate today's OMSGuru update file and upload to Firebase now"
+            disabled={generating || !canSend}
+            title={canSend ? "Force generate today's OMSGuru update file and upload to Firebase now" : SEND_LOCKED_TITLE}
           >
             <Icon name="upload" size={15} />
             <span>{generating ? "Generating..." : "Generate Today Now"}</span>
@@ -748,8 +755,8 @@ export function OmsguruDailyReport() {
                         type="button"
                         className="btn btn-secondary btn-sm"
                         onClick={() => handleSendEmail(item.id)}
-                        disabled={sendingId === item.id}
-                        title={item.emailSent ? "Resend update email with CSV attachment" : "Send update email with CSV attachment"}
+                        disabled={sendingId === item.id || !canSend}
+                        title={!canSend ? SEND_LOCKED_TITLE : item.emailSent ? "Resend update email with CSV attachment" : "Send update email with CSV attachment"}
                       >
                         {sendingId === item.id ? "Sending..." : item.emailSent ? "Resend" : "Email"}
                       </button>
@@ -758,8 +765,8 @@ export function OmsguruDailyReport() {
                         type="button"
                         className="btn btn-secondary btn-sm"
                         onClick={() => handleSendWhatsApp(item.id)}
-                        disabled={sendingWaId === item.id}
-                        title={item.whatsappSent ? "Resend update CSV to WhatsApp group" : "Send update CSV to WhatsApp group"}
+                        disabled={sendingWaId === item.id || !canSend}
+                        title={!canSend ? SEND_LOCKED_TITLE : item.whatsappSent ? "Resend update CSV to WhatsApp group" : "Send update CSV to WhatsApp group"}
                       >
                         {sendingWaId === item.id ? "Sending WA..." : item.whatsappSent ? "Resend WA" : "WhatsApp"}
                       </button>
@@ -1011,6 +1018,8 @@ export function OmsguruDailyReport() {
                       setShowPreviewModal(false)
                       handleGenerateNow(false)
                     }}
+                    disabled={generating || !canSend}
+                    title={canSend ? undefined : SEND_LOCKED_TITLE}
                   >
                     Generate Update File Now
                   </button>
