@@ -4,6 +4,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import type { NextFunction, Request, Response } from "express"
+import type pg from "pg"
 import {
   ALL_ACCOUNTS,
   NO_ACCESS_MESSAGE,
@@ -13,9 +14,32 @@ import {
   allowsAccount,
   isAdminRole,
   scopeFor,
+  type AccountScope,
 } from "../access.js"
 import { requireAdmin, sendError } from "../http.js"
-import { ServiceError, buildRegisterWhere, sortClauseFor } from "../register-service.js"
+import {
+  ServiceError,
+  buildRegisterWhere,
+  correctScanIssue,
+  exportRegister,
+  exportRegisterRows,
+  listRegister,
+  lookupShipment,
+  recordScan,
+  registerOptions,
+  scanSession,
+  sortClauseFor,
+  ticketHistory,
+  todayShift,
+  updateTicketStatus,
+  workspaceUi,
+  type Actor,
+  type LookupInput,
+  type RecordInput,
+  type RegisterFilters,
+  type RegisterSort,
+} from "../register-service.js"
+import type { ScanSubmission } from "../register-rules.js"
 
 test("[synthetic] an Admin sees every account, whatever the letter case of the role", () => {
   assert.equal(isAdminRole("Admin"), true)
@@ -154,4 +178,50 @@ test("[synthetic] a ServiceError keeps its HTTP status and message; any other er
   assert.equal(firstForwarded, undefined)
   sendError(res, new Error("boom"), next)
   assert.ok(forwarded.error instanceof Error)
+})
+
+// Every register-service function takes the account scope as a required argument, so a route that forgets it does not
+// compile. `npm run typecheck` checks the directives below: if a scope parameter gets a default again (such as every
+// account), a directive goes unused and the typecheck fails. This function is never called.
+function registerCallsWithoutScope(
+  db: pg.Pool,
+  actor: Actor,
+  lookup: LookupInput,
+  record: RecordInput,
+  submission: ScanSubmission,
+  filters: RegisterFilters,
+  sort: RegisterSort,
+): void {
+  // @ts-expect-error the account scope is required
+  void workspaceUi(db)
+  // @ts-expect-error the account scope is required
+  void scanSession(db)
+  // @ts-expect-error the account scope is required
+  void lookupShipment(db, lookup)
+  // @ts-expect-error the account scope is required
+  void recordScan(db, actor, record)
+  // @ts-expect-error the account scope is required
+  void correctScanIssue(db, actor, submission)
+  // @ts-expect-error the account scope is required
+  void updateTicketStatus(db, actor, 1, "Review", "")
+  // @ts-expect-error the account scope is required
+  void ticketHistory(db, 1)
+  // @ts-expect-error the account scope is required
+  buildRegisterWhere(filters)
+  // @ts-expect-error the account scope is required
+  void listRegister(db, filters, 1, 50, sort)
+  // @ts-expect-error the account scope is required
+  void exportRegisterRows(db, filters)
+  // @ts-expect-error the account scope is required
+  void exportRegister(db, filters)
+  // @ts-expect-error the account scope is required
+  void registerOptions(db)
+  // @ts-expect-error the account scope is required
+  void todayShift(db)
+}
+
+test("[synthetic] a register call without an account scope fails closed: a type error, and an error at run time", () => {
+  assert.equal(typeof registerCallsWithoutScope, "function")
+  // A caller that skips the type check gets an error, never every account's rows.
+  assert.throws(() => buildRegisterWhere({}, undefined as unknown as AccountScope), TypeError)
 })

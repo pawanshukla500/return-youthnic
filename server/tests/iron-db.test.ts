@@ -121,7 +121,7 @@ async function makeUser(label: string, role: string): Promise<Actor & { role: st
 }
 
 async function shipmentOf(tracking: string) {
-  const result = await lookupShipment(pool, { tracking, marketplace: ACCOUNT, shipmentId: null })
+  const result = await lookupShipment(pool, { tracking, marketplace: ACCOUNT, shipmentId: null }, allScope)
   assert.equal(result.status, "found", `lookup of ${tracking} returned ${result.status}`)
   if (result.status !== "found") throw new Error("unreachable")
   return result.shipment
@@ -207,7 +207,7 @@ test("a scan with only Iron Send is a clear return, opens one Iron Send record, 
     ]),
     photoCount: 0,
     hasVideo: false,
-  })
+  }, allScope)
   ironScanId = receipt.scan.id
   assert.equal(receipt.scan.outcome, "clear", "Iron Send alone is not an issue return")
   assert.equal(receipt.scan.status, "Clear", "Iron Send alone never opens a claim (Draft/Raised)")
@@ -224,15 +224,15 @@ test("a scan with only Iron Send is a clear return, opens one Iron Send record, 
 })
 
 test("the register never lists Iron Send as a return issue: it has its own column", { skip: skip || false }, async () => {
-  const page = await listRegister(pool, { tracking: AWB.iron }, 1, 50)
+  const page = await listRegister(pool, { tracking: AWB.iron }, 1, 50, {}, allScope)
   assert.equal(page.rows.length, 1)
   assert.deepEqual(page.rows[0].issues, [], "Iron Send is not in the issue list")
   assert.equal(page.rows[0].ironSendQty, 2)
-  const noIssue = await listRegister(pool, { tracking: AWB.iron, issue: "no_issue" }, 1, 50)
+  const noIssue = await listRegister(pool, { tracking: AWB.iron, issue: "no_issue" }, 1, 50, {}, allScope)
   assert.equal(noIssue.total, 1, "an Iron-only line is a no-issue line")
-  const ironFilter = await listRegister(pool, { tracking: AWB.iron, issue: "iron_send" }, 1, 50)
+  const ironFilter = await listRegister(pool, { tracking: AWB.iron, issue: "iron_send" }, 1, 50, {}, allScope)
   assert.equal(ironFilter.total, 1, "the Iron Send filter still finds it")
-  const exported = await exportRegisterRows(pool, { tracking: AWB.iron })
+  const exported = await exportRegisterRows(pool, { tracking: AWB.iron }, allScope)
   const approved = registerCsv(exported, "approved")
   assert.match(approved, /"No issue"/)
   assert.doesNotMatch(approved, /Iron Send/, "the approved issue report never names Iron Send")
@@ -256,7 +256,7 @@ test("Iron Send with a real issue is an issue return, and the issue text names o
     ]),
     photoCount: 0,
     hasVideo: false,
-  })
+  }, allScope)
   assert.equal(receipt.scan.outcome, "issue")
   assert.equal(receipt.issueCount, 1, "only the damaged issue is a return issue")
   assert.equal(receipt.ironSendQty, 1)
@@ -266,7 +266,7 @@ test("Iron Send with a real issue is an issue return, and the issue text names o
   await pool.query("UPDATE receipt_scans SET issue_label = 'Damaged product; Iron Send' WHERE id = $1", [receipt.scan.id])
   const reasons = await loadReasons(pool, allScope)
   assert.ok(!reasons.some((r) => /Iron/.test(r.reason)), "no overview issue reason names Iron Send")
-  const page = await listRegister(pool, { tracking: AWB.mixed }, 1, 50)
+  const page = await listRegister(pool, { tracking: AWB.mixed }, 1, 50, {}, allScope)
   assert.deepEqual(page.rows[0].issues.map((i) => i.categoryCode), ["damaged_product"])
   assert.equal(page.rows[0].ironSendQty, 1)
 })
@@ -295,7 +295,7 @@ test("OMSGuru: Iron Send and damaged units are left out, and a missing unit is n
     ]),
     photoCount: 0,
     hasVideo: false,
-  })
+  }, allScope)
   const clean = await shipmentOf(AWB.clean)
   await recordScan(pool, scanner, {
     submission: submission(clean.shipmentId, `SYN-${run}-CLEAN-1`, [
@@ -303,7 +303,7 @@ test("OMSGuru: Iron Send and damaged units are left out, and a missing unit is n
     ]),
     photoCount: 0,
     hasVideo: false,
-  })
+  }, allScope)
 
   const day = await calculateGoodReturnsForDay(pool, todayIst())
   const kurta = day.skus.find((entry) => entry.sku === `SYN-${run}-KURTA-BLUE_M`)
@@ -380,7 +380,7 @@ test("a bench correction cannot change an Iron Send that the Inward Team already
     ]),
     photoCount: 0,
     hasVideo: false,
-  })
+  }, allScope)
   const withIron = await correctScanIssue(
     pool,
     scanner,
@@ -485,7 +485,7 @@ async function ironScan(tracking: string, key: string): Promise<number> {
     ]),
     photoCount: 0,
     hasVideo: false,
-  })
+  }, allScope)
   return (await recordOf(receipt.scan.id)).id
 }
 
@@ -516,7 +516,7 @@ test("Iron batches: the Return Team batches pending lines for the khaata challan
   assert.equal(unbatched.rows.length, 0, "a batched line leaves the not-in-a-batch list")
 
   // The scan bench cannot change an Iron Send that has gone out in a batch.
-  const shipment = await lookupShipment(pool, { tracking: AWB.batchA, marketplace: ACCOUNT, shipmentId: null })
+  const shipment = await lookupShipment(pool, { tracking: AWB.batchA, marketplace: ACCOUNT, shipmentId: null }, allScope)
   assert.equal(shipment.status, "duplicate")
   const scanRow = await pool.query("SELECT rs.expected_return_id FROM iron_send_records r JOIN receipt_scans rs ON rs.id = r.receipt_scan_id WHERE r.id = $1", [a])
   const item = await pool.query("SELECT id FROM expected_return_items WHERE expected_return_id = $1", [scanRow.rows[0].expected_return_id])
