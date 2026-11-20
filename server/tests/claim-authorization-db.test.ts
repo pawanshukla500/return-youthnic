@@ -12,6 +12,7 @@
 //  - An expired lease cannot record a ticket; the next poll parks the job as manual_intervention_required.
 //  - An auto-submit account (require_approval_before_submit = false) completes from a live lease.
 //  - Retry cannot re-arm a submitting job.
+//  - A held desktop panel (skipMarketplaces) leaves its queued job unleased with its attempts intact (checklist 3.1).
 import { after, before, test } from "node:test"
 import assert from "node:assert/strict"
 import pg from "pg"
@@ -233,4 +234,29 @@ test("db: retry cannot re-arm a submitting job", { skip: skip || false }, async 
   assert.equal(leased.stage, "submitting")
   const code = await errCode(retryAutomationJob(pool, supervisor, scope, jobId))
   assert.equal(code, 409, "a mid-flight submission must never be re-armed by retry")
+})
+
+test("db: a held panel's queued job is not leased and keeps its attempts; its approved job still leases (3.1)", { skip: skip || false }, async () => {
+  const queuedJob = await makeJob(await makeClaim("HELD-Q"), await makeCredential("HELD-Q-APPR", true), "queued")
+  const approvedJob = await makeJob(await makeClaim("HELD-A"), await makeCredential("HELD-A-APPR", true), "queued")
+  await approveJobForSubmission(pool, supervisor, scope, approvedJob)
+
+  // The desktop holds the Meesho panel (a prepared claim waiting for approval) and says so with every poll.
+  const submitting = await pollNextAutomationJob(pool, agentUuid1, scope, ["Meesho"])
+  assert.ok(submitting, "the approved job that files the prepared claim must still lease")
+  assert.equal(submitting.jobId, approvedJob)
+  assert.equal(submitting.stage, "submitting")
+  for (let i = 0; i < 3; i++) {
+    assert.equal(await pollNextAutomationJob(pool, agentUuid1, scope, ["Meesho"]), null, "a held panel's queued job must not lease")
+  }
+  const held = await pool.query(`SELECT stage, attempts, agent_id FROM claim_automation_jobs WHERE id = $1`, [queuedJob])
+  assert.equal(held.rows[0].stage, "queued")
+  assert.equal(Number(held.rows[0].attempts), 0, "skipped polls must not spend an attempt")
+  assert.equal(held.rows[0].agent_id, null)
+
+  // Rejoin rotation: the next poll without the hold leases it (and leaves no queued job behind for later runs).
+  const released = await pollNextAutomationJob(pool, agentUuid1, scope)
+  assert.ok(released)
+  assert.equal(released.jobId, queuedJob)
+  assert.equal(released.stage, "downloading_media")
 })

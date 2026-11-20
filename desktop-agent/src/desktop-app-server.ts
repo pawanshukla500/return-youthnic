@@ -41,14 +41,14 @@ import {
   tabIdForPanelKey,
   WORKER_ACTIVE_PAUSE_REQUIRED,
 } from "./native-browser-view.js"
-import { CLAIM_PANELS, clearPanelHold, getPanelRuntimeState, getPanelStatuses, isPanelHeld, markPanelBusy, markPanelResult, panelKeyForMarketplace } from "./panel-queue.js"
+import { CLAIM_PANELS, clearPanelHold, getPanelRuntimeState, getPanelStatuses, isPanelHeld, markPanelBusy, markPanelResult, panelKeyForMarketplace, pollJobSkippingHeldPanels } from "./panel-queue.js"
 import { localEncryptionAvailable } from "./local-secrets.js"
 import { checkForUpdates } from "./update-check.js"
 import { followUpExecutionBundle } from "./follow-up-bundle.js"
 import { isSafeToSubmitBundle } from "./submit-guard.js"
 import { describeBrowserAdapter, openSupplierBrowser, resolveBrowserAdapterKind } from "./browser-adapter.js"
 import { profileDirFor, readSessionSavedAt, supplierSessionDir } from "./supplier-session.js"
-import { aiUsageSnapshot, buildDiagnosticPrompt, decideFollowUpAssist, loadAiAssistConfig, providerFromConfig, requestAiProposal, validateAiProposal, type AssistanceContext } from "./ai-assistant.js"
+import { aiUsageSnapshot, ASSIST_SYSTEM_PROMPT, buildDiagnosticPrompt, decideFollowUpAssist, loadAiAssistConfig, providerFromConfig, requestAiProposal, validateAiProposal, type AssistanceContext } from "./ai-assistant.js"
 import { findApprovedProcedure, isCacheStale, loadLocalMemory, markSynced, pruneLocalEvents, recordLocalEvent, saveLocalMemory, upsertCachedProcedure } from "./ai-memory-cache.js"
 import type { CachedProcedure } from "./ai-memory-cache.js"
 import type { OperatorTaskKind } from "./agent-client.js"
@@ -220,7 +220,10 @@ async function pollAndProcessJob(manual = false): Promise<boolean> {
   // the callback clears the flags before the sentinel resolves, and the shared
   // finally below re-runs the same cleanup on both paths.
   const runCycle = async (): Promise<boolean> => {
-    const poll = await client.pollJob()
+    // Held and cooling-down panels go with the poll, so the server never leases
+    // a queued job for them: a dropped lease would cost the job one of its 3
+    // attempts every cycle until it failed (checklist 3.1).
+    const poll = await pollJobSkippingHeldPanels(client)
     // Stale check: if the watchdog reset this cycle and a newer one has since
     // started, abandon before consuming the lease — the server lease expires
     // and the job returns to the queue on its own.
@@ -229,6 +232,8 @@ async function pollAndProcessJob(manual = false): Promise<boolean> {
 
     const jobHeader = poll.job
     const panelKey = panelKeyForMarketplace(String(jobHeader.marketplace || ""))
+    // Fallback: reached with a server older than the skipMarketplaces poll
+    // parameter, or if an abandoned cycle set a hold mid-poll (checklist 3.2).
     if (jobHeader.stage !== "submitting" && isPanelHeld(panelKey)) {
       logger.warn(`Panel ${panelKey} is held (${getPanelRuntimeState(panelKey)}). Refusing to process new Job #${jobHeader.jobId} until operator resolves the open form.`)
       return false
@@ -495,10 +500,6 @@ let followUpTimer: NodeJS.Timeout | null = null
 let lastFollowUpCheckTime = ""
 let followUpChecksRun = 0
 let lastFollowUpResult = ""
-
-const ASSIST_SYSTEM_PROMPT =
-  "You assist a warehouse claim bot. Propose one safe, evidence-grounded recovery step. " +
-  + "Never invent ticket IDs, evidence, or credentials. Reply with the proposed action text only."
 
 /**
  * Assistance pass after one follow-up check: approved memory first, a bounded AI

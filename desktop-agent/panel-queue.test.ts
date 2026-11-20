@@ -8,10 +8,13 @@ import {
   isPanelHeld,
   markPanelBusy,
   markPanelResult,
+  marketplacesToSkip,
   nextReadyPanels,
   panelKeyForMarketplace,
+  pollJobSkippingHeldPanels,
   resetPanelRuntime,
 } from "./src/panel-queue.js"
+import { AgentBackendClient, type JobPollResult } from "./src/agent-client.js"
 
 describe("panel-wise continuous claim queue", () => {
   it("covers all six supplier panels with isolated profiles", () => {
@@ -100,5 +103,100 @@ describe("panel-wise continuous claim queue", () => {
     assert.equal(isPanelHeld("meesho"), false)
     assert.equal(getPanelRuntimeState("meesho"), "idle")
     assert.ok(nextReadyPanels(6).includes("meesho"), "clearing hold restores panel to ready rotation")
+  })
+
+  it("names held and cooling-down panels as marketplaces to skip, never busy or idle ones", () => {
+    resetPanelRuntime()
+    assert.deepEqual(marketplacesToSkip(), [])
+    markPanelResult("meesho", "prepared", "Waiting for approval")
+    markPanelResult("myntra_vb", "manual_action", "OTP needed")
+    for (let i = 0; i < 3; i++) markPanelResult("ajio", "failed", `SYN-boom-${i}`)
+    markPanelBusy("amazon", 7, "preparing")
+    assert.deepEqual(marketplacesToSkip(), ["Meesho", "Myntra VB", "Ajio"])
+    clearPanelHold("meesho")
+    assert.deepEqual(marketplacesToSkip(), ["Myntra VB", "Ajio"])
+  })
+})
+
+describe("job poll skips held panels (checklist 3.1)", () => {
+  type SynJob = { jobId: number; marketplace: string; stage: "queued" | "approved"; leases: number }
+
+  // A fake backend with the server's lease rule: the oldest job leases, except
+  // queued jobs of a marketplace named in skipMarketplaces. Each lease counts.
+  function fakeClient(jobs: SynJob[]) {
+    const polls: string[][] = []
+    return {
+      polls,
+      async pollJob(skipMarketplaces: readonly string[]): Promise<JobPollResult> {
+        polls.push([...skipMarketplaces])
+        const skip = new Set(skipMarketplaces.map((name) => name.toLowerCase()))
+        const job = jobs.find((j) => j.leases === 0 && !(j.stage === "queued" && skip.has(j.marketplace.toLowerCase())))
+        if (!job) return { hasJob: false }
+        job.leases += 1
+        const stage = job.stage === "approved" ? "submitting" : "downloading_media"
+        return { hasJob: true, job: { jobId: job.jobId, claimId: job.jobId, stage, marketplace: job.marketplace, orderNumber: `SYN-ORD-${job.jobId}`, trackingId: `SYN-AWB-${job.jobId}` } }
+      },
+    }
+  }
+
+  it("a held panel's queued job is never leased while other marketplaces keep flowing", async () => {
+    resetPanelRuntime()
+    markPanelResult("meesho", "prepared", "Waiting for approval")
+    const meeshoQueued: SynJob = { jobId: 1, marketplace: "Meesho", stage: "queued", leases: 0 }
+    const flipkartQueued: SynJob = { jobId: 2, marketplace: "Flipkart", stage: "queued", leases: 0 }
+    const meeshoApproved: SynJob = { jobId: 3, marketplace: "Meesho", stage: "approved", leases: 0 }
+    const client = fakeClient([meeshoQueued, flipkartQueued, meeshoApproved])
+
+    const first = await pollJobSkippingHeldPanels(client)
+    assert.equal(first.job?.jobId, 2, "another marketplace's job leases past the held one")
+    const second = await pollJobSkippingHeldPanels(client)
+    assert.equal(second.job?.jobId, 3, "the approved job for the held panel still leases to submit")
+    assert.equal(second.job?.stage, "submitting")
+    const third = await pollJobSkippingHeldPanels(client)
+    assert.equal(third.hasJob, false)
+    assert.equal(meeshoQueued.leases, 0, "the held panel's queued job never used an attempt")
+    assert.deepEqual(client.polls, [["Meesho"], ["Meesho"], ["Meesho"]])
+
+    clearPanelHold("meesho")
+    const afterRejoin = await pollJobSkippingHeldPanels(client)
+    assert.equal(afterRejoin.job?.jobId, 1, "Rejoin rotation lets the queued job lease again")
+    assert.deepEqual(client.polls[3], [])
+  })
+
+  it("the real client sends the skip list on the poll URL and nothing when no panel is held", async () => {
+    resetPanelRuntime()
+    const urls: string[] = []
+    const realFetch = globalThis.fetch
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      urls.push(String(input))
+      return new Response(JSON.stringify({ hasJob: false }), { status: 200, headers: { "Content-Type": "application/json" } })
+    }) as typeof fetch
+    try {
+      const client = new AgentBackendClient({
+        agentUuid: "SYN-agent",
+        agentName: "SYN-agent",
+        backendUrl: "http://127.0.0.1:1",
+        apiKey: "SYN-key",
+        pollIntervalMs: 1000,
+        heartbeatIntervalMs: 1000,
+        followUpCheckIntervalMs: 1000,
+        browserMode: "headless",
+        browserPath: "",
+        userDataDir: "SYN-dir",
+        workDir: "SYN-dir",
+        logLevel: "error",
+      })
+      // Registration writes the agent config file; this test covers only the poll.
+      ;(client as unknown as { isRegistered: boolean }).isRegistered = true
+      await pollJobSkippingHeldPanels(client)
+      markPanelResult("meesho", "prepared", "Waiting for approval")
+      markPanelResult("myntra_vb", "manual_action", "OTP needed")
+      await pollJobSkippingHeldPanels(client)
+    } finally {
+      globalThis.fetch = realFetch
+    }
+    assert.equal(urls.length, 2)
+    assert.equal(new URL(urls[0]).searchParams.has("skipMarketplaces"), false)
+    assert.equal(new URL(urls[1]).searchParams.get("skipMarketplaces"), "Meesho,Myntra VB")
   })
 })

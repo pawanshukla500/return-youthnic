@@ -103,6 +103,24 @@ export function isPanelHeld(panelKey: string): boolean {
   return r.state === "prepared" || r.state === "manual_action"
 }
 
+/**
+ * Marketplace names whose panel must not take a new filing job: held for the
+ * operator (prepared, manual_action) or cooling down after repeated failures.
+ * Sent with every job poll so the server leaves those queued jobs alone instead
+ * of leasing one (and spending one of its attempts) that the engine would drop.
+ */
+export function marketplacesToSkip(): string[] {
+  return CLAIM_PANELS.filter((p) => {
+    const state = runtimeFor(p.key).state
+    return state === "prepared" || state === "manual_action" || state === "cooldown"
+  }).map((p) => p.name)
+}
+
+/** The engine's job poll: asks the backend for work, skipping held and cooling-down panels. */
+export function pollJobSkippingHeldPanels<T>(client: { pollJob(skipMarketplaces: readonly string[]): Promise<T> }): Promise<T> {
+  return client.pollJob(marketplacesToSkip())
+}
+
 /** Current runtime state for a panel. */
 export function getPanelRuntimeState(panelKey: string): PanelRuntimeState {
   return runtimeFor(panelKey).state
