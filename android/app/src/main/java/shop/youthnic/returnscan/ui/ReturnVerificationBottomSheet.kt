@@ -17,6 +17,7 @@ import shop.youthnic.returnscan.data.IssueCategory
 import shop.youthnic.returnscan.data.ItemVerificationState
 import shop.youthnic.returnscan.data.LookupResult
 import shop.youthnic.returnscan.data.ScanPayload
+import shop.youthnic.returnscan.data.ScanReceipt
 import shop.youthnic.returnscan.data.ScanSessionData
 import shop.youthnic.returnscan.data.VerificationSubmitData
 import shop.youthnic.returnscan.databinding.ItemVerificationProductBinding
@@ -26,17 +27,23 @@ import shop.youthnic.returnscan.databinding.SheetReturnVerificationBinding
  * Physical verification of one found return. The categories, the missing-item options and the rules for each come from
  * the server (GET /api/scan/session), so a code sent back is always one the server accepts. Dismissing the sheet in any
  * way is reported through the dialog's own dismiss listener, which the scanner sets.
+ *
+ * Save and File Claim both hand the scan to [onSave], which saves it with the scanner's one clientScanKey for this return.
+ * File Claim also passes what to do once it is saved: open the claim screen on that scan. A claim never exists without
+ * a bench scan, so a failed save stays on the sheet with the server's message and opens nothing.
  */
 class ReturnVerificationBottomSheet(
     private val activity: AppCompatActivity,
     private val lookup: LookupResult,
     private val sessionData: ScanSessionData,
-    private val onSave: (VerificationSubmitData) -> Unit
+    private val onSave: (data: VerificationSubmitData, afterSave: ((ScanReceipt) -> Unit)?) -> Unit
 ) : BottomSheetDialog(activity, R.style.ThemeOverlay_ReturnScan_BottomSheet) {
 
     private val binding = SheetReturnVerificationBinding.inflate(LayoutInflater.from(activity))
     private val itemStates = mutableListOf<ItemVerificationState>()
     private val productBindings = mutableListOf<ItemVerificationProductBinding>()
+    /** The File Claim button's own label, put back when its save fails. */
+    private var fileClaimLabel: CharSequence = ""
 
     /** The category with is_clear set. The server seeds it as "no_issue". */
     private val clearCategory: IssueCategory =
@@ -341,67 +348,84 @@ class ReturnVerificationBottomSheet(
 
         binding.btnCancelVerification.setOnClickListener { dismiss() }
 
+        fileClaimLabel = binding.btnFileClaim.text
         binding.btnFileClaim.setOnClickListener {
-            dismiss()
-            val firstItem = lookup.items.firstOrNull()
-            val firstState = itemStates.firstOrNull()
-            val subOrderId = firstItem?.orderItemId?.ifBlank { lookup.orderId }.orEmpty()
-            val flyerId = binding.etFlyerId.text?.toString()?.trim().orEmpty()
-            val issueCode = firstState?.category?.code ?: IssueCategory.CODE_WRONG
-
-            // Also save to SessionManager for instant fallback everywhere
-            (activity.application as? ReturnScanApp)?.sessionManager?.saveLastScannedReturn(
-                awb = lookup.trackingNumber,
-                orderId = lookup.orderId,
-                subOrderId = subOrderId,
-                flyerId = flyerId,
-                marketplace = lookup.marketplace,
-                productTitle = firstItem?.title.orEmpty(),
-                sku = firstItem?.marketplaceSku.orEmpty(),
-                masterSku = firstItem?.masterSku.orEmpty(),
-                imageUrl = firstItem?.imageUrl.orEmpty(),
-                issueCode = issueCode
-            )
-
-            val intent = Intent(activity, ClaimCaptureActivity::class.java).apply {
-                putExtra(ClaimCaptureActivity.EXTRA_TRACKING_AWB, lookup.trackingNumber)
-                putExtra(ClaimCaptureActivity.EXTRA_ORDER_ID, lookup.orderId)
-                putExtra(ClaimCaptureActivity.EXTRA_SUB_ORDER_ID, subOrderId)
-                putExtra(ClaimCaptureActivity.EXTRA_PACKET_ID, flyerId.ifBlank { "NA" })
-                putExtra(ClaimCaptureActivity.EXTRA_MARKETPLACE, lookup.marketplace)
-                putExtra(ClaimCaptureActivity.EXTRA_PRODUCT_TITLE, firstItem?.title.orEmpty())
-                putExtra(ClaimCaptureActivity.EXTRA_PRODUCT_SKU, firstItem?.marketplaceSku.orEmpty())
-                putExtra(ClaimCaptureActivity.EXTRA_MASTER_SKU, firstItem?.masterSku.orEmpty())
-                putExtra(ClaimCaptureActivity.EXTRA_IMAGE_URL, firstItem?.imageUrl.orEmpty())
-                putExtra(ClaimCaptureActivity.EXTRA_ISSUE_CODE, issueCode)
+            // File Claim saves the scan for good, so a sheet still on "No issue" (or Iron Send only) would be saved CLEAR
+            // and filed under a default issue. The operator marks the item's issue first.
+            if (!hasRealIssue()) {
+                showError("Mark the item's issue first: File Claim saves the scan with it.")
+                return@setOnClickListener
             }
-            activity.startActivity(intent)
+            // The bench scan is saved first, with the operator's counts, sub-issues and flyer, and the claim is filed on it.
+            submitScan(afterSave = { receipt -> openClaimCapture(receipt.id) })
         }
 
-        binding.btnSaveVerification.setOnClickListener {
-            if (validateInputs()) {
-                binding.btnSaveVerification.isEnabled = false
-                binding.btnSaveVerification.text = "Saving..."
-                for (item in itemStates) {
-                    IssueCategoryUi.recordUsage(activity, item.category.code)
+        binding.btnSaveVerification.setOnClickListener { submitScan(afterSave = null) }
+    }
+
+    /**
+     * Validates the sheet and hands the scan to [onSave], the one save both buttons use. While it runs both buttons are
+     * disabled, so a second tap cannot start a second save, and the sheet cannot be cancelled, closed, swiped or backed
+     * away: the reply comes back to the sheet the operator is looking at, so File Claim opens the claim screen from it
+     * and a failed save keeps what was entered, with the retry on the same key ([showSaveError]).
+     */
+    private fun submitScan(afterSave: ((ScanReceipt) -> Unit)?) {
+        if (!validateInputs()) return
+        binding.btnSaveVerification.isEnabled = false
+        binding.btnFileClaim.isEnabled = false
+        binding.btnCancelVerification.isEnabled = false
+        binding.btnCloseSheet.isEnabled = false
+        setCancelable(false)
+        if (afterSave == null) {
+            binding.btnSaveVerification.text = "Saving..."
+        } else {
+            binding.btnFileClaim.text = "Saving scan..."
+        }
+        for (item in itemStates) {
+            IssueCategoryUi.recordUsage(activity, item.category.code)
+        }
+        val flyerId = binding.etFlyerId.text?.toString()?.trim()?.uppercase().orEmpty()
+        val unavailable = binding.cbFlyerUnavailable.isChecked
+        onSave(
+            VerificationSubmitData(
+                shipmentId = lookup.shipmentId,
+                scannedTracking = lookup.trackingNumber,
+                items = itemStates.map { it.copy() },
+                flyerId = if (needsFlyer() && !unavailable) flyerId else "",
+                flyerState = when {
+                    !needsFlyer() -> "not_required"
+                    unavailable -> "unavailable"
+                    else -> "scanned"
                 }
-                val flyerId = binding.etFlyerId.text?.toString()?.trim()?.uppercase().orEmpty()
-                val unavailable = binding.cbFlyerUnavailable.isChecked
-                onSave(
-                    VerificationSubmitData(
-                        shipmentId = lookup.shipmentId,
-                        scannedTracking = lookup.trackingNumber,
-                        items = itemStates.map { it.copy() },
-                        flyerId = if (needsFlyer() && !unavailable) flyerId else "",
-                        flyerState = when {
-                            !needsFlyer() -> "not_required"
-                            unavailable -> "unavailable"
-                            else -> "scanned"
-                        }
-                    )
-                )
-            }
+            ),
+            afterSave
+        )
+    }
+
+    /** Opens the claim screen for this return, filed on the bench scan [scanId] that File Claim has just saved. */
+    private fun openClaimCapture(scanId: Int) {
+        val firstItem = lookup.items.firstOrNull()
+        val firstState = itemStates.firstOrNull()
+        val subOrderId = firstItem?.orderItemId?.ifBlank { lookup.orderId }.orEmpty()
+        val flyerId = binding.etFlyerId.text?.toString()?.trim().orEmpty()
+        val issueCode = firstState?.category?.code ?: IssueCategory.CODE_WRONG
+
+        val intent = Intent(activity, ClaimCaptureActivity::class.java).apply {
+            putExtra(ClaimCaptureActivity.EXTRA_SCAN_ID, scanId)
+            // The expected return the scan was saved on: it, not the parcel AWB, tells this return from the others in it.
+            putExtra(ClaimCaptureActivity.EXTRA_EXPECTED_RETURN_ID, lookup.shipmentId.toIntOrNull() ?: 0)
+            putExtra(ClaimCaptureActivity.EXTRA_TRACKING_AWB, lookup.trackingNumber)
+            putExtra(ClaimCaptureActivity.EXTRA_ORDER_ID, lookup.orderId)
+            putExtra(ClaimCaptureActivity.EXTRA_SUB_ORDER_ID, subOrderId)
+            putExtra(ClaimCaptureActivity.EXTRA_PACKET_ID, flyerId.ifBlank { "NA" })
+            putExtra(ClaimCaptureActivity.EXTRA_MARKETPLACE, lookup.marketplace)
+            putExtra(ClaimCaptureActivity.EXTRA_PRODUCT_TITLE, firstItem?.title.orEmpty())
+            putExtra(ClaimCaptureActivity.EXTRA_PRODUCT_SKU, firstItem?.marketplaceSku.orEmpty())
+            putExtra(ClaimCaptureActivity.EXTRA_MASTER_SKU, firstItem?.masterSku.orEmpty())
+            putExtra(ClaimCaptureActivity.EXTRA_IMAGE_URL, firstItem?.imageUrl.orEmpty())
+            putExtra(ClaimCaptureActivity.EXTRA_ISSUE_CODE, issueCode)
         }
+        activity.startActivity(intent)
     }
 
     private fun validateInputs(): Boolean {
@@ -456,9 +480,15 @@ class ReturnVerificationBottomSheet(
         return true
     }
 
+    /** A save (from Save or File Claim) failed: the sheet stays open with the server's message and both buttons work again. */
     fun showSaveError(message: String) {
         binding.btnSaveVerification.isEnabled = true
         binding.btnSaveVerification.text = activity.getString(R.string.btn_save_return)
+        binding.btnFileClaim.isEnabled = true
+        binding.btnFileClaim.text = fileClaimLabel
+        binding.btnCancelVerification.isEnabled = true
+        binding.btnCloseSheet.isEnabled = true
+        setCancelable(true)
         showError(message)
     }
 

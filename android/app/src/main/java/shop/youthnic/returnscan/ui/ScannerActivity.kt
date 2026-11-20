@@ -680,9 +680,10 @@ class ScannerActivity : AppCompatActivity() {
             activity = this,
             lookup = lookup,
             sessionData = sessionData,
-            onSave = { submitData ->
-                // Save is tapped on the sheet that is showing, so that sheet owns this save and its reply.
-                commitVerificationSave(activeVerificationSheet, idempotencyKey, lookup, submitData)
+            onSave = { submitData, afterSave ->
+                // Save (or File Claim) is tapped on the sheet that is showing, so that sheet owns this save and its reply.
+                // Both buttons use this one key, so File Claim, a retry and a later Save are all the same register row.
+                commitVerificationSave(activeVerificationSheet, idempotencyKey, lookup, submitData, afterSave)
             }
         )
         // Every way out of the sheet ends here: Cancel, the close button, a swipe down, the back key, or a tap outside.
@@ -711,12 +712,15 @@ class ScannerActivity : AppCompatActivity() {
     /**
      * [owner] is the sheet the save was started from. The reply may arrive after that sheet was swiped away and after
      * the scanner opened a newer sheet, so the reply only ever touches [owner], never whichever sheet is showing now.
+     * [afterSave] (File Claim) runs once the scan is saved, only while [owner] is still showing, and only with the saved
+     * scan's id: without one the sheet stays open with an error, so no claim is filed without its bench scan.
      */
     private fun commitVerificationSave(
         owner: ReturnVerificationBottomSheet?,
         clientScanKey: String,
         lookup: LookupResult,
-        data: VerificationSubmitData
+        data: VerificationSubmitData,
+        afterSave: ((ScanReceipt) -> Unit)? = null
     ) {
         val app = application as ReturnScanApp
         val shipmentId = data.shipmentId.toIntOrNull() ?: 0
@@ -731,9 +735,12 @@ class ScannerActivity : AppCompatActivity() {
             )
 
             val receipt = result.getOrNull()
-            if (receipt != null) {
+            if (receipt != null && (afterSave == null || receipt.id > 0)) {
                 setOnline(true)
+                // Checked before onSaveSuccess closes the sheet: File Claim continues only from the sheet it was tapped on.
+                val ownerShowing = owner != null && owner === activeVerificationSheet
                 onSaveSuccess(owner, lookup, receipt, data)
+                if (ownerShowing) afterSave?.invoke(receipt)
             } else {
                 val err = result.exceptionOrNull()
                 if (err is AuthExpiredException) {
@@ -741,7 +748,10 @@ class ScannerActivity : AppCompatActivity() {
                     return@launch
                 }
                 if (err is NetworkException) setOnline(false)
-                val message = err?.message ?: "Failed to save return scan"
+                val message = when {
+                    receipt != null -> "The scan was saved but the server sent no scan number, so the claim cannot be filed on it. Tap File Claim again."
+                    else -> err?.message ?: "Failed to save return scan"
+                }
                 signal(Cue.STOP)
                 // The same clientScanKey is reused by the next Save tap, so a retry can never save the return twice.
                 if (owner != null && owner === activeVerificationSheet) {
