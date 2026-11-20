@@ -16,7 +16,6 @@ import { syncScanToReturnTracking } from "./return-tracking.js"
 import { masterSkusForListings } from "./lookup-import.js"
 import { isPlaceholderMasterSku } from "./marketplace-rules.js"
 import {
-  ALL_ACCOUNTS,
   NO_ACCESS_MESSAGE,
   accountCondition,
   accountListParam,
@@ -175,7 +174,7 @@ export function presentShift(shift: ShiftCounts) {
 // The header date and the claims badge. A ticket that is approved or rejected is no longer open.
 export async function workspaceUi(
   db: pg.Pool,
-  scope: AccountScope = ALL_ACCOUNTS,
+  scope: AccountScope,
 ): Promise<{ headerDate: string; claimsBadge: string }> {
   return withClient(db, async (client) => {
     const params: unknown[] = []
@@ -228,7 +227,7 @@ async function loadSubIssueRules(client: pg.PoolClient): Promise<SubIssueRule[]>
   }))
 }
 
-export async function scanSession(db: pg.Pool, scope: AccountScope = ALL_ACCOUNTS) {
+export async function scanSession(db: pg.Pool, scope: AccountScope) {
   return withClient(db, async (client) => {
     const [shift, categories, subIssues] = await Promise.all([
       shiftCounts(client, scope),
@@ -532,6 +531,15 @@ const SCAN_MATCH_SQL = `
     AND ($3::integer[] IS NULL OR m.id = ANY($3::integer[]))
   ORDER BY rs.scanned_at DESC`
 
+// The ids of the saved scans in the user's accounts that match an AWB or order ID by the bench's own exact rules,
+// newest first. A scan on a superseded lookup row still counts: the scan is the permanent record.
+export async function savedScansFor(db: pg.Pool, tracking: string, scope: AccountScope): Promise<number[]> {
+  const normalized = normalizeTracking(tracking)
+  if (normalized.error) return []
+  const rows = (await db.query(SCAN_MATCH_SQL, [normalized.value, "", accountListParam(scope)])).rows
+  return rows.map((row) => Number(row.scan_id))
+}
+
 const SHIPMENT_HEADER_SQL = `
   SELECT er.id, er.tracking_id, er.alt_tracking_id, er.order_number, er.return_type, er.return_type_raw,
          er.return_reason, er.matched_from, er.product_title, er.lookup_status, er.tracking_source,
@@ -660,7 +668,7 @@ export type LookupInput = { tracking: string; marketplace: string; shipmentId: n
 export async function lookupShipment(
   db: pg.Pool,
   input: LookupInput,
-  scope: AccountScope = ALL_ACCOUNTS,
+  scope: AccountScope,
   actor?: Actor,
 ): Promise<LookupResponse> {
   const normalized = normalizeTracking(input.tracking)
@@ -932,7 +940,7 @@ export async function recordScan(
   db: pg.Pool,
   actor: Actor,
   input: RecordInput,
-  scope: AccountScope = ALL_ACCOUNTS,
+  scope: AccountScope,
 ): Promise<ScanReceipt> {
   const submission = input.submission
   if (!Number.isInteger(submission.shipmentId) || submission.shipmentId < 1) {
@@ -1240,7 +1248,7 @@ export async function correctScanIssue(
   db: pg.Pool,
   actor: Actor,
   submission: ScanSubmission,
-  scope: AccountScope = ALL_ACCOUNTS,
+  scope: AccountScope,
 ): Promise<ScanReceipt> {
   if (!isValidClientKey(submission.clientScanKey)) {
     throw new ServiceError(400, "The scan key is missing or malformed.")
@@ -1476,7 +1484,7 @@ export async function updateTicketStatus(
   ticketId: number,
   nextStatus: string,
   reason: string,
-  scope: AccountScope = ALL_ACCOUNTS,
+  scope: AccountScope,
 ): Promise<TicketView> {
   return withClient(db, async (client) => {
     await client.query("BEGIN")
@@ -1513,7 +1521,7 @@ export async function updateTicketStatus(
   })
 }
 
-export async function ticketHistory(db: pg.Pool, ticketId: number, scope: AccountScope = ALL_ACCOUNTS) {
+export async function ticketHistory(db: pg.Pool, ticketId: number, scope: AccountScope) {
   return withClient(db, async (client) => {
     const account = await ticketAccount(client, ticketId)
     if (account === null || !allowsAccount(scope, account)) throw new ServiceError(404, "That ticket does not exist.")
@@ -1710,7 +1718,7 @@ const REGISTER_UNION_SQL = `
 // applied, so a restricted user's filters can only narrow the rows they are allowed to see.
 export function buildRegisterWhere(
   filters: RegisterFilters,
-  scope: AccountScope = ALL_ACCOUNTS,
+  scope: AccountScope,
 ): { sql: string; params: unknown[] } {
   const clauses: string[] = []
   const params: unknown[] = []
@@ -1798,8 +1806,8 @@ export async function listRegister(
   filters: RegisterFilters,
   page: number,
   pageSize: number,
-  sort: RegisterSort = {},
-  scope: AccountScope = ALL_ACCOUNTS,
+  sort: RegisterSort,
+  scope: AccountScope,
 ): Promise<{ rows: RegisterRow[]; total: number; page: number; pageSize: number; sort: string; direction: string }> {
   const size = Math.min(200, Math.max(1, Math.floor(pageSize) || 50))
   const current = Math.max(1, Math.floor(page) || 1)
@@ -1834,7 +1842,7 @@ export async function listRegister(
 export async function exportRegisterRows(
   db: pg.Pool,
   filters: RegisterFilters,
-  scope: AccountScope = ALL_ACCOUNTS,
+  scope: AccountScope,
 ): Promise<RegisterRow[]> {
   const where = buildRegisterWhere(filters, scope)
   return withClient(db, async (client) => {
@@ -1853,11 +1861,11 @@ export async function exportRegisterRows(
   })
 }
 
-export async function exportRegister(db: pg.Pool, filters: RegisterFilters, scope: AccountScope = ALL_ACCOUNTS): Promise<string> {
+export async function exportRegister(db: pg.Pool, filters: RegisterFilters, scope: AccountScope): Promise<string> {
   return registerCsv(await exportRegisterRows(db, filters, scope), "extended")
 }
 
-export async function registerOptions(db: pg.Pool, scope: AccountScope = ALL_ACCOUNTS) {
+export async function registerOptions(db: pg.Pool, scope: AccountScope) {
   return withClient(db, async (client) => {
     const accountParams: unknown[] = []
     const accountSql = accountCondition(scope, "m.id", accountParams)
@@ -1900,8 +1908,9 @@ export async function registerOptions(db: pg.Pool, scope: AccountScope = ALL_ACC
   })
 }
 
-// Used by the register screen to show the same shift figures as the scan screen.
-export async function todayShift(db: pg.Pool, scope: AccountScope = ALL_ACCOUNTS) {
+// Today's figures alone, the same as scanSession().shift: GET /api/scan/session?only=shift, which the phones refresh on
+// every live change.
+export async function todayShift(db: pg.Pool, scope: AccountScope) {
   return withClient(db, async (client) => presentShift(await shiftCounts(client, scope)))
 }
 

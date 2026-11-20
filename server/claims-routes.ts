@@ -4,8 +4,8 @@
 //  GET    /api/claims/:id                one claim with media and status history
 //  POST   /api/claims                    create a claim (duplicate prevention, immutable scan linkage)
 //  PATCH  /api/claims/:id/status         update claim status (audited)
-//  POST   /api/claims/:id/media/upload   validate and upload one evidence file to Firebase
-//  GET    /api/claims/:id/media/:mediaId secure scoped file retrieval (streams from Firebase, no public link)
+//  POST   /api/claims/:id/media/upload   validate and upload one evidence file to Firebase (streamed via a temp file)
+//  GET    /api/claims/:id/media/:mediaId secure scoped file retrieval (streams from Firebase with Range/206, no public link)
 //  PATCH  /api/claims/:id/media/:mediaId  deactivate media (soft delete, audited)
 //  GET    /api/claims/templates          list claim templates (scoped, any signed-in user)
 //  POST   /api/admin/claims/templates     create a template (Admin only)
@@ -16,12 +16,11 @@
 // Every route passes the signed-in user's account scope, so the restriction is applied in SQL.
 // Admin routes require requireAdmin. No direct public media links are returned.
 
-import crypto from "node:crypto"
 import path from "node:path"
 import type { Express, RequestHandler } from "express"
-import multer from "multer"
 import * as XLSX from "xlsx"
-import { downloadFromFirebaseStorage, uploadToFirebaseStorage } from "./firebase-storage.js"
+import { uploadFileToFirebaseStorage } from "./firebase-storage.js"
+import { evidenceUpload, removeEvidenceTempFile, sendStoredEvidence, type EvidenceTempFile } from "./evidence-stream.js"
 import { getPool } from "./db.js"
 import { publishChange } from "./live.js"
 import { actorOf, requireAdmin, requireSupervisorOrAdmin, scopeOf, sendError } from "./http.js"
@@ -77,10 +76,7 @@ function claimFilters(q: Record<string, unknown>) {
   }
 }
 
-const uploadEvidence = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 100 * 1024 * 1024, files: 1 },
-})
+const uploadEvidence = evidenceUpload()
 
 function fileExtension(filename: string): string {
   const ext = path.extname(filename).toLowerCase()
@@ -232,46 +228,50 @@ export function mountClaimsRoutes(app: Express, requireUser: RequestHandler): vo
 
   // ---- Claim media ----
 
-  app.post("/api/claims/:id(\\d+)/media/upload", requireUser, uploadEvidence.single("file"), async (req, res, next) => {
+  app.post("/api/claims/:id(\\d+)/media/upload", requireUser, uploadEvidence, async (req, res, next) => {
+    const file = req.file as EvidenceTempFile | undefined
     try {
       const id = positiveId(req.params.id)
       if (!id) return next()
-      if (!req.file) throw new ServiceError(400, "Choose an evidence file to upload.")
+      if (!file) throw new ServiceError(400, "Choose an evidence file to upload.")
       if (!isEvidenceStorageConfigured()) {
         throw new ServiceError(503, "Evidence storage is not configured. Set up Firebase credentials before uploading evidence.")
       }
-      const contentHash = crypto.createHash("sha256").update(req.file.buffer).digest("hex")
+      const contentHash = file.contentHash
       const target = await prepareClaimMediaUpload(getPool(), scopeOf(req), id, {
         fieldKey: text(req.body?.fieldKey),
         contentHash,
-        mimeType: req.file.mimetype,
-        extension: fileExtension(req.file.originalname),
-        sizeBytes: req.file.size,
+        mimeType: file.mimetype,
+        extension: fileExtension(file.originalname),
+        sizeBytes: file.size,
       })
       if (target.duplicateMediaId) {
         res.json({ id: target.duplicateMediaId, duplicate: true })
         return
       }
-      const contentError = evidenceContentError(target.fieldType, req.file.buffer)
+      const contentError = evidenceContentError(target.fieldType, file.head)
       if (contentError) throw new ServiceError(400, contentError)
-      const uploaded = await uploadToFirebaseStorage(target.objectPath, req.file.buffer, req.file.mimetype)
+      const uploaded = await uploadFileToFirebaseStorage(target.objectPath, file.path, file.mimetype)
       const result = await addClaimMedia(getPool(), actorOf(req), scopeOf(req), id, {
         fieldKey: text(req.body?.fieldKey),
         storageObjectPath: target.objectPath,
         contentHash,
-        sizeBytes: uploaded.size || req.file.size,
-        mimeType: req.file.mimetype,
-        originalFilename: req.file.originalname,
+        sizeBytes: uploaded.size || file.size,
+        mimeType: file.mimetype,
+        originalFilename: file.originalname,
         capturedAt: text(req.body?.capturedAt) || null,
       })
       publishChange({ kind: "claim.updated", marketplaceId: result.marketplaceId, actorId: actorOf(req).id })
       res.status(201).json(result)
     } catch (error) {
       sendError(res, error, next)
+    } finally {
+      removeEvidenceTempFile(file)
     }
   })
 
-  // Secure scoped file retrieval: streams the file from Firebase Storage. No direct public link.
+  // Secure scoped file retrieval: streams the file from Firebase Storage, passing a Range request through
+  // (206) so the console's video player can seek. No direct public link.
   app.get("/api/claims/:id(\\d+)/media/:mediaId(\\d+)", requireUser, async (req, res, next) => {
     try {
       const claimId = positiveId(req.params.id)
@@ -284,16 +284,7 @@ export function mountClaimsRoutes(app: Express, requireUser: RequestHandler): vo
         throw new ServiceError(503, "Evidence storage is not configured. Set up Firebase credentials to retrieve media.")
       }
 
-      const downloaded = await downloadFromFirebaseStorage(meta.storageObjectPath)
-      if (!downloaded) {
-        throw new ServiceError(404, "The file could not be retrieved from storage.")
-      }
-
-      res.setHeader("Content-Type", meta.mimeType)
-      res.setHeader("Content-Length", String(downloaded.size))
-      res.setHeader("Content-Disposition", `inline; filename*=UTF-8''${encodeURIComponent(meta.originalFilename)}`)
-      res.setHeader("Cache-Control", "private, max-age=3600")
-      res.send(downloaded.content)
+      await sendStoredEvidence(req, res, meta)
     } catch (error) {
       sendError(res, error, next)
     }

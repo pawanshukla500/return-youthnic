@@ -7,6 +7,7 @@
 import { after, before, test } from "node:test"
 import assert from "node:assert/strict"
 import pg from "pg"
+import { ALL_ACCOUNTS } from "../access.js"
 import { applySchema, connectionSettingsFor } from "../db.js"
 import { commitLookupUpload, type ProductSource } from "../lookup-import.js"
 import { ensureReferenceData } from "../reference-data.js"
@@ -99,7 +100,7 @@ async function expectError(work: Promise<unknown>, status: number, pattern: RegE
 type FoundShipment = Extract<Awaited<ReturnType<typeof lookupShipment>>, { status: "found" }>["shipment"]
 
 async function found(tracking: string, marketplace: string): Promise<FoundShipment> {
-  const result = await lookupShipment(pool, { tracking, marketplace, shipmentId: null })
+  const result = await lookupShipment(pool, { tracking, marketplace, shipmentId: null }, ALL_ACCOUNTS)
   assert.equal(result.status, "found", `lookup of ${tracking} in ${marketplace} returned ${result.status}`)
   if (result.status !== "found") throw new Error("unreachable")
   return result.shipment
@@ -161,7 +162,7 @@ test("the same AWB can exist in Myntra EJ and Myntra VB without touching each ot
     [row({ trackingId: TRACK.shared, marketplace: "Myntra VB", channelListingId: "SYN-VB-A", sku: "SYN-VB-A", orderLineId: "SYN-VB-L1" })],
     "VB-1",
   )
-  const both = await lookupShipment(pool, { tracking: TRACK.shared, marketplace: "Auto detect", shipmentId: null })
+  const both = await lookupShipment(pool, { tracking: TRACK.shared, marketplace: "Auto detect", shipmentId: null }, ALL_ACCOUNTS)
   assert.equal(both.status, "choose", "one AWB in two accounts must not be picked silently")
   if (both.status !== "choose") throw new Error("unreachable")
   assert.deepEqual(both.candidates.map((candidate) => candidate.accountName).sort(), ["Myntra EJ", "Myntra VB"])
@@ -203,25 +204,25 @@ test("a clean scan is saved once, a retry with the same key is idempotent, and a
     verified: true,
     issues: [],
   }))
-  const first = await recordScan(pool, actor, { submission: submission(shipment.shipmentId, key, items), photoCount: 2, hasVideo: false })
+  const first = await recordScan(pool, actor, { submission: submission(shipment.shipmentId, key, items), photoCount: 2, hasVideo: false }, ALL_ACCOUNTS)
   assert.equal(first.replayed, false)
   assert.equal(first.itemCount, 1)
   assert.equal(first.issueCount, 0)
   assert.equal(first.scan.status, "Clear")
 
-  const retry = await recordScan(pool, actor, { submission: submission(shipment.shipmentId, key, items), photoCount: 2, hasVideo: false })
+  const retry = await recordScan(pool, actor, { submission: submission(shipment.shipmentId, key, items), photoCount: 2, hasVideo: false }, ALL_ACCOUNTS)
   assert.equal(retry.replayed, true)
   assert.equal(retry.scan.id, first.scan.id)
   assert.equal(await countScans(shipment.shipmentId), 1, "a retry must not create a second scan")
 
   const second = await expectError(
-    recordScan(pool, actor, { submission: submission(shipment.shipmentId, `${KEY_PREFIX}-OTHER`, items), photoCount: 0, hasVideo: false }),
+    recordScan(pool, actor, { submission: submission(shipment.shipmentId, `${KEY_PREFIX}-OTHER`, items), photoCount: 0, hasVideo: false }, ALL_ACCOUNTS),
     409,
     /already been received/,
   )
   assert.equal(second.extra.scannedBy, "SYN Scanner")
 
-  const looked = await lookupShipment(pool, { tracking: TRACK.scan, marketplace: "Myntra EJ", shipmentId: null })
+  const looked = await lookupShipment(pool, { tracking: TRACK.scan, marketplace: "Myntra EJ", shipmentId: null }, ALL_ACCOUNTS)
   assert.equal(looked.status, "duplicate")
 })
 
@@ -229,8 +230,8 @@ test("concurrent saves of one return: exactly one scan is kept, and the other sa
   const shipment = await found(TRACK.concurrent, "Myntra EJ")
   const items = shipment.items.map((item) => ({ itemId: item.itemId, receivedQty: item.expectedQty, verified: true, issues: [] }))
   const results = await Promise.allSettled([
-    recordScan(pool, actor, { submission: submission(shipment.shipmentId, `${KEY_PREFIX}-RACE-A`, items), photoCount: 0, hasVideo: false }),
-    recordScan(pool, actor, { submission: submission(shipment.shipmentId, `${KEY_PREFIX}-RACE-B`, items), photoCount: 0, hasVideo: false }),
+    recordScan(pool, actor, { submission: submission(shipment.shipmentId, `${KEY_PREFIX}-RACE-A`, items), photoCount: 0, hasVideo: false }, ALL_ACCOUNTS),
+    recordScan(pool, actor, { submission: submission(shipment.shipmentId, `${KEY_PREFIX}-RACE-B`, items), photoCount: 0, hasVideo: false }, ALL_ACCOUNTS),
   ])
   const saved = results.filter((result) => result.status === "fulfilled")
   const refused = results.filter((result): result is PromiseRejectedResult => result.status === "rejected")
@@ -257,7 +258,7 @@ test("a partly received return needs a sub-issue for the missing unit, and then 
     ]),
     photoCount: 1,
     hasVideo: true,
-  }).catch((error: unknown) => error)
+  }, ALL_ACCOUNTS).catch((error: unknown) => error)
   assert.ok(refused instanceof ServiceError)
   assert.equal(refused.status, 400)
   assert.ok(refused.details.some((detail) => detail.includes("choose what is missing")))
@@ -281,11 +282,11 @@ test("a partly received return needs a sub-issue for the missing unit, and then 
     ]),
     photoCount: 1,
     hasVideo: true,
-  })
+  }, ALL_ACCOUNTS)
   assert.equal(saved.scan.status, "Raised")
   assert.equal(saved.issueCount, 1)
 
-  const register = await listRegister(pool, { tracking: TRACK.multi }, 1, 50)
+  const register = await listRegister(pool, { tracking: TRACK.multi }, 1, 50, {}, ALL_ACCOUNTS)
   assert.equal(register.total, 2)
   const missingLine = register.rows.find((line) => line.expectedQty === 2)
   assert.ok(missingLine, "the register must show the line with the missing unit")
@@ -311,7 +312,7 @@ test("a ticket is created with its first history row, a rejection needs a reason
     ]),
     photoCount: 0,
     hasVideo: false,
-  })
+  }, ALL_ACCOUNTS)
   assert.equal(saved.scan.status, "Raised")
   const ticket = await pool.query("SELECT id, status FROM claim_tickets WHERE ticket_code = $1", [ticketCode])
   assert.equal(ticket.rows[0].status, "Raised")
@@ -331,18 +332,18 @@ test("a ticket is created with its first history row, a rejection needs a reason
       ]),
       photoCount: 0,
       hasVideo: false,
-    }),
+    }, ALL_ACCOUNTS),
     409,
     /already recorded/,
   )
   assert.ok(reuse.message.includes(ticketCode))
 
-  await expectError(updateTicketStatus(pool, actor, ticketId, "Rejected", "   "), 400, /rejection reason is required/)
-  const rejected = await updateTicketStatus(pool, actor, ticketId, "Rejected", "SYN photo does not match the order")
+  await expectError(updateTicketStatus(pool, actor, ticketId, "Rejected", "   ", ALL_ACCOUNTS), 400, /rejection reason is required/)
+  const rejected = await updateTicketStatus(pool, actor, ticketId, "Rejected", "SYN photo does not match the order", ALL_ACCOUNTS)
   assert.equal(rejected.status, "Rejected")
   assert.equal(rejected.rejectionReason, "SYN photo does not match the order")
 
-  const history = await ticketHistory(pool, ticketId)
+  const history = await ticketHistory(pool, ticketId, ALL_ACCOUNTS)
   assert.deepEqual(history.map((entry) => entry.toStatus), ["Raised", "Rejected"])
   assert.equal(history[1].reason, "SYN photo does not match the order")
 })
@@ -356,7 +357,7 @@ test("invalid lookup references are refused and nothing is written", { skip: ski
       submission: submission(shipment.shipmentId, `${KEY_PREFIX}-BAD-ITEM`, [{ itemId: 999999999, receivedQty: 1, verified: true, issues: [] }]),
       photoCount: 0,
       hasVideo: false,
-    }),
+    }, ALL_ACCOUNTS),
     400,
     /Fix the items/,
   )
@@ -367,7 +368,7 @@ test("invalid lookup references are refused and nothing is written", { skip: ski
       submission: submission(999999999, `${KEY_PREFIX}-NO-SHIPMENT`, [{ itemId: 1, receivedQty: 1, verified: true, issues: [] }]),
       photoCount: 0,
       hasVideo: false,
-    }),
+    }, ALL_ACCOUNTS),
     404,
     /Return not found/,
   )
@@ -401,7 +402,7 @@ test("a new upload replaces only its own account's active lookup data, and the s
   )
   assert.ok(second.supersededRows >= 4, "the earlier active rows are superseded, not deleted")
 
-  const gone = await lookupShipment(pool, { tracking: TRACK.gone, marketplace: "Myntra EJ", shipmentId: null })
+  const gone = await lookupShipment(pool, { tracking: TRACK.gone, marketplace: "Myntra EJ", shipmentId: null }, ALL_ACCOUNTS)
   assert.equal(gone.status, "not_found", "an AWB left out of the new file is no longer available")
 
   const fresh = await found(TRACK.fresh, "Myntra EJ")
@@ -416,13 +417,13 @@ test("a new upload replaces only its own account's active lookup data, and the s
       submission: submission(Number(supersededGone.rows[0].id), `${KEY_PREFIX}-SUPERSEDED`, [{ itemId: 1, receivedQty: 1, verified: true, issues: [] }]),
       photoCount: 0,
       hasVideo: false,
-    }),
+    }, ALL_ACCOUNTS),
     409,
     /no longer in the active lookup data/,
   )
 
   // The scan made before the replacement is still in the register, with its own snapshot.
-  const history = await listRegister(pool, { tracking: TRACK.scan }, 1, 50)
+  const history = await listRegister(pool, { tracking: TRACK.scan }, 1, 50, {}, ALL_ACCOUNTS)
   assert.ok(history.total >= 1)
   assert.ok(history.rows.every((line) => line.trackingId === TRACK.scan))
   const snapshot = await pool.query("SELECT tracking_id_snapshot FROM receipt_scans WHERE expected_return_id = $1", [scannedShipment])
@@ -448,12 +449,12 @@ test("a failed upload rolls back, and the previous active lookup data stays in p
 
 test("the register lists item rows with their issues, and the export matches the filters", { skip: skip || false }, async () => {
   const marketplace = await pool.query("SELECT id FROM marketplaces WHERE name = 'Myntra EJ'")
-  const list = await listRegister(pool, { marketplaceId: Number(marketplace.rows[0].id), scannerId: actor.id }, 1, 200)
+  const list = await listRegister(pool, { marketplaceId: Number(marketplace.rows[0].id), scannerId: actor.id }, 1, 200, {}, ALL_ACCOUNTS)
   assert.ok(list.total >= 3)
   assert.ok(list.rows.every((line) => line.scannedBy === "SYN Scanner"))
   assert.ok(list.rows.some((line) => line.issues.length > 0), "the partly received return must show its issue")
 
-  const csv = await exportRegister(pool, { tracking: TRACK.multi })
+  const csv = await exportRegister(pool, { tracking: TRACK.multi }, ALL_ACCOUNTS)
   const lines = csv.trimEnd().split("\n")
   assert.equal(lines.length, 3, "one header and two item rows for the multi-line return")
   assert.match(lines[0], /"Return Received Sub Issue/)
@@ -556,12 +557,12 @@ test("one AWB in Myntra EJ and Myntra VB: a scan in one account leaves the other
 })
 
 test("persistence: a new connection and a second schema run keep every scan", { skip: skip || false }, async () => {
-  const before = await listRegister(pool, { tracking: TRACK.multi }, 1, 50)
+  const before = await listRegister(pool, { tracking: TRACK.multi }, 1, 50, {}, ALL_ACCOUNTS)
   await pool.end()
   const settings = connectionSettingsFor(rawUrl)
   pool = new pg.Pool({ connectionString: settings.connectionString, ssl: settings.ssl, connectionTimeoutMillis: 8000 })
   await applySchema(pool)
-  const after = await listRegister(pool, { tracking: TRACK.multi }, 1, 50)
+  const after = await listRegister(pool, { tracking: TRACK.multi }, 1, 50, {}, ALL_ACCOUNTS)
   assert.equal(after.total, before.total)
   assert.deepEqual(after.rows.map((line) => line.scanId), before.rows.map((line) => line.scanId))
 })

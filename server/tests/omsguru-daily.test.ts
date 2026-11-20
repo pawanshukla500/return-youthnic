@@ -233,3 +233,48 @@ test("isFirebaseConfigured returns valid status without throwing error", () => {
   assert.equal(typeof result, "object")
   assert.equal(typeof result.configured, "boolean")
 })
+
+// Owner decision 2026-11-20: only a Supervisor or an Admin may generate the daily file or send it (email, WhatsApp).
+// The routes are mounted on a stand-in app and their middleware run in order, stopping before the route's own handler,
+// so no database or storage is touched.
+test("[synthetic] OMSGuru generate and send routes refuse every role but Supervisor and Admin with 403", async () => {
+  const { mountOmsguruRoutes } = await import("../omsguru-routes.js")
+  type Handler = (req: unknown, res: unknown, next: () => void) => unknown
+  const routes = new Map<string, Handler[]>()
+  const record = (method: string) => (path: string, ...handlers: Handler[]) => {
+    routes.set(`${method} ${path}`, handlers)
+  }
+  const app = { get: record("GET"), post: record("POST"), put: record("PUT"), patch: record("PATCH"), delete: record("DELETE") }
+  const requireUser: Handler = (_req, _res, next) => next()
+  mountOmsguruRoutes(app as never, requireUser as never)
+
+  // Runs every middleware before the route's handler. Returns the status sent, or "handler" when all of them passed.
+  const runGates = (key: string, role: string): number | "handler" => {
+    const handlers = routes.get(key)
+    assert.ok(handlers, `${key} is mounted`)
+    let status = 0
+    const res = {
+      status(code: number) { status = code; return res },
+      json() { return res },
+    }
+    const req = { user: { id: 1, role, name: "SYN-User", email: "syn-user@example.test" } }
+    for (const gate of handlers.slice(0, -1)) {
+      let passed = false
+      gate(req, res, () => { passed = true })
+      if (!passed) return status
+    }
+    return "handler"
+  }
+
+  const gated = ["POST /api/omsguru/daily/generate", "POST /api/omsguru/daily/:id/send", "POST /api/omsguru/daily/:id/send-whatsapp"]
+  for (const key of gated) {
+    for (const role of ["Scanner", "Inward", "scanner", ""]) {
+      assert.equal(runGates(key, role), 403, `${key} refuses role "${role}"`)
+    }
+    for (const role of ["Supervisor", "Admin", "admin"]) {
+      assert.equal(runGates(key, role), "handler", `${key} lets role "${role}" through`)
+    }
+  }
+  // Reading the reports stays open to any signed-in user.
+  assert.equal(runGates("GET /api/omsguru/daily", "Scanner"), "handler")
+})

@@ -69,9 +69,13 @@ If the camera is refused, the scanner stays open: the overlay offers **Allow cam
 # Run lint checks
 ./gradlew lintDebug
 
-# Build optimized release APK with R8 and resource shrinking
+# Build optimized release APK with R8 and resource shrinking.
+# It is signed only when RS_KEYSTORE, RS_KEYSTORE_PASSWORD, RS_KEY_ALIAS and RS_KEY_PASSWORD
+# are all set; otherwise it is left unsigned. No keystore or password is kept in this repository.
 ./gradlew assembleRelease
 ```
+
+Release APKs are signed in CI only, from the repository secrets `ANDROID_KEYSTORE_B64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` and `ANDROID_KEY_PASSWORD` (a missing one fails the build). The workflow prints the signing certificate SHA-256 and fails if it differs from the repository variable `ANDROID_SIGNER_SHA256`.
 
 ### APK Size Budget
 - Target: `< 5.0 MB` (actual release build measures ~3.6 MB)

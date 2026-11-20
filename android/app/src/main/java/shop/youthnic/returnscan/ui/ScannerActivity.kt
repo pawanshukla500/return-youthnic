@@ -53,6 +53,7 @@ import shop.youthnic.returnscan.update.AppUpdater
 import shop.youthnic.returnscan.util.CameraPermission
 import shop.youthnic.returnscan.util.CameraTuning
 import shop.youthnic.returnscan.util.Cue
+import shop.youthnic.returnscan.util.Debouncer
 import shop.youthnic.returnscan.util.ScanSignals
 import shop.youthnic.returnscan.util.Ui
 import java.util.concurrent.ExecutorService
@@ -104,6 +105,8 @@ class ScannerActivity : AppCompatActivity() {
     private var online = true
     private var lastVerdictAt = 0L
     private var tickerJob: Job? = null
+    // A busy shift sends a live change per scan. They are folded into one refresh of today's figures every 2 seconds.
+    private val liveRefresh by lazy { Debouncer(lifecycleScope, LIVE_REFRESH_WAIT_MS) { refreshShift() } }
 
     private val sessionManager get() = (application as ReturnScanApp).sessionManager
 
@@ -136,7 +139,7 @@ class ScannerActivity : AppCompatActivity() {
             (application as ReturnScanApp).apiClient,
             sessionManager,
             lifecycleScope,
-            onChange = { refreshShift() },
+            onChange = { liveRefresh.trigger() },
             onStatus = { mode, syncedAt ->
                 syncMode = mode
                 if (syncedAt > 0) lastSyncedAt = syncedAt
@@ -167,6 +170,7 @@ class ScannerActivity : AppCompatActivity() {
         super.onPause()
         idleJob?.cancel()
         liveSync?.stop()
+        liveRefresh.cancel()
         tickerJob?.cancel()
         pauseCamera(showOverlay = false)
     }
@@ -243,18 +247,29 @@ class ScannerActivity : AppCompatActivity() {
         renderConnection()
     }
 
-    /** Reloads today's figures (all benches and phones). Called on open, and whenever the live cursor moves. */
+    /**
+     * Reloads today's figures (all benches and phones). Called on open, and through [liveRefresh] when the live cursor
+     * moves. Only the figures are fetched; a scanner that opened offline has no issue rules yet, so it takes the whole
+     * session once.
+     */
     private fun refreshShift() {
         lifecycleScope.launch {
-            val app = application as ReturnScanApp
-            val result = app.apiClient.getSessionData(accountId)
-            val data = result.getOrNull()
-            if (data != null) {
+            val api = (application as ReturnScanApp).apiClient
+            val result = if (sessionData.categories.isEmpty()) {
+                api.getSessionData(accountId).map { data ->
+                    sessionData = data
+                    data.shift
+                }
+            } else {
+                api.getShiftProgress()
+            }
+            val shift = result.getOrNull()
+            if (shift != null) {
                 // Keep the issue rules the open verification sheet already uses; only the figures change.
-                sessionData = if (sessionData.categories.isEmpty()) data else sessionData.copy(shift = data.shift)
-                scannedCountToday = data.shiftProgress.scannedToday
-                issuesToday = data.shiftProgress.issuesToday
-                ironSendToday = data.shiftProgress.ironSendToday
+                sessionData = sessionData.copy(shift = shift)
+                scannedCountToday = shift.scannedToday
+                issuesToday = shift.issuesToday
+                ironSendToday = shift.ironSendToday
                 lastSyncedAt = System.currentTimeMillis()
                 online = true
                 updateCountsUi()
@@ -665,9 +680,10 @@ class ScannerActivity : AppCompatActivity() {
             activity = this,
             lookup = lookup,
             sessionData = sessionData,
-            onSave = { submitData ->
-                // Save is tapped on the sheet that is showing, so that sheet owns this save and its reply.
-                commitVerificationSave(activeVerificationSheet, idempotencyKey, lookup, submitData)
+            onSave = { submitData, afterSave ->
+                // Save (or File Claim) is tapped on the sheet that is showing, so that sheet owns this save and its reply.
+                // Both buttons use this one key, so File Claim, a retry and a later Save are all the same register row.
+                commitVerificationSave(activeVerificationSheet, idempotencyKey, lookup, submitData, afterSave)
             }
         )
         // Every way out of the sheet ends here: Cancel, the close button, a swipe down, the back key, or a tap outside.
@@ -696,12 +712,15 @@ class ScannerActivity : AppCompatActivity() {
     /**
      * [owner] is the sheet the save was started from. The reply may arrive after that sheet was swiped away and after
      * the scanner opened a newer sheet, so the reply only ever touches [owner], never whichever sheet is showing now.
+     * [afterSave] (File Claim) runs once the scan is saved, only while [owner] is still showing, and only with the saved
+     * scan's id: without one the sheet stays open with an error, so no claim is filed without its bench scan.
      */
     private fun commitVerificationSave(
         owner: ReturnVerificationBottomSheet?,
         clientScanKey: String,
         lookup: LookupResult,
-        data: VerificationSubmitData
+        data: VerificationSubmitData,
+        afterSave: ((ScanReceipt) -> Unit)? = null
     ) {
         val app = application as ReturnScanApp
         val shipmentId = data.shipmentId.toIntOrNull() ?: 0
@@ -716,9 +735,12 @@ class ScannerActivity : AppCompatActivity() {
             )
 
             val receipt = result.getOrNull()
-            if (receipt != null) {
+            if (receipt != null && (afterSave == null || receipt.id > 0)) {
                 setOnline(true)
+                // Checked before onSaveSuccess closes the sheet: File Claim continues only from the sheet it was tapped on.
+                val ownerShowing = owner != null && owner === activeVerificationSheet
                 onSaveSuccess(owner, lookup, receipt, data)
+                if (ownerShowing) afterSave?.invoke(receipt)
             } else {
                 val err = result.exceptionOrNull()
                 if (err is AuthExpiredException) {
@@ -726,7 +748,10 @@ class ScannerActivity : AppCompatActivity() {
                     return@launch
                 }
                 if (err is NetworkException) setOnline(false)
-                val message = err?.message ?: "Failed to save return scan"
+                val message = when {
+                    receipt != null -> "The scan was saved but the server sent no scan number, so the claim cannot be filed on it. Tap File Claim again."
+                    else -> err?.message ?: "Failed to save return scan"
+                }
                 signal(Cue.STOP)
                 // The same clientScanKey is reused by the next Save tap, so a retry can never save the return twice.
                 if (owner != null && owner === activeVerificationSheet) {
@@ -996,5 +1021,6 @@ class ScannerActivity : AppCompatActivity() {
         const val EXTRA_ACCOUNT_NAME = "extra_account_name"
         const val EXTRA_MARKETPLACE = "extra_marketplace"
         const val EXTRA_COLOR = "extra_color"
+        const val LIVE_REFRESH_WAIT_MS = 2_000L
     }
 }

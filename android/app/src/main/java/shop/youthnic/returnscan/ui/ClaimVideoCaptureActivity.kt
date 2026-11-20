@@ -19,6 +19,7 @@ import androidx.camera.video.VideoCapture
 import androidx.camera.video.VideoRecordEvent
 import androidx.core.content.ContextCompat
 import com.google.android.material.snackbar.Snackbar
+import shop.youthnic.returnscan.claim.EvidenceUploads
 import shop.youthnic.returnscan.databinding.ActivityClaimVideoBinding
 import java.io.File
 import java.util.UUID
@@ -58,6 +59,8 @@ class ClaimVideoCaptureActivity : AppCompatActivity() {
     private fun startCamera() {
         val future = ProcessCameraProvider.getInstance(this)
         future.addListener({
+            // The screen may have closed while the camera started; a recording begun now would never be finished.
+            if (isFinishing || isDestroyed) return@addListener
             val provider = future.get()
             val preview = Preview.Builder().build().also {
                 it.setSurfaceProvider(binding.previewVideo.surfaceProvider)
@@ -78,7 +81,7 @@ class ClaimVideoCaptureActivity : AppCompatActivity() {
     }
 
     private fun startRecording(capture: VideoCapture<Recorder>) {
-        val dir = File(filesDir, "claim-evidence").apply { mkdirs() }
+        val dir = File(filesDir, EvidenceUploads.DIR).apply { mkdirs() }
         val file = File(dir, "meesho-unpacking-${UUID.randomUUID()}.mp4")
         outputFile = file
         recording = capture.output
@@ -100,6 +103,11 @@ class ClaimVideoCaptureActivity : AppCompatActivity() {
         binding.btnStopVideo.isEnabled = false
         val file = outputFile
         recording = null
+        if (isFinishing || isDestroyed) {
+            // The operator left mid-recording: nobody takes this video, so keep no partial MP4.
+            file?.delete()
+            return
+        }
         if (file == null || event.hasError() || !file.exists() || file.length() == 0L || file.length() > MAX_BYTES) {
             file?.delete()
             Snackbar.make(binding.root, "Video could not be saved under 25 MB. Please record again.", Snackbar.LENGTH_LONG).show()
@@ -112,7 +120,11 @@ class ClaimVideoCaptureActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         handler.removeCallbacks(monitor)
-        recording?.close()
+        // Still recording means the operator left (back, or the screen closed) before Stop: the MP4 is partial.
+        if (recording != null) {
+            recording?.close()
+            outputFile?.delete()
+        }
         super.onDestroy()
     }
 
