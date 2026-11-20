@@ -124,9 +124,15 @@ after(async () => {
 
 test("db: staging rows and superseded rows with no scan are never returned", { skip: skip || false }, async () => {
   const staging = await makeReturn("STAGE", { status: "staging" })
+  try {
+    assert.equal(await lookupReturnForClaim(pool, scope, staging.tracking), null, "exact AWB of a staging row")
+    assert.equal(await lookupReturnForClaim(pool, scope, `${run}-STAGE`), null, "partial AWB of a staging row")
+  } finally {
+    // Staging rows only live while an upload runs (a failed upload removes them), and register-db.test.ts checks that
+    // none is left in the database. Remove this synthetic one; its item rows go with it (ON DELETE CASCADE).
+    await pool.query("DELETE FROM expected_returns WHERE id = $1 AND lookup_status = 'staging'", [staging.id])
+  }
   const stale = await makeReturn("STALE", { status: "superseded" })
-  assert.equal(await lookupReturnForClaim(pool, scope, staging.tracking), null, "exact AWB of a staging row")
-  assert.equal(await lookupReturnForClaim(pool, scope, `${run}-STAGE`), null, "partial AWB of a staging row")
   assert.equal(await lookupReturnForClaim(pool, scope, stale.tracking), null, "exact AWB of a superseded row")
   assert.equal(await lookupReturnForClaim(pool, scope, `SYN-${run}-STALE-ORD`), null, "order of a superseded row")
 
