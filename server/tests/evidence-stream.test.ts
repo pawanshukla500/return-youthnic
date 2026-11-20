@@ -343,7 +343,13 @@ test("multipart upload: a streamed file over the limit gets 413 and leaves no te
 
 test("multipart upload: a client that drops off halfway leaves no temp file behind", async () => {
   const dir = fs.mkdtempSync(path.join(tempRoot, "SYN-dropped-"))
-  const server = await startServer(uploadApp(dir))
+  const app = uploadApp(dir)
+  const reachedErrorHandler: unknown[] = []
+  app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    reachedErrorHandler.push(error)
+    res.status(500).end()
+  })
+  const server = await startServer(app)
   try {
     const req = http.request({
       host: "127.0.0.1",
@@ -366,6 +372,8 @@ test("multipart upload: a client that drops off halfway leaves no temp file behi
     req.destroy()
     await waitUntil(() => fs.readdirSync(dir).length === 0)
     assert.deepEqual(fs.readdirSync(dir), [], "the partial temp file is removed when the client goes away")
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    assert.deepEqual(reachedErrorHandler, [], "a dropped upload never reaches the 500 handler (no log, no Sentry event)")
   } finally {
     await server.close()
   }

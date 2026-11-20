@@ -24,13 +24,17 @@ const STALE_TEMP_MS = 24 * 60 * 60 * 1000
 
 export type EvidenceTempFile = Express.Multer.File & { contentHash: string; head: Buffer }
 
+// A phone on weak Wi-Fi drops off mid-upload all the time. That is not a server fault, so it must not reach the
+// 500 handler (which logs a stack and reports to Sentry); the phone's upload worker retries on its own.
+class UploadInterruptedError extends Error {}
+
 function hashingDiskStorage(dir: string): multer.StorageEngine {
   return {
     _handleFile(req, file, cb) {
       // A phone that drops off mid-upload never ends the multipart stream; without this the temp file and
       // its open handle would wait for the next restart.
       req.once("close", () => {
-        if (!req.complete) file.stream.destroy(new Error("The upload was interrupted."))
+        if (!req.complete) file.stream.destroy(new UploadInterruptedError("The upload was interrupted."))
       })
       const filePath = path.join(dir, crypto.randomUUID())
       const hash = crypto.createHash("sha256")
@@ -90,6 +94,11 @@ export function evidenceUpload(options: { dir?: string; maxBytes?: number } = {}
     single(req, res, (error?: unknown) => {
       if (error instanceof multer.MulterError && error.code === "LIMIT_FILE_SIZE") {
         res.status(413).json({ error: tooLarge })
+        return
+      }
+      if (error && (error instanceof UploadInterruptedError || req.destroyed)) {
+        // The client is gone; the partial temp file is already removed. Nothing to log or report.
+        if (!res.headersSent) res.status(400).json({ error: "The upload was interrupted. Try again." })
         return
       }
       next(error)
