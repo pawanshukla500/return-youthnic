@@ -52,7 +52,7 @@ Errors are JSON with the message in `error`. Rule failures also list each proble
 | 500 | An unexpected error. The response carries the server's error message as it is. See [known risks](notes/agent-handoff.md#known-risks-and-gaps). |
 | 503 | The database is not connected yet. |
 
-An upload larger than 25 MB returns HTTP 400 with `File is larger than 25 MB`.
+An upload larger than its route's limit (25 MB for spreadsheets, 50 MB for return-tracking files) returns HTTP 400 with `The file is larger than this upload allows.` Claim evidence answers 413 with `Evidence files can be up to 100 MB.` instead (see the claim media routes).
 
 ## Rate limits and CORS
 
@@ -75,8 +75,8 @@ Sign-in and mutating routes are login- and IP-rate-limited (`server/rate-limit.t
 | POST | `/api/claims` | Yes | Creates one claim linked immutably to a scanned return. |
 | GET | `/api/claims/:id` | Yes | Claim details, evidence readiness, media metadata, and status history. |
 | PATCH | `/api/claims/:id/status` | Supervisor/Admin | Advances the approval-controlled claim lifecycle. |
-| POST | `/api/claims/:id/media/upload` | Yes | Validates and uploads one evidence file to Firebase Storage. |
-| GET | `/api/claims/:id/media/:mediaId` | Yes | Securely streams scoped evidence without exposing a public URL. |
+| POST | `/api/claims/:id/media/upload` | Yes | Validates and uploads one evidence file to Firebase Storage, streamed through a temp file (never held in memory). |
+| GET | `/api/claims/:id/media/:mediaId` | Yes | Securely streams scoped evidence without exposing a public URL; honours `Range` (206). |
 | PATCH | `/api/claims/:id/media/:mediaId/deactivate` | Yes | Deactivates an evidence record without deleting history. |
 | GET | `/api/accounts` | Yes | The accounts the user may use. |
 | GET | `/api/uploads` | Yes | Upload history for the user's accounts. |
@@ -219,7 +219,8 @@ Claim management links immutably to a verified `receipt_scans` row and does not 
 
 - `POST /api/claims`: accepts `receiptScanId`, `claimReason`, `claimTitle`, `claimDescription`, `remarks`, and `claimTemplateId`. One claim per scan. Auto-falls back to the marketplace's default active template if template ID is mismatched.
 - `GET /api/claims/:id`: returns `{ claim, media, statusHistory }`. `claim` includes `totalPrice` (merchandise value), `trackingId`, `orderId`, `claimReason`, `status`, and linked `scan`. `media` contains uploaded photos and video entries.
-- `GET /api/claims/:id/media/:mediaId`: securely streams evidence files inline with MIME type (`image/jpeg`, `image/png`, `video/mp4`) and session/bearer authentication, allowing direct browser `<img>` rendering and `<video controls>` HTML5 streaming.
+- `GET /api/claims/:id/media/:mediaId`: securely streams evidence files inline with MIME type (`image/jpeg`, `image/png`, `video/mp4`) and session/bearer authentication, allowing direct browser `<img>` rendering and `<video controls>` HTML5 streaming. Every answer carries `Accept-Ranges: bytes`. One `Range: bytes=…` header is passed to storage and answered `206` with `Content-Range` (so the video player can seek), or `416` when it starts past the end; any other Range form gets the whole file (`200`). The bytes are piped from storage, never buffered, and a storage read that stalls for 60 seconds is cut off.
+- `POST /api/claims/:id/media/upload`: multipart with `fieldKey`, optional `capturedAt` and one `file`. The file is written to a private temp folder while its SHA-256 is computed, so server memory stays at a few buffers whatever its size; the temp file is removed after the request. A request whose `Content-Length` already exceeds 100 MB is refused with `413` before its body is read, and a streamed file that passes 100 MB is cut off with the same `413` (`Evidence files can be up to 100 MB.`). The field's own `max_file_size_mb`, the duplicate check and the file-signature check run before anything is sent to storage. The file then goes to Firebase with a resumable upload in 8 MiB chunks: every storage call has a 60-second deadline, and a dropped or timed-out chunk resumes from what storage already holds (up to 4 retries).
 - `POST /api/claims/unified-create`: mobile-first atomic submission endpoint. Accepts `expectedReturnId`, `receiptScanId`, `marketplaceId`, `trackingId`, `orderId`, `claimReason`, `claimTitle`, `claimDescription` and `claimTemplateId`. Atomically creates the `receipt_scan`, `receipt_scan_items`, `receipt_scan_issues` and `claims` rows, and calls `syncClaimTicketToRegister()` to link the ticket directly to the Return Register. Evidence files are NOT part of this body: each file is uploaded separately to `POST /api/claims/:id/media/upload`.
 - `GET /api/claims/queue`: accepts lifecycle, search, marketplace, `dateFrom`, and `dateTo` filters.
 - `GET /api/claims/export?format=csv|xlsx`: exports the same scoped and filtered reconciliation rows, up to 50,000 rows. Larger results return 413 and must be narrowed with date or marketplace filters.
