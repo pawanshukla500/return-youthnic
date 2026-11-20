@@ -40,8 +40,11 @@ android {
     }
 
     buildTypes {
+        // Unencrypted http only in debug builds (a LAN test server). Release builds allow https only, here for every
+        // connection and in UrlPolicy for the server address and update links.
         debug {
             signingConfig signingConfigs.debug
+            manifestPlaceholders = [usesCleartextTraffic: "true"]
             def defaultApiUrl = System.getenv("API_URL") ?: "https://return.youthnic.shop"
             buildConfigField "String", "DEFAULT_API_URL", "\"${defaultApiUrl}\""
         }
@@ -54,6 +57,7 @@ android {
             // signed with Android's debug key: the APK installs for testing but can never replace the warehouse app,
             // whose updates must carry the release signer.
             signingConfig(signingConfigs.release.storeFile != null ? signingConfigs.release : signingConfigs.debug)
+            manifestPlaceholders = [usesCleartextTraffic: "false"]
             def defaultApiUrl = System.getenv("API_URL") ?: "https://return.youthnic.shop"
             buildConfigField "String", "DEFAULT_API_URL", "\"${defaultApiUrl}\""
         }

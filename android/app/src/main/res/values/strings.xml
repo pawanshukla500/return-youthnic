@@ -104,6 +104,7 @@
     <string name="error_credentials_required">Email and password are required.</string>
     <string name="signing_in">Signing in…</string>
     <string name="login_failed">Login failed. Please check credentials.</string>
+    <string name="error_server_url_not_https">Server address must start with https://. Only a test build may use http://, and only for a server on this network.</string>
     <string name="preparing_scanner">Preparing scanner…</string>
     <string name="scanned_today_format">%1$s scanned today</string>
     <string name="update_scanner_banner">Update available (%1$s)</string>
@@ -136,6 +137,7 @@
     <string name="downloading_update">Downloading APK…</string>
     <string name="update_try_again">Try Again</string>
     <string name="update_open_browser">Open in Browser</string>
+    <string name="update_link_not_https">The update link is missing or not https, so it was not opened. Ask an administrator to check the release.</string>
 
     <!-- Camera permission (asked at sign-in; the scanner shows the same help if it is still missing) -->
     <string name="camera_permission_title">Allow camera access</string>

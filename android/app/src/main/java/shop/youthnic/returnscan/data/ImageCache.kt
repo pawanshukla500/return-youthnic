@@ -9,6 +9,7 @@ import android.util.LruCache
 import android.widget.ImageView
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import shop.youthnic.returnscan.util.UrlPolicy
 import java.io.File
 import java.io.FileOutputStream
 import java.security.MessageDigest
@@ -98,7 +99,7 @@ class ImageCache(context: Context, private val okHttpClient: OkHttpClient = OkHt
         }
 
         return try {
-            val request = Request.Builder().url(url).build()
+            val request = Request.Builder().url(UrlPolicy.forImage(url)).build()
             val response = okHttpClient.newCall(request).execute()
             if (!response.isSuccessful) return null
 

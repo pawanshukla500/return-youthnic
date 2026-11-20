@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import shop.youthnic.returnscan.BuildConfig
+import shop.youthnic.returnscan.util.UrlPolicy
 
 class SessionManager(private val context: Context) {
 
@@ -24,10 +25,11 @@ class SessionManager(private val context: Context) {
         context.getSharedPreferences("return_session_prefs", Context.MODE_PRIVATE)
     }
 
+    // A saved address this build may not use (an http:// one saved by an older build) falls back to the default.
     var serverUrl: String
         get() {
             val saved = prefs.getString("server_url", "")
-            return if (!saved.isNullOrBlank()) saved else BuildConfig.DEFAULT_API_URL
+            return saved?.takeIf { UrlPolicy.isAllowed(it) } ?: BuildConfig.DEFAULT_API_URL
         }
         set(value) {
             val clean = value.trim().trimEnd('/')
