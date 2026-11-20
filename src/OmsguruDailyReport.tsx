@@ -3,13 +3,23 @@ import { api, downloadFile } from "./api"
 import { DateField } from "./date-field"
 import { Loading } from "./shell"
 import { Badge, Icon, Modal } from "./ui"
-import { isSupervisorOrAdminUser } from "./access"
+import { isAdminUser, isSupervisorOrAdminUser } from "./access"
 import { useWorkspace } from "./workspace"
 
 // The server refuses generate and send from any other role (server/omsguru-routes.ts); the screen says so up front.
 const SEND_LOCKED_TITLE = "Only a supervisor or administrator can generate or send the OMSGuru update."
-const WA_OFFLINE_TITLE =
-  "WhatsApp gateway is offline or not configured. An administrator can set it up under OMSGuru settings."
+// Saving settings and the WhatsApp test ping are Admin-only on the server, so only an Admin opens the settings.
+const SETTINGS_LOCKED_TITLE = "Only an administrator can change OMSGuru settings or send a WhatsApp test ping."
+
+/** Why WhatsApp sends are disabled, from the status the header badge shows; null while the gateway is online. */
+export function waOfflineTitle(status: { connected: boolean; error?: string } | null): string | null {
+  if (status?.connected === true) return null
+  if (!status) return "WhatsApp gateway status has not loaded. Reload the page to check it again."
+  const reason = status.error?.trim().replace(/\.+$/, "") || "the gateway says it is not connected to WhatsApp"
+  // The gateway login and group ID are server environment settings (server/whatsapp.ts); no screen here can set them.
+  const where = /WHATSAPP_[A-Z_]+/.test(reason) ? " The server administrator sets these in the server environment; OMSGuru settings cannot." : ""
+  return `WhatsApp gateway is offline: ${reason}.${where}`
+}
 
 export type SkuBreakdownItem = {
   sku: string
@@ -70,6 +80,7 @@ export type UnmappedScannedItem = {
 export function OmsguruDailyReport() {
   const { user } = useWorkspace()
   const canSend = isSupervisorOrAdminUser(user)
+  const isAdmin = isAdminUser(user)
   const [updates, setUpdates] = useState<OmsguruDailyUpdateItem[]>([])
   const [summary, setSummary] = useState<OmsguruSummary | null>(null)
   const [loading, setLoading] = useState(true)
@@ -139,8 +150,8 @@ export function OmsguruDailyReport() {
   } | null>(null)
   const [testingWa, setTestingWa] = useState(false)
   // Same status the header badge shows: a WhatsApp send is offered only while the gateway is online.
-  const waOnline = waStatus?.connected === true
-  const waSendLock = [!canSend && SEND_LOCKED_TITLE, !waOnline && WA_OFFLINE_TITLE].filter(Boolean).join(" ") || null
+  const waOffline = waOfflineTitle(waStatus)
+  const waSendLock = [!canSend && SEND_LOCKED_TITLE, waOffline].filter(Boolean).join(" ") || null
 
   const loadUnmappedCheck = async () => {
     try {
@@ -480,7 +491,8 @@ export function OmsguruDailyReport() {
             type="button"
             className="btn btn-secondary btn-icon-only"
             onClick={() => setShowSettingsModal(true)}
-            title="Configure Dropship Warehouse ID, schedule time, and audit CC recipients"
+            disabled={!isAdmin}
+            title={isAdmin ? "Configure Dropship Warehouse ID, schedule time, and audit CC recipients" : SETTINGS_LOCKED_TITLE}
           >
             <Icon name="chevron" size={15} />
             <span style={{ fontSize: "12px", fontWeight: 600 }}>Settings</span>
@@ -1162,8 +1174,8 @@ export function OmsguruDailyReport() {
                     type="button"
                     className="btn btn-secondary btn-sm"
                     onClick={handleSendTestWhatsApp}
-                    disabled={testingWa || !waOnline}
-                    title={waOnline ? undefined : WA_OFFLINE_TITLE}
+                    disabled={testingWa || waOffline !== null}
+                    title={waOffline ?? undefined}
                   >
                     {testingWa ? "Sending Test Ping..." : "Send Test Ping to WhatsApp Group"}
                   </button>

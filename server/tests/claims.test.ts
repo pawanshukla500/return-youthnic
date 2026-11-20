@@ -4,6 +4,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { EventEmitter } from "node:events"
+import type pg from "pg"
 import {
   CLAIM_STATUSES,
   claimDescriptionError,
@@ -31,7 +32,7 @@ import {
   templateNameError,
 } from "../claims-service.js"
 import { meeshoClaimDescription, meeshoClaimDueDate, normalizeMeeshoPacketState } from "../meesho-claims.js"
-import { claimStatusesFor, presentClaimMarkets } from "../dashboard.js"
+import { claimStatusesFor, loadClaims, presentClaimMarkets } from "../dashboard.js"
 
 test("the complete claim lifecycle statuses are defined in order", () => {
   assert.deepEqual([...CLAIM_STATUSES], [
@@ -283,6 +284,31 @@ test("claims analytics: approval rate is approved / (approved + rejected), open 
   assert.equal(mixed.rows[1].rate, null, "nothing decided yet is no rate, not 0%")
   assert.equal(mixed.approvalRate, "75.0%")
   assert.equal(presentClaimMarkets([]).approvalRate, "—")
+})
+
+test("claims overview: the stat cards show one approval percentage; Amount recovered gives a count", async () => {
+  // The same Meesho numbers after one approved claim is paid. Each query is answered by what it selects.
+  const db = {
+    query: async (sql: string) => {
+      if (sql.includes("recovered_value")) {
+        return { rows: [{ total_claims: 12, open_claims: 4, total_value: "1200.00", recovered_value: "150.00" }] }
+      }
+      if (sql.includes("FROM marketplaces m")) {
+        return { rows: [{ market: "SYN-Meesho", raised: 12, approved: 2, review: 4, rejected: 0, needs_action: 6, total_val: "1200.00" }] }
+      }
+      if (sql.includes("status_name")) return { rows: [] }
+      if (sql.includes("AS received")) {
+        return { rows: [{ received: 0, issues: 0, clear: 0, received_today: 0, issues_today: 0, claims: 12, open_claims: 4, approved_claims: 2 }] }
+      }
+      throw new Error(`unexpected query: ${sql}`)
+    },
+  } as unknown as pg.Pool
+
+  const { stats } = await loadClaims(db, { all: true })
+  const card = (label: string) => stats.find((s) => s.label === label)!
+  assert.deepEqual(stats.filter((s) => `${s.value} ${s.delta}`.includes("%")).map((s) => s.label), ["Approval rate"])
+  assert.equal(card("Approval rate").value, "100.0%")
+  assert.equal(card("Amount recovered").delta, "Approved claims: 2", "the table's Approved column, as a count")
 })
 
 test("PostgreSQL pool catches idle client termination error and avoids unhandled process crash", () => {

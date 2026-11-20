@@ -717,7 +717,7 @@ export type ClaimMarketCounts = {
   total_val: string | number
 }
 
-// The per-marketplace table and the headline approval rate, from one set of counts so they always agree. The
+// The per-marketplace table, the headline approval rate and the approved count, from one set of counts so they agree. The
 // approval rate is approved / (approved + rejected): only claims the marketplace decided. Claims still open or
 // waiting on a person after an automation failure are not decided, so they stay out of the denominator. A row with
 // nothing decided has no rate (null), not 0%.
@@ -740,7 +740,7 @@ export function presentClaimMarkets(rows: ClaimMarketCounts[]) {
       rate: rowDecided ? Math.round((rowApproved / rowDecided) * 100) : null,
     }
   })
-  return { rows: presented, approvalRate: percentOf(approved, approved + rejected) }
+  return { rows: presented, approved, approvalRate: percentOf(approved, approved + rejected) }
 }
 
 export async function loadClaims(db: pg.Pool, scope: AccountScope) {
@@ -769,7 +769,6 @@ export async function loadClaims(db: pg.Pool, scope: AccountScope) {
       SELECT
         COUNT(c.id)::int AS total_claims,
         (COUNT(c.id) FILTER (WHERE c.status NOT IN ('approved', 'reconciled', 'paid', 'rejected', 'failed')))::int AS open_claims,
-        (COUNT(c.id) FILTER (WHERE c.status IN ('approved', 'reconciled', 'paid')))::int AS approved_claims,
         COALESCE(SUM(COALESCE(NULLIF(c.claim_amount, 0), c.total_price_snapshot)), 0)::numeric(12,2) AS total_value,
         COALESCE(SUM(c.paid_amount) FILTER (WHERE c.status = 'paid'), 0)::numeric(12,2) AS recovered_value
       FROM claims c
@@ -839,7 +838,6 @@ export async function loadClaims(db: pg.Pool, scope: AccountScope) {
   const totals = totalsRes.rows[0] || {
     total_claims: 0,
     open_claims: 0,
-    approved_claims: 0,
     total_value: "0.00",
     recovered_value: "0.00",
   }
@@ -847,7 +845,6 @@ export async function loadClaims(db: pg.Pool, scope: AccountScope) {
   const claims = Number(headline.claims)
   const totalVal = Number(totals.total_value)
   const recoveredVal = Number(totals.recovered_value)
-  const approvedClaims = Number(totals.approved_claims)
   const markets = presentClaimMarkets(rows.rows as ClaimMarketCounts[])
 
   return {
@@ -869,7 +866,8 @@ export async function loadClaims(db: pg.Pool, scope: AccountScope) {
       {
         label: "Amount recovered",
         value: recoveredVal > 0 ? formatInr(recoveredVal) : "₹0.00",
-        delta: recoveredVal > 0 ? `${percentOf(approvedClaims, claims)} approved` : "No paid amounts recorded",
+        // A count, not a second percentage: the Approval rate card is the page's only approval percentage.
+        delta: recoveredVal > 0 ? `Approved claims: ${formatCount(markets.approved)}` : "No paid amounts recorded",
         icon: "check",
         tone: "green",
       },
