@@ -559,11 +559,11 @@ Every PR in this phase bumps the version (rule 20) and keeps both modes building
 
 - [ ] **5.4 Follow-up checks open the panel and detect an expired sign-in.** P1, S, confirmed by reading the code (not run live).
   - **Why:** ENG-05.
-    - The follow-up opens the browser and reads the page without navigating or signing in (`desktop-app-server.ts:704-735`). A fresh view has nothing loaded (`native-browser-view.ts:1161-1170`).
-    - The seller ID comes from the page address or `portal_url`, and neither contains it (`meesho.ts:1044-1049`, `schema-claim-automation.sql:85-88`).
+    - The follow-up opens a fresh browser view (`desktop-app-server.ts:704-735`, `native-browser-view.ts:1161-1170`). `checkClaimStatus` (`meesho.ts:1040-1095`) does navigate to the ticket page and falls back to the Support table, but it can only build those addresses once it has the seller slug.
+    - The slug comes from the current page address or `portal_url`, and neither contains it on a fresh view (`meesho.ts:1044-1049`, `schema-claim-automation.sql:85-88`), so the check returns "panel address not found" before navigating.
     - Empty text is reported as not_found (`desktop-app-server.ts:744-751`), and 3 in a row stop the follow-up (`claim-follow-up-service.ts:21, 157-161`).
     - An expired session is never reported as login_required (`desktop-app-server.ts:675-676`).
-  - **Fix:** sign in or navigate before reading, store the seller ID per panel after a successful filing, and return login_required when the sign-in or one-time-code page appears.
+  - **Fix:** store the seller slug per panel after a successful filing (or read it once from the panel home), so `checkClaimStatus` can build the ticket and Support addresses; and return login_required when the sign-in or one-time-code page appears.
   - **Done when:**
     - A fixture test starting from a blank page reads the ticket.
     - A sign-in page fixture returns login_required, which the server already handles without using up a check.
