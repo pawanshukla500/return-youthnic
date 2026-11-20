@@ -31,9 +31,16 @@ const SESSION_URL = "https://storage.googleapis.com/upload/SYN-session"
 type FakeHandler = (url: string, init: RequestInit) => Promise<Response> | Response
 let storageHandler: FakeHandler = () => new Response("not faked", { status: 500 })
 
+// A storage call that never answers. AbortSignal.timeout uses an unref'd timer, and this fake holds no socket, so
+// without the interval Node 20/22 would see an empty event loop and cancel the test before the timeout fires (a real
+// hung fetch keeps its socket open, so production does not need this).
 function abortable(init: RequestInit): Promise<never> {
   return new Promise((_resolve, reject) => {
-    init.signal?.addEventListener("abort", () => reject(init.signal?.reason))
+    const keepAlive = setInterval(() => undefined, 1000)
+    init.signal?.addEventListener("abort", () => {
+      clearInterval(keepAlive)
+      reject(init.signal?.reason)
+    })
   })
 }
 
