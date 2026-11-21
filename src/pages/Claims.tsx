@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { ApiError, api, downloadFile } from "../api"
 import { Loading, PageError } from "../shell"
 import { saveCsv, toCsv } from "../csv"
@@ -1548,18 +1548,26 @@ function ManualRequiredTab({ onResolved }: { onResolved: () => void }) {
   const [savingTicket, setSavingTicket] = useState(false)
   const [detailId, setDetailId] = useState<number | null>(null)
   const [copiedId, setCopiedId] = useState<number | null>(null)
+  const loadSeqRef = useRef(0)
 
   const loadManualClaims = () => {
+    const seq = ++loadSeqRef.current
     setLoading(true)
     const q = new URLSearchParams({ status: "manual_list", pageSize: "100" })
     if (search.trim()) q.set("search", search.trim())
     api<ClaimListResult>(`/api/claims/queue?${q.toString()}`)
       .then((d) => {
+        if (seq !== loadSeqRef.current) return
         setRows(d.rows || [])
         setError("")
       })
-      .catch((err: Error) => setError(err.message))
-      .finally(() => setLoading(false))
+      .catch((err: Error) => {
+        if (seq !== loadSeqRef.current) return
+        setError(err.message)
+      })
+      .finally(() => {
+        if (seq === loadSeqRef.current) setLoading(false)
+      })
   }
 
   useEffect(() => {

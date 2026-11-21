@@ -238,6 +238,32 @@ export type VisibleDomCandidate = {
   type?: string
 }
 
+/** Parses model JSON `{ "index": number | null, "reason": string }` strictly so `null` or blank never coerces to 0. */
+export function parseSelectorFallbackResponse(
+  rawText: string,
+  validIndices: readonly number[],
+): { candidateIndex: number; reason: string } | null {
+  try {
+    const match = String(rawText || "").match(/\{[\s\S]*\}/)
+    if (!match) return null
+    const parsed = JSON.parse(match[0]) as { index?: unknown; reason?: unknown }
+    const rawIdx = parsed?.index
+    const idx =
+      typeof rawIdx === "number"
+        ? rawIdx
+        : typeof rawIdx === "string" && /^\d+$/.test(rawIdx.trim())
+          ? Number(rawIdx.trim())
+          : Number.NaN
+    if (!Number.isInteger(idx) || !validIndices.includes(idx)) return null
+    return {
+      candidateIndex: idx,
+      reason: String(parsed?.reason || "AI selector match").slice(0, 160),
+    }
+  } catch {
+    return null
+  }
+}
+
 /**
  * Bounded AI-assisted selector fallback when hardcoded portal selectors miss a layout update.
  *
@@ -321,11 +347,9 @@ export async function proposeSelectorFallback(input: {
           estimatedUsd: cost.estimatedUsd,
           pricingProvenance: cost.provenance,
         })
-        const match = res.text.match(/\{[\s\S]*\}/)
-        if (!match) continue
-        const parsed = JSON.parse(match[0]) as { index?: unknown; reason?: unknown }
-        const idx = Number(parsed?.index)
-        if (Number.isInteger(idx) && bounded.some((b) => b.index === idx)) {
+        const parsed = parseSelectorFallbackResponse(res.text, bounded.map((b) => b.index))
+        if (parsed !== null) {
+          const idx = parsed.candidateIndex
           appendActivity(input.dir, {
             id: newActivityId(),
             at: new Date().toISOString(),
@@ -337,12 +361,12 @@ export async function proposeSelectorFallback(input: {
             model: candidate.model,
             stage: "selector-fallback",
             memoryHit: false,
-            result: `Matched control #${idx}: ${String(parsed.reason || input.targetDescription).slice(0, 120)}`,
+            result: `Matched control #${idx}: ${parsed.reason.slice(0, 120)}`,
             errorCategory: null,
             fallback: true,
             approval: "none-required",
           })
-          return { candidateIndex: idx, reason: String(parsed.reason || "AI selector match").slice(0, 160) }
+          return parsed
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)

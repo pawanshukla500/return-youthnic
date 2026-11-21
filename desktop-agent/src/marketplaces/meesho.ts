@@ -423,25 +423,7 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
     const supportUrl = `https://supplier.meesho.com/panel/v3/new/experience/${slug}/support`
     await this.browser.navigate(supportUrl)
     await this.waitForContent()
-    let ticketsBefore = await this.readRecentTicketIds(2500)
-    let ticketRows = await this.readTicketTableRows()
-    if (!ticketsBefore.length && !ticketRows.length) {
-      // Live Meesho lists raised tickets inside the "My Tickets" tab; switch there briefly when
-      // the default Help tab has no inline ticket table so duplicate checks and IDs are accurate.
-      const switchedToMyTickets = await this.browser.evaluate<boolean>(`
-        (() => {
-          const target = Array.from(document.querySelectorAll('a, button, [role="tab"], div, span'))
-            .find((el) => /^\\s*my tickets\\s*$/i.test(el.textContent || '') && el.getBoundingClientRect().width > 0);
-          if (!target || typeof target.click !== 'function') return false;
-          target.click();
-          return true;
-        })()
-      `).catch(() => false)
-      if (switchedToMyTickets) {
-        ticketsBefore = await this.readRecentTicketIds(2500)
-        ticketRows = await this.readTicketTableRows()
-      }
-    }
+    const { ids: ticketsBefore, rows: ticketRows } = await this.readSupportTicketsSnapshot(2500)
     logger.info(`Meesho shows ${ticketsBefore.length} recent tickets before this claim.`)
 
     // F7: an already-filed claim for this order must not be filed again. The
@@ -536,7 +518,11 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
         openedIssue = await issueOpen()
       }
       if (!openedIssue) {
-        const pickedByAi = await this.tryAiControlFallback("select_issue_category", `Open issue category matching "${issueLabel}"`, 'button, a, div, span, p, [role="button"], [role="listitem"]')
+        const pickedByAi = await this.tryAiControlFallback(
+          "select_issue_category",
+          `Open issue category matching "${issueLabel}"`,
+          'button, a, [role="button"], [role="listitem"], [role="tab"]',
+        )
         if (pickedByAi) {
           await this.delay(1500)
           openedIssue = await issueOpen()
@@ -1045,7 +1031,7 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
     if (!extractedTicketId && !formStillOpen) {
       await this.browser.navigate(supportUrl)
       await this.waitForContent()
-      const after = await this.readRecentTicketIds(6000)
+      const { ids: after } = await this.readSupportTicketsSnapshot(6000)
       extractedTicketId = after.find((id) => !known.has(id)) || ""
     }
     await this.browser.captureScreenshot(confScreenshot)
@@ -1341,16 +1327,24 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
     `)) || []
   }
 
-  /** Bounded AI fallback: reads up to 25 visible control labels and asks configured AI to pick a match. */
+  /** Bounded AI fallback: reads up to 25 interactive control labels (scrubbed of order/tracking/PII runs) and asks configured AI to pick a match. */
   private async tryAiControlFallback(step: string, targetDescription: string, selectorQuery: string): Promise<boolean> {
     try {
-      const candidates = await this.browser.evaluate<VisibleDomCandidate[]>(`
+      const sanitizeLabel = (raw: string): string =>
+        raw
+          .replace(/[\w.+-]+@[\w.-]+\.[a-z]{2,}/gi, "[redacted]")
+          .replace(/\b[a-z]{2,5}\d{6,}\b/gi, "[redacted]")
+          .replace(/\b\d{6,}\b/g, "[redacted]")
+          .trim()
+          .slice(0, 80)
+
+      const rawCandidates = await this.browser.evaluate<VisibleDomCandidate[]>(`
         (() => {
           const all = Array.from(document.querySelectorAll(${JSON.stringify(selectorQuery)}));
           return all
             .filter((el) => {
               const r = el.getBoundingClientRect();
-              return r.width > 0 && r.height > 0;
+              return r.width > 0 && r.height > 0 && el.childElementCount <= 2;
             })
             .slice(0, 25)
             .map((el, index) => {
@@ -1368,6 +1362,7 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
             });
         })()
       `).catch(() => [] as VisibleDomCandidate[])
+      const candidates = rawCandidates.map((c) => ({ ...c, text: sanitizeLabel(c.text || "") }))
       if (!candidates.length) return false
       const pick = await proposeSelectorFallback({
         dir: agentDataDir(),
@@ -1392,6 +1387,31 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
     } catch {
       return false
     }
+  }
+
+  /**
+   * Reads support ticket IDs and table rows from /support, switching briefly to the
+   * "My Tickets" tab when the default Help view has no inline ticket table.
+   */
+  private async readSupportTicketsSnapshot(waitMs: number): Promise<{ ids: string[]; rows: string[][] }> {
+    let ids = await this.readRecentTicketIds(Math.min(waitMs, 2500))
+    let rows = await this.readTicketTableRows()
+    if (!ids.length && !rows.length) {
+      const switchedToMyTickets = await this.browser.evaluate<boolean>(`
+        (() => {
+          const target = Array.from(document.querySelectorAll('a, button, [role="tab"], div, span'))
+            .find((el) => /^\\s*my tickets\\s*$/i.test(el.textContent || '') && el.getBoundingClientRect().width > 0);
+          if (!target || typeof target.click !== 'function') return false;
+          target.click();
+          return true;
+        })()
+      `).catch(() => false)
+      if (switchedToMyTickets) {
+        ids = await this.readRecentTicketIds(waitMs)
+        rows = await this.readTicketTableRows()
+      }
+    }
+    return { ids, rows }
   }
 
   /** Reads the numeric ticket IDs in Meesho's "Recently raised tickets" table on the Support page. */

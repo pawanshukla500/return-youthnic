@@ -636,7 +636,7 @@ export async function listClaims(
   const search = (filters.search || "").trim()
   if (search) {
     params.push(`%${search}%`)
-    conditions.push(`(c.claim_reason ILIKE $${params.length} OR c.claim_title ILIKE $${params.length} OR er.tracking_id ILIKE $${params.length} OR er.order_number ILIKE $${params.length})`)
+    conditions.push(`(c.claim_reason ILIKE $${params.length} OR c.claim_title ILIKE $${params.length} OR COALESCE(c.sub_order_id_snapshot, '') ILIKE $${params.length} OR COALESCE(c.packet_id_snapshot, '') ILIKE $${params.length} OR COALESCE(c.awb_snapshot, '') ILIKE $${params.length} OR er.tracking_id ILIKE $${params.length} OR er.order_number ILIKE $${params.length})`)
   }
   if (filters.dateFrom && /^\d{4}-\d{2}-\d{2}$/.test(filters.dateFrom)) {
     params.push(filters.dateFrom)

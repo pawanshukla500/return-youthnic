@@ -103,11 +103,15 @@ test("listClaims supports status=manual_list filtering for Manual Required list"
     return { rows: [] }
   })
 
-  await listClaims(pool, scope, { status: "manual_list", page: 1, pageSize: 25 })
+  await listClaims(pool, scope, { status: "manual_list", search: "SYN-SUB", page: 1, pageSize: 25 })
   const querySql = queries.map((q) => q.sql).join("\n")
   assert.ok(
     querySql.includes("c.status IN ('manual_action_required', 'failed')"),
     "manual_list filter must query manual_action_required and failed claims",
+  )
+  assert.ok(
+    querySql.includes("c.sub_order_id_snapshot"),
+    "claims search must include sub_order_id_snapshot",
   )
 })
 

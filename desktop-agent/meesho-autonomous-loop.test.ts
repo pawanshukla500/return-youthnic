@@ -17,6 +17,7 @@ import type { SupplierBrowserApi } from "./src/browser-adapter.ts"
 import { MeeshoAutomation } from "./src/marketplaces/meesho.ts"
 import { NativeSupplierBrowser } from "./src/native-browser-view.ts"
 import { clearSupplierSessionCache } from "./src/native-browser-view.ts"
+import { parseSelectorFallbackResponse } from "./src/ai-center-assist.ts"
 
 const SLUG = "syn-tulip-slug"
 
@@ -388,5 +389,15 @@ describe("Meesho autonomous claim loop hardening", () => {
     const avgMsPerClaim = elapsedMs / 5
     // Even with ~20s of real browser network/upload time per claim in production, 150 claims/day = 50 minutes/day.
     assert.ok(avgMsPerClaim < 5000, `sequential automation overhead too slow: ${avgMsPerClaim}ms/claim`)
+  })
+
+  it("parseSelectorFallbackResponse treats null/blank index strictly as no-match instead of coercing to 0", () => {
+    assert.equal(parseSelectorFallbackResponse('{"index": null, "reason": "none"}', [0, 1, 2]), null)
+    assert.equal(parseSelectorFallbackResponse('{"index": "", "reason": "none"}', [0, 1, 2]), null)
+    assert.equal(parseSelectorFallbackResponse('{"index": 99, "reason": "oob"}', [0, 1, 2]), null)
+    assert.deepEqual(parseSelectorFallbackResponse('{"index": 0, "reason": "Submit button"}', [0, 1, 2]), {
+      candidateIndex: 0,
+      reason: "Submit button",
+    })
   })
 })
