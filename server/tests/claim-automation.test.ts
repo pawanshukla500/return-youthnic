@@ -2,12 +2,15 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import {
   authenticateAutomationAgent,
+  createOrQueueAutomationJob,
   decryptSecret,
   encryptSecret,
+  getJobExecutionBundle,
   likeContains,
   lookupReturnForClaim,
   maskSecret,
   mapToReceiptIssueCategory,
+  pollNextAutomationJob,
   defaultRequireApprovalBeforeSubmit,
   isMeeshoAccountName,
   resolveClaimScanId,
@@ -396,4 +399,92 @@ test("claim lookup: a restricted scope binds the account list after the search t
   assert.deepEqual(calls[0].params, ["SYN-AWB_9", "%SYN-AWB\\_9%", [3, 5]])
   assert.match(calls[0].sql, /er\.marketplace_id = ANY\(\$3::integer\[\]\)/)
   assert.match(calls[0].sql, /er\.lookup_status = 'active'/)
+})
+
+test("createOrQueueAutomationJob: queues reclaimed completed claims once without overriding active stages", async () => {
+  const queries: Array<{ sql: string; params: unknown[] }> = []
+  let existingStage = "completed"
+  const pool = {
+    query: async (sql: string, params: unknown[] = []) => {
+      queries.push({ sql, params })
+      if (sql.includes("SELECT m.name")) return { rows: [{ name: "Meesho" }] }
+      if (sql.includes("SELECT id, stage FROM claim_automation_jobs")) return { rows: [{ id: 88, stage: existingStage }] }
+      if (sql.includes("FROM claims c") && sql.includes("marketplace_credentials")) return { rows: [{ id: 1, automation_mode: "visible" }] }
+      if (sql.includes("INSERT INTO claim_automation_jobs")) return { rows: [{ id: 99 }] }
+      return { rows: [] }
+    },
+  } as unknown as pg.Pool
+
+  assert.equal(await createOrQueueAutomationJob(pool, 12), 88)
+  assert.equal(await createOrQueueAutomationJob(pool, 12, { requeueReopened: true }), 99)
+
+  existingStage = "queued"
+  assert.equal(await createOrQueueAutomationJob(pool, 12, { requeueReopened: true }), 88)
+})
+
+test("pollNextAutomationJob: backfills missing queued jobs for scoped ready Meesho claims before leasing", async () => {
+  const queries: Array<{ sql: string; params: unknown[] }> = []
+  const client = {
+    query: async (sql: string, params: unknown[] = []) => {
+      queries.push({ sql, params })
+      if (sql.includes("FROM claim_automation_agents")) return { rows: [{ id: 7 }] }
+      return { rows: [] }
+    },
+    release: () => undefined,
+  }
+  const pool = { connect: async () => client } as unknown as pg.Pool
+  await pollNextAutomationJob(pool, "SYN-agent-backfill", { all: false, marketplaceIds: [4] })
+  const backfill = queries.find((q) => q.sql.includes("INSERT INTO claim_automation_jobs"))
+  assert.ok(backfill, "backfill insert must run inside pollNextAutomationJob")
+  assert.match(backfill.sql, /NOT EXISTS/)
+  assert.match(backfill.sql, /c\.status IN \('ready_for_claim', 'reclaim', 'escalated'\)/)
+  assert.deepEqual(backfill.params, [[4]])
+})
+
+test("getJobExecutionBundle: resolves returnType from receipt_scan_items/expected_returns when snapshot is empty", async () => {
+  const calls: string[] = []
+  const pool = {
+    query: async (sql: string) => {
+      calls.push(sql)
+      if (sql.includes("FROM claim_automation_jobs j")) {
+        return {
+          rows: [{
+            job_id: 1,
+            claim_id: 2,
+            stage: "downloading_media",
+            claim_status: "ready_for_claim",
+            marketplace: "Meesho",
+            account_name: "Meesho",
+            portal_url: "https://supplier.meesho.com/panel/v3/new/root/login",
+            username_encrypted: "",
+            password_encrypted: "",
+            auth_state: {},
+            browser_mode: "visible",
+            automation_mode: "autonomous",
+            require_approval_before_submit: false,
+            claim_reason: "Wrong return",
+            claim_title: "SYN Title",
+            claim_description: "SYN Desc",
+            claim_content: "",
+            remarks: "",
+            sub_order_id_snapshot: "SYN-SUB-1",
+            awb_snapshot: "SYN-AWB-1",
+            packet_id_snapshot: "SYN-PKT-1",
+            customer_name_snapshot: "",
+            total_price_snapshot: 100,
+            sku_snapshot: "",
+            packet_state_snapshot: "Intact",
+            marketplace_issue_code: "wrong_return",
+            return_type_snapshot: "Customer Return",
+            order_number: "SYN-ORD-1",
+            tracking_id: "SYN-AWB-1",
+          }],
+        }
+      }
+      return { rows: [] }
+    },
+  } as unknown as pg.Pool
+  const bundle = await getJobExecutionBundle(pool, 1)
+  assert.match(calls[0], /COALESCE\(\s*NULLIF\(c\.return_type_snapshot, ''\)/)
+  assert.equal(bundle.claim.returnType, "Customer Return")
 })

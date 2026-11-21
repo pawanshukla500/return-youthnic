@@ -443,10 +443,19 @@ export async function saveMarketplaceCredential(
 // Automation Jobs Queue & Execution
 // ---------------------------------------------------------------------------------------------------------------
 
+const ACTIVE_AUTOMATION_STAGES = new Set([
+  "queued",
+  "approved",
+  "downloading_media",
+  "opening_portal",
+  "filling_form",
+  "submitting",
+])
+
 export async function createOrQueueAutomationJob(
   db: pg.Pool,
   claimId: number,
-  options: { browserMode?: string } = {},
+  options: { browserMode?: string; requeueReopened?: boolean } = {},
 ): Promise<number | null> {
   const marketplace = await db.query(
     `SELECT m.name
@@ -463,7 +472,9 @@ export async function createOrQueueAutomationJob(
     `SELECT id, stage FROM claim_automation_jobs WHERE claim_id = $1 ORDER BY id DESC LIMIT 1`,
     [claimId],
   )
-  if (existing.rows[0] && existing.rows[0].stage !== "failed") {
+  const existingStage = String(existing.rows[0]?.stage || "")
+  const shouldRequeue = existingStage === "failed" || (Boolean(options.requeueReopened) && !ACTIVE_AUTOMATION_STAGES.has(existingStage))
+  if (existing.rows[0] && !shouldRequeue) {
     return Number(existing.rows[0].id)
   }
 
@@ -598,6 +609,35 @@ export async function pollNextAutomationJob(
         [String(row.id), JSON.stringify({ claimId: Number(row.claim_id) })],
       )
     }
+
+    // Backfill queue jobs for any pre-existing ready Meesho claims in scope that have
+    // never entered claim_automation_jobs yet (preserves failed/prepared/completed rows).
+    const backfillParams: unknown[] = []
+    const backfillScope = accountCondition(scope, "c.marketplace_id", backfillParams)
+    await client.query(
+      `INSERT INTO claim_automation_jobs (claim_id, marketplace_credential_id, stage, browser_mode, logs)
+       SELECT c.id,
+              mc.id,
+              'queued',
+              CASE WHEN mc.automation_mode = 'headless' THEN 'headless' ELSE 'visible' END,
+              '[{"level":"info","message":"Queued existing eligible claim for desktop automation."}]'::jsonb
+       FROM claims c
+       JOIN marketplaces m ON m.id = c.marketplace_id
+       LEFT JOIN LATERAL (
+         SELECT id, automation_mode
+         FROM marketplace_credentials
+         WHERE marketplace_id = c.marketplace_id AND is_active = true
+         ORDER BY id ASC
+         LIMIT 1
+       ) mc ON true
+       WHERE LOWER(m.name) = 'meesho'
+         AND c.status IN ('ready_for_claim', 'reclaim', 'escalated')
+         AND ${backfillScope}
+         AND NOT EXISTS (
+           SELECT 1 FROM claim_automation_jobs existing_j WHERE existing_j.claim_id = c.id
+         )`,
+      backfillParams,
+    )
 
     // Select oldest queued job or approved job ready for submission
     const jobParams: unknown[] = []
@@ -737,7 +777,12 @@ export async function getJobExecutionBundle(
             c.claim_reason, c.claim_title, c.claim_description, c.claim_content, c.remarks,
             c.sub_order_id_snapshot, c.awb_snapshot, c.packet_id_snapshot, c.customer_name_snapshot,
             c.total_price_snapshot, c.sku_snapshot, c.packet_state_snapshot, c.marketplace_issue_code,
-            c.return_type_snapshot,
+            COALESCE(
+              NULLIF(c.return_type_snapshot, ''),
+              NULLIF((SELECT string_agg(DISTINCT btrim(rsi.return_type), ', ') FROM receipt_scan_items rsi WHERE rsi.receipt_scan_id = c.receipt_scan_id AND btrim(rsi.return_type) <> ''), ''),
+              er.return_type,
+              ''
+            ) AS return_type_snapshot,
             er.order_number, er.tracking_id
      FROM claim_automation_jobs j
      JOIN claims c ON c.id = j.claim_id
