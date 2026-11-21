@@ -615,27 +615,32 @@ export async function pollNextAutomationJob(
     const backfillParams: unknown[] = []
     const backfillScope = accountCondition(scope, "c.marketplace_id", backfillParams)
     await client.query(
-      `INSERT INTO claim_automation_jobs (claim_id, marketplace_credential_id, stage, browser_mode, logs)
-       SELECT c.id,
+      `WITH missing AS (
+         SELECT c.id, c.marketplace_id
+         FROM claims c
+         JOIN marketplaces m ON m.id = c.marketplace_id
+         WHERE LOWER(m.name) = 'meesho'
+           AND c.status IN ('ready_for_claim', 'reclaim', 'escalated')
+           AND ${backfillScope}
+           AND NOT EXISTS (
+             SELECT 1 FROM claim_automation_jobs existing_j WHERE existing_j.claim_id = c.id
+           )
+         FOR UPDATE OF c SKIP LOCKED
+       )
+       INSERT INTO claim_automation_jobs (claim_id, marketplace_credential_id, stage, browser_mode, logs)
+       SELECT missing.id,
               mc.id,
               'queued',
               CASE WHEN mc.automation_mode = 'headless' THEN 'headless' ELSE 'visible' END,
               '[{"level":"info","message":"Queued existing eligible claim for desktop automation."}]'::jsonb
-       FROM claims c
-       JOIN marketplaces m ON m.id = c.marketplace_id
+       FROM missing
        LEFT JOIN LATERAL (
          SELECT id, automation_mode
          FROM marketplace_credentials
-         WHERE marketplace_id = c.marketplace_id AND is_active = true
+         WHERE marketplace_id = missing.marketplace_id AND is_active = true
          ORDER BY id ASC
          LIMIT 1
-       ) mc ON true
-       WHERE LOWER(m.name) = 'meesho'
-         AND c.status IN ('ready_for_claim', 'reclaim', 'escalated')
-         AND ${backfillScope}
-         AND NOT EXISTS (
-           SELECT 1 FROM claim_automation_jobs existing_j WHERE existing_j.claim_id = c.id
-         )`,
+       ) mc ON true`,
       backfillParams,
     )
 

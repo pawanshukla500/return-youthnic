@@ -441,16 +441,27 @@ test("pollNextAutomationJob: backfills missing queued jobs for scoped ready Mees
   const backfill = queries.find((q) => q.sql.includes("INSERT INTO claim_automation_jobs"))
   assert.ok(backfill, "backfill insert must run inside pollNextAutomationJob")
   assert.match(backfill.sql, /NOT EXISTS/)
+  assert.match(backfill.sql, /FOR UPDATE OF c SKIP LOCKED/)
   assert.match(backfill.sql, /c\.status IN \('ready_for_claim', 'reclaim', 'escalated'\)/)
   assert.deepEqual(backfill.params, [[4]])
 })
 
 test("getJobExecutionBundle: resolves returnType from receipt_scan_items/expected_returns when snapshot is empty", async () => {
   const calls: string[] = []
+  const rawClaimSnapshot = ""
+  const rawScanItemReturnType = "Customer Return"
+  const rawExpectedReturnType = "RTO"
   const pool = {
     query: async (sql: string) => {
       calls.push(sql)
       if (sql.includes("FROM claim_automation_jobs j")) {
+        const hasFallbackSql =
+          sql.includes("NULLIF(c.return_type_snapshot, '')") &&
+          sql.includes("FROM receipt_scan_items rsi") &&
+          sql.includes("er.return_type")
+        const resolvedReturnType = hasFallbackSql
+          ? rawClaimSnapshot || rawScanItemReturnType || rawExpectedReturnType
+          : rawClaimSnapshot
         return {
           rows: [{
             job_id: 1,
@@ -479,7 +490,7 @@ test("getJobExecutionBundle: resolves returnType from receipt_scan_items/expecte
             sku_snapshot: "",
             packet_state_snapshot: "Intact",
             marketplace_issue_code: "wrong_return",
-            return_type_snapshot: "Customer Return",
+            return_type_snapshot: resolvedReturnType,
             order_number: "SYN-ORD-1",
             tracking_id: "SYN-AWB-1",
           }],
@@ -489,6 +500,5 @@ test("getJobExecutionBundle: resolves returnType from receipt_scan_items/expecte
     },
   } as unknown as pg.Pool
   const bundle = await getJobExecutionBundle(pool, 1)
-  assert.match(calls[0], /COALESCE\(\s*NULLIF\(c\.return_type_snapshot, ''\)/)
   assert.equal(bundle.claim.returnType, "Customer Return")
 })
