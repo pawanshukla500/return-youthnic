@@ -125,6 +125,11 @@ export type ClaimRow = {
   paidAmount: number
   payoutReference: string
   payoutDate: string
+  manualActionReason?: string
+  automationJobId?: number | null
+  automationAttempts?: number
+  automationMaxAttempts?: number
+  marketplaceClaimId?: string
 }
 
 export type ClaimDetail = ClaimRow & {
@@ -618,7 +623,9 @@ export async function listClaims(
   const conditions: string[] = []
   conditions.push(accountCondition(scope, "c.marketplace_id", params))
 
-  if (filters.status && isValidStatus(filters.status)) {
+  if (filters.status === "manual_list") {
+    conditions.push(`c.status IN ('manual_action_required', 'failed')`)
+  } else if (filters.status && isValidStatus(filters.status)) {
     params.push(filters.status)
     conditions.push(`c.status = $${params.length}`)
   }
@@ -672,12 +679,22 @@ export async function listClaims(
             c.payout_reference, c.payout_date,
             CASE WHEN c.claim_due_date IS NULL THEN NULL
                  ELSE c.claim_due_date - (now() AT TIME ZONE 'Asia/Kolkata')::date END AS days_remaining,
-            (SELECT COUNT(*)::int FROM claim_media cm WHERE cm.claim_id = c.id AND cm.is_active = true) AS media_count
+            (SELECT COUNT(*)::int FROM claim_media cm WHERE cm.claim_id = c.id AND cm.is_active = true) AS media_count,
+            j.id AS automation_job_id, j.attempts AS automation_attempts, j.max_attempts AS automation_max_attempts,
+            COALESCE(NULLIF(j.manual_action_reason, ''), j.failure_reason, '') AS manual_action_reason,
+            COALESCE(j.marketplace_claim_id, '') AS marketplace_claim_id
      FROM claims c
      JOIN marketplaces m ON m.id = c.marketplace_id
      JOIN receipt_scans rs ON rs.id = c.receipt_scan_id
      JOIN expected_returns er ON er.id = rs.expected_return_id
      JOIN users u ON u.id = c.created_by
+     LEFT JOIN LATERAL (
+       SELECT id, attempts, max_attempts, manual_action_reason, failure_reason, marketplace_claim_id
+       FROM claim_automation_jobs
+       WHERE claim_id = c.id
+       ORDER BY id DESC
+       LIMIT 1
+     ) j ON true
      WHERE ${where}
      ORDER BY c.created_at DESC
      LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}`,
@@ -720,6 +737,11 @@ export async function listClaims(
       paidAmount: Number(row.paid_amount || 0),
       payoutReference: String(row.payout_reference || ""),
       payoutDate: row.payout_date ? String(row.payout_date).slice(0, 10) : "",
+      manualActionReason: String(row.manual_action_reason || ""),
+      automationJobId: row.automation_job_id ? Number(row.automation_job_id) : null,
+      automationAttempts: Number(row.automation_attempts || 0),
+      automationMaxAttempts: Number(row.automation_max_attempts || 3),
+      marketplaceClaimId: String(row.marketplace_claim_id || ""),
     })),
     total,
     page,

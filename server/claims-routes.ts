@@ -45,7 +45,7 @@ import {
 } from "./claims-service.js"
 import { ServiceError } from "./register-service.js"
 import { getMeeshoClaimDraft } from "./meesho-claims.js"
-import { createOrQueueAutomationJob } from "./claim-automation-service.js"
+import { createOrQueueAutomationJob, resolveManualClaim } from "./claim-automation-service.js"
 
 function text(value: unknown): string {
   return typeof value === "string" ? value : ""
@@ -237,6 +237,25 @@ export function mountClaimsRoutes(app: Express, requireUser: RequestHandler): vo
       }
       publishChange({ kind: "claim.updated", marketplaceId: result.marketplaceId, actorId: actorOf(req).id })
       res.json(result)
+    } catch (error) {
+      sendError(res, error, next)
+    }
+  })
+
+  app.post("/api/claims/:id(\\d+)/manual-resolve", requireUser, requireSupervisorOrAdmin, async (req, res, next) => {
+    try {
+      const id = positiveId(req.params.id)
+      if (!id) throw new ServiceError(404, "Claim not found.")
+      const body = (req.body ?? {}) as Record<string, unknown>
+      const refId = text(body.marketplaceClaimId)
+      if (!refId) throw new ServiceError(400, "Marketplace Ticket ID is required.")
+      const result = await resolveManualClaim(getPool(), actorOf(req), scopeOf(req), id, {
+        marketplaceClaimId: refId,
+        notes: text(body.notes),
+        screenshotPath: text(body.screenshotPath),
+      })
+      publishChange({ kind: "claim.updated", marketplaceId: result.marketplaceId, actorId: actorOf(req).id })
+      res.json({ ok: true, ...result })
     } catch (error) {
       sendError(res, error, next)
     }
