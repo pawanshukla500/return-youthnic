@@ -226,3 +226,132 @@ export async function testProviderConnection(dir: string, provider: ProviderId, 
     return { ok: false, category, message: message.slice(0, 300) }
   }
 }
+
+export type VisibleDomCandidate = {
+  index: number
+  tag: string
+  id?: string
+  name?: string
+  placeholder?: string
+  text?: string
+  role?: string
+  type?: string
+}
+
+/**
+ * Bounded AI-assisted selector fallback when hardcoded portal selectors miss a layout update.
+ *
+ * Only non-sensitive visible control attributes (<=25 entries) are shared; cookies, tokens,
+ * credentials, and page HTML are never sent. Immediately returns null when no AI provider key
+ * is configured so deterministic flows add zero delay.
+ */
+export async function proposeSelectorFallback(input: {
+  dir: string
+  step: string
+  targetDescription: string
+  candidates: VisibleDomCandidate[]
+  claimId?: number
+  marketplace?: string
+}): Promise<{ candidateIndex: number; reason: string } | null> {
+  if (!input.candidates.length) return null
+  try {
+    const config = loadRoutingConfig(input.dir)
+    const route = config.tasks.worker_diagnosis
+    const healthy = PROVIDER_CATALOG.map((entry) => {
+      const prefs = readProviderPrefs(input.dir, entry.id)
+      return {
+        provider: entry.id,
+        model: prefs.defaultModel || route.primary.model || entry.defaultModel,
+        hasKey: hasProviderKey(input.dir, entry.id),
+        lastErrorCategory: prefs.lastErrorCategory,
+      }
+    })
+    if (!healthy.some((h) => h.hasKey)) return null
+    const spent = spentThisMonthUsd(readUsage(input.dir, 2000))
+    const decision = decideRoute({
+      task: "worker_diagnosis",
+      config,
+      healthy,
+      spentUsdThisMonth: spent,
+      escalate: false,
+    })
+    if (decision.kind === "blocked" || !decision.candidates.length) return null
+
+    const bounded = input.candidates.slice(0, 25).map((c) => ({
+      index: c.index,
+      tag: String(c.tag || "").slice(0, 20),
+      id: String(c.id || "").slice(0, 60),
+      name: String(c.name || "").slice(0, 60),
+      placeholder: String(c.placeholder || "").slice(0, 80),
+      text: String(c.text || "").slice(0, 80),
+      role: String(c.role || "").slice(0, 30),
+      type: String(c.type || "").slice(0, 20),
+    }))
+    const prompt =
+      `Step: ${input.step}\nTarget: ${input.targetDescription}\n` +
+      `Pick the matching control index from this JSON list and respond ONLY with JSON {"index": number|null, "reason": string}:\n` +
+      JSON.stringify(bounded)
+
+    for (const candidate of decision.candidates) {
+      const apiKey = revealProviderKey(input.dir, candidate.provider)
+      if (!apiKey) continue
+      const prefs = readProviderPrefs(input.dir, candidate.provider)
+      const t0 = Date.now()
+      try {
+        const res = await generateWithRetries({
+          provider: candidate.provider,
+          apiKey,
+          model: candidate.model,
+          system: "You match a UI control description to an integer candidate index. Reply with valid JSON only.",
+          prompt,
+          maxTokens: 120,
+          baseUrl: prefs.baseUrlOverride || undefined,
+        })
+        const cost = honestCost(candidate.provider, candidate.model, res.usage)
+        recordProviderSuccess(input.dir, candidate.provider)
+        recordUsage(input.dir, {
+          at: new Date().toISOString(),
+          provider: candidate.provider,
+          model: candidate.model,
+          task: "worker_diagnosis",
+          ok: true,
+          errorCategory: null,
+          ...usageRecordFields(res.usage),
+          latencyMs: Date.now() - t0,
+          estimatedUsd: cost.estimatedUsd,
+          pricingProvenance: cost.provenance,
+        })
+        const match = res.text.match(/\{[\s\S]*\}/)
+        if (!match) continue
+        const parsed = JSON.parse(match[0]) as { index?: unknown; reason?: unknown }
+        const idx = Number(parsed?.index)
+        if (Number.isInteger(idx) && bounded.some((b) => b.index === idx)) {
+          appendActivity(input.dir, {
+            id: newActivityId(),
+            at: new Date().toISOString(),
+            endAt: new Date().toISOString(),
+            claimId: input.claimId ?? 0,
+            marketplace: input.marketplace ?? "Meesho",
+            agentFunction: `selector-fallback:${input.step}`,
+            provider: candidate.provider,
+            model: candidate.model,
+            stage: "selector-fallback",
+            memoryHit: false,
+            result: `Matched control #${idx}: ${String(parsed.reason || input.targetDescription).slice(0, 120)}`,
+            errorCategory: null,
+            fallback: true,
+            approval: "none-required",
+          })
+          return { candidateIndex: idx, reason: String(parsed.reason || "AI selector match").slice(0, 160) }
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        const category = (err as { category?: string })?.category ?? "unknown"
+        recordProviderError(input.dir, candidate.provider, message, category)
+      }
+    }
+    return null
+  } catch {
+    return null
+  }
+}

@@ -850,6 +850,11 @@ export type ClaimRow = {
   paidAmount: number
   payoutReference: string
   payoutDate: string
+  manualActionReason?: string
+  automationJobId?: number | null
+  automationAttempts?: number
+  automationMaxAttempts?: number
+  marketplaceClaimId?: string
 }
 
 export type ClaimDetail = ClaimRow & {
@@ -931,9 +936,12 @@ export type AutomationJob = {
   claimReason: string
   claimTitle: string
   stage: string
+  checkpoint?: string
   browserMode: string
   attempts: number
   maxAttempts: number
+  nextRetryAt?: string | null
+  failureReason?: string
   marketplaceClaimId: string
   submissionScreenshotPath: string
   manualActionReason: string

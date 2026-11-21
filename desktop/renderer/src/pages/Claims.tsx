@@ -107,8 +107,15 @@ const CHIPS: Array<{ id: ChipFilter; label: string }> = [
   { id: 'queued', label: 'Queued' },
   { id: 'processing', label: 'In Progress' },
   { id: 'completed', label: 'Done-Completed' },
-  { id: 'action', label: 'Attention Needed' },
+  { id: 'action', label: 'Manual Required' },
 ]
+
+function stageLabel(stage: string): string {
+  if (stage === 'manual_intervention_required' || stage === 'failed') return 'Manual Required'
+  if (stage === 'not_eligible') return 'Not Eligible (Manual)'
+  if (stage === 'completed') return 'Done-Completed'
+  return stage
+}
 
 const JOBS_POLL_MS = 10_000
 const PANELS_POLL_MS = 5_000
@@ -421,7 +428,7 @@ export default function ClaimsPage() {
       header: 'Status',
       render: (row) => (
         <div>
-          <Badge variant={stageVariant(row.stage)}>{row.stage}</Badge>
+          <Badge variant={stageVariant(row.stage)}>{stageLabel(row.stage)}</Badge>
           {row.manualActionReason ? <div className="mt-1 text-xs text-red">{row.manualActionReason}</div> : null}
         </div>
       ),
@@ -655,7 +662,7 @@ export default function ClaimsPage() {
                     <h3 className="font-display text-sm font-bold text-ink">
                       {selectedRow?.claimTitle || selectedRow?.trackingId || selectedRow?.orderNumber || 'Claim details'}
                     </h3>
-                    {selectedRow ? <Badge variant={stageVariant(selectedRow.stage)}>{selectedRow.stage}</Badge> : null}
+                    {selectedRow ? <Badge variant={stageVariant(selectedRow.stage)}>{stageLabel(selectedRow.stage)}</Badge> : null}
                   </div>
                   <button
                     type="button"

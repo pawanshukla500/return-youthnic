@@ -76,12 +76,19 @@ const NEXT_STATUSES: Record<ClaimStatus, ClaimStatus[]> = {
 }
 
 export function Claims() {
-  const [tab, setTab] = useState<"overview" | "queue" | "automation">("queue")
+  const [tab, setTab] = useState<"overview" | "queue" | "manual" | "automation">("queue")
+  const [manualCount, setManualCount] = useState<number>(0)
 
   // Overview data
   const [data, setData] = useState<ClaimsData | null>(null)
   const [loadingOverview, setLoadingOverview] = useState(false)
   const [error, setError] = useState("")
+
+  const loadManualCount = () => {
+    api<ClaimListResult>("/api/claims/queue?status=manual_list&pageSize=1")
+      .then((d) => setManualCount(Number(d.total || 0)))
+      .catch(() => {})
+  }
 
   const loadOverview = () => {
     setLoadingOverview(true)
@@ -96,21 +103,32 @@ export function Claims() {
 
   useEffect(() => {
     loadOverview()
+    loadManualCount()
   }, [tab])
   useLiveChanges((change) => {
-    if (change.kind === "claim.updated" && tab === "overview") loadOverview()
+    if (change.kind === "claim.updated") {
+      loadManualCount()
+      if (tab === "overview") loadOverview()
+    }
   }, 800)
 
   if (error && tab === "overview" && !data) return <PageError message={error} />
 
   return (
     <div className="page-content">
-      <div className="claims-tabs" style={{ display: "flex", gap: 10, marginBottom: 20 }}>
+      <div className="claims-tabs" style={{ display: "flex", gap: 10, marginBottom: 20, flexWrap: "wrap" }}>
         <button
           className={tab === "queue" ? "active btn primary" : "btn secondary"}
           onClick={() => setTab("queue")}
         >
           <Icon name="box" size={16} /> Claim Queue
+        </button>
+        <button
+          className={tab === "manual" ? "active btn primary" : "btn secondary"}
+          onClick={() => setTab("manual")}
+          style={manualCount > 0 && tab !== "manual" ? { borderColor: "#f59e0b", color: "#92400e", background: "#fffbeb" } : undefined}
+        >
+          <Icon name="alert" size={16} /> Manual Required {manualCount > 0 ? `(${manualCount})` : ""}
         </button>
         <button
           className={tab === "automation" ? "active btn primary" : "btn secondary"}
@@ -127,6 +145,7 @@ export function Claims() {
       </div>
 
       {tab === "queue" && <ClaimQueue />}
+      {tab === "manual" && <ManualRequiredTab onResolved={loadManualCount} />}
       {tab === "automation" && <DesktopAutomationTab />}
       {tab === "overview" && <Overview data={data} loading={loadingOverview} onRefresh={loadOverview} />}
     </div>
@@ -634,13 +653,15 @@ function ClaimDetailModal({
   }
 
   const handleManualResolve = async () => {
-    if (!automationJob || !manualClaimRef.trim()) return
+    if (!manualClaimRef.trim()) return
     try {
-      await api(`/api/automation/jobs/${automationJob.id}/manual-resolve`, {
+      await api(`/api/claims/${claimId}/manual-resolve`, {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ marketplaceClaimId: manualClaimRef.trim() }),
       })
       setManualModalOpen(false)
+      setManualClaimRef("")
       load()
     } catch (err: any) {
       setError(err.message || "Failed to resolve claim manually.")
@@ -790,6 +811,16 @@ function ClaimDetailModal({
               )}
             </div>
           </div>
+
+          {/* Desktop Automation Status Card (or Manual Resolve Action if no job yet) */}
+          {!automationJob && (claim.status === "manual_action_required" || claim.status === "failed") && canApprove && (
+            <div style={{ background: "#fffbeb", border: "1px solid #fde68a", padding: 14, borderRadius: 10, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+              <span style={{ color: "#92400e", fontSize: 13 }}>
+                ⚠️ <strong>Manual filing required.</strong> Once filed on the marketplace portal, enter the Ticket ID to mark Done.
+              </span>
+              <button className="btn primary small" onClick={() => setManualModalOpen(true)}>Enter Ticket ID</button>
+            </div>
+          )}
 
           {/* Desktop Automation Status Card */}
           {automationJob && (
@@ -1501,6 +1532,257 @@ function CreateClaimModal({
         )}
       </div>
     </Modal>
+  )
+}
+
+function ManualRequiredTab({ onResolved }: { onResolved: () => void }) {
+  const { user } = useWorkspace()
+  const canResolve = isSupervisorOrAdminUser(user)
+  const [rows, setRows] = useState<ClaimListResult["rows"]>([])
+  const [templates, setTemplates] = useState<ClaimTemplate[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState("")
+  const [search, setSearch] = useState("")
+  const [resolvingClaim, setResolvingClaim] = useState<ClaimListResult["rows"][number] | null>(null)
+  const [ticketInput, setTicketInput] = useState("")
+  const [savingTicket, setSavingTicket] = useState(false)
+  const [detailId, setDetailId] = useState<number | null>(null)
+  const [copiedId, setCopiedId] = useState<number | null>(null)
+
+  const loadManualClaims = () => {
+    setLoading(true)
+    const q = new URLSearchParams({ status: "manual_list", pageSize: "100" })
+    if (search.trim()) q.set("search", search.trim())
+    api<ClaimListResult>(`/api/claims/queue?${q.toString()}`)
+      .then((d) => {
+        setRows(d.rows || [])
+        setError("")
+      })
+      .catch((err: Error) => setError(err.message))
+      .finally(() => setLoading(false))
+  }
+
+  useEffect(() => {
+    api<{ templates: ClaimTemplate[] }>("/api/claims/templates")
+      .then((d) => setTemplates(d.templates || []))
+      .catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    loadManualClaims()
+  }, [search])
+
+  useLiveChanges((change) => {
+    if (change.kind === "claim.updated") loadManualClaims()
+  }, 800)
+
+  const submitManualTicket = async () => {
+    if (!resolvingClaim || !ticketInput.trim()) return
+    setSavingTicket(true)
+    setError("")
+    try {
+      await api(`/api/claims/${resolvingClaim.id}/manual-resolve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ marketplaceClaimId: ticketInput.trim() }),
+      })
+      setResolvingClaim(null)
+      setTicketInput("")
+      loadManualClaims()
+      onResolved()
+    } catch (err: any) {
+      setError(err?.message || "Could not save manual Ticket ID.")
+    } finally {
+      setSavingTicket(false)
+    }
+  }
+
+  const retryBot = async (jobId: number) => {
+    try {
+      await api(`/api/automation/jobs/${jobId}/retry`, { method: "POST" })
+      loadManualClaims()
+      onResolved()
+    } catch (err: any) {
+      setError(err?.message || "Retry failed.")
+    }
+  }
+
+  const copyDescription = (claimId: number, textVal: string) => {
+    if (!textVal) return
+    navigator.clipboard.writeText(textVal).then(() => {
+      setCopiedId(claimId)
+      setTimeout(() => setCopiedId(null), 2000)
+    }).catch(() => {})
+  }
+
+  return (
+    <div style={{ display: "grid", gap: 16 }}>
+      <section className="panel">
+        <div className="panel-head" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+          <div>
+            <h2>Manual Required Claims ({rows.length})</h2>
+            <p>
+              Claims stopped after 3 failed attempts or flagged for manual portal submission. Enter the Ticket ID once
+              filed to mark done and move out of this list.
+            </p>
+          </div>
+          <button className="btn secondary small" onClick={loadManualClaims} disabled={loading}>
+            {loading ? "Refreshing…" : "↻ Refresh"}
+          </button>
+        </div>
+
+        {error && <div className="form-error" style={{ marginBottom: 12 }}>{error}</div>}
+
+        <div className="filter-row" style={{ display: "flex", gap: 12, margin: "12px 0" }}>
+          <input
+            type="search"
+            placeholder="Search Sub-Order ID, Order ID, AWB, or reason…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            style={{ flex: 1, minWidth: 220 }}
+          />
+        </div>
+
+        {loading && rows.length === 0 ? (
+          <Loading label="Loading Manual Required claims…" />
+        ) : rows.length === 0 ? (
+          <div style={{ padding: 28, textAlign: "center", background: "#f8fafc", borderRadius: 10 }}>
+            <strong>No claims require manual filing right now.</strong>
+            <p style={{ margin: "6px 0 0", color: "var(--muted)", fontSize: 13 }}>
+              All queued and automated claims are filing smoothly or already completed.
+            </p>
+          </div>
+        ) : (
+          <DataTable
+            columns={[
+              {
+                key: "marketplace",
+                header: "Channel",
+                render: (row) => <MarketplaceBadge name={row.marketplace} />,
+              },
+              {
+                key: "order",
+                header: "Sub-Order / AWB",
+                render: (row) => (
+                  <div>
+                    <strong style={{ display: "block" }}>{row.subOrderId || row.orderId || "—"}</strong>
+                    <small style={{ color: "var(--muted)" }}>AWB: {row.trackingId || "—"}</small>
+                  </div>
+                ),
+              },
+              {
+                key: "reason",
+                header: "Issue & Failure Reason",
+                render: (row) => (
+                  <div style={{ maxWidth: 420 }}>
+                    <div style={{ fontWeight: 600 }}>{row.claimReason}</div>
+                    <div style={{ fontSize: 12, color: "#b45309", marginTop: 4, whiteSpace: "normal" }}>
+                      {row.manualActionReason || "Stopped after automation retries."}
+                    </div>
+                  </div>
+                ),
+              },
+              {
+                key: "attempts",
+                header: "Attempts",
+                render: (row) => (
+                  <Badge tone="danger">
+                    {row.automationAttempts ?? 3}/{row.automationMaxAttempts ?? 3}
+                  </Badge>
+                ),
+              },
+              {
+                key: "actions",
+                header: "Actions",
+                render: (row) => (
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    <button
+                      type="button"
+                      className="btn primary small"
+                      disabled={!canResolve}
+                      title={canResolve ? "Enter Ticket ID filed manually on supplier panel" : "Supervisor or Admin role required"}
+                      onClick={() => {
+                        setResolvingClaim(row)
+                        setTicketInput("")
+                      }}
+                    >
+                      Enter Ticket ID
+                    </button>
+                    {row.claimDescription && (
+                      <button
+                        type="button"
+                        className="btn secondary small"
+                        onClick={() => copyDescription(row.id, row.claimDescription)}
+                      >
+                        {copiedId === row.id ? "Copied ✓" : "Copy Statement"}
+                      </button>
+                    )}
+                    {canResolve && row.automationJobId ? (
+                      <button
+                        type="button"
+                        className="btn secondary small"
+                        onClick={() => void retryBot(row.automationJobId!)}
+                      >
+                        Retry Bot
+                      </button>
+                    ) : null}
+                    <button type="button" className="btn secondary small" onClick={() => setDetailId(row.id)}>
+                      Details
+                    </button>
+                  </div>
+                ),
+              },
+            ]}
+            rows={rows}
+            rowKey={(row) => String(row.id)}
+          />
+        )}
+      </section>
+
+      {resolvingClaim && (
+        <Modal onClose={() => setResolvingClaim(null)}>
+          <div style={{ padding: 10 }}>
+            <h3>Mark Manual Claim Done</h3>
+            <p style={{ fontSize: 13, color: "var(--muted)" }}>
+              Order / Sub-Order: <strong>{resolvingClaim.subOrderId || resolvingClaim.orderId}</strong> (AWB:{" "}
+              {resolvingClaim.trackingId}). Enter the marketplace confirmation / Ticket ID to mark it Done and remove it
+              from the Manual Required list.
+            </p>
+            <div style={{ margin: "16px 0" }}>
+              <label style={{ fontSize: 13, fontWeight: 600 }}>Marketplace Ticket ID</label>
+              <input
+                type="text"
+                autoFocus
+                placeholder="e.g. 795277339384"
+                value={ticketInput}
+                onChange={(e) => setTicketInput(e.target.value)}
+                style={{ width: "100%", marginTop: 6 }}
+              />
+            </div>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+              <button className="btn secondary" onClick={() => setResolvingClaim(null)} disabled={savingTicket}>
+                Cancel
+              </button>
+              <button className="btn primary" disabled={!ticketInput.trim() || savingTicket} onClick={() => void submitManualTicket()}>
+                {savingTicket ? "Saving…" : "Save Ticket ID & Mark Done"}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {detailId !== null && (
+        <ClaimDetailModal
+          claimId={detailId}
+          templates={templates}
+          onClose={() => {
+            setDetailId(null)
+            loadManualClaims()
+            onResolved()
+          }}
+        />
+      )}
+    </div>
   )
 }
 

@@ -13,6 +13,7 @@ export type MarketplaceAutomationResult = {
   errorMessage?: string
   manualActionReason?: string
   loginRequired?: boolean
+  checkpoint?: string
 }
 
 /**
@@ -37,6 +38,7 @@ export type ClaimStatusCheckResult =
 
 export abstract class BaseMarketplaceAutomation {
   abstract readonly marketplaceName: string
+  private progressReporter?: (checkpoint: string, message?: string) => Promise<void>
 
   constructor(
     protected browser: SupplierBrowserApi,
@@ -46,6 +48,15 @@ export abstract class BaseMarketplaceAutomation {
   ) {
     if (!this.workDir) this.workDir = os.tmpdir()
     if (!this.evidenceFilesMap) this.evidenceFilesMap = new Map()
+  }
+
+  public setProgressReporter(reporter: (checkpoint: string, message?: string) => Promise<void>): void {
+    this.progressReporter = reporter
+  }
+
+  protected async reportCheckpoint(checkpoint: string, message?: string): Promise<void> {
+    if (!this.progressReporter) return
+    await this.progressReporter(checkpoint, message).catch(() => undefined)
   }
 
   abstract execute(action: "prepare" | "submit"): Promise<MarketplaceAutomationResult>
