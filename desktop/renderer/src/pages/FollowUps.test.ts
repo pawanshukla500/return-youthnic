@@ -1,6 +1,6 @@
 import { describe, it } from "node:test"
 import assert from "node:assert/strict"
-import { followUpStateLabel, whenText } from "./FollowUps.js"
+import { followUpStateLabel, followUpSummaryText, whenText } from "./FollowUps.js"
 
 const NOW = Date.parse("2026-11-04T12:00:00.000Z")
 
@@ -63,5 +63,13 @@ describe("followUpStateLabel", () => {
     assert.equal(followUpStateLabel({ ...stopped, stopReason: "mystery" }), "stopped")
     assert.equal(followUpStateLabel({ ...stopped, stopReason: "" }), "stopped")
     assert.equal(followUpStateLabel({ ...stopped, stopReason: null }), "stopped")
+  })
+})
+
+describe("followUpSummaryText", () => {
+  it("defaults missing counts to zero instead of rendering undefined", () => {
+    assert.equal(followUpSummaryText({ active: 2 } as any, false), "(2 tracking · 0 due now · 0 resolved)")
+    assert.equal(followUpSummaryText(undefined, true), "(unavailable)")
+    assert.equal(followUpSummaryText(null, false), "")
   })
 })

@@ -3,7 +3,7 @@ import http from "node:http"
 import fs from "node:fs"
 import path from "node:path"
 import child_process from "node:child_process"
-import { loadAgentConfig, saveAgentConfig, type AgentConfig } from "./config.js"
+import { loadAgentConfig, publicEngineConfig, saveAgentConfig, type AgentConfig } from "./config.js"
 import { bearerTokenFromHeader, engineTokenMatches, localEngineUrl, resolveEngineBind, type EngineBind } from "./engine-config.js"
 import { installCrashGuards } from "./crash-guard.js"
 import { engineBusy as engineBusyWith, shouldRunPollCycle, supplierProfileInUse as supplierProfileInUseWith } from "./poll-guard.js"
@@ -4498,6 +4498,15 @@ export function startDesktopAppServer(bind: EngineBind = resolveEngineBind()): P
         return
       }
 
+      if (url.pathname === "/api/config" && req.method === "GET") {
+        if (!operatorSignedIn) {
+          sendJson(res, 401, { error: "Sign in before viewing the engine settings." })
+          return
+        }
+        sendJson(res, 200, { config: publicEngineConfig(config) })
+        return
+      }
+
       if (url.pathname === "/api/config" && req.method === "POST") {
         let body = ""
         req.on("data", (chunk) => { body += chunk })
@@ -4515,9 +4524,8 @@ export function startDesktopAppServer(bind: EngineBind = resolveEngineBind()): P
               isWorkerRunning = false
               await logoutOperator()
               logger.info(`Agent backend URL changed. Signed out; new backend: ${config.backendUrl}`)
-              const { apiKey: _apiKey, ...publicConfig } = config
               res.writeHead(200, { "Content-Type": "application/json" })
-              res.end(JSON.stringify({ ok: true, signedOut: true, config: publicConfig }))
+              res.end(JSON.stringify({ ok: true, signedOut: true, config: publicEngineConfig(config) }))
               return
             }
             if (!operatorSignedIn) {
@@ -4528,9 +4536,8 @@ export function startDesktopAppServer(bind: EngineBind = resolveEngineBind()): P
             client = new AgentBackendClient(config)
             logger.info(`Agent configuration updated. Backend URL: ${config.backendUrl}`)
             if (operatorSignedIn) await client.register()
-            const { apiKey: _apiKey, ...publicConfig } = config
             res.writeHead(200, { "Content-Type": "application/json" })
-            res.end(JSON.stringify({ ok: true, config: publicConfig }))
+            res.end(JSON.stringify({ ok: true, config: publicEngineConfig(config) }))
           } catch (err: any) {
             res.writeHead(400, { "Content-Type": "application/json" })
             res.end(JSON.stringify({ error: err?.message || String(err) }))

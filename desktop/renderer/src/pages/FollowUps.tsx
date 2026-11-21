@@ -9,6 +9,13 @@ import { EmptyState } from '../components/ui/EmptyState'
 import { ErrorState } from '../components/ui/ErrorState'
 import { Spinner } from '../components/ui/Spinner'
 
+export function followUpSummaryText(summary: FollowUpsResponse['summary'] | undefined | null, hasError: boolean): string {
+  if (summary) {
+    return `(${summary.active ?? 0} tracking · ${summary.due ?? 0} due now · ${summary.resolved ?? 0} resolved)`
+  }
+  return hasError ? '(unavailable)' : ''
+}
+
 const POLL_MS = 60_000
 
 const STOP_REASON_LABELS: Record<string, string> = {
@@ -170,11 +177,7 @@ export default function FollowUpsPage() {
   const retry = useCallback(() => setRefreshKey((key) => key + 1), [])
 
   const summary = data?.summary
-  const headlineCount = summary
-    ? `(${summary.active} tracking · ${summary.due} due now · ${summary.resolved} resolved)`
-    : error
-      ? '(unavailable)'
-      : ''
+  const headlineCount = followUpSummaryText(summary, Boolean(error))
 
   return (
     <section aria-labelledby="followups-title">
