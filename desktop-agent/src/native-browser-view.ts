@@ -1395,19 +1395,92 @@ export class NativeSupplierBrowser implements SupplierBrowserApi {
     throw new Error("Raw CDP send() is external-adapter only; use the typed helpers on the native adapter.")
   }
 
-  async navigate(url: string): Promise<void> {
-    await this.contents.loadURL(url)
+  async navigate(url: string, timeoutMs = 25_000): Promise<void> {
+    if (typeof (this.contents as unknown as { isDestroyed?: () => boolean }).isDestroyed === "function" &&
+      (this.contents as unknown as { isDestroyed: () => boolean }).isDestroyed()) {
+      throw new Error("Browser tab was closed before navigation.")
+    }
+    let timer: NodeJS.Timeout | null = null
+    try {
+      await Promise.race([
+        this.contents.loadURL(url),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`Navigation to ${url} timed out after ${Math.round(timeoutMs / 1000)}s.`)), timeoutMs)
+        }),
+      ])
+    } catch (err: any) {
+      const code = String(err?.code || "")
+      const errno = Number(err?.errno)
+      const msg = String(err?.message || err || "")
+      // Chromium cancels an in-flight loadURL with ERR_ABORTED (-3) whenever a portal triggers a fast redirect
+      // (e.g. Meesho /growth/yqcue/home -> /panel/v3/...). Wait briefly for the redirected target to settle.
+      if (code === "ERR_ABORTED" || errno === -3 || /ERR_ABORTED/i.test(msg)) {
+        await this.delay(650)
+        return
+      }
+      throw err
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
   }
 
-  async evaluate<T>(expression: string): Promise<T> {
-    return this.contents.executeJavaScript(expression) as Promise<T>
+  async evaluate<T>(expression: string, timeoutMs = 20_000): Promise<T> {
+    if (typeof (this.contents as unknown as { isDestroyed?: () => boolean }).isDestroyed === "function" &&
+      (this.contents as unknown as { isDestroyed: () => boolean }).isDestroyed()) {
+      throw new Error("Browser tab is destroyed.")
+    }
+    let timer: NodeJS.Timeout | null = null
+    try {
+      return await Promise.race([
+        this.contents.executeJavaScript(expression) as Promise<T>,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`Page evaluate timed out after ${Math.round(timeoutMs / 1000)}s.`)), timeoutMs)
+        }),
+      ])
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
   }
 
   async captureScreenshot(outputPath: string): Promise<string> {
-    const image = await this.contents.capturePage()
-    const { default: fsp } = await import("node:fs/promises")
-    await fsp.writeFile(outputPath, image.toPNG())
-    return outputPath
+    try {
+      if (typeof (this.contents as unknown as { isDestroyed?: () => boolean }).isDestroyed === "function" &&
+        (this.contents as unknown as { isDestroyed: () => boolean }).isDestroyed()) {
+        return ""
+      }
+      const [{ default: fsp }, { default: nodePath }] = await Promise.all([import("node:fs/promises"), import("node:path")])
+      await fsp.mkdir(nodePath.dirname(outputPath), { recursive: true })
+      const captureOnce = async () => {
+        let timer: NodeJS.Timeout | null = null
+        try {
+          return await Promise.race([
+            this.contents.capturePage(),
+            new Promise<never>((_, reject) => {
+              timer = setTimeout(() => reject(new Error("capturePage timed out after 5s")), 5000)
+            }),
+          ])
+        } finally {
+          if (timer) clearTimeout(timer)
+        }
+      }
+      let image
+      try {
+        image = await captureOnce()
+      } catch (firstErr) {
+        // Hidden/off-screen Chromium compositors on Windows can throw UnknownVizError transiently.
+        await this.delay(150)
+        image = await captureOnce().catch(() => {
+          logger.warn("Native screenshot skipped (non-fatal surface error):", firstErr)
+          return null
+        })
+      }
+      if (!image || (typeof image.isEmpty === "function" && image.isEmpty())) return ""
+      await fsp.writeFile(outputPath, image.toPNG())
+      return outputPath
+    } catch (err) {
+      logger.warn("Native screenshot skipped (non-fatal):", err)
+      return ""
+    }
   }
 
   async detectCaptchaOrOtp(): Promise<{ challengeDetected: boolean; reason?: string }> {
@@ -1459,7 +1532,48 @@ export class NativeSupplierBrowser implements SupplierBrowserApi {
       })()
     `).catch(() => undefined)
 
-    // Type character by character with input events
+    // Fast path for long descriptions (>48 chars): React controlled inputs only need the prefix set
+    // cleanly via the native property setter followed by the final keystroke + input/change dispatch.
+    if (text.length > 48) {
+      const prefix = text.slice(0, -1)
+      const lastChar = text.slice(-1)
+      await this.evaluate(`
+        (() => {
+          const el = document.querySelector(${JSON.stringify(selector)});
+          if (!el) return;
+          const prefix = ${JSON.stringify(prefix)};
+          const proto = el instanceof HTMLTextAreaElement ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+          const nativeSetter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
+          if (nativeSetter) {
+            nativeSetter.call(el, prefix);
+          } else {
+            el.value = prefix;
+          }
+          el.dispatchEvent(new Event("input", { bubbles: true }));
+        })()
+      `).catch(() => undefined)
+      this.contents.sendInputEvent({ type: "char", keyCode: lastChar } as never)
+      await this.evaluate(`
+        (() => {
+          const el = document.querySelector(${JSON.stringify(selector)});
+          if (!el) return;
+          const intended = ${JSON.stringify(text)};
+          const proto = el instanceof HTMLTextAreaElement ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+          const nativeSetter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
+          if (nativeSetter) {
+            nativeSetter.call(el, intended);
+          } else {
+            el.value = intended;
+          }
+          el.dispatchEvent(new Event("input", { bubbles: true }));
+          el.dispatchEvent(new Event("change", { bubbles: true }));
+        })()
+      `).catch(() => undefined)
+      await this.delay(150)
+      return true
+    }
+
+    // Type short values character by character with lightweight pacing
     for (let i = 0; i < text.length; i++) {
       const char = text[i]
       this.contents.sendInputEvent({ type: "char", keyCode: char } as never)
@@ -1480,9 +1594,9 @@ export class NativeSupplierBrowser implements SupplierBrowserApi {
           el.dispatchEvent(new Event("change", { bubbles: true }));
         })()
       `).catch(() => undefined)
-      await this.delay(30)
+      await this.delay(15)
     }
-    await this.delay(500)
+    await this.delay(150)
     return true
   }
 
@@ -1836,5 +1950,21 @@ export async function flushSupplierSessionCookies(panelKey: string): Promise<voi
     }
   } catch {
     // Best-effort flush on partition cookies.
+  }
+}
+
+/** Clear HTTP disk/memory cache on a supplier partition while keeping login cookies and storage intact. */
+export async function clearSupplierSessionCache(panelKey: string): Promise<void> {
+  const resolved = resolveStoredPanelKey(panelKey) || panelKey
+  try {
+    const mod = await import("electron").catch(() => null)
+    const sesApi = mod?.session
+    if (!sesApi) return
+    const ses = sesApi.fromPartition(`persist:supplier-${resolved}`)
+    if (typeof ses?.clearCache === "function") {
+      await ses.clearCache().catch(() => undefined)
+    }
+  } catch {
+    // Best-effort cache cleanup on Electron partition.
   }
 }

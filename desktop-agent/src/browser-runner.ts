@@ -222,28 +222,56 @@ export class BrowserRunner {
       }
     })
 
+    const rejectAllPending = (reason: string) => {
+      for (const [id, pending] of this.pendingCallbacks.entries()) {
+        this.pendingCallbacks.delete(id)
+        pending.reject(new Error(reason))
+      }
+    }
+    this.ws.on("close", () => rejectAllPending("Browser DevTools connection closed."))
+    this.ws.on("error", (err) => rejectAllPending(`Browser DevTools socket error: ${err instanceof Error ? err.message : String(err)}`))
+
     // Enable Page and Runtime domains
     await this.send("Page.enable")
     await this.send("Runtime.enable")
     await this.send("DOM.enable")
   }
 
-  async send(method: string, params: Record<string, unknown> = {}): Promise<any> {
+  async send(method: string, params: Record<string, unknown> = {}, timeoutMs = 25_000): Promise<any> {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       throw new Error("Browser WebSocket is not open.")
     }
     const id = this.nextId++
     return new Promise((resolve, reject) => {
-      this.pendingCallbacks.set(id, { resolve, reject })
-      this.ws!.send(JSON.stringify({ id, method, params }))
+      const timer = setTimeout(() => {
+        if (this.pendingCallbacks.delete(id)) {
+          reject(new Error(`CDP command "${method}" timed out after ${Math.round(timeoutMs / 1000)}s.`))
+        }
+      }, timeoutMs)
+      this.pendingCallbacks.set(id, {
+        resolve: (value) => {
+          clearTimeout(timer)
+          resolve(value)
+        },
+        reject: (err) => {
+          clearTimeout(timer)
+          reject(err)
+        },
+      })
+      try {
+        this.ws!.send(JSON.stringify({ id, method, params }))
+      } catch (err) {
+        clearTimeout(timer)
+        this.pendingCallbacks.delete(id)
+        reject(err)
+      }
     })
   }
 
   async navigate(url: string): Promise<void> {
     logger.info(`Navigating to: ${url}`)
-    await this.send("Page.navigate", { url })
-    // Wait for load event
-    await new Promise((r) => setTimeout(r, 3000))
+    await this.send("Page.navigate", { url }, 25_000)
+    await new Promise((r) => setTimeout(r, 2000))
   }
 
   async evaluate<T = any>(expression: string): Promise<T> {
@@ -251,20 +279,24 @@ export class BrowserRunner {
       expression,
       returnByValue: true,
       awaitPromise: true,
-    })
+    }, 20_000)
     return result?.result?.value as T
   }
 
   async captureScreenshot(outputPath: string): Promise<string> {
-    const result = await this.send("Page.captureScreenshot", { format: "png" })
-    const base64Data = result?.data
-    if (base64Data) {
-      const buffer = Buffer.from(base64Data, "base64")
-      const dir = path.dirname(outputPath)
-      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
-      fs.writeFileSync(outputPath, buffer)
-      logger.info(`Screenshot captured: ${outputPath}`)
-      return outputPath
+    try {
+      const result = await this.send("Page.captureScreenshot", { format: "png" }, 8_000)
+      const base64Data = result?.data
+      if (base64Data) {
+        const buffer = Buffer.from(base64Data, "base64")
+        const dir = path.dirname(outputPath)
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
+        fs.writeFileSync(outputPath, buffer)
+        logger.info(`Screenshot captured: ${outputPath}`)
+        return outputPath
+      }
+    } catch (err) {
+      logger.warn("CDP screenshot skipped (non-fatal):", err)
     }
     return ""
   }
@@ -334,7 +366,46 @@ export class BrowserRunner {
       })()
     `)
 
-    // Type character by character with human-like randomized intervals (40-90ms)
+    // Fast React-safe typing for long descriptions (>48 chars)
+    if (text.length > 48) {
+      const prefix = text.slice(0, -1)
+      const lastChar = text.slice(-1)
+      await this.evaluate(`
+        (() => {
+          const el = document.querySelector(${JSON.stringify(selector)});
+          if (!el) return;
+          const prefix = ${JSON.stringify(prefix)};
+          const proto = el instanceof HTMLTextAreaElement ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+          const nativeSetter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+          if (nativeSetter) nativeSetter.call(el, prefix);
+          else el.value = prefix;
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+        })()
+      `)
+      try {
+        await this.send("Input.dispatchKeyEvent", { type: "keyDown", text: lastChar, unmodifiedText: lastChar, key: lastChar })
+        await this.send("Input.dispatchKeyEvent", { type: "keyUp", key: lastChar })
+      } catch {
+        // fallback to JS injection below
+      }
+      await this.evaluate(`
+        (() => {
+          const el = document.querySelector(${JSON.stringify(selector)});
+          if (!el) return;
+          const intended = ${JSON.stringify(text)};
+          const proto = el instanceof HTMLTextAreaElement ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+          const nativeSetter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+          if (nativeSetter) nativeSetter.call(el, intended);
+          else el.value = intended;
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+        })()
+      `)
+      await this.delay(150)
+      return true
+    }
+
+    // Type short inputs character by character with lightweight intervals (15-30ms)
     for (let i = 0; i < text.length; i++) {
       const char = text[i]
       try {
@@ -370,12 +441,11 @@ export class BrowserRunner {
         })()
       `)
 
-      const keystrokeInterval = Math.floor(Math.random() * 50) + 40
+      const keystrokeInterval = Math.floor(Math.random() * 15) + 15
       await new Promise((r) => setTimeout(r, keystrokeInterval))
     }
 
-    // 1-second delay after finishing typing
-    await this.delay(1000)
+    await this.delay(150)
     return true
   }
 

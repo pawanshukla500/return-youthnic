@@ -14,6 +14,7 @@ export type JobPollResult = {
     jobId: number
     claimId: number
     stage: string
+    checkpoint?: string
     marketplace: string
     orderNumber: string
     trackingId: string
@@ -71,6 +72,7 @@ export type JobExecutionBundle = {
   jobId: number
   claimId: number
   stage: string
+  checkpoint?: string
   claimStatus: string
   marketplace: string
   accountName: string
@@ -117,10 +119,17 @@ export class AgentBackendClient {
     this.apiKey = config.apiKey
   }
 
+  private async fetchWithTimeout(url: string, init: RequestInit = {}, timeoutMs = 20_000): Promise<Response> {
+    return fetch(url, {
+      ...init,
+      signal: init.signal ?? AbortSignal.timeout(timeoutMs),
+    })
+  }
+
   async register(): Promise<boolean> {
     try {
       const url = `${this.config.backendUrl}/api/automation/agent/register`
-      const res = await fetch(url, {
+      const res = await this.fetchWithTimeout(url, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -164,7 +173,7 @@ export class AgentBackendClient {
     }
     try {
       const url = `${this.config.backendUrl}/api/automation/agent/heartbeat`
-      const res = await fetch(url, {
+      const res = await this.fetchWithTimeout(url, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -176,7 +185,7 @@ export class AgentBackendClient {
           status,
           currentTaskInfo: taskInfo,
         }),
-      })
+      }, 10_000)
       if (res.status === 401 || res.status === 404) {
         this.isRegistered = false
       }
@@ -194,7 +203,7 @@ export class AgentBackendClient {
     try {
       const skip = skipMarketplaces.length > 0 ? `&skipMarketplaces=${encodeURIComponent(skipMarketplaces.join(","))}` : ""
       const url = `${this.config.backendUrl}/api/automation/agent/poll?agentUuid=${encodeURIComponent(this.config.agentUuid)}${skip}`
-      const res = await fetch(url, {
+      const res = await this.fetchWithTimeout(url, {
         headers: {
           "X-Agent-UUID": this.config.agentUuid,
           "X-Agent-Key": this.apiKey,
@@ -226,7 +235,7 @@ export class AgentBackendClient {
     }
     try {
       const url = `${this.config.backendUrl}/api/automation/follow-ups/due?agentUuid=${encodeURIComponent(this.config.agentUuid)}`
-      const res = await fetch(url, {
+      const res = await this.fetchWithTimeout(url, {
         headers: {
           "X-Agent-UUID": this.config.agentUuid,
           "X-Agent-Key": this.apiKey,
@@ -251,7 +260,7 @@ export class AgentBackendClient {
   async reportFollowUp(followUpId: number, data: FollowUpReport): Promise<{ statusChanged: boolean }> {
     try {
       const url = `${this.config.backendUrl}/api/automation/follow-ups/${followUpId}/result`
-      const res = await fetch(url, {
+      const res = await this.fetchWithTimeout(url, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -352,7 +361,7 @@ export class AgentBackendClient {
   async getExecutionBundle(jobId: number): Promise<JobExecutionBundle | null> {
     try {
       const url = `${this.config.backendUrl}/api/automation/jobs/${jobId}/bundle`
-      const res = await fetch(url, {
+      const res = await this.fetchWithTimeout(url, {
         headers: { "X-Agent-UUID": this.config.agentUuid, "X-Agent-Key": this.apiKey },
       })
       if (!res.ok) {
@@ -389,7 +398,7 @@ export class AgentBackendClient {
         const headers: Record<string, string> = { "X-Agent-UUID": this.config.agentUuid }
         const authorization = operatorAuthorization()
         if (authorization) headers.Authorization = authorization
-        const res = await fetch(mediaUrl, { headers })
+        const res = await this.fetchWithTimeout(mediaUrl, { headers }, 90_000)
 
         if (res.ok && res.body) {
           await pipeline(Readable.fromWeb(res.body as any), fs.createWriteStream(partialPath))
@@ -480,10 +489,13 @@ export class AgentBackendClient {
     }
   }
 
-  async updateProgress(jobId: number, data: { stage: string; logMessage?: string; screenshotPath?: string; manualActionReason?: string }): Promise<void> {
+  async updateProgress(
+    jobId: number,
+    data: { stage: string; checkpoint?: string; logMessage?: string; screenshotPath?: string; manualActionReason?: string; nextRetrySeconds?: number },
+  ): Promise<void> {
     try {
       const url = `${this.config.backendUrl}/api/automation/jobs/${jobId}/progress`
-      const res = await fetch(url, {
+      const res = await this.fetchWithTimeout(url, {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Agent-UUID": this.config.agentUuid, "X-Agent-Key": this.apiKey },
         body: JSON.stringify(data),
@@ -498,7 +510,7 @@ export class AgentBackendClient {
   async completeJob(jobId: number, data: { marketplaceClaimId: string; screenshotPath?: string; notes?: string }): Promise<void> {
     try {
       const url = `${this.config.backendUrl}/api/automation/jobs/${jobId}/complete`
-      const res = await fetch(url, {
+      const res = await this.fetchWithTimeout(url, {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Agent-UUID": this.config.agentUuid, "X-Agent-Key": this.apiKey },
         body: JSON.stringify(data),
