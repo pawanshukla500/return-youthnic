@@ -578,19 +578,48 @@ describe("Meesho end-to-end claim automation flow", () => {
           POLL_INTERVAL_MS: "3600000",
           FOLLOWUP_INTERVAL_MS: "3600000",
         },
-        stdio: "ignore",
+        // Wait on ENGINE_READY so resumeClaimBotIfSignedIn() finishes before tests call authenticated routes.
+        stdio: ["ignore", "pipe", "pipe"],
       })
+      let logs = ""
+      let readyPrinted = false
+      const appendLog = (chunk: Buffer) => {
+        logs = (logs + chunk.toString("utf8")).slice(-8192)
+        if (logs.includes("ENGINE_READY")) readyPrinted = true
+      }
+      child.stdout?.on("data", appendLog)
+      child.stderr?.on("data", appendLog)
       const base = `http://127.0.0.1:${enginePort}`
       const deadline = Date.now() + 30000
       while (Date.now() < deadline) {
-        try {
-          const r = await fetch(`${base}/api/status`)
-          if (r.ok) return { child, base }
-        } catch {}
+        if (child.exitCode !== null) {
+          throw new Error(`Engine exited early (${child.exitCode}): ${logs}`)
+        }
+        if (readyPrinted) {
+          try {
+            const r = await fetch(`${base}/api/status`)
+            if (r.ok) return { child, base }
+          } catch {}
+        }
         await new Promise((r) => setTimeout(r, 150))
       }
       child.kill()
-      throw new Error("Engine boot timed out")
+      throw new Error(`Engine boot timed out: ${logs}`)
+    }
+
+    const stopChild = async (proc: child_process.ChildProcess | null): Promise<void> => {
+      if (!proc || proc.exitCode !== null) return
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(() => {
+          proc.kill("SIGKILL")
+          resolve()
+        }, 5000)
+        proc.once("exit", () => {
+          clearTimeout(timer)
+          resolve()
+        })
+        proc.kill()
+      })
     }
 
     let child1: child_process.ChildProcess | null = null
@@ -606,26 +635,29 @@ describe("Meesho end-to-end claim automation flow", () => {
         body: JSON.stringify({ email: "syn@example.com", password: "SYN-Pass-1" }),
       })
       assert.equal(login1.status, 200)
-      const panelsBefore = (await (await fetch(`${inst1.base}/api/panels`)).json()) as {
-        panels: Array<{ key: string; sessionSavedAt: string | null; reloginRequired: boolean }>
+      const panelsBeforeRes = await fetch(`${inst1.base}/api/panels`)
+      const panelsBefore = (await panelsBeforeRes.json()) as {
+        panels?: Array<{ key: string; sessionSavedAt: string | null; reloginRequired: boolean }>
       }
-      const m1 = panelsBefore.panels.find((p) => p.key === "meesho")
+      assert.equal(panelsBeforeRes.status, 200, JSON.stringify(panelsBefore))
+      const m1 = panelsBefore.panels?.find((p) => p.key === "meesho")
       assert.ok(m1?.sessionSavedAt, "sessionSavedAt present before restart")
       assert.equal(m1?.reloginRequired, false)
 
-      // Kill engine 1 (simulating app close/restart)
-      child1.kill()
-      await new Promise((r) => setTimeout(r, 300))
+      // Kill engine 1 cleanly before starting engine 2 on the same AGENT_DATA_DIR
+      await stopChild(child1)
       child1 = null
 
       // Boot 2: new process on same AGENT_DATA_DIR & userDataDir
       const port2 = await nextPort()
       const inst2 = await bootEngine(port2)
       child2 = inst2.child
-      const panelsAfter = (await (await fetch(`${inst2.base}/api/panels`)).json()) as {
-        panels: Array<{ key: string; sessionSavedAt: string | null; reloginRequired: boolean }>
+      const panelsAfterRes = await fetch(`${inst2.base}/api/panels`)
+      const panelsAfter = (await panelsAfterRes.json()) as {
+        panels?: Array<{ key: string; sessionSavedAt: string | null; reloginRequired: boolean }>
       }
-      const m2 = panelsAfter.panels.find((p) => p.key === "meesho")
+      assert.equal(panelsAfterRes.status, 200, JSON.stringify(panelsAfter))
+      const m2 = panelsAfter.panels?.find((p) => p.key === "meesho")
       assert.equal(m2?.sessionSavedAt, m1?.sessionSavedAt, "saved Meesho session survives engine restart")
 
       // Verify /api/panels/meesho/check-login endpoint responds cleanly when signed in
@@ -635,8 +667,8 @@ describe("Meesho end-to-end claim automation flow", () => {
       assert.equal(checkData.ok, true)
       assert.ok(Array.isArray(checkData.panels))
     } finally {
-      child1?.kill()
-      child2?.kill()
+      await stopChild(child1)
+      await stopChild(child2)
       stub.close()
     }
   })
