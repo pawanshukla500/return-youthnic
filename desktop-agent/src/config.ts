@@ -54,6 +54,11 @@ export function isTrustedBackendUrl(value: string): boolean {
   }
 }
 
+export function publicEngineConfig(cfg: AgentConfig): Omit<AgentConfig, "apiKey"> {
+  const { apiKey: _apiKey, ...publicConfig } = cfg
+  return publicConfig
+}
+
 export function loadAgentConfig(): AgentConfig {
   const baseDir = ensureAgentDataDir()
 

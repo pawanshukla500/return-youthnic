@@ -226,6 +226,15 @@ export function mountClaimsRoutes(app: Express, requireUser: RequestHandler): vo
         payoutReference: text(body.payoutReference),
         payoutDate: text(body.payoutDate),
       })
+      if (result.status === "ready_for_claim" || result.status === "reclaim") {
+        try {
+          // Requeue when returning from waiting_for_approval (prior job is "prepared") or reopening via reclaim;
+          // active stages ("queued", "approved", "downloading_media", etc.) are preserved without duplicating.
+          await createOrQueueAutomationJob(getPool(), result.id, { requeueReopened: true })
+        } catch (err) {
+          console.warn("[claims-status] createOrQueueAutomationJob warning:", err)
+        }
+      }
       publishChange({ kind: "claim.updated", marketplaceId: result.marketplaceId, actorId: actorOf(req).id })
       res.json(result)
     } catch (error) {
@@ -268,6 +277,11 @@ export function mountClaimsRoutes(app: Express, requireUser: RequestHandler): vo
         originalFilename: file.originalname,
         capturedAt: text(req.body?.capturedAt) || null,
       })
+      try {
+        await createOrQueueAutomationJob(getPool(), id)
+      } catch (err) {
+        console.warn("[claims-media] createOrQueueAutomationJob warning:", err)
+      }
       publishChange({ kind: "claim.updated", marketplaceId: result.marketplaceId, actorId: actorOf(req).id })
       res.status(201).json(result)
     } catch (error) {

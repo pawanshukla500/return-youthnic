@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { pickIntervalMs, isTrustedBackendUrl, saveAgentConfig, loadAgentConfig, DEFAULT_PRODUCTION_URL } from "./src/config.js"
+import { pickIntervalMs, isTrustedBackendUrl, saveAgentConfig, loadAgentConfig, publicEngineConfig, DEFAULT_PRODUCTION_URL } from "./src/config.js"
 import { isBackendUrlExternallyControlled } from "./src/load-env.js"
 
 /**
@@ -104,6 +104,23 @@ describe("backend URL configuration and consistency", () => {
       } catch {
         // ignore
       }
+    }
+  })
+
+  it("publicEngineConfig strips apiKey while keeping non-secret settings intact", () => {
+    const originalDataDir = process.env.AGENT_DATA_DIR
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-pub-cfg-"))
+    try {
+      process.env.AGENT_DATA_DIR = tempDir
+      const cfg = saveAgentConfig({ apiKey: "SYN-secret-agent-key", backendUrl: DEFAULT_PRODUCTION_URL })
+      const pub = publicEngineConfig(cfg)
+      assert.equal("apiKey" in pub, false)
+      assert.equal(pub.backendUrl, DEFAULT_PRODUCTION_URL)
+      assert.equal(pub.agentUuid, cfg.agentUuid)
+    } finally {
+      if (originalDataDir !== undefined) process.env.AGENT_DATA_DIR = originalDataDir
+      else delete process.env.AGENT_DATA_DIR
+      fs.rmSync(tempDir, { recursive: true, force: true })
     }
   })
 })
