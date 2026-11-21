@@ -418,6 +418,10 @@ test("createOrQueueAutomationJob: queues reclaimed completed claims once without
   assert.equal(await createOrQueueAutomationJob(pool, 12), 88)
   assert.equal(await createOrQueueAutomationJob(pool, 12, { requeueReopened: true }), 99)
 
+  existingStage = "prepared"
+  assert.equal(await createOrQueueAutomationJob(pool, 12), 88)
+  assert.equal(await createOrQueueAutomationJob(pool, 12, { requeueReopened: true }), 99)
+
   existingStage = "queued"
   assert.equal(await createOrQueueAutomationJob(pool, 12, { requeueReopened: true }), 88)
 })

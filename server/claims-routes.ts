@@ -228,7 +228,9 @@ export function mountClaimsRoutes(app: Express, requireUser: RequestHandler): vo
       })
       if (result.status === "ready_for_claim" || result.status === "reclaim") {
         try {
-          await createOrQueueAutomationJob(getPool(), result.id, { requeueReopened: result.status === "reclaim" })
+          // Requeue when returning from waiting_for_approval (prior job is "prepared") or reopening via reclaim;
+          // active stages ("queued", "approved", "downloading_media", etc.) are preserved without duplicating.
+          await createOrQueueAutomationJob(getPool(), result.id, { requeueReopened: true })
         } catch (err) {
           console.warn("[claims-status] createOrQueueAutomationJob warning:", err)
         }
