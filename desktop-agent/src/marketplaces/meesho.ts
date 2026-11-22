@@ -337,6 +337,31 @@ export function detectMeeshoEarlyBlocker(text: string): string | null {
 }
 
 /**
+ * In-page click for the enabled Submit control. Exact visible text only: a
+ * "Submit" inside "Submitted on" or a disabled button must not count as a
+ * click, or the filer records a ticket that Meesho never created.
+ */
+export function meeshoSubmitClickScript(): string {
+  return `(() => {
+    const control = (el) => el.closest('button, a, [role="button"], input[type="submit"]') || el;
+    const label = (el) => ((el.textContent || (el instanceof HTMLInputElement ? el.value : '') || '').trim());
+    const candidates = Array.from(document.querySelectorAll('button, a, [role="button"], input[type="submit"]'));
+    const match = candidates.find((el) => {
+      const target = control(el);
+      if (label(target) !== 'Submit') return false;
+      if (target.disabled || target.getAttribute('aria-disabled') === 'true') return false;
+      const rect = target.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0;
+    });
+    if (!match) return false;
+    const target = control(match);
+    if (typeof target.scrollIntoView === 'function') target.scrollIntoView({ block: 'center' });
+    if (typeof target.click === 'function') target.click();
+    return true;
+  })()`
+}
+
+/**
  * Extracts a newly created numeric Meesho ticket ID (9-15 digits) from either
  * the confirmation URL or page text, ignoring order/AWB/prior ticket numbers.
  */
@@ -671,11 +696,19 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
       `)
       if (!packetSelected) await this.delay(1000)
     }
-    if (packetSelected) {
-      logger.info(`Selected packet state: ${packetState}.`)
-    } else {
+    if (!packetSelected) {
+      const shot = path.join(this.workDir, `packet-state-job-${this.job.jobId}.png`)
+      await this.browser.captureScreenshot(shot)
       logger.warn(`Could not select packet state '${packetState}' on the Meesho form.`)
+      return {
+        success: false,
+        stage: "manual_intervention_required",
+        checkpoint: "packet_state_unselected",
+        screenshotPath: shot,
+        manualActionReason: `Meesho did not accept packet state "${packetState}". Pick Intact or Tampered in the open browser, then run this claim again.`,
+      }
     }
+    logger.info(`Selected packet state: ${packetState}.`)
 
     // Callback Number (ported from the legacy filer): an empty callback field can
     // keep the portal's Submit disabled, stalling an otherwise valid claim. The
@@ -968,7 +1001,7 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
     }
 
     logger.info(`Submitting Meesho ticket (Job #${this.job.jobId})...`)
-    let submitted = await this.browser.clickVisibleLabel("Submit")
+    let submitted = await this.browser.evaluate<boolean>(meeshoSubmitClickScript()).catch(() => false)
 
     if (!submitted) {
       submitted = await this.humanClick('button[type="submit"]')
