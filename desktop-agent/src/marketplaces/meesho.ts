@@ -1064,8 +1064,26 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
     if (!extractedTicketId && !formStillOpen) {
       await this.browser.navigate(supportUrl)
       await this.waitForContent()
-      const { ids: after } = await this.readSupportTicketsSnapshot(6000)
-      extractedTicketId = after.find((id) => !known.has(id)) || ""
+      const { ids: after, rows: afterRows } = await this.readSupportTicketsSnapshot(6000)
+      // Exact ticket ID matching: confirm the ticket row actually corresponds to this order/AWB
+      const matchedByOrder = findExistingTicketForOrder(afterRows, [
+        this.job.claim.subOrderId,
+        this.job.claim.orderNumber,
+        this.job.claim.trackingId,
+        this.job.claim.packetId,
+      ])
+      if (matchedByOrder) {
+        extractedTicketId = matchedByOrder
+      } else if (ticketsBefore.length === 0 && after.length === 1 && !known.has(after[0])) {
+        // Zero-prior ticket account fallback: exactly 1 new ticket appeared on a clean account
+        extractedTicketId = after[0]
+      } else if (after.length > 0) {
+        logger.warn(
+          `Meesho shows tickets [${after.join(", ")}], but none matched order references ` +
+          `[${[this.job.claim.subOrderId, this.job.claim.orderNumber, this.job.claim.trackingId].filter(Boolean).join(", ")}]. ` +
+          `Refusing to associate unverified ticket ID.`
+        )
+      }
     }
     await this.browser.captureScreenshot(confScreenshot)
 
@@ -1077,7 +1095,7 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
         screenshotPath: confScreenshot,
         manualActionReason: formErrors.length
           ? `Meesho did not raise the ticket: ${formErrors.slice(0, 3).join(" | ")}`
-          : "Meesho did not show a new ticket after Submit. Check the open browser, then run this claim again.",
+          : "Meesho form closed but no ticket matching this order/AWB was verified on the portal. Check the open browser or My Tickets before retrying.",
       }
     }
 
