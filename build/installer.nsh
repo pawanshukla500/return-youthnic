@@ -70,5 +70,8 @@
 !macroend
 
 !macro customUnInstall
+  ExecWait 'taskkill /F /IM "Return App.exe" /T'
   ExecWait 'schtasks /delete /TN "ReturnAppClaimBot" /F'
+  DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "Return App"
+  DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "electron.app.Return App"
 !macroend

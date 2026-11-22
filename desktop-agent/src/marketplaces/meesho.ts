@@ -2,6 +2,8 @@ import fs from "node:fs"
 import path from "node:path"
 import { BaseMarketplaceAutomation, type ClaimStatusCheckResult, type MarketplaceAutomationResult } from "./base-automation.js"
 import { completePortalLogin, isPortalLoggedIn, resolvePortalLoginUrl } from "../portal-login.js"
+import { agentDataDir } from "../paths.js"
+import { proposeSelectorFallback, type VisibleDomCandidate } from "../ai-center-assist.js"
 import { logger } from "../logger.js"
 
 /**
@@ -393,10 +395,12 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
         stage: "manual_intervention_required",
         screenshotPath: loginScreenshot,
         loginRequired: login.loginRequired !== false,
+        checkpoint: "login_required",
         manualActionReason: login.message,
       }
     }
 
+    await this.reportCheckpoint("portal_authenticated", "Signed in to Meesho Supplier Panel.")
     logger.info("Opening the Meesho Support page for this seller...")
     const panelUrl = await this.browser.evaluate<string>(`window.location.href`)
     const slug = panelUrl.match(/\/(?:growth|experience)\/([^/]+)/)?.[1]
@@ -410,6 +414,7 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
         stage: "manual_intervention_required",
         screenshotPath: blockedScreenshot,
         ...(sessionLost ? { loginRequired: true } : {}),
+        checkpoint: "support_slug_missing",
         manualActionReason: sessionLost
           ? "Meesho session expired. Log in to Meesho in the Browsers tab and the claim will continue automatically."
           : "Meesho is signed in, but the seller panel address was not found. Open Support in the browser, then run this claim again.",
@@ -418,14 +423,14 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
     const supportUrl = `https://supplier.meesho.com/panel/v3/new/experience/${slug}/support`
     await this.browser.navigate(supportUrl)
     await this.waitForContent()
-    const ticketsBefore = await this.readRecentTicketIds(15000)
+    const { ids: ticketsBefore, rows: ticketRows } = await this.readSupportTicketsSnapshot(2500)
     logger.info(`Meesho shows ${ticketsBefore.length} recent tickets before this claim.`)
 
     // F7: an already-filed claim for this order must not be filed again. The
     // support table names the order reference next to its ticket; order/AWB
     // digit runs are excluded from the ticket candidates so they are never
     // mistaken for a filed ticket.
-    const alreadyFiled = findExistingTicketForOrder(await this.readTicketTableRows(), [
+    const alreadyFiled = findExistingTicketForOrder(ticketRows, [
       this.job.claim.subOrderId,
       this.job.claim.orderNumber,
       this.job.claim.trackingId,
@@ -436,6 +441,7 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
       return {
         success: false,
         stage: "manual_intervention_required",
+        checkpoint: "duplicate_ticket_found",
         manualActionReason: `Meesho already shows ticket ${alreadyFiled} for this order. Verify on the portal instead of filing again.`,
       }
     }
@@ -508,8 +514,19 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
             await this.waitForContent()
           }
         }
-        await this.delay(2000)
+        await this.delay(1500)
         openedIssue = await issueOpen()
+      }
+      if (!openedIssue) {
+        const pickedByAi = await this.tryAiControlFallback(
+          "select_issue_category",
+          `Open issue category matching "${issueLabel}"`,
+          'button, a, [role="button"], [role="listitem"], [role="tab"]',
+        )
+        if (pickedByAi) {
+          await this.delay(1500)
+          openedIssue = await issueOpen()
+        }
       }
     }
     if (!openedIssue) {
@@ -517,10 +534,12 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
       return {
         success: false,
         stage: "manual_intervention_required",
+        checkpoint: "category_open_failed",
         manualActionReason: `The Meesho issue page for "${issueLabel}" did not open (page: ${href}). An operator must navigate to the right category by hand.`,
       }
     }
 
+    await this.reportCheckpoint("category_opened", `Opened Meesho issue category: ${issueLabel}.`)
     logger.info("Clicking 'Raise a Ticket'...")
     let openedForm = false
     const subOrderInputSelector = 'input[placeholder*="Sub Order" i], input[placeholder*="suborder" i], input[name*="suborder" i], input[name*="sub_order" i], input[id*="suborder" i], input[id*="sub_order" i]'
@@ -530,13 +549,21 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
       } else {
         await this.browser.clickLabelInDom("Raise a Ticket")
       }
-      await this.delay(2000)
+      await this.delay(1500)
       openedForm = await this.browser.evaluate<boolean>(`Boolean(document.querySelector(${JSON.stringify(subOrderInputSelector)}))`)
+    }
+    if (!openedForm) {
+      const clickedRaiseByAi = await this.tryAiControlFallback("open_raise_ticket_form", 'Button or link that opens the "Raise a Ticket" claim form', 'button, a, [role="button"]')
+      if (clickedRaiseByAi) {
+        await this.delay(1500)
+        openedForm = await this.browser.evaluate<boolean>(`Boolean(document.querySelector(${JSON.stringify(subOrderInputSelector)}))`)
+      }
     }
     if (!openedForm) {
       return {
         success: false,
         stage: "manual_intervention_required",
+        checkpoint: "raise_ticket_form_missing",
         manualActionReason: "The Meesho Raise a Ticket form did not open. An operator must open it in the browser window, then run this claim again.",
       }
     }
@@ -690,9 +717,11 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
       const hasFlyer = await this.browser.evaluate<boolean>(`Boolean(document.querySelector(${JSON.stringify(flyerSelector)}))`)
       if (hasFlyer) {
         await this.humanType(flyerSelector, flyerId)
-        await this.delay(1000)
+        await this.delay(500)
       }
     }
+
+    await this.reportCheckpoint("details_filled", "Filled Sub Order, AWB, Packet ID, and Packet State.")
 
     // Evidence Media Upload (Images & Video)
     const allFiles = Array.from(this.evidenceFilesMap.values()).flat()
@@ -742,11 +771,11 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
         logger.warn(`Meesho upload unverified on #${rawId} (${field ?? "unknown"}): ${reason}.`)
       }
       if (!chosen.length) {
-        if (field === "attachments") {
-          logger.info(`Optional attachments upload box #${rawId} skipped (no extra attachment files).`)
+        if (field === "attachments" || field === "barcode_image") {
+          logger.info(`Optional upload box #${rawId} (${field}) skipped (no extra files).`)
           continue
         }
-        // No evidence mapped to this box: do not guess and do not retry blindly.
+        // No evidence mapped to this mandatory box: do not guess and do not retry blindly.
         fail("no evidence file mapped to this upload box")
         continue
       }
@@ -790,24 +819,29 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
       }
       chosen.forEach((file) => attachedFiles.add(file))
       logger.info(`Attached ${chosen.length} file(s) to ${rawId}; verifying portal acknowledgement…`)
-      await this.delay(1500)
-      // Portal acknowledgement: files.length AND a visible ack near the input
-      // (file name, thumbnail, success chip) with no error text. The portal may
-      // reset the input after upload, so files.length alone never counts.
-      const ack = await this.browser.evaluate<{ files: number; ack: boolean; error: string }>(`
-        (() => {
-          const input = document.querySelector(${JSON.stringify(`#${rawId}`)});
-          if (!input) return { files: 0, ack: false, error: 'input gone after upload' };
-          const files = input.files ? input.files.length : 0;
-          const scope = (input.closest('div, section, li, td') || input.parentElement || document.body);
-          const text = ((scope && scope.innerText) || '').slice(0, 2000);
-          const hasName = /\\.(jpe?g|png|webp|mp4|webm|mov)\\b/i.test(text) || /uploaded|attached|success|preview/i.test(text);
-          const hasThumb = Boolean(scope && scope.querySelector && scope.querySelector('img, video, canvas'));
-          const errEl = scope ? Array.from(scope.querySelectorAll('*')).find((el) => el.childElementCount === 0 && /error|failed|invalid|exceed|limit|required/i.test(el.textContent || '') && (el.textContent || '').trim().length > 8) : null;
-          const error = errEl ? (errEl.textContent || '').trim().slice(0, 200) : '';
-          return { files, ack: Boolean((files > 0 || hasName || hasThumb) && !error), error };
-        })()
-      `).catch(() => ({ files: 0, ack: false, error: "ack read failed" }))
+      let ack: { files: number; ack: boolean; error: string } = { files: 0, ack: false, error: "no acknowledgement yet" }
+      const ackMaxPolls = isVideoBox ? 16 : 8
+      for (let poll = 0; poll < ackMaxPolls; poll++) {
+        await this.delay(poll === 0 ? 900 : 750)
+        // Portal acknowledgement: files.length AND a visible ack near the input
+        // (file name, thumbnail, success chip) with no error text. The portal may
+        // reset the input after upload, so files.length alone never counts.
+        ack = await this.browser.evaluate<{ files: number; ack: boolean; error: string }>(`
+          (() => {
+            const input = document.querySelector(${JSON.stringify(`#${rawId}`)});
+            if (!input) return { files: 0, ack: false, error: 'input gone after upload' };
+            const files = input.files ? input.files.length : 0;
+            const scope = (input.closest('div, section, li, td') || input.parentElement || document.body);
+            const text = ((scope && scope.innerText) || '').slice(0, 2000);
+            const hasName = /\\.(jpe?g|png|webp|mp4|webm|mov)\\b/i.test(text) || /uploaded|attached|success|preview/i.test(text);
+            const hasThumb = Boolean(scope && scope.querySelector && scope.querySelector('img, video, canvas'));
+            const errEl = scope ? Array.from(scope.querySelectorAll('*')).find((el) => el.childElementCount === 0 && /error|failed|invalid|exceed|limit|required/i.test(el.textContent || '') && (el.textContent || '').trim().length > 8) : null;
+            const error = errEl ? (errEl.textContent || '').trim().slice(0, 200) : '';
+            return { files, ack: Boolean((files > 0 || hasName || hasThumb) && !error), error };
+          })()
+        `).catch(() => ({ files: 0, ack: false, error: "ack read failed" }))
+        if (ack.error || ack.ack) break
+      }
       if (ack.error) {
         verifications.push({ inputId: rawId, field: field ?? "unknown", ok: false, reason: `portal reports: ${ack.error}`, attachedCount: ack.files, portalAck: false })
         logger.warn(`Meesho upload rejected on #${rawId}: ${ack.error}.`)
@@ -819,7 +853,7 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
       }
       verifications.push({ inputId: rawId, field: field ?? "unknown", ok: true, reason: "portal acknowledged attachment", attachedCount: ack.files, portalAck: true })
       logger.info(`Verified #${rawId} (${field ?? "unknown"}): portal acknowledged the attachment.`)
-      await this.delay(500)
+      await this.delay(300)
     }
     const failures = verifications.filter((v) => !v.ok)
     if (failures.length) {
@@ -848,6 +882,8 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
       }
     }
 
+    await this.reportCheckpoint("evidence_uploaded", `Verified ${verifications.length} evidence upload(s) on Meesho form.`)
+
     // Description text
     const description = this.job.claim.claimDescription || this.job.claim.claimContent || this.job.claim.remarks
     if (description) {
@@ -870,11 +906,13 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
       if (descReady) {
         logger.info("Entering claim description...")
         await this.humanType("#return-claim-description", description)
-        await this.delay(1000)
+        await this.delay(300)
       }
     }
 
-    // Step 7: Capture Prepared Screenshot
+    await this.reportCheckpoint("description_filled", "Entered dynamic claim description.")
+
+    // Step 7: Capture Prepared Screenshot (safe no-op if surface hidden)
     const prepScreenshot = path.join(this.workDir, `prepared-meesho-job-${this.job.jobId}.png`)
     await this.browser.captureScreenshot(prepScreenshot)
 
@@ -930,24 +968,26 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
     }
 
     logger.info(`Submitting Meesho ticket (Job #${this.job.jobId})...`)
-    const submitted = await this.browser.clickVisibleLabel("Submit")
+    let submitted = await this.browser.clickVisibleLabel("Submit")
 
     if (!submitted) {
-      const clickedFallback = await this.humanClick('button[type="submit"]')
-      if (!clickedFallback) {
-        return {
-          success: false,
-          stage: "manual_intervention_required",
-          screenshotPath: prepScreenshot,
-          manualActionReason: "Meesho did not submit the claim. Finish the form in the open browser, then run this claim again.",
-        }
+      submitted = await this.humanClick('button[type="submit"]')
+    }
+    if (!submitted) {
+      submitted = await this.tryAiControlFallback("click_submit", "Primary Submit button for raising the support claim ticket", 'button, [role="button"], input[type="submit"]')
+    }
+    if (!submitted) {
+      return {
+        success: false,
+        stage: "manual_intervention_required",
+        checkpoint: "submit_button_missing",
+        screenshotPath: prepScreenshot,
+        manualActionReason: "Meesho did not submit the claim. Finish the form in the open browser, then run this claim again.",
       }
     }
 
-    await this.delay(4000)
-
-    const confScreenshot = path.join(this.workDir, `submitted-meesho-job-${this.job.jobId}.png`)
-    await this.browser.captureScreenshot(confScreenshot)
+    await this.reportCheckpoint("submitting_clicked", "Clicked Submit on Meesho form; waiting for Ticket ID confirmation.")
+    await this.delay(1500)
 
     const formErrors = await this.browser.evaluate<string[]>(`
       Array.from(document.querySelectorAll('*'))
@@ -958,14 +998,15 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
     `)
     if (formErrors.length) logger.warn(`Meesho form messages after Submit: ${formErrors.join(" | ")}`)
 
-    // A ticket counts only when Meesho shows a new numeric ticket ID that was not listed before this claim.
+    // Extract Ticket ID BEFORE taking the post-submit screenshot so an OS window surface error
+    // can never drop a confirmed ticket ID after Submit was already clicked.
     const known = new Set(ticketsBefore)
     for (const value of [this.job.claim.subOrderId, this.job.claim.orderNumber, this.job.claim.trackingId, this.job.claim.packetId]) {
       for (const digits of String(value || "").match(/\d{9,15}/g) || []) known.add(digits)
     }
     let extractedTicketId = ""
     const started = Date.now()
-    while (!extractedTicketId && Date.now() - started < 15000) {
+    while (!extractedTicketId && Date.now() - started < 16000) {
       const confirmation = await this.browser.evaluate<{ href: string; text: string }>(`
         ({
           href: window.location.href || '',
@@ -973,13 +1014,16 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
         })
       `).catch(() => ({ href: "", text: "" }))
       extractedTicketId = extractTicketIdFromConfirmation(confirmation.href, confirmation.text, known)
-      if (!extractedTicketId) await this.delay(1500)
+      if (!extractedTicketId) await this.delay(1000)
     }
-    const formStillOpen = await this.browser.evaluate<boolean>(`Boolean(document.querySelector(${JSON.stringify(subOrderInputSelector)}))`)
-    if (formErrors.length && formStillOpen) {
+    const formStillOpen = await this.browser.evaluate<boolean>(`Boolean(document.querySelector(${JSON.stringify(subOrderInputSelector)}))`).catch(() => false)
+    const confScreenshot = path.join(this.workDir, `submitted-meesho-job-${this.job.jobId}.png`)
+    if (formErrors.length && formStillOpen && !extractedTicketId) {
+      await this.browser.captureScreenshot(confScreenshot)
       return {
         success: false,
         stage: "manual_intervention_required",
+        checkpoint: "submit_form_errors",
         screenshotPath: confScreenshot,
         manualActionReason: `Meesho kept the claim form open with errors: ${formErrors.slice(0, 3).join(" | ").slice(0, 400)}`,
       }
@@ -987,14 +1031,16 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
     if (!extractedTicketId && !formStillOpen) {
       await this.browser.navigate(supportUrl)
       await this.waitForContent()
-      const after = await this.readRecentTicketIds(20000)
+      const { ids: after } = await this.readSupportTicketsSnapshot(6000)
       extractedTicketId = after.find((id) => !known.has(id)) || ""
     }
+    await this.browser.captureScreenshot(confScreenshot)
 
     if (!extractedTicketId) {
       return {
         success: false,
         stage: "manual_intervention_required",
+        checkpoint: "ticket_id_missing",
         screenshotPath: confScreenshot,
         manualActionReason: formErrors.length
           ? `Meesho did not raise the ticket: ${formErrors.slice(0, 3).join(" | ")}`
@@ -1002,11 +1048,13 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
       }
     }
 
+    await this.reportCheckpoint("ticket_extracted", `Ticket raised on Meesho: ${extractedTicketId}`)
     logger.info(`Meesho claim submitted. Ticket ID: ${extractedTicketId}`)
 
     return {
       success: true,
       stage: "completed",
+      checkpoint: "ticket_extracted",
       marketplaceClaimId: extractedTicketId,
       screenshotPath: confScreenshot,
     }
@@ -1014,8 +1062,7 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
 
   /** Meesho's "not eligible" message under a form field, waiting briefly for its AWB check. Empty when there is none. */
   private async readIneligibleMessage(): Promise<string> {
-    const started = Date.now()
-    while (Date.now() - started < 5000) {
+    for (let attempt = 0; attempt < 3; attempt++) {
       const message = await this.browser.evaluate<string>(`
         (() => {
           const isErrorStyled = (el) => {
@@ -1030,7 +1077,7 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
         })()
       `)
       if (message) return message
-      await this.delay(1000)
+      if (attempt < 2) await this.delay(1000)
     }
     return ""
   }
@@ -1280,17 +1327,104 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
     `)) || []
   }
 
+  /** Bounded AI fallback: reads up to 25 interactive control labels (scrubbed of order/tracking/PII runs) and asks configured AI to pick a match. */
+  private async tryAiControlFallback(step: string, targetDescription: string, selectorQuery: string): Promise<boolean> {
+    try {
+      const sanitizeLabel = (raw: string): string =>
+        raw
+          .replace(/[\w.+-]+@[\w.-]+\.[a-z]{2,}/gi, "[redacted]")
+          .replace(/\b[a-z]{2,5}\d{6,}\b/gi, "[redacted]")
+          .replace(/\b\d{6,}\b/g, "[redacted]")
+          .trim()
+          .slice(0, 80)
+
+      const rawCandidates = await this.browser.evaluate<VisibleDomCandidate[]>(`
+        (() => {
+          const all = Array.from(document.querySelectorAll(${JSON.stringify(selectorQuery)}));
+          return all
+            .filter((el) => {
+              const r = el.getBoundingClientRect();
+              return r.width > 0 && r.height > 0 && el.childElementCount <= 2;
+            })
+            .slice(0, 25)
+            .map((el, index) => {
+              el.setAttribute('data-ai-cand', String(index));
+              return {
+                index,
+                tag: el.tagName.toLowerCase(),
+                id: el.id || '',
+                name: el.getAttribute('name') || '',
+                placeholder: el.getAttribute('placeholder') || '',
+                text: (el.textContent || '').trim().replace(/\\s+/g, ' ').slice(0, 80),
+                role: el.getAttribute('role') || '',
+                type: el.getAttribute('type') || '',
+              };
+            });
+        })()
+      `).catch(() => [] as VisibleDomCandidate[])
+      const candidates = rawCandidates.map((c) => ({ ...c, text: sanitizeLabel(c.text || "") }))
+      if (!candidates.length) return false
+      const pick = await proposeSelectorFallback({
+        dir: agentDataDir(),
+        step,
+        targetDescription,
+        candidates,
+        claimId: this.job.claimId,
+        marketplace: "Meesho",
+      })
+      if (!pick) return false
+      logger.info(`[AI Selector Fallback] Clicking candidate #${pick.candidateIndex} for "${targetDescription}" (${pick.reason})`)
+      const targetAttrSelector = `[data-ai-cand="${pick.candidateIndex}"]`
+      return await this.browser.evaluate<boolean>(`
+        (() => {
+          const target = document.querySelector(${JSON.stringify(targetAttrSelector)});
+          if (!target) return false;
+          if (typeof target.scrollIntoView === 'function') target.scrollIntoView({ block: 'center' });
+          if (typeof target.click === 'function') target.click();
+          return true;
+        })()
+      `).catch(() => false)
+    } catch {
+      return false
+    }
+  }
+
+  /**
+   * Reads support ticket IDs and table rows from /support, switching briefly to the
+   * "My Tickets" tab when the default Help view has no inline ticket table.
+   */
+  private async readSupportTicketsSnapshot(waitMs: number): Promise<{ ids: string[]; rows: string[][] }> {
+    let ids = await this.readRecentTicketIds(Math.min(waitMs, 2500))
+    let rows = await this.readTicketTableRows()
+    if (!ids.length && !rows.length) {
+      const switchedToMyTickets = await this.browser.evaluate<boolean>(`
+        (() => {
+          const target = Array.from(document.querySelectorAll('a, button, [role="tab"], div, span'))
+            .find((el) => /^\\s*my tickets\\s*$/i.test(el.textContent || '') && el.getBoundingClientRect().width > 0);
+          if (!target || typeof target.click !== 'function') return false;
+          target.click();
+          return true;
+        })()
+      `).catch(() => false)
+      if (switchedToMyTickets) {
+        ids = await this.readRecentTicketIds(waitMs)
+        rows = await this.readTicketTableRows()
+      }
+    }
+    return { ids, rows }
+  }
+
   /** Reads the numeric ticket IDs in Meesho's "Recently raised tickets" table on the Support page. */
   private async readRecentTicketIds(timeoutMs: number): Promise<string[]> {
-    const started = Date.now()
-    while (Date.now() - started < timeoutMs) {
+    const maxPolls = Math.max(1, Math.ceil(timeoutMs / 1000))
+    for (let poll = 0; poll < maxPolls; poll++) {
       const ids = await this.browser.evaluate<string[]>(`
         Array.from(document.querySelectorAll('tr td'))
           .map((td) => (td.textContent || '').trim())
           .filter((text) => /^\\d{9,15}$/.test(text))
       `)
       if (ids && ids.length) return ids
-      await this.delay(1000)
+      if (poll < maxPolls - 1) await this.delay(1000)
     }
     return []
   }

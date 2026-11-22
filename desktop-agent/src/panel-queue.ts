@@ -74,14 +74,14 @@ export function markPanelBusy(panelKey: string, jobId: number, stage: string): v
 /** Record the outcome of a finished job so the dashboard shows per-panel progress. */
 export function markPanelResult(
   panelKey: string,
-  outcome: "completed" | "prepared" | "manual_action" | "not_eligible" | "failed",
+  outcome: "completed" | "prepared" | "manual_action" | "not_eligible" | "claim_manual" | "failed",
   detail?: string,
   options?: { loginRequired?: boolean },
 ): void {
   const r = runtimeFor(panelKey)
   r.activeJobId = null
   r.lastResultAt = new Date().toISOString()
-  if (outcome === "completed" || outcome === "not_eligible") {
+  if (outcome === "completed" || outcome === "not_eligible" || outcome === "claim_manual") {
     r.consecutiveErrors = 0
     r.reloginRequired = false
     r.state = "idle"

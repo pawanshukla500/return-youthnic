@@ -18,6 +18,7 @@ import { clearPortalLoginHold, closePortalLoginBrowser, ensureMeeshoAutoSubmit, 
 import {
   activeSupplierTabPanelKey,
   attachSupplierViewForBackground,
+  clearSupplierSessionCache,
   closeSupplierTab,
   detachSupplierTab,
   dockSupplierTab,
@@ -70,6 +71,8 @@ import { evidenceStreamHeaders, isValidEvidenceClaimId, listEvidenceFiles, resol
  * second copy of the loop anywhere.
  */
 let engineBind: EngineBind | null = null
+let activeServer: http.Server | null = null
+let processedSinceCacheClear = 0
 
 let config: AgentConfig = loadAgentConfig()
 let client = new AgentBackendClient(config)
@@ -469,6 +472,17 @@ async function pollAndProcessJob(manual = false): Promise<boolean> {
       // backend-issued `submitting` lease (granted when an approved job is
       // leased) selects the submit path; cookie state is not consulted.
       const action = jobHeader.stage === "submitting" ? "submit" : "prepare"
+      if (typeof (engine as { setProgressReporter?: (cb: (checkpoint: string, message?: string) => Promise<void>) => void }).setProgressReporter === "function") {
+        ;(engine as { setProgressReporter: (cb: (checkpoint: string, message?: string) => Promise<void>) => void }).setProgressReporter(
+          async (checkpoint, message) => {
+            await client.updateProgress(jobHeader.jobId, {
+              stage: jobHeader.stage === "submitting" ? "submitting" : "filling_form",
+              checkpoint,
+              logMessage: message || `Checkpoint: ${checkpoint}`,
+            }).catch(() => undefined)
+          },
+        )
+      }
       // Prepare runs on auto-submit accounts fall through to portal submission
       // inside the engine, so they get the same revalidation (without the
       // submitting-stage requirement, which only the approval path satisfies).
@@ -481,7 +495,14 @@ async function pollAndProcessJob(manual = false): Promise<boolean> {
         const gate = isSafeToSubmitBundle(fresh?.stage, fresh?.claimStatus, bundle.requireApprovalBeforeSubmit)
         if (!gate.ok) {
           logger.warn(`Pre-submit revalidation stopped Job #${jobHeader.jobId}: ${gate.reason}`)
-          markPanelResult(panelKey, "manual_action", gate.reason)
+          markPanelResult(panelKey, "claim_manual", gate.reason)
+          await client.updateProgress(jobHeader.jobId, {
+            stage: "manual_intervention_required",
+            checkpoint: "pre_submit_stopped",
+            logMessage: gate.reason,
+            manualActionReason: gate.reason,
+          }).catch(() => undefined)
+          await client.cleanClaimEvidenceFiles(bundle.claimId, [])
           return false
         }
       }
@@ -503,6 +524,7 @@ async function pollAndProcessJob(manual = false): Promise<boolean> {
         markPanelResult(panelKey, "prepared", "Prepared on the supplier panel. Waiting for approval.")
         await client.updateProgress(jobHeader.jobId, {
           stage: "prepared",
+          checkpoint: "prepared_for_approval",
           logMessage: "Claim prepared on seller portal. Waiting for user approval before submission.",
           screenshotPath: result.screenshotPath,
         })
@@ -517,50 +539,75 @@ async function pollAndProcessJob(manual = false): Promise<boolean> {
         // Clean up local downloaded evidence files so they don't occupy disk space, keeping the
         // submission screenshot the job references for operator inspection.
         await client.cleanClaimEvidenceFiles(bundle.claimId, result.screenshotPath ? [result.screenshotPath] : [])
+        processedSinceCacheClear += 1
+        if (processedSinceCacheClear >= 5) {
+          processedSinceCacheClear = 0
+          await clearSupplierSessionCache(panelKey)
+          if (typeof (globalThis as { gc?: () => void }).gc === "function") {
+            ;(globalThis as { gc?: () => void }).gc!()
+          }
+        }
       } else if (result.stage === "manual_intervention_required") {
-        keepBrowserOpen = true
-        // Manual intervention needs the operator's eyes on the actual page:
-        // every manualActionReason says "in the open browser", so the view
-        // must be shown in the bounded workspace here. The background-only
-        // attach left operators facing the "browser is hidden" placeholder
-        // with no page to act on. showSupplierView never steals OS focus
-        // (the tab badges instead) and is fail-closed off the Browsers tab.
-        showSupplierView(panelKey)
-        await browserRunner.showForManualStep?.()
         const isLoginPrompt = result.loginRequired === true
         if (isLoginPrompt) {
+          // Only an expired panel session holds the whole marketplace panel while
+          // waiting for the operator to sign back in once.
+          keepBrowserOpen = true
+          showSupplierView(panelKey)
+          await browserRunner.showForManualStep?.()
           clearSessionMarker(supplierSessionDir(config.userDataDir, bundle.marketplace, resolveBrowserAdapterKind()))
           heldReloginBrowserByPanel.set(panelKey, supplierBrowser)
-        }
-        await client.createOperatorTask({
-          claimId: bundle.claimId,
-          marketplace: bundle.marketplace,
-          kind: isLoginPrompt ? "expired_session" : "pending_approval",
-          title: isLoginPrompt
-            ? `${bundle.marketplace}: session expired — log in again for claim #${bundle.claimId}`
-            : `${bundle.marketplace}: manual approval needed for claim #${bundle.claimId}`,
-          note: result.manualActionReason || (isLoginPrompt ? "Session expired. Log in again in the app to carry on with this claim." : "Filing paused for an operator action."),
-        })
-        markPanelResult(
-          panelKey,
-          "manual_action",
-          result.manualActionReason || "Manual action required on portal.",
-          isLoginPrompt ? { loginRequired: true } : undefined,
-        )
-        await client.updateProgress(jobHeader.jobId, {
-          stage: "manual_intervention_required",
-          logMessage: result.manualActionReason || "Manual action required on portal.",
-          screenshotPath: result.screenshotPath,
-          manualActionReason: result.manualActionReason,
-        })
-        if (isLoginPrompt) {
+          await client.createOperatorTask({
+            claimId: bundle.claimId,
+            marketplace: bundle.marketplace,
+            kind: "expired_session",
+            title: `${bundle.marketplace}: session expired — log in again for claim #${bundle.claimId}`,
+            note: result.manualActionReason || "Session expired. Log in again in the app to carry on with this claim.",
+          })
+          markPanelResult(
+            panelKey,
+            "manual_action",
+            result.manualActionReason || "Session expired — log in again.",
+            { loginRequired: true },
+          )
+          await client.updateProgress(jobHeader.jobId, {
+            stage: "manual_intervention_required",
+            checkpoint: "login_required",
+            logMessage: result.manualActionReason || "Session expired — log in again.",
+            screenshotPath: result.screenshotPath,
+            manualActionReason: result.manualActionReason,
+          })
           scheduleReloginWatch(panelKey)
+        } else {
+          // Single-claim manual issues must NEVER block subsequent queued claims.
+          keepBrowserOpen = false
+          await client.createOperatorTask({
+            claimId: bundle.claimId,
+            marketplace: bundle.marketplace,
+            kind: "operator_action",
+            title: `${bundle.marketplace}: manual filing needed for claim #${bundle.claimId}`,
+            note: result.manualActionReason || "This claim needs manual review; remaining queue continues.",
+          })
+          markPanelResult(
+            panelKey,
+            "claim_manual",
+            result.manualActionReason || "Manual filing required for this claim; continuing queue.",
+          )
+          await client.updateProgress(jobHeader.jobId, {
+            stage: "manual_intervention_required",
+            checkpoint: result.checkpoint || "manual_required",
+            logMessage: result.manualActionReason || "Manual filing required for this claim.",
+            screenshotPath: result.screenshotPath,
+            manualActionReason: result.manualActionReason,
+          })
+          await client.cleanClaimEvidenceFiles(bundle.claimId, result.screenshotPath ? [result.screenshotPath] : [])
         }
       } else if (result.stage === "not_eligible") {
         logger.warn(`Job #${jobHeader.jobId} is not eligible for a claim. Kept for manual review; moving to the next job.`)
         markPanelResult(panelKey, "not_eligible", result.manualActionReason || "Marketplace says this order is not eligible.")
         await client.updateProgress(jobHeader.jobId, {
           stage: "not_eligible",
+          checkpoint: "not_eligible",
           logMessage: result.manualActionReason || "The marketplace says this order is not eligible for a claim.",
           screenshotPath: result.screenshotPath,
           manualActionReason: result.manualActionReason,
@@ -615,18 +662,19 @@ async function pollAndProcessJob(manual = false): Promise<boolean> {
     logger.error("Error processing automation job:", err)
     if (activeJobInfo?.jobId) {
       const failedPanel = panelKeyForMarketplace(String(activeJobInfo.marketplace || ""))
-      markPanelResult(
-        failedPanel,
-        submissionOutcomeUnknown ? "manual_action" : "failed",
-        err instanceof Error ? err.message : "Desktop automation failed.",
-      )
+      const reason = err instanceof Error ? err.message : "Desktop automation failed."
+      // Never lock the entire marketplace panel because one claim failed or lost its
+      // confirmation ACK; the failing job moves to exponential backoff / Manual Required
+      // on the backend while the remaining queued claims keep moving.
+      markPanelResult(failedPanel, "claim_manual", reason)
       setSupplierTabWorkerState(failedPanel, { workerOwned: false })
       await client.updateProgress(activeJobInfo.jobId, {
         stage: submissionOutcomeUnknown ? "manual_intervention_required" : "failed",
-        logMessage: err instanceof Error ? err.message : "Desktop automation failed.",
+        checkpoint: submissionOutcomeUnknown ? "submit_ack_uncertain" : "error_retry_scheduled",
+        logMessage: reason,
         manualActionReason: submissionOutcomeUnknown
           ? "Meesho returned a ticket, but the server acknowledgement was lost. Verify the ticket before retrying."
-          : err instanceof Error ? err.message : "Desktop automation failed.",
+          : reason,
       }).catch(() => undefined)
     }
   } finally {
@@ -999,7 +1047,7 @@ function scheduleNextFollowUp(delayMs: number): void {
 function pollDelayMs(processedJob: boolean): number {
   if (processedJob) {
     idlePolls = 0
-    return Math.max(5000, Math.round(config.pollIntervalMs / 2))
+    return 1000
   }
   idlePolls += 1
   if (idlePolls > 10) return config.pollIntervalMs * 3
@@ -4575,6 +4623,7 @@ export function startDesktopAppServer(bind: EngineBind = resolveEngineBind()): P
 
     server.once("error", reject)
     server.listen(bind.port, bind.host, () => {
+      activeServer = server
       if (bind.remoteAccess) {
         logger.info(
           `Automation engine listening on ${bind.host}:${bind.port} (remote mode; bearer token required on every route except /api/health).`,
@@ -4584,6 +4633,47 @@ export function startDesktopAppServer(bind: EngineBind = resolveEngineBind()): P
       }
       resolve(server)
     })
+  })
+}
+
+export async function stopDesktopAppServer(): Promise<void> {
+  isWorkerRunning = false
+  if (pollTimer) {
+    clearTimeout(pollTimer)
+    pollTimer = null
+  }
+  if (followUpTimer) {
+    clearTimeout(followUpTimer)
+    followUpTimer = null
+  }
+  if (countdownTimer) {
+    clearInterval(countdownTimer)
+    countdownTimer = null
+  }
+  if (reloginWatchTimer) {
+    clearTimeout(reloginWatchTimer)
+    reloginWatchTimer = null
+  }
+  for (const timer of viewSettleTimers.values()) clearTimeout(timer)
+  viewSettleTimers.clear()
+  for (const res of sseClients) {
+    try {
+      res.end()
+    } catch {
+      // ignore closed stream
+    }
+  }
+  sseClients.clear()
+  const srv = activeServer
+  activeServer = null
+  if (!srv) return
+  await new Promise<void>((resolve) => {
+    try {
+      srv.close(() => resolve())
+      setTimeout(resolve, 1000)
+    } catch {
+      resolve()
+    }
   })
 }
 

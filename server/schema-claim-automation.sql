@@ -69,8 +69,13 @@ CREATE INDEX IF NOT EXISTS claim_automation_jobs_agent_idx ON claim_automation_j
 CREATE INDEX IF NOT EXISTS claim_automation_jobs_stage_created_idx ON claim_automation_jobs (stage, created_at ASC) WHERE stage IN ('queued', 'approved');
 ALTER TABLE claim_automation_jobs ADD COLUMN IF NOT EXISTS lease_expires_at timestamptz;
 ALTER TABLE claim_automation_jobs ADD COLUMN IF NOT EXISTS last_error text NOT NULL DEFAULT '';
+ALTER TABLE claim_automation_jobs ADD COLUMN IF NOT EXISTS checkpoint text NOT NULL DEFAULT '';
+ALTER TABLE claim_automation_jobs ADD COLUMN IF NOT EXISTS next_retry_at timestamptz;
+ALTER TABLE claim_automation_jobs ADD COLUMN IF NOT EXISTS failure_reason text NOT NULL DEFAULT '';
 CREATE INDEX IF NOT EXISTS claim_automation_jobs_lease_idx ON claim_automation_jobs (lease_expires_at)
   WHERE lease_expires_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS claim_automation_jobs_next_retry_idx ON claim_automation_jobs (next_retry_at)
+  WHERE next_retry_at IS NOT NULL;
 
 -- 4. Additional claim snapshot and description fields on claims table
 ALTER TABLE claims ADD COLUMN IF NOT EXISTS customer_name_snapshot text NOT NULL DEFAULT '';
@@ -98,6 +103,34 @@ SELECT m.id, m.name,
 FROM marketplaces m
 WHERE m.name IN ('Myntra VB', 'Myntra EJ', 'Meesho', 'Ajio', 'Flipkart', 'Amazon')
 ON CONFLICT DO NOTHING;
+
+-- Migrate the seeded default Meesho credential from assisted -> autonomous once (preserving custom/SYN credentials
+-- and leaving Flipkart, Myntra, Ajio, Amazon approval-required).
+WITH updated_meesho AS (
+  UPDATE marketplace_credentials mc
+  SET automation_mode = 'autonomous',
+      require_approval_before_submit = false,
+      updated_at = now()
+  FROM marketplaces m
+  WHERE m.id = mc.marketplace_id
+    AND LOWER(m.name) = 'meesho'
+    AND mc.account_name = 'Meesho'
+    AND mc.automation_mode = 'assisted'
+    AND mc.require_approval_before_submit = true
+    AND NOT EXISTS (
+      SELECT 1 FROM register_audit_log WHERE action = 'marketplace_credential.meesho_autonomous_migration'
+    )
+  RETURNING mc.id, mc.account_name
+)
+INSERT INTO register_audit_log (actor_user_id, action, entity_type, entity_id, details)
+SELECT NULL, 'marketplace_credential.meesho_autonomous_migration', 'marketplace_credential', u.id::text,
+       jsonb_build_object(
+         'accountName', u.account_name,
+         'automationMode', 'autonomous',
+         'requireApprovalBeforeSubmit', false,
+         'reason', 'Default Meesho account runs autonomously with saved desktop cookies.'
+       )
+FROM updated_meesho u;
 
 -- 6. Ensure default claim templates exist for all marketplaces
 -- Myntra VB, Myntra EJ, Meesho, Ajio: Images + Unpacking Video

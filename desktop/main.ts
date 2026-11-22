@@ -13,6 +13,7 @@ import {
   engineStatus,
   resumeClaimBotIfSignedIn,
   startDesktopAppServer,
+  stopDesktopAppServer,
 } from "../desktop-agent/src/desktop-app-server.js"
 import { notifyWindowGeometryChanged, setBrowserWorkspaceRect, setDetachedViewHost, setFullscreenSupplierView, setSupplierViewHost, handleDetachedWindowClosed, disposeDetachedSupplierViews, notifyWindowLifecycle, DETACHED_WINDOW_WEB_PREFERENCES, STANDARD_CHROME_USER_AGENT, type WindowLifecycleEvent } from "../desktop-agent/src/native-browser-view.js"
 import { isInsecureRemoteUrl, isSameOrigin, localEngineUrl, resolveEngineBind, type EngineBind } from "../desktop-agent/src/engine-config.js"
@@ -1255,6 +1256,7 @@ ipcMain.on("desktop:browser-fullscreen", (_event, fullscreen) => {
 const gotTheLock = app.requestSingleInstanceLock()
 if (!gotTheLock) {
   app.quit()
+  app.exit(0)
 } else {
   app.on("second-instance", () => {
     if (mainWindow) {
@@ -1379,6 +1381,7 @@ function registerAutoStart(): void {
 }
 
 app.whenReady().then(async () => {
+  if (!gotTheLock) return
   process.env.RETURN_APP_VERSION = app.getVersion()
 
   registerRendererProtocol()
@@ -1428,7 +1431,7 @@ app.on("before-quit", (event) => {
       session.fromPartition(`persist:supplier-${panelKey}`).cookies.flushStore().catch(() => undefined),
     )
     Promise.race([
-      Promise.allSettled(flushes),
+      Promise.allSettled([...flushes, stopDesktopAppServer()]),
       new Promise<void>((resolve) => setTimeout(resolve, 1500)),
     ]).finally(() => {
       cookiesFlushedBeforeQuit = true

@@ -293,9 +293,11 @@ export function mountClaimAutomationRoutes(app: Express, requireUser: RequestHan
       // from a worker that no longer holds a live lease on this job.
       const marketplaceId = await updateJobProgress(getPool(), id, {
         stage: text(body.stage) || "processing",
+        checkpoint: text(body.checkpoint) || undefined,
         logMessage: text(body.logMessage),
         screenshotPath: text(body.screenshotPath),
         manualActionReason: text(body.manualActionReason),
+        nextRetrySeconds: Number.isFinite(Number(body.nextRetrySeconds)) ? Number(body.nextRetrySeconds) : undefined,
       }, agent.id)
       publishChange({ kind: "claim.updated", marketplaceId })
       res.json({ ok: true })
