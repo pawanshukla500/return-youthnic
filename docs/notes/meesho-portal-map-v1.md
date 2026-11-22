@@ -43,8 +43,12 @@ Unmapped codes stop for human review — the bot never substitutes another categ
 ## 4. Validation and refusal signals (from code)
 
 - "Not eligible" (case-insensitive, error-styled, short) after Check → `not_eligible`, never claimed.
+- Packet state not selected after 3 tries → `manual_intervention_required` (`packet_state_unselected`).
+  Nothing is filed: Meesho keeps Submit disabled until Intact or Tampered is chosen.
 - Submit disabled after 20 s → scrape empty inputs + error text; not-eligible wording → `not_eligible`,
   else `manual_intervention_required` with the portal text.
+- The click is `meeshoSubmitClickScript()`: exact visible text `Submit`, enabled, not
+  `aria-disabled`. A "Submitted on" history line or a disabled button is not a click.
 - Portal error words after Submit with the form still open → `manual_intervention_required`.
 - Ticket counts only when a NEW 9–15 digit ID appears that was absent before Submit.
 

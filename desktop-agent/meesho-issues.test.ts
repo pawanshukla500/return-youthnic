@@ -14,12 +14,53 @@ import {
   parseMeeshoTicketRow,
   extractMeeshoResolution,
   extractTicketIdFromConfirmation,
+  meeshoSubmitClickScript,
   resolveMeeshoIssueLabel,
   resolveMeeshoPacketLabel,
   resolveMeeshoUploadField,
   summarizeMeeshoUploadFailures,
   validateMeeshoVideoForUpload,
 } from "./src/marketplaces/meesho.js"
+
+describe("Meesho Submit click", () => {
+  class El {
+    clicked = false
+    constructor(
+      readonly textContent: string,
+      readonly value = "",
+      readonly disabled = false,
+      private readonly ariaDisabled: string | null = null,
+      private readonly width = 10,
+    ) {}
+    getAttribute(name: string): string | null {
+      return name === "aria-disabled" ? this.ariaDisabled : null
+    }
+    getBoundingClientRect(): { width: number; height: number } {
+      return { width: this.width, height: 10 }
+    }
+    scrollIntoView(): void {}
+    click(): void { this.clicked = true }
+    closest(): this { return this }
+  }
+
+  function run(nodes: El[]): El | undefined {
+    const document = { querySelectorAll: () => nodes }
+    const window = { HTMLInputElement: function HTMLInputElement() { /* marker for instanceof */ } }
+    const click = new Function("document", "window", "HTMLInputElement", `${meeshoSubmitClickScript()};`)
+    click(document, window, window.HTMLInputElement)
+    return nodes.find((node) => node.clicked)
+  }
+
+  it("clicks only an enabled control whose text is exactly Submit", () => {
+    const submit = new El("Submit")
+    const history = new El("Submitted on 21/11")
+    assert.equal(run([history, submit]), submit)
+    assert.equal(run([new El("Submit", "", true)]), undefined)
+    assert.equal(run([new El("Submit", "", false, "true")]), undefined)
+    assert.equal(run([new El("Submit", "", false, null, 0)]), undefined)
+    assert.equal(run([history]), undefined)
+  })
+})
 
 describe("Meesho portal issue mapping", () => {
   it("maps every known claim issue code to a portal label", () => {

@@ -115,6 +115,10 @@ function createCategoryBrowser(state: CategorySimState, workDir: string): Suppli
         : url
     },
     async evaluate<T>(script: string): Promise<T> {
+      if (script.includes("label(target) !== 'Submit'")) {
+        state.submitted = true
+        return true as unknown as T
+      }
       if (script.includes("isPortalLoggedIn")) return true as unknown as T
       if (script.includes("#loginbutton")) return false as unknown as T
       if (script.includes('input[type="password"]')) {
