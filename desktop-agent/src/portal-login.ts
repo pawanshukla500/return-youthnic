@@ -388,17 +388,38 @@ export function isPortalLoggedIn(marketplace: string, url: string, text: string 
     lowerUrl.includes("/root/register") ||
     lowerUrl.includes("/root/otp") ||
     lowerUrl.includes("signin") ||
-    lowerUrl.includes("sign-in")
+    lowerUrl.includes("sign-in") ||
+    lowerUrl.includes("accounts.myntra.com")
   ) {
     return false
   }
   if (hasPasswordInput) {
     return false
   }
-  if (marketplace.toLowerCase().includes("meesho")) {
+  const normMarketplace = marketplace.toLowerCase()
+  if (normMarketplace.includes("meesho")) {
     const inPanel = lowerUrl.includes("/growth/") || lowerUrl.includes("/experience/") || lowerUrl.includes("/panel/v3/new/")
     const welcome = text.includes("Welcome back") || text.includes("Pending Orders")
     return inPanel || welcome
+  }
+  if (normMarketplace.includes("flipkart")) {
+    const inPanel =
+      lowerUrl.includes("seller.flipkart.com") &&
+      (lowerUrl.includes("/dashboard") ||
+        lowerUrl.includes("/returns") ||
+        lowerUrl.includes("/index.html") ||
+        lowerUrl.includes("/orders"))
+    const hasSellerContext =
+      text.includes("Seller Hub") || text.includes("Dashboard") || text.includes("Returns") || text.includes("My Listings")
+    return inPanel || hasSellerContext
+  }
+  if (normMarketplace.includes("myntra")) {
+    const inPanel =
+      (lowerUrl.includes("partners.myntra.com") || lowerUrl.includes("partners.myntrainfo.com")) &&
+      !lowerUrl.includes("accounts.myntra.com")
+    const hasPartnerContext =
+      text.includes("Partner Portal") || text.includes("Returns") || text.includes("Services") || text.includes("Dashboard")
+    return inPanel || hasPartnerContext
   }
   return text.length > 80
 }

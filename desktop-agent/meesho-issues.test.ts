@@ -150,6 +150,17 @@ describe("Meesho already-filed check", () => {
     assert.equal(findExistingTicketForOrder([["1234567890123", "Raised"]], []), null)
     assert.equal(findExistingTicketForOrder([["1234567890123", "Raised"]], [undefined, null, ""]), null)
   })
+
+  it("distinguishes between matching order tickets and unrelated tickets in support snapshot", () => {
+    const rows = [
+      ["Ticket 999111222333", "Sub Order 888777666555", "Resolved"],
+      ["Ticket 999444555666", "Sub Order 1234567890123", "In Progress"],
+    ]
+    // Only the ticket for order 1234567890123 matches
+    assert.equal(findExistingTicketForOrder(rows, ["1234567890123"]), "999444555666")
+    // When looking for an order not in any row, unrelated tickets are never matched
+    assert.equal(findExistingTicketForOrder(rows, ["5554443332221"]), null)
+  })
 })
 
 describe("Meesho upload-field mapping (M9 Phase 6: Claim #1 regression)", () => {

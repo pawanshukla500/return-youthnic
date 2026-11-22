@@ -12,10 +12,10 @@ import { profileDirFor, readSessionSavedAt, supplierSessionDir } from "./supplie
 
 export const CLAIM_PANELS = [
   { key: "meesho", name: "Meesho", portalUrl: "https://supplier.meesho.com/panel/v3/new/root/login", automated: true },
-  { key: "flipkart", name: "Flipkart", portalUrl: "https://seller.flipkart.com/index.html#dashboard/returns-v2", automated: false },
+  { key: "flipkart", name: "Flipkart", portalUrl: "https://seller.flipkart.com/index.html#dashboard/returns-v2", automated: true },
   { key: "amazon", name: "Amazon", portalUrl: "https://sellercentral.amazon.in/", automated: false },
-  { key: "myntra_vb", name: "Myntra VB", portalUrl: "https://partners.myntra.com/returns", automated: false },
-  { key: "myntra_ej", name: "Myntra EJ", portalUrl: "https://partners.myntra.com/returns", automated: false },
+  { key: "myntra_vb", name: "Myntra VB", portalUrl: "https://partners.myntrainfo.com/returns", automated: true },
+  { key: "myntra_ej", name: "Myntra EJ", portalUrl: "https://partners.myntrainfo.com/returns", automated: true },
   { key: "ajio", name: "Ajio", portalUrl: "https://supplier.ajio.com/returns", automated: false },
 ] as const
 
