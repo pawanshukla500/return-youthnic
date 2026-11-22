@@ -3889,3 +3889,31 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
 - Ran: `node --import tsx --test desktop-agent/meesho-issues.test.ts` -> 27 pass, 0 fail. `node --import tsx --test desktop-agent/meesho-autonomous-loop.test.ts` -> 4 pass, 0 fail (its fake browser records the new exact-Submit script as the click). `npx tsc --noEmit -p tsconfig.desktop.json` -> 0 errors. `graphify update .` -> 4,978 nodes, 13,181 edges.
 - Not run: a live submit on `supplier.meesho.com` (no seller session on this machine); `npm run typecheck`; `npm test`; `npm run desktop:dist`; `graphify update .` (runs after this entry).
 - The next agent must not: go back to `clickVisibleLabel("Submit")` for the filing click, or file a claim whose packet state was not selected.
+
+### 2026-11-22, Antigravity, OMSGuru Reverse Engineering, Flipkart & Myntra SPF Automation, Meesho Exact Ticket Matching (1.3.19) (PR #101, release desktop-v1.3.19.185)
+- **Task 1 OMSGuru Reverse Engineering**:
+  - Inspected `/home/pawanshukla/Downloads/omsguru-2.3.6.zip` (273,387,341 bytes, SHA256 `4c755521bcfccdd9908272764265daad769559ba114b6b2b2de5a10316d4f15b`, 0 CRC errors).
+  - Reverse engineered binary `OmsGuru.exe` (PE32+ x64, Nuitka, Python 3.12, PySide6, SeleniumBase UC). Confirmed clean-room status: dynamic encrypted channel loader (`SecureApiClient.fetch_channel_code`) downloads scripts at runtime; no static scrapers embedded. Replicated architectural patterns (`BaseChannel`, `ensure_valid_session`, `_download_files_parallel`, `ClaimSubmissionResult`, `TicketUpdate`) in strict TypeScript without copying proprietary vendor code or executing untrusted code.
+- **Task 2 Repository Audit & Bugs Found**:
+  - Fixed invalid `:has-text(...)` pseudo-selector in `flipkart.ts`; replaced stub in `myntra.ts` with full SPF engine; fixed loose `after.find((id) => !known.has(id))` in `meesho.ts`; updated `isPortalLoggedIn` in `portal-login.ts` for Flipkart/Myntra domain recognition.
+- **Task 3 Meesho Automation Hardening**:
+  - `desktop-agent/src/marketplaces/meesho.ts`: replaced unverified ticket diffing with `findExistingTicketForOrder(afterRows, [subOrderId, orderNumber, trackingId, packetId])` to strictly match order references from the Support Tickets table. Retained zero-prior account fallback (`ticketsBefore.length === 0 && after.length === 1`). Strict `Intact` vs `Tampered` packet state enforcement.
+- **Task 4 Flipkart SPF Automation**:
+  - `desktop-agent/src/marketplaces/flipkart.ts`: complete `FlipkartAutomation` implementation. `returns-v2` order search; `detectFlipkartEarlyBlocker` (identifies `not_eligible` and `already_claimed`); `FLIPKART_SPF_ISSUE_LABELS` (wrong return, missing items, damaged return, used product, wrong-barcoded RTO); `flipkartSubmitClickScript` pure-DOM enabled/visible button clicker; multi-file upload field mapping (`outer_box`, `shipping_label`, `product_damage`, `customer_invoice`, `unboxing_video`); `extractFlipkartIncidentId` (`IN...`, `SPF...`). Tests: `desktop-agent/flipkart-issues.test.ts` (13 pass), `desktop-agent/flipkart-claim-flow.test.ts` (3 pass).
+- **Task 5 Myntra SPF Automation**:
+  - `desktop-agent/src/marketplaces/myntra.ts`: complete `MyntraAutomation` implementation with strict account isolation between VB Export PPMP (`myntra_vb`, `persist:supplier-myntra_vb`) and Ethnic Junction (`myntra_ej`, `persist:supplier-myntra_ej`). Returns services navigation (`/returns/services`); `MYNTRA_SPF_ISSUE_LABELS`; Tag Loop & VMS catalog compliance; evidence uploader; `extractMyntraTicketId` (`MYN-SPF-...`, `SPF-...`, `TKT-...`, `INC...`). Tests: `desktop-agent/myntra-issues.test.ts` (12 pass), `desktop-agent/myntra-claim-flow.test.ts` (2 pass).
+- **Task 6 Shared Reliability & Safety**:
+  - `desktop-agent/src/portal-login.ts`: domain recognition for `seller.flipkart.com` and `partners.myntrainfo.com`.
+  - `desktop-agent/src/panel-queue.ts`: enabled automated flags for `flipkart`, `myntra_vb`, and `myntra_ej` while retaining `requireApprovalBeforeSubmitForMarketplace: true` (supervised preparation mode).
+  - Maintained `checkClaimStatus` contract (`supported: false (live verification pending)`) for Flipkart and Myntra to avoid unverified DOM polling.
+- **Task 7 Desktop UI & Packaging**:
+  - Built React 19 bundled renderer (`npm run desktop:renderer:build` Vite v6.4.4, 0 errors).
+  - Bumped version `1.3.18 -> 1.3.19` (`package.json`).
+- **Task 8 Verification & Checks**:
+  - `npm run typecheck` -> 0 errors (all 4 tsconfigs).
+  - `npm test` -> 1,171 tests across 96 suites (1,105 pass, 0 fail, 66 skipped DB checks, 0 cancelled).
+  - `graphify update .` -> 5,063 nodes, 13,336 edges, 179 communities.
+- **Task 9 PR & Release**:
+  - PR #101 squashed and merged into `main` (`d0e88ce`).
+  - Windows Desktop Release published: `desktop-v1.3.19.185` (`Return.App.Setup.1.3.19.exe`, 121.56 MiB).
+- **The next agent must not**: bypass `requireApprovalBeforeSubmitForMarketplace` for Flipkart or Myntra before live human verification on vendor panels; remove exact order ticket matching in `meesho.ts`; or set `checkClaimStatus` to `supported: true` for non-Meesho panels without verified live DOM readers.
