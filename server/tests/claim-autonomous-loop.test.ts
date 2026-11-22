@@ -97,6 +97,69 @@ test("createOrQueueAutomationJob blocks duplicate active filing when completed t
   )
 })
 
+test("pollNextAutomationJob skips multiple duplicates iteratively on one single DB connection without exhausting the pool", async () => {
+  let connectCount = 0
+  let pollSelectCount = 0
+  const queries: string[] = []
+  const exec = async (sql: string) => {
+    queries.push(sql)
+    if (sql.includes("FROM claim_automation_agents")) return { rows: [{ id: 7 }], rowCount: 1 }
+    if (sql.includes("FROM claim_automation_jobs j")) {
+      pollSelectCount += 1
+      if (pollSelectCount <= 2) {
+        return {
+          rows: [{
+            id: 500 + pollSelectCount,
+            claim_id: 600 + pollSelectCount,
+            stage: "queued",
+            checkpoint: "",
+            marketplace_id: 3,
+            claim_status: "ready_for_claim",
+            sub_order_id_snapshot: `SYN-DUP-${pollSelectCount}`,
+            marketplace: "Meesho",
+            order_number: `SYN-ORD-DUP-${pollSelectCount}`,
+            tracking_id: `SYN-AWB-DUP-${pollSelectCount}`,
+          }],
+          rowCount: 1,
+        }
+      }
+      return {
+        rows: [{
+          id: 503,
+          claim_id: 603,
+          stage: "queued",
+          checkpoint: "",
+          marketplace_id: 3,
+          claim_status: "ready_for_claim",
+          sub_order_id_snapshot: "SYN-CLEAN-3",
+          marketplace: "Meesho",
+          order_number: "SYN-ORD-CLEAN-3",
+          tracking_id: "SYN-AWB-CLEAN-3",
+        }],
+        rowCount: 1,
+      }
+    }
+    if (sql.includes("completed_other_order_check")) {
+      if (pollSelectCount <= 2) return { rows: [{ ticket_id: "795277339000" }], rowCount: 1 }
+      return { rows: [], rowCount: 0 }
+    }
+    return { rows: [], rowCount: 0 }
+  }
+  const client = { query: exec, release: () => undefined }
+  const pool = {
+    query: exec,
+    connect: async () => {
+      connectCount += 1
+      return client
+    },
+  } as unknown as pg.Pool
+
+  const leased = await pollNextAutomationJob(pool, "SYN-AGENT", scope)
+  assert.equal(connectCount, 1, "must hold at most one pooled client even across multiple duplicates")
+  assert.ok(leased)
+  assert.equal(leased.jobId, 503)
+})
+
 test("listClaims supports status=manual_list filtering for Manual Required list", async () => {
   const { pool, queries } = fakePool((sql) => {
     if (sql.includes("COUNT(*)::int AS total")) return { rows: [{ total: 0 }] }

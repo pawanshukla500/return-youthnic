@@ -711,7 +711,8 @@ export async function pollNextAutomationJob(
       backfillParams,
     )
 
-    // Select oldest queued job or approved job ready for submission
+    // Select oldest queued job or approved job ready for submission, parking any
+    // duplicate already-ticketed jobs iteratively on this single connection.
     const jobParams: unknown[] = []
     const scopeCondition = accountCondition(scope, "c.marketplace_id", jobParams)
     jobParams.push(
@@ -721,98 +722,111 @@ export async function pollNextAutomationJob(
         .slice(0, 20),
     )
     const skipParam = `$${jobParams.length}::text[]`
-    const jobRes = await client.query(
-      `SELECT j.id, j.claim_id, j.stage, j.checkpoint, c.marketplace_id, c.status AS claim_status,
-              c.sub_order_id_snapshot, m.name AS marketplace, er.order_number, er.tracking_id
-       FROM claim_automation_jobs j
-       JOIN claims c ON c.id = j.claim_id
-       JOIN marketplaces m ON m.id = c.marketplace_id
-       JOIN receipt_scans rs ON rs.id = c.receipt_scan_id
-       JOIN expected_returns er ON er.id = rs.expected_return_id
-       WHERE j.stage IN ('queued', 'approved')
-         AND LOWER(m.name) = 'meesho'
-         AND j.attempts < j.max_attempts
-         AND (j.next_retry_at IS NULL OR j.next_retry_at <= now())
-         -- Filing eligibility allowlist (M8): only claims that are ready to file, being
-         -- processed, or explicitly re-opened may lease. Pending states (pending_evidence,
-         -- waiting_for_approval), recorded outcomes (submitted, under_review, approved, rejected,
-         -- reconciled, paid) and operator-held states (failed, manual_action_required) never
-         -- lease directly; they re-enter only through retry/approve/manual-resolve. Jobs for
-         -- incomplete claims stay safely pending and become eligible automatically when
-         -- addClaimMedia flips the claim to ready_for_claim.
-         AND c.status IN ('ready_for_claim', 'processing', 'reclaim', 'escalated')
-         AND NOT (j.stage = 'queued' AND LOWER(m.name) = ANY(${skipParam}))
-         AND ${scopeCondition}
-       ORDER BY j.created_at ASC
-       LIMIT 1
-       FOR UPDATE OF j SKIP LOCKED`,
-      jobParams,
-    )
 
-    if (!jobRes.rows[0]) {
-      await client.query("COMMIT")
-      return null
+    let job: Record<string, unknown> | null = null
+    for (let dupSkip = 0; dupSkip < 50; dupSkip++) {
+      const jobRes = await client.query(
+        `SELECT j.id, j.claim_id, j.stage, j.checkpoint, c.marketplace_id, c.status AS claim_status,
+                c.sub_order_id_snapshot, m.name AS marketplace, er.order_number, er.tracking_id
+         FROM claim_automation_jobs j
+         JOIN claims c ON c.id = j.claim_id
+         JOIN marketplaces m ON m.id = c.marketplace_id
+         JOIN receipt_scans rs ON rs.id = c.receipt_scan_id
+         JOIN expected_returns er ON er.id = rs.expected_return_id
+         WHERE j.stage IN ('queued', 'approved')
+           AND LOWER(m.name) = 'meesho'
+           AND j.attempts < j.max_attempts
+           AND (j.next_retry_at IS NULL OR j.next_retry_at <= now())
+           -- Filing eligibility allowlist (M8): only claims that are ready to file, being
+           -- processed, or explicitly re-opened may lease. Pending states (pending_evidence,
+           -- waiting_for_approval), recorded outcomes (submitted, under_review, approved, rejected,
+           -- reconciled, paid) and operator-held states (failed, manual_action_required) never
+           -- lease directly; they re-enter only through retry/approve/manual-resolve. Jobs for
+           -- incomplete claims stay safely pending and become eligible automatically when
+           -- addClaimMedia flips the claim to ready_for_claim.
+           AND c.status IN ('ready_for_claim', 'processing', 'reclaim', 'escalated')
+           AND NOT (j.stage = 'queued' AND LOWER(m.name) = ANY(${skipParam}))
+           AND ${scopeCondition}
+         ORDER BY j.created_at ASC
+         LIMIT 1
+         FOR UPDATE OF j SKIP LOCKED`,
+        jobParams,
+      )
+
+      if (!jobRes.rows[0]) {
+        await client.query("COMMIT")
+        return null
+      }
+
+      const candidate = jobRes.rows[0]
+
+      // Duplicate order/sub-order guard at lease time: if another completed job already filed
+      // a ticket for this sub-order (or order when sub-order is blank), never file a second time.
+      if (String(candidate.claim_status || "") !== "reclaim") {
+        const dupCheck = await client.query<{ ticket_id: string }>(
+          `/* completed_other_order_check */
+           SELECT other_j.marketplace_claim_id AS ticket_id
+           FROM claim_automation_jobs other_j
+           JOIN claims other_c ON other_c.id = other_j.claim_id AND other_c.marketplace_id = $1
+           JOIN receipt_scans other_rs ON other_rs.id = other_c.receipt_scan_id
+           JOIN expected_returns other_er ON other_er.id = other_rs.expected_return_id
+           WHERE other_j.stage = 'completed'
+             AND other_j.marketplace_claim_id <> ''
+             AND other_j.claim_id <> $2
+             AND (
+               (NULLIF(BTRIM($3::text), '') IS NOT NULL
+                 AND NULLIF(BTRIM(other_c.sub_order_id_snapshot), '') IS NOT NULL
+                 AND UPPER(BTRIM(other_c.sub_order_id_snapshot)) = UPPER(BTRIM($3::text)))
+               OR (
+                 (NULLIF(BTRIM($3::text), '') IS NULL OR NULLIF(BTRIM(other_c.sub_order_id_snapshot), '') IS NULL)
+                 AND NULLIF(BTRIM($4::text), '') IS NOT NULL
+                 AND UPPER(BTRIM(other_er.order_number)) = UPPER(BTRIM($4::text))
+               )
+             )
+           LIMIT 1`,
+          [
+            Number(candidate.marketplace_id || 0),
+            Number(candidate.claim_id),
+            String(candidate.sub_order_id_snapshot || ""),
+            String(candidate.order_number || ""),
+          ],
+        )
+        const duplicateTicket = dupCheck.rows[0]?.ticket_id ? String(dupCheck.rows[0].ticket_id) : ""
+        if (duplicateTicket) {
+          const dupReason = `Duplicate prevented: already filed with Ticket ID ${duplicateTicket}`
+          await client.query(
+            `UPDATE claim_automation_jobs
+             SET stage = 'manual_intervention_required',
+                 manual_action_reason = $2,
+                 failure_reason = $2,
+                 next_retry_at = NULL,
+                 lease_expires_at = NULL,
+                 updated_at = now()
+             WHERE id = $1`,
+            [candidate.id, dupReason],
+          )
+          await client.query(
+            `INSERT INTO claim_status_history (claim_id, from_status, to_status, reason, changed_by)
+             SELECT id, status, 'manual_action_required', $2, NULL FROM claims WHERE id = $1 AND status <> 'manual_action_required'`,
+            [candidate.claim_id, dupReason],
+          )
+          await client.query(
+            `UPDATE claims SET status = 'manual_action_required', remarks = COALESCE(remarks, '') || '\n' || $2, updated_at = now() WHERE id = $1`,
+            [candidate.claim_id, dupReason],
+          )
+          await client.query("COMMIT")
+          await client.query("BEGIN")
+          continue
+        }
+      }
+
+      job = candidate
+      break
     }
 
-    const job = jobRes.rows[0]
-
-    // Duplicate order/sub-order guard at lease time: if another completed job already filed
-    // a ticket for this sub-order (or order when sub-order is blank), never file a second time.
-    if (String(job.claim_status || "") !== "reclaim") {
-      const dupCheck = await client.query<{ ticket_id: string }>(
-        `/* completed_other_order_check */
-         SELECT other_j.marketplace_claim_id AS ticket_id
-         FROM claim_automation_jobs other_j
-         JOIN claims other_c ON other_c.id = other_j.claim_id AND other_c.marketplace_id = $1
-         JOIN receipt_scans other_rs ON other_rs.id = other_c.receipt_scan_id
-         JOIN expected_returns other_er ON other_er.id = other_rs.expected_return_id
-         WHERE other_j.stage = 'completed'
-           AND other_j.marketplace_claim_id <> ''
-           AND other_j.claim_id <> $2
-           AND (
-             (NULLIF(BTRIM($3::text), '') IS NOT NULL
-               AND NULLIF(BTRIM(other_c.sub_order_id_snapshot), '') IS NOT NULL
-               AND UPPER(BTRIM(other_c.sub_order_id_snapshot)) = UPPER(BTRIM($3::text)))
-             OR (
-               (NULLIF(BTRIM($3::text), '') IS NULL OR NULLIF(BTRIM(other_c.sub_order_id_snapshot), '') IS NULL)
-               AND NULLIF(BTRIM($4::text), '') IS NOT NULL
-               AND UPPER(BTRIM(other_er.order_number)) = UPPER(BTRIM($4::text))
-             )
-           )
-         LIMIT 1`,
-        [
-          Number(job.marketplace_id || 0),
-          Number(job.claim_id),
-          String(job.sub_order_id_snapshot || ""),
-          String(job.order_number || ""),
-        ],
-      )
-      const duplicateTicket = dupCheck.rows[0]?.ticket_id ? String(dupCheck.rows[0].ticket_id) : ""
-      if (duplicateTicket) {
-        const dupReason = `Duplicate prevented: already filed with Ticket ID ${duplicateTicket}`
-        await client.query(
-          `UPDATE claim_automation_jobs
-           SET stage = 'manual_intervention_required',
-               manual_action_reason = $2,
-               failure_reason = $2,
-               next_retry_at = NULL,
-               lease_expires_at = NULL,
-               updated_at = now()
-           WHERE id = $1`,
-          [job.id, dupReason],
-        )
-        await client.query(
-          `INSERT INTO claim_status_history (claim_id, from_status, to_status, reason, changed_by)
-           SELECT id, status, 'manual_action_required', $2, NULL FROM claims WHERE id = $1 AND status <> 'manual_action_required'`,
-          [job.claim_id, dupReason],
-        )
-        await client.query(
-          `UPDATE claims SET status = 'manual_action_required', remarks = COALESCE(remarks, '') || '\n' || $2, updated_at = now() WHERE id = $1`,
-          [job.claim_id, dupReason],
-        )
-        await client.query("COMMIT")
-        return await pollNextAutomationJob(db, agentUuid, scope, skipMarketplaces)
-      }
+    if (!job) {
+      await client.query("COMMIT")
+      return null
     }
 
     const nextStage = job.stage === "approved" ? "submitting" : "downloading_media"
