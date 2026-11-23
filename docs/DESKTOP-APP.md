@@ -160,6 +160,14 @@ response* as they happen.
 The **Follow-ups** page shows the marketplace, the marketplace's own ticket
 ID, the claim status, when the last check ran, when the next one is due, how
 many checks have run, and the current state.
+Since v1.3.25, the page includes:
+- **Stat cards**: Total Tracked, Active Tracking, Action Required, Approved / Resolved (with total settled payout in ₹).
+- **Search bar**: Instantly searches by Ticket ID, Sub-Order ID, AWB, Order number, or Account name.
+- **Status tabs**: All, Action Required, Active, and Resolved.
+- **Marketplace pills**: Filter by Meesho, Flipkart, Myntra, or All.
+- **1-Click Ticket ID Copy**: Copies the marketplace ticket number to the clipboard with visual checkmark feedback.
+- **Detailed Order Context**: Displays the 18-digit Meesho Sub-Order ID, AWB, and approved settlement amounts (+₹).
+See [docs/TICKET-TRACKING.md](docs/TICKET-TRACKING.md) for the full ticket tracking architecture, database tables, and live audit metrics.
 
 The check stops by itself when there is nothing left to chase:
 

@@ -267,6 +267,10 @@ export type FollowUpRow = {
   history: Array<Record<string, unknown>>
   createdAt: string
   updatedAt: string
+  subOrderId?: string
+  awb?: string
+  claimAmount?: number
+  approvedAmount?: number
 }
 
 function iso(value: unknown): string | null {
@@ -660,7 +664,7 @@ export async function listFollowUps(
   filter: { activeOnly?: boolean; search?: string; page?: number; pageSize?: number } = {},
 ): Promise<{ rows: FollowUpRow[]; total: number; summary: FollowUpSummary }> {
   const page = Math.max(1, Number(filter.page) || 1)
-  const pageSize = Math.min(200, Math.max(1, Number(filter.pageSize) || 50))
+  const pageSize = Math.min(500, Math.max(1, Number(filter.pageSize) || 50))
 
   const params: unknown[] = []
   const scopeCondition = accountCondition(scope, "c.marketplace_id", params)
@@ -669,7 +673,9 @@ export async function listFollowUps(
   const search = String(filter.search || "").trim()
   if (search) {
     params.push(`%${search}%`)
-    conditions.push(`(f.marketplace_claim_id ILIKE $${params.length} OR er.order_number ILIKE $${params.length})`)
+    conditions.push(
+      `(f.marketplace_claim_id ILIKE $${params.length} OR er.order_number ILIKE $${params.length} OR COALESCE(c.sub_order_id_snapshot, '') ILIKE $${params.length} OR COALESCE(c.awb_snapshot, '') ILIKE $${params.length})`,
+    )
   }
   const where = conditions.join(" AND ")
 
@@ -704,7 +710,12 @@ export async function listFollowUps(
             f.is_active, f.stop_reason, f.status_at_last_check, f.last_checked_at, f.next_check_at,
             f.check_interval_hours, f.check_count, f.error_streak, f.last_error, f.history,
             f.created_at, f.updated_at,
-            COALESCE(m.name, '') AS marketplace, COALESCE(er.order_number, '') AS order_number,
+            COALESCE(m.name, '') AS marketplace,
+            COALESCE(c.sub_order_id_snapshot, er.order_number, '') AS order_number,
+            COALESCE(c.sub_order_id_snapshot, '') AS sub_order_id,
+            COALESCE(c.awb_snapshot, rs.scanned_tracking, '') AS awb,
+            COALESCE(c.claim_amount, 0)::float AS claim_amount,
+            COALESCE(c.approved_amount, 0)::float AS approved_amount,
             c.status AS claim_status, (COUNT(*) OVER())::int AS total_count
      FROM claim_automation_follow_ups f
      JOIN claims c ON c.id = f.claim_id
@@ -740,6 +751,10 @@ export async function listFollowUps(
     history: Array.isArray(r.history) ? (r.history as Array<Record<string, unknown>>) : [],
     createdAt: iso(r.created_at) || "",
     updatedAt: iso(r.updated_at) || "",
+    subOrderId: String(r.sub_order_id || ""),
+    awb: String(r.awb || ""),
+    claimAmount: Number(r.claim_amount || 0),
+    approvedAmount: Number(r.approved_amount || 0),
   }))
 
   return { rows, total: Number(listRes.rows[0]?.total_count || 0), summary }

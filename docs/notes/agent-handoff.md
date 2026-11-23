@@ -4071,5 +4071,32 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
   - Bumped version `1.3.23 -> 1.3.24` (`package.json`).
 - **The next agent must not**: bypass M9's `requireApprovalBeforeSubmitForMarketplace` or `submitting`-lease gates; log or expose secrets or API keys; exceed 256MB V8 heap on desktop automation.
 
+### 2026-11-23, Antigravity, Live Database Ticket Tracking System, Desktop Follow-Up Filtering & Documentation (1.3.25)
+- **Full Database Ticket Tracking & Backend Enhancements**:
+  - In `server/claim-follow-up-service.ts`: Updated `FollowUpRow` type with optional `subOrderId`, `awb`, `claimAmount`, and `approvedAmount`. Increased `pageSize` cap to 500 to accommodate all 115+ submitted claims. Expanded search query matching across `f.marketplace_claim_id`, `er.order_number`, `c.sub_order_id_snapshot`, and `c.awb_snapshot`.
+  - In `desktop-agent/src/agent-client.ts`: Updated `getFollowUps` to forward `search`, `page`, `pageSize`, and `activeOnly` query parameters to backend `/api/automation/follow-ups`.
+  - In `desktop-agent/src/desktop-app-server.ts`: Updated `GET /api/follow-ups` handler to extract and forward `search`, `pageSize` (default 250), `page`, and `activeOnly`.
+  - In `desktop/renderer/src/types/engine.ts`: Updated `FollowUpRow` with `id`, `claimId`, `subOrderId`, `awb`, `claimAmount`, `approvedAmount`.
+- **Desktop Follow-Ups UI Overhaul (`desktop/renderer/src/pages/FollowUps.tsx`)**:
+  - Implemented 4 real-time StatCards: Total Tracked (115+), Active Tracking (48h cadence), Action Required (proof demands), Approved / Resolved (with live settled payouts ₹876.57).
+  - Search Bar: Live filtering across Ticket ID, Sub-Order ID, AWB, Order Number, Account Name, and last check message with 1-click clear button.
+  - Status Tabs: `All`, `Action Required`, `Active`, `Resolved` with count pills.
+  - Marketplace Filter Pills: `All`, `Meesho`, `Flipkart`, `Myntra`.
+  - 1-Click Ticket ID Copy: Dedicated copy-to-clipboard button with visual checkmark feedback.
+  - Detailed Order Context: Displays 18-digit Meesho Sub-Order ID, AWB, and approved settlement amount badges (`+₹<amount>`).
+- **Unit Testing**:
+  - Added unit tests in `desktop/renderer/src/pages/FollowUps.test.ts` for `filterFollowUps` (23/23 tests pass).
+- **Comprehensive Documentation**:
+  - Created `docs/TICKET-TRACKING.md` detailing the entire ticket tracking architecture, database tables, live metrics (142 claims, 115 submitted with tickets, 2 approved with ₹876.57 payout), desktop UI capabilities, and operational runbook.
+  - Updated `docs/DESKTOP-APP.md` with Follow-ups page search, filtering, and copy features.
+- **Verification & Checks**:
+  - `npm run desktop:renderer:build` -> Vite built in 1.94s with 0 errors.
+  - `npm run typecheck` -> 0 errors across all 4 tsconfig projects.
+  - `npm test` -> 1,210 tests across 102 suites: **1,144 pass**, 0 fail, 66 skipped DB checks, 0 cancelled.
+  - `graphify update .` -> updated code knowledge graph.
+  - Bumped version `1.3.24 -> 1.3.25` (`package.json`).
+- **The next agent must not**: bypass M9's `requireApprovalBeforeSubmitForMarketplace` or `submitting`-lease gates; log or expose secrets or API keys; exceed 256MB V8 heap on desktop automation.
+
+
 
 
