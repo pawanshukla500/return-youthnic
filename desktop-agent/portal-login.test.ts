@@ -37,6 +37,16 @@ test("isPortalLoggedIn correctly recognizes Meesho supplier panel states", () =>
     "should identify /panel/v3/new/ route as logged in"
   )
   assert.equal(
+    isPortalLoggedIn("Meesho", "https://supplier.meesho.com/home", "", false),
+    true,
+    "should identify /home root dashboard as logged in"
+  )
+  assert.equal(
+    isPortalLoggedIn("Meesho", "https://supplier.meesho.com/", "", false),
+    true,
+    "should identify supplier.meesho.com/ root as logged in"
+  )
+  assert.equal(
     isPortalLoggedIn("Meesho", "https://supplier.meesho.com/dashboard", "Welcome back seller! Pending Orders: 5", false),
     true,
     "should identify welcome text as logged in"
