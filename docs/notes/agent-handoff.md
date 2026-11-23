@@ -4097,6 +4097,26 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
   - Bumped version `1.3.24 -> 1.3.25` (`package.json`).
 - **The next agent must not**: bypass M9's `requireApprovalBeforeSubmitForMarketplace` or `submitting`-lease gates; log or expose secrets or API keys; exceed 256MB V8 heap on desktop automation.
 
+### 2026-11-23, Antigravity, 104 Meesho Claims Tracking & Master Directory Audit (1.3.26)
+- **104 Meesho Orders & Ticket Tracking Audit**:
+  - Executed complete audit of all 104 Meesho claims in the live database (`return-scan_youthnic`).
+  - Breakdown: 77 `submitted` with real 12-digit tickets (₹49,926.00 claimed), 2 `approved` with settled payouts totaling ₹876.57 (Claim #2: ₹618.24, Claim #4: ₹258.33), 17 `ready_for_claim` staged for filing, 6 `waiting_for_approval`, 1 `manual_action_required`, 1 `failed`.
+  - Confirmed 100% of all 104 claims carry order/sub-order linkages, courier AWBs, and tracking references.
+- **Machine Learning & Scenario Tracking Operational Flow**:
+  - Documented deep-link per-ticket inspection (`https://supplier.meesho.com/panel/v3/new/experience/{slug}/support/ticket/{ticketId}`).
+  - Documented deterministic & machine-learned scenario classification (`meesho-scenarios.ts`): full approvals, partial approvals with extracted amounts, final rejections with extracted reasons, and proof/unboxing video demands (`isResponseNeeded`).
+  - Documented dual-loop safety enforcement preventing concurrent browser operations.
+- **Master Directory & Reporting**:
+  - Published Section 7 in `docs/TICKET-TRACKING.md` with complete 104-order master table mapping Claim ID, Sub-Order ID, AWB, Ticket ID, Claim Amount, Approved Amount, Issue Description, and Follow-up state.
+  - Created standalone artifact `meesho-104-claims-report.md`.
+- **Verification & Checks**:
+  - `npm run desktop:renderer:build` -> 0 errors.
+  - `npm run typecheck` -> 0 errors across all 4 tsconfig projects.
+  - `npm test` -> 1,210 tests across 103 suites: **1,144 pass**, 0 fail, 66 skipped DB checks.
+  - Bumped version `1.3.25 -> 1.3.26` (`package.json`).
+- **The next agent must not**: bypass M9's `requireApprovalBeforeSubmitForMarketplace` or `submitting`-lease gates; log or expose secrets or API keys; exceed 256MB V8 heap on desktop automation.
+
+
 
 
 
