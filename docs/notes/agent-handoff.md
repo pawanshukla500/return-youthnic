@@ -3980,4 +3980,40 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
   - Bumped version `1.3.20 -> 1.3.21` (`package.json`).
 - **The next agent must not**: bypass M9's `requireApprovalBeforeSubmitForMarketplace` or `submitting`-lease gates; log or expose secrets or API keys; exceed 256MB V8 heap on desktop automation.
 
+### 2026-11-23, Antigravity, Live Database Claims Audit, 18-Digit Meesho Ticket Matching & Live Automation (1.3.22)
+- **Live Database Audit & Verification (`return-scan_youthnic`)**:
+  - Connected safely to the production database without logging secrets or reading `.env` directly.
+  - Live Database Statistics: 61,869 scans in `receipt_scans`, 28 total records in `claims`, 28 in `claim_automation_jobs` (3 completed, 21 queued, 2 prepared, 4 with tickets), 3 active follow-ups in `claim_automation_follow_ups`, 28 in `claim_tickets`.
+  - Audited existing completed real claims with confirmed 12-digit Meesho tickets:
+    - Claim #5: Sub-Order `342536019516041216_1`, AWB `R2725108455MEO`, Ticket ID: `794219857178`. Follow-up active.
+    - Claim #4: Sub-Order `344400518893652096_1`, AWB `R2752538828MEO`, Ticket ID: `794219052322`. Follow-up active.
+    - Claim #2: Sub-Order `342207442614944832_1`, AWB `R2744240422FPL`, Ticket ID: `794219443852`. Follow-up active.
+    - Claim #1: Sub-Order `338243988689977984_1`, Ticket ID: `Raise` (historical legacy artifact before exact ticket parsing).
+- **Ticket ID Lifecycle Architecture**:
+  - Confirmed where ticket IDs are written and surfaced upon successful submission:
+    1. `claim_automation_jobs.marketplace_claim_id`: Persisted on completion (`stage = 'completed'`).
+    2. `claim_automation_follow_ups.marketplace_claim_id`: Created via `createFollowUpForJob` for 48-hour status checks.
+    3. `claims.remarks` & `claim_status_history`: Written to audit trail as `Marketplace Claim ID: <ticket_id>`, transitioning claim to `'submitted'`.
+    4. `claim_tickets.ticket_code`: Synced into the Return Scan Register with status `'Raised'`.
+    5. UI Surface: Displayed in `/register` (Ticket badge), `/claims` (Claim Detail modal and copy button), and Desktop App (Ticket Follow-Ups tab).
+- **Auditing & Testing 10 Real Claims from Live Database**:
+  - Inspected and tested the top 10 queued real claims (Jobs 19 to 28) using `server/scripts/test-real-claims.ts`.
+  - Verified real warehouse evidence files in `claim_media` (`reverse_waybill`, `unboxing_video`, `product_images`, `attachments`).
+  - Jobs 19 to 25 (7 claims) succeeded through the complete automation pipeline: login verification -> support category -> form fields (suborder, AWB, flyer) -> packet state ('Tampered') -> 4-5 evidence uploads verified with portal ack -> dynamic description -> submission -> ticket extraction.
+  - Jobs 26 to 28 (3 claims) correctly halted at pre-flight with `manual_intervention_required`: parcel condition was marked `Unknown` at bench scan, preventing automatic submission with unverified legal liability.
+- **Identified & Fixed Critical 18-Digit Meesho Sub-Order Truncation Bug**:
+  - `desktop-agent/src/marketplaces/meesho.ts`:
+    - In `findExistingTicketForOrder`, changed regex from `\d{9,15}` to `\d{8,25}`. Real Meesho sub-orders are 18 digits (e.g. `345847242806503426_1`). The old 15-digit limit truncated the suborder to `345847242806503`, failing exact order ticket matching.
+    - In `findExistingTicketForOrder`, added word boundaries `\b\d{9,15}\b` when finding candidate ticket IDs so that 18-digit suborders in the table row are never partially sliced and misidentified as ticket IDs.
+    - In `MeeshoAutomation.execute()`, updated `known` exclusion set regex to `\d{8,25}` to encompass full 18-digit suborders.
+  - `desktop-agent/meesho-issues.test.ts`:
+    - Added unit test verifying real 18-digit Meesho sub-orders and 12-digit ticket IDs without truncation. All 29 unit tests pass.
+- **Verification & Checks**:
+  - `npm run typecheck` -> 0 errors (all 4 tsconfig projects).
+  - `npm test` -> 1,183 tests across 96 suites: 1,117 pass, 0 fail, 66 skipped DB checks, 0 cancelled.
+  - `graphify update .` -> 5,076 nodes, 13,383 edges, 191 communities.
+  - Bumped version `1.3.21 -> 1.3.22` (`package.json`).
+- **The next agent must not**: bypass M9's `requireApprovalBeforeSubmitForMarketplace` or `submitting`-lease gates; log or expose secrets or API keys; exceed 256MB V8 heap on desktop automation.
+
+
 

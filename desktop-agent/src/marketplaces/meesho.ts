@@ -46,7 +46,7 @@ export function resolveMeeshoPacketLabel(packetState: string): "Intact" | "Tampe
 export function findExistingTicketForOrder(rows: string[][], orderRefs: Array<string | undefined | null>): string | null {
   const needleRuns = new Set<string>()
   for (const ref of orderRefs) {
-    for (const digits of String(ref || "").match(/\d{9,15}/g) || []) needleRuns.add(digits)
+    for (const digits of String(ref || "").match(/\d{8,25}/g) || []) needleRuns.add(digits)
   }
   if (!needleRuns.size) return null
   if (!Array.isArray(rows)) return null
@@ -54,7 +54,7 @@ export function findExistingTicketForOrder(rows: string[][], orderRefs: Array<st
     if (!Array.isArray(cells)) continue
     const text = cells.join(" | ")
     if (![...needleRuns].some((run) => text.includes(run))) continue
-    const ticket = (text.match(/\d{9,15}/g) || []).find((id) => !needleRuns.has(id))
+    const ticket = (text.match(/\b\d{9,15}\b/g) || []).find((id) => !needleRuns.has(id))
     if (ticket) return ticket
   }
   return null
@@ -1049,7 +1049,7 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
     // can never drop a confirmed ticket ID after Submit was already clicked.
     const known = new Set(ticketsBefore)
     for (const value of [this.job.claim.subOrderId, this.job.claim.orderNumber, this.job.claim.trackingId, this.job.claim.packetId]) {
-      for (const digits of String(value || "").match(/\d{9,15}/g) || []) known.add(digits)
+      for (const digits of String(value || "").match(/\d{8,25}/g) || []) known.add(digits)
     }
     let extractedTicketId = ""
     const started = Date.now()
