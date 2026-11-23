@@ -103,9 +103,15 @@ export type JobRow = {
 
 /** GET /api/follow-ups?pageSize=100 */
 export type FollowUpRow = {
+  id?: number
+  claimId?: number
   marketplace: string
   accountName: string
   orderNumber: string
+  subOrderId?: string
+  awb?: string
+  claimAmount?: number
+  approvedAmount?: number
   marketplaceClaimId: string
   claimStatus: string
   statusAtLastCheck: string

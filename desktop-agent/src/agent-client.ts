@@ -558,7 +558,9 @@ export class AgentBackendClient {
    * would make the dashboard's follow-up table say "no tickets are tracked" when the truth is that nothing
    * could be read — the same class of mistake as reporting an unrun check as passed.
    */
-  async getFollowUps(filter: { pageSize?: number } = {}): Promise<FollowUpListResult> {
+  async getFollowUps(
+    filter: { pageSize?: number; search?: string; page?: number; activeOnly?: boolean } = {},
+  ): Promise<FollowUpListResult> {
     const failure = (status: number, error: string): FollowUpListResult => ({
       ok: false,
       status,
@@ -572,6 +574,9 @@ export class AgentBackendClient {
       if (!authorization) return failure(401, "Sign in on the claim bot to see ticket follow-ups.")
       const q = new URLSearchParams()
       if (filter.pageSize) q.set("pageSize", String(filter.pageSize))
+      if (filter.search) q.set("search", String(filter.search))
+      if (filter.page) q.set("page", String(filter.page))
+      if (filter.activeOnly) q.set("activeOnly", "true")
       const url = `${this.config.backendUrl}/api/automation/follow-ups?${q.toString()}`
       const res = await fetch(url, { headers: { Authorization: authorization } })
       if (!res.ok) {

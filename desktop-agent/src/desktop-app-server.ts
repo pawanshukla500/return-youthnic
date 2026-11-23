@@ -3894,9 +3894,14 @@ export function startDesktopAppServer(bind: EngineBind = resolveEngineBind()): P
           sendJson(res, 401, { error: "Sign in before viewing ticket follow-ups." })
           return
         }
+        // Extract query parameters from client (search, pageSize, page, activeOnly)
+        const search = url.searchParams.get("search") || undefined
+        const pageSize = Number(url.searchParams.get("pageSize")) || 250
+        const page = Number(url.searchParams.get("page")) || 1
+        const activeOnly = url.searchParams.get("activeOnly") === "true" ? true : undefined
         // Pass the real outcome through. A failed read must not look like an empty list, or the dashboard would
         // report "no tickets are tracked" while nothing could actually be read.
-        const data = await client.getFollowUps({ pageSize: 100 })
+        const data = await client.getFollowUps({ search, pageSize, page, activeOnly })
         if (!data.ok) {
           sendJson(res, data.status, { error: data.error })
           return
