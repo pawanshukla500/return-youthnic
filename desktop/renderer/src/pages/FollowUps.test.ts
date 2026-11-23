@@ -1,6 +1,6 @@
 import { describe, it } from "node:test"
 import assert from "node:assert/strict"
-import { followUpStateLabel, followUpSummaryText, whenText } from "./FollowUps.js"
+import { followUpStateLabel, followUpSummaryText, isResponseNeeded, whenText } from "./FollowUps.js"
 
 const NOW = Date.parse("2026-11-04T12:00:00.000Z")
 
@@ -32,6 +32,29 @@ describe("whenText", () => {
 })
 
 describe("followUpStateLabel", () => {
+  it("flags action required when the ticket demands a seller response or proof", () => {
+    assert.equal(
+      followUpStateLabel({
+        isActive: true,
+        errorStreak: 0,
+        checkIntervalHours: 48,
+        stopReason: "",
+        statusAtLastCheck: "Please provide clear unboxing video within 24 hours",
+      }),
+      "action required",
+    )
+    assert.equal(
+      followUpStateLabel({
+        isActive: true,
+        errorStreak: 0,
+        checkIntervalHours: 48,
+        stopReason: "",
+        statusAtLastCheck: "Action required: waiting for seller response",
+      }),
+      "action required",
+    )
+  })
+
   it("reports the error streak for an active follow-up that keeps failing", () => {
     assert.equal(
       followUpStateLabel({ isActive: true, errorStreak: 3, checkIntervalHours: 48, stopReason: "" }),
@@ -71,5 +94,20 @@ describe("followUpSummaryText", () => {
     assert.equal(followUpSummaryText({ active: 2 } as any, false), "(2 tracking · 0 due now · 0 resolved)")
     assert.equal(followUpSummaryText(undefined, true), "(unavailable)")
     assert.equal(followUpSummaryText(null, false), "")
+  })
+})
+
+describe("isResponseNeeded", () => {
+  it("identifies action and response request phrases from the marketplace", () => {
+    assert.equal(isResponseNeeded({ claimStatus: "under_review", statusAtLastCheck: "Please provide unboxing video" }), true)
+    assert.equal(isResponseNeeded({ claimStatus: "under_review", statusAtLastCheck: "Action required: share proof" }), true)
+    assert.equal(isResponseNeeded({ claimStatus: "under_review", statusAtLastCheck: "Waiting for you to reply" }), true)
+    assert.equal(isResponseNeeded({ claimStatus: "under_review", statusAtLastCheck: "Upload new label photo" }), true)
+  })
+
+  it("returns false for regular under review, approved, or rejected tickets", () => {
+    assert.equal(isResponseNeeded({ claimStatus: "under_review", statusAtLastCheck: "Ticket under review by Meesho" }), false)
+    assert.equal(isResponseNeeded({ claimStatus: "approved", statusAtLastCheck: "Claim approved for ₹450" }), false)
+    assert.equal(isResponseNeeded({ claimStatus: "rejected", statusAtLastCheck: "Rejected: Product arrived intact" }), false)
   })
 })

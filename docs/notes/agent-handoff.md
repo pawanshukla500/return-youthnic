@@ -4015,5 +4015,36 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
   - Bumped version `1.3.21 -> 1.3.22` (`package.json`).
 - **The next agent must not**: bypass M9's `requireApprovalBeforeSubmitForMarketplace` or `submitting`-lease gates; log or expose secrets or API keys; exceed 256MB V8 heap on desktop automation.
 
+### 2026-11-23, Antigravity, Meesho Machine-Learned Scenarios, 48-Hour Follow-Up Response Tracking & Terminal Resolution Engine (1.3.23)
+- **Machine-Learned Meesho Scenarios Engine (`desktop-agent/src/marketplaces/meesho-scenarios.ts`)**:
+  - Formalized all 6 core portal claim scenarios into strict, deterministic schema:
+    1. `customer_wrong_return`: Category "I have received wrong return", packet state `Tampered`, mandatory uploads `reverse_waybill`, `product_images`, `unboxing_video`.
+    2. `customer_missing_items`: Category "Item/s are missing in my return", packet state `Tampered`, mandatory uploads `reverse_waybill`, `unboxing_video`, `attachments` (outer box showing empty).
+    3. `customer_damaged_return`: Category "I have received damaged return", packet state `Intact`, mandatory uploads `reverse_waybill`, `product_images`, `unboxing_video`.
+    4. `customer_used_return`: Category "I have received used return", packet state `Intact`, mandatory uploads `reverse_waybill`, `product_images`, `unboxing_video`.
+    5. `courier_wrong_barcode`: Category "I have received wrong barcoded RTO", courier return, mandatory uploads `barcode_image`, `reverse_waybill`, `unboxing_video`.
+    6. `courier_damaged_rto`: Category "Damaged RTO received", courier return, mandatory uploads `reverse_waybill`, `unboxing_video`, `attachments`.
+  - Implemented `resolveMeeshoScenario()` to map issue codes and return types to verified portal scenarios.
+  - Implemented strictly factual, non-invented `descriptionTemplate()` per scenario, citing the verified Sub-Order, AWB, packet state, and attached proof.
+  - Formulated `MEESHO_LEARNED_RECOVERY_PROCEDURES` with pre-approved operational steps.
+- **Integration into `desktop-agent/src/marketplaces/meesho.ts`**:
+  - In `execute()`: When `claimDescription` / `claimContent` is missing, dynamically generates the factual scenario description template using the claim's verified attributes.
+  - In `checkClaimStatus()`: Evaluates ticket text using `analyzeMeeshoFollowUpResponse()`. When additional proof or seller response is demanded ("Action Required", "Provide unboxing video", "Clear waybill photo"), prefixes `statusText` with `Action Required:` and keeps `normalizedStatus = "under_review"`.
+  - Terminal ticket closure enforcement: Follow-up loop strictly stays active, re-checking every 48 hours, UNLESS `isMeeshoTicketTerminal()` is true (`approved`, `rejected`, `paid`, `reconciled`, `closed`, `resolved`), extracting approved amount or rejection reason upon terminal state.
+- **Desktop UI Response-Needed Alerting (`desktop/renderer/src/pages/FollowUps.tsx`)**:
+  - Implemented `isResponseNeeded(row)` to detect action demands in ticket status and notes.
+  - Rendered orange `<Badge variant="orange">Action Required</Badge>` beside ticket status.
+  - Added header summary badge showing the exact count of tickets requiring action so operators never miss a marketplace deadline.
+- **Unit Testing**:
+  - Created `desktop-agent/meesho-scenarios.test.ts` (10/10 tests pass).
+  - Updated `desktop/renderer/src/pages/FollowUps.test.ts` (12/12 tests pass).
+- **Verification & Checks**:
+  - `npm run desktop:renderer:build` -> Vite built in 1.92s with 0 errors.
+  - `npm run typecheck` -> 0 errors across all 4 tsconfig projects (`tsconfig.json`, `tsconfig.server.json`, `tsconfig.desktop.json`, `desktop/renderer/tsconfig.json`).
+  - `npm test` -> 1,196 tests across 101 suites: 1,130 pass, 0 fail, 66 skipped DB checks, 0 cancelled.
+  - `graphify update .` -> 5,088 nodes, 13,414 edges, 189 communities.
+  - Bumped version `1.3.22 -> 1.3.23` (`package.json`).
+- **The next agent must not**: bypass M9's `requireApprovalBeforeSubmitForMarketplace` or `submitting`-lease gates; log or expose secrets or API keys; exceed 256MB V8 heap on desktop automation.
+
 
 

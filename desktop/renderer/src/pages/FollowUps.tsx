@@ -43,21 +43,43 @@ export function whenText(iso: string | null | undefined, now: number = Date.now(
 
 type FollowUpStateInput = Pick<FollowUpRow, 'isActive' | 'errorStreak' | 'checkIntervalHours' | 'stopReason'>
 
+const RESPONSE_TRIGGER_WORDS = [
+  'provide',
+  'upload',
+  'reply',
+  'action required',
+  'waiting for you',
+  'share proof',
+  'seller response',
+] as const
+
+/**
+ * Detects if a ticket follow-up requires action or response from the seller.
+ */
+export function isResponseNeeded(row: Pick<FollowUpRow, 'claimStatus' | 'statusAtLastCheck'>): boolean {
+  const combined = `${row.claimStatus || ''} ${row.statusAtLastCheck || ''}`.toLowerCase()
+  return RESPONSE_TRIGGER_WORDS.some((word) => combined.includes(word))
+}
+
 /**
  * One-line lifecycle state for a follow-up row, matching the engine
  * dashboard: active rows report their check cadence (or an error streak),
  * stopped rows report why they stopped.
  */
-export function followUpStateLabel(row: FollowUpStateInput): string {
+export function followUpStateLabel(row: FollowUpStateInput & { statusAtLastCheck?: string; claimStatus?: string }): string {
   if (row.isActive) {
+    if (isResponseNeeded(row as any)) return 'action required'
     if (row.errorStreak > 0) return `errors ×${row.errorStreak}`
     return `checking every ${Math.round(row.checkIntervalHours || 48)}h`
   }
   return STOP_REASON_LABELS[row.stopReason ?? ''] ?? 'stopped'
 }
 
-function stateToneClass(row: FollowUpStateInput): string {
-  if (row.isActive) return row.errorStreak > 0 ? 'text-orange' : 'text-green'
+function stateToneClass(row: FollowUpStateInput & { statusAtLastCheck?: string; claimStatus?: string }): string {
+  if (row.isActive) {
+    if (isResponseNeeded(row as any)) return 'text-amber font-semibold'
+    return row.errorStreak > 0 ? 'text-orange' : 'text-green'
+  }
   if (row.stopReason === 'repeated_errors') return 'text-red'
   if (row.stopReason === 'max_checks_reached') return 'text-orange'
   return 'text-muted'
@@ -97,12 +119,18 @@ const columns: Array<DataTableColumn<FollowUpRow>> = [
   {
     key: 'claimStatus',
     header: 'Claim status',
-    render: (row) => (
-      <div>
-        <span>{row.claimStatus || '—'}</span>
-        {row.statusAtLastCheck ? <div className="mt-0.5 text-[11px] text-muted">{row.statusAtLastCheck}</div> : null}
-      </div>
-    ),
+    render: (row) => {
+      const needsAction = isResponseNeeded(row)
+      return (
+        <div>
+          <div className="flex items-center gap-1.5">
+            <span>{row.claimStatus || '—'}</span>
+            {needsAction ? <Badge variant="orange">Action Required</Badge> : null}
+          </div>
+          {row.statusAtLastCheck ? <div className="mt-0.5 text-[11px] text-muted">{row.statusAtLastCheck}</div> : null}
+        </div>
+      )
+    },
   },
   {
     key: 'lastCheckedAt',
@@ -178,6 +206,7 @@ export default function FollowUpsPage() {
 
   const summary = data?.summary
   const headlineCount = followUpSummaryText(summary, Boolean(error))
+  const needsResponseCount = data?.rows.filter((r) => isResponseNeeded(r)).length ?? 0
 
   return (
     <section aria-labelledby="followups-title">
@@ -185,6 +214,11 @@ export default function FollowUpsPage() {
         <h1 id="followups-title" className="font-display text-xl font-bold text-ink">
           Ticket follow-ups <span className="text-sm font-normal text-muted">{headlineCount}</span>
         </h1>
+        {needsResponseCount > 0 ? (
+          <Badge variant="orange" title="Follow-ups where the marketplace requires seller response or proof">
+            {needsResponseCount} action required
+          </Badge>
+        ) : null}
         {summary && summary.withErrors > 0 ? (
           <Badge variant="red" title="Follow-ups whose last check failed">
             {summary.withErrors} with errors

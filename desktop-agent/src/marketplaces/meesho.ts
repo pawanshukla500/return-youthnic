@@ -5,6 +5,11 @@ import { completePortalLogin, isPortalLoggedIn, resolvePortalLoginUrl } from "..
 import { agentDataDir } from "../paths.js"
 import { proposeSelectorFallback, type VisibleDomCandidate } from "../ai-center-assist.js"
 import { logger } from "../logger.js"
+import {
+  resolveMeeshoScenario,
+  analyzeMeeshoFollowUpResponse,
+  isMeeshoTicketTerminal,
+} from "./meesho-scenarios.js"
 
 /**
  * Portal issue labels behind the Meesho "Raise a Ticket" categories.
@@ -922,8 +927,19 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
 
     await this.reportCheckpoint("evidence_uploaded", `Verified ${verifications.length} evidence upload(s) on Meesho form.`)
 
-    // Description text
-    const description = this.job.claim.claimDescription || this.job.claim.claimContent || this.job.claim.remarks
+    // Description text (uses verified scenario template as factual non-invented fallback)
+    const scenario = resolveMeeshoScenario(this.job.claim.marketplaceIssueCode, this.job.claim.returnType)
+    const fallbackDescription = scenario
+      ? scenario.descriptionTemplate({
+          subOrderId: this.job.claim.subOrderId,
+          awb: this.job.claim.trackingId,
+          packetState: packetState,
+          packetId: this.job.claim.packetId,
+          expectedItem: this.job.claim.sku,
+          notes: this.job.claim.remarks,
+        })
+      : this.job.claim.remarks
+    const description = this.job.claim.claimDescription || this.job.claim.claimContent || fallbackDescription
     if (description) {
       const descReady = await this.browser.evaluate<boolean>(`
         (() => {
@@ -1216,7 +1232,15 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
           await this.browser.captureScreenshot(shot)
           let statusText = classification.statusText
           let resolutionNote = `Ticket ${ticketId} read from its Meesho ticket page.`
-          if (classification.normalizedStatus === "rejected") {
+          let normalizedStatus: string | undefined = classification.normalizedStatus
+
+          // Evaluate if Meesho demands response or additional proof (unboxing video, clear waybill, etc.)
+          const demand = analyzeMeeshoFollowUpResponse(page.text, classification.statusText)
+          if (demand.needsSellerResponse) {
+            statusText = `Action Required: Demanded ${demand.responseType} (${demand.demandText}) | ${classification.statusText}`
+            resolutionNote = `Action Required: Meesho demands ${demand.responseType} ("${demand.demandText}"). Seller response needed; ticket kept active.`
+            normalizedStatus = "under_review"
+          } else if (classification.normalizedStatus === "rejected") {
             const res = extractMeeshoResolution(page.text)
             if (res.rejectionReason) {
               statusText = `${classification.statusText} | Reason: ${res.rejectionReason}`
@@ -1234,7 +1258,7 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
           return {
             supported: true,
             statusText,
-            normalizedStatus: classification.normalizedStatus,
+            normalizedStatus,
             screenshotPath: shot,
             note: resolutionNote,
           }
@@ -1276,6 +1300,7 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
 
       let resolutionNote = `Ticket ${ticketId} read from the Meesho Support page.`
       let statusText = parsed.statusText
+      let normalizedStatus: string | undefined = parsed.normalizedStatus
 
       let finalScreenshot = shot
       // If the ticket is rejected, open ticket details to extract the exact reason
@@ -1320,12 +1345,19 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
           statusText = `${parsed.statusText} | Approved Amount: ₹${res.approvedAmount}`
           resolutionNote = `Claim approved for ₹${res.approvedAmount}.`
         }
+      } else {
+        const demand = analyzeMeeshoFollowUpResponse("", parsed.statusText)
+        if (demand.needsSellerResponse) {
+          statusText = `Action Required: Demanded ${demand.responseType} (${demand.demandText}) | ${parsed.statusText}`
+          resolutionNote = `Action Required: Meesho demands ${demand.responseType} ("${demand.demandText}"). Seller response needed; ticket kept active.`
+          normalizedStatus = "under_review"
+        }
       }
 
       return {
         supported: true,
         statusText,
-        normalizedStatus: parsed.normalizedStatus,
+        normalizedStatus,
         screenshotPath: finalScreenshot,
         note: resolutionNote,
       }
