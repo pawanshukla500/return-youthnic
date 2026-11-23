@@ -161,6 +161,13 @@ describe("Meesho already-filed check", () => {
     // When looking for an order not in any row, unrelated tickets are never matched
     assert.equal(findExistingTicketForOrder(rows, ["5554443332221"]), null)
   })
+
+  it("handles real 18-digit Meesho sub-orders and 12-digit ticket IDs without truncation", () => {
+    const rows = [
+      ["Ticket 794219857178", "Sub Order 345847242806503426_1", "Resolved"],
+    ]
+    assert.equal(findExistingTicketForOrder(rows, ["345847242806503426_1"]), "794219857178")
+  })
 })
 
 describe("Meesho upload-field mapping (M9 Phase 6: Claim #1 regression)", () => {
