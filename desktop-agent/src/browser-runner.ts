@@ -235,6 +235,14 @@ export class BrowserRunner {
     await this.send("Page.enable")
     await this.send("Runtime.enable")
     await this.send("DOM.enable")
+    await this.send("Page.addScriptToEvaluateOnNewDocument", {
+      source: `
+        try {
+          Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+          window.chrome = window.chrome || { runtime: {} };
+        } catch {}
+      `,
+    }).catch(() => undefined)
   }
 
   async send(method: string, params: Record<string, unknown> = {}, timeoutMs = 25_000): Promise<any> {
@@ -728,7 +736,20 @@ export class BrowserRunner {
           nodeId: query.nodeId,
           files: filePaths,
         })
-        await this.delay(1000)
+        await this.delay(500)
+        await this.evaluate(`
+          (() => {
+            const el = document.querySelector(${JSON.stringify(selector)});
+            if (!el) return;
+            el.dispatchEvent(new Event("change", { bubbles: true }));
+            el.dispatchEvent(new Event("input", { bubbles: true }));
+            const key = Object.keys(el).find((k) => k.startsWith("__reactProps") || k.startsWith("__reactEventHandlers"));
+            if (key && el[key] && typeof el[key].onChange === "function") {
+              try { el[key].onChange({ target: el, currentTarget: el }); } catch {}
+            }
+          })()
+        `).catch(() => undefined)
+        await this.delay(500)
         return true
       }
     } catch (err) {

@@ -49,7 +49,9 @@ export function findExistingTicketForOrder(rows: string[][], orderRefs: Array<st
     for (const digits of String(ref || "").match(/\d{9,15}/g) || []) needleRuns.add(digits)
   }
   if (!needleRuns.size) return null
-  for (const cells of rows || []) {
+  if (!Array.isArray(rows)) return null
+  for (const cells of rows) {
+    if (!Array.isArray(cells)) continue
     const text = cells.join(" | ")
     if (![...needleRuns].some((run) => text.includes(run))) continue
     const ticket = (text.match(/\d{9,15}/g) || []).find((id) => !needleRuns.has(id))
@@ -351,7 +353,9 @@ export function meeshoSubmitClickScript(): string {
       if (label(target) !== 'Submit') return false;
       if (target.disabled || target.getAttribute('aria-disabled') === 'true') return false;
       const rect = target.getBoundingClientRect();
-      return rect.width > 0 && rect.height > 0;
+      const style = window.getComputedStyle ? window.getComputedStyle(target) : null;
+      if (style && (style.visibility === 'hidden' || style.display === 'none')) return false;
+      return rect.width > 0 && rect.height > 0 && (target.offsetParent !== null || (style && style.position === 'fixed'));
     });
     if (!match) return false;
     const target = control(match);
@@ -645,7 +649,7 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
     // Meesho checks the AWB against its packaging policy and shows "not eligible" under the field. Such an order is
     // never claimed: it is kept for manual review and the bot moves on.
     const ineligible = await this.readIneligibleMessage()
-    if (ineligible) {
+    if (typeof ineligible === "string" && ineligible.trim()) {
       const shot = path.join(this.workDir, `not-eligible-job-${this.job.jobId}.png`)
       await this.browser.captureScreenshot(shot)
       logger.warn(`Meesho says this order is not eligible for a claim: ${ineligible}`)
@@ -653,7 +657,7 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
         success: false,
         stage: "not_eligible",
         screenshotPath: shot,
-        manualActionReason: `Not eligible on Meesho: ${ineligible.slice(0, 400)}`,
+        manualActionReason: `Not eligible on Meesho: ${ineligible.trim().slice(0, 400)}`,
       }
     }
 
@@ -661,7 +665,7 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
     // returns, existing tickets and eligibility windows also block filing, and
     // Meesho does not always style them as the red "not eligible" error above.
     const earlyBlocker = await this.readEarlyBlockerMessage()
-    if (earlyBlocker) {
+    if (typeof earlyBlocker === "string" && earlyBlocker.trim()) {
       const shot = path.join(this.workDir, `not-eligible-job-${this.job.jobId}.png`)
       await this.browser.captureScreenshot(shot)
       logger.warn(`Meesho blocks filing before submit: ${earlyBlocker}`)
@@ -669,7 +673,7 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
         success: false,
         stage: "not_eligible",
         screenshotPath: shot,
-        manualActionReason: `Not eligible on Meesho: ${earlyBlocker.slice(0, 400)}`,
+        manualActionReason: `Not eligible on Meesho: ${earlyBlocker.trim().slice(0, 400)}`,
       }
     }
 
@@ -680,7 +684,8 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
         (async () => {
           const wanted = ${JSON.stringify(packetState)}.toLowerCase();
           const label = Array.from(document.querySelectorAll('label')).find((el) => /state of the packet/i.test(el.textContent || ''));
-          const button = label && label.parentElement && label.parentElement.querySelector('button[aria-haspopup="listbox"]');
+          const scope = label && (label.closest('div[class*="field"], div[class*="form"], div[class*="item"], div, section') || label.parentElement);
+          const button = scope && (scope.querySelector('button[aria-haspopup="listbox"], button[aria-expanded], [role="combobox"]') || scope.querySelector('button'));
           if (!button) return false;
           if ((button.textContent || '').trim().toLowerCase() === wanted) return true;
           button.scrollIntoView({ block: 'center' });
@@ -785,7 +790,7 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
         : field === "reverse_waybill"
           ? (this.evidenceFilesMap.get("reverse_waybill") || imageFiles.filter((file) => file.toLowerCase().includes("waybill")))
           : field === "product_images"
-            ? (this.evidenceFilesMap.get("product_images") || imageFiles.filter((file) => file.toLowerCase().includes("product")))
+            ? (this.evidenceFilesMap.get("product_images") || (this.job.claim.marketplaceIssueCode === "missing_items" ? (this.evidenceFilesMap.get("attachments") || imageFiles) : imageFiles.filter((file) => file.toLowerCase().includes("product"))))
             : field === "barcode_image"
               ? (this.evidenceFilesMap.get("barcode_image") || imageFiles.filter((file) => file.toLowerCase().includes("barcode")))
               : field === "attachments"
@@ -959,7 +964,15 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
     }
 
     // Step 8: Final Submission
-    const submitDisabledJs = `Array.from(document.querySelectorAll('button')).some((b) => (b.textContent || '').trim() === 'Submit' && b.disabled)`
+    const submitDisabledJs = `(() => {
+      const candidates = Array.from(document.querySelectorAll('button, a, [role="button"], input[type="submit"]'));
+      const btn = candidates.find((el) => {
+        const text = (el instanceof HTMLInputElement ? el.value : (el.textContent || '')).trim();
+        return text === 'Submit';
+      });
+      if (!btn) return false;
+      return Boolean(btn.disabled || btn.getAttribute('aria-disabled') === 'true' || btn.classList.contains('disabled'));
+    })()`
     const waitStarted = Date.now()
     while ((await this.browser.evaluate<boolean>(submitDisabledJs)) && Date.now() - waitStarted < 20000) {
       await this.delay(1000)
@@ -980,8 +993,9 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
       `)
       const disabledShot = path.join(this.workDir, `submit-disabled-job-${this.job.jobId}.png`)
       await this.browser.captureScreenshot(disabledShot)
-      const meeshoSays = (fieldErrors || []).join(" | ")
-      logger.warn(`Meesho kept Submit disabled. ${meeshoSays ? `Meesho says: ${meeshoSays}` : `Empty fields: ${(emptyFields || []).join(", ") || "none found"}`}`)
+      const meeshoSays = Array.isArray(fieldErrors) ? fieldErrors.join(" | ") : ""
+      const emptyList = Array.isArray(emptyFields) ? emptyFields.join(", ") : "none found"
+      logger.warn(`Meesho kept Submit disabled. ${meeshoSays ? `Meesho says: ${meeshoSays}` : `Empty fields: ${emptyList}`}`)
       if (detectMeeshoEarlyBlocker(meeshoSays)) {
         return {
           success: false,
@@ -996,7 +1010,7 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
         screenshotPath: disabledShot,
         manualActionReason: meeshoSays
           ? `Meesho blocked this claim: ${meeshoSays.slice(0, 400)}`
-          : `Meesho kept Submit disabled. Empty fields: ${(emptyFields || []).join(", ") || "check the uploads"}. Finish the form in the open browser.`,
+          : `Meesho kept Submit disabled. Empty fields: ${emptyList}. Finish the form in the open browser.`,
       }
     }
 
@@ -1126,8 +1140,8 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
             .find((el) => /not eligible/i.test(el.textContent || '') && (el.textContent || '').length < 600 && isErrorStyled(el));
           return hit ? (hit.textContent || '').trim().replace(/\\s+/g, ' ') : '';
         })()
-      `)
-      if (message) return message
+      `).catch(() => "")
+      if (typeof message === "string" && message.trim()) return message.trim()
       if (attempt < 2) await this.delay(1000)
     }
     return ""
@@ -1147,6 +1161,7 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
         .filter((text) => text.length > 12 && text.length < 300)
         .slice(0, 60)
     `).catch(() => [])
+    if (!Array.isArray(texts)) return ""
     for (const text of texts) {
       const blocker = detectMeeshoEarlyBlocker(text)
       if (blocker) return blocker

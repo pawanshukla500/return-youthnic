@@ -106,9 +106,9 @@ export function parseFlipkartTicketRow(
   ticketId: string,
 ): { statusText: string; normalizedStatus?: string } | null {
   const wanted = (ticketId || "").trim().toLowerCase()
-  if (!wanted) return null
+  if (!wanted || !Array.isArray(rows)) return null
   for (const cells of rows) {
-    if (!cells.some((cell) => cell.toLowerCase().includes(wanted))) continue
+    if (!Array.isArray(cells) || !cells.some((cell) => cell.toLowerCase().includes(wanted))) continue
     const statusText = cells.filter((cell) => !cell.toLowerCase().includes(wanted)).join(" | ")
     if (!statusText) return { statusText: ticketId }
     const lower = statusText.toLowerCase()
@@ -132,7 +132,9 @@ export function flipkartSubmitClickScript(): string {
       const isInput = el instanceof HTMLInputElement;
       const text = (isInput ? el.value : (el.textContent || '')).trim().toLowerCase();
       const rect = el.getBoundingClientRect();
-      const visible = rect.width > 0 && rect.height > 0 && el.offsetParent !== null;
+      const style = window.getComputedStyle ? window.getComputedStyle(el) : null;
+      if (style && (style.visibility === 'hidden' || style.display === 'none')) return false;
+      const visible = rect.width > 0 && rect.height > 0 && (el.offsetParent !== null || (style && style.position === 'fixed'));
       const disabled = Boolean(el.disabled || el.getAttribute('aria-disabled') === 'true');
       const isSubmitText = text === 'submit' || text === 'submit claim' || text === 'raise claim' || text === 'apply spf' || text === 'confirm';
       return visible && !disabled && isSubmitText;
@@ -296,7 +298,7 @@ export class FlipkartAutomation extends BaseMarketplaceAutomation {
     if (fileInputs.length > 0 && allFiles.length > 0) {
       logger.info(`Attaching evidence to ${fileInputs.length} Flipkart upload boxes...`)
       for (const inputKey of fileInputs) {
-        const selector = inputKey.startsWith("#") ? inputKey : `input[type="file"]`
+        const selector = inputKey.startsWith("#") ? inputKey : (inputKey === "file-input" ? 'input[type="file"]' : `#${inputKey}`)
         const field = resolveFlipkartUploadField(inputKey)
         const chosen = field === "unboxing_video"
           ? (this.evidenceFilesMap.get("unboxing_video") || videoFiles)
