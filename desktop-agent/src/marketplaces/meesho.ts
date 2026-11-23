@@ -103,7 +103,7 @@ export function extractMeeshoResolution(text: string): { rejectionReason?: strin
   const result: { rejectionReason?: string; approvedAmount?: number } = {}
 
   // Approved amount detection
-  const amtMatch = text.match(/(?:approved(?:\s+(?:for|amount))?|refund\s+amount|compensation|credit(?:ed)?)\s*(?:is|of|:)?\s*(?:₹|rs\.?)\s*([\d,]+(?:\.\d+)?)/i)
+  const amtMatch = text.match(/(?:approved(?:\s+(?:compensation|for|amount|claim))*|compensation(?:\s+amount)?|refund\s+amount|credit(?:ed)?)\s*(?:is|of|:)?\s*(?:₹|rs\.?)\s*([\d,]+(?:\.\d+)?)/i)
     || text.match(/(?:₹|rs\.?)\s*([\d,]+(?:\.\d+)?)\s*(?:approved|credited|refunded|compensation)/i)
   if (amtMatch) {
     const num = parseFloat(amtMatch[1].replace(/,/g, ""))
@@ -112,7 +112,7 @@ export function extractMeeshoResolution(text: string): { rejectionReason?: strin
 
   // Rejection reason patterns from Meesho support
   const rejKeywords = [
-    /(?:rejection\s*reason|reason\s*for\s*rejection|resolution\s*notes?|agent\s*remarks?|remarks?|resolution)\s*[:\-]\s*([^.\n\r]+)/i,
+    /(?:rejection\s*reason|reason\s*(?:for\s*rejection)?|resolution\s*notes?|agent\s*remarks?|remarks?|resolution)\s*[:\-]\s*([^.\n\r]+)/i,
     /(?:rejected\s*(?:due\s*to|because|as))\s*[:\-]?\s*([^.\n\r]+)/i,
     /(?:claim\s*(?:is|has\s*been)?\s*rejected\s*[:\-])\s*([^.\n\r]+)/i,
     /(?:not\s*eligible\s*for\s*(?:claim|compensation|refund)\s*[:\-]?)\s*([^.\n\r]+)/i,
@@ -1234,13 +1234,8 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
           let resolutionNote = `Ticket ${ticketId} read from its Meesho ticket page.`
           let normalizedStatus: string | undefined = classification.normalizedStatus
 
-          // Evaluate if Meesho demands response or additional proof (unboxing video, clear waybill, etc.)
-          const demand = analyzeMeeshoFollowUpResponse(page.text, classification.statusText)
-          if (demand.needsSellerResponse) {
-            statusText = `Action Required: Demanded ${demand.responseType} (${demand.demandText}) | ${classification.statusText}`
-            resolutionNote = `Action Required: Meesho demands ${demand.responseType} ("${demand.demandText}"). Seller response needed; ticket kept active.`
-            normalizedStatus = "under_review"
-          } else if (classification.normalizedStatus === "rejected") {
+          // Evaluate terminal resolution (approved / rejected) first before checking response demands
+          if (classification.normalizedStatus === "rejected") {
             const res = extractMeeshoResolution(page.text)
             if (res.rejectionReason) {
               statusText = `${classification.statusText} | Reason: ${res.rejectionReason}`
@@ -1253,6 +1248,14 @@ export class MeeshoAutomation extends BaseMarketplaceAutomation {
             if (res.approvedAmount) {
               statusText = `${classification.statusText} | Approved Amount: ₹${res.approvedAmount}`
               resolutionNote = `Claim approved for ₹${res.approvedAmount}.`
+            }
+          } else {
+            // For non-terminal tickets, evaluate if Meesho demands response or additional proof (unboxing video, clear waybill, etc.)
+            const demand = analyzeMeeshoFollowUpResponse(page.text, classification.statusText)
+            if (demand.needsSellerResponse) {
+              statusText = `Action Required: Demanded ${demand.responseType} (${demand.demandText}) | ${classification.statusText}`
+              resolutionNote = `Action Required: Meesho demands ${demand.responseType} ("${demand.demandText}"). Seller response needed; ticket kept active.`
+              normalizedStatus = "under_review"
             }
           }
           return {
