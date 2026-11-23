@@ -303,6 +303,44 @@ export async function completePortalLogin(
         typed = true
         typedAt = Date.now()
         await browser.delay(3000)
+
+        // Inspect for early portal authentication rejection (e.g. incorrect password, invalid phone/email)
+        const earlyAuthError = await browser.evaluate<string>(`
+          (() => {
+            const candidates = Array.from(document.querySelectorAll('span, p, div')).filter((el) => {
+              if (el.childElementCount > 0) return false;
+              const text = (el.textContent || '').trim();
+              if (!text || text.length < 5 || text.length > 200) return false;
+              const rect = el.getBoundingClientRect();
+              if (rect.width === 0 || rect.height === 0) return false;
+              const lowered = text.toLowerCase();
+              return (
+                lowered.includes('please enter the correct') ||
+                lowered.includes('invalid email or phone') ||
+                lowered.includes('invalid password') ||
+                lowered.includes('incorrect password') ||
+                lowered.includes('invalid credentials') ||
+                lowered.includes('user does not exist') ||
+                lowered.includes('account is locked') ||
+                lowered.includes('account is blocked') ||
+                ((el.className || '').toLowerCase().includes('error') && (lowered.includes('invalid') || lowered.includes('incorrect')))
+              );
+            });
+            return candidates.length > 0 ? (candidates[0].textContent || '').trim() : '';
+          })()
+        `).catch(() => '')
+        if (earlyAuthError) {
+          logger.warn(`${input.marketplace} showed login error: ${earlyAuthError}`)
+          if (input.failFastOnManualPrompt) {
+            clearSessionMarker(resolvedSessionDir)
+            await browser.showForManualStep?.()
+            return {
+              ok: false,
+              loginRequired: true,
+              message: `${input.marketplace} rejected login: "${earlyAuthError}". Check the saved credentials in Settings.`,
+            }
+          }
+        }
         continue
       }
     }
@@ -398,7 +436,12 @@ export function isPortalLoggedIn(marketplace: string, url: string, text: string 
   }
   const normMarketplace = marketplace.toLowerCase()
   if (normMarketplace.includes("meesho")) {
-    const inPanel = lowerUrl.includes("/growth/") || lowerUrl.includes("/experience/") || lowerUrl.includes("/panel/v3/new/")
+    const inPanel =
+      lowerUrl.includes("/growth/") ||
+      lowerUrl.includes("/experience/") ||
+      lowerUrl.includes("/panel/v3/new/") ||
+      lowerUrl.includes("/home") ||
+      lowerUrl.endsWith("supplier.meesho.com/")
     const welcome = text.includes("Welcome back") || text.includes("Pending Orders")
     return inPanel || welcome
   }

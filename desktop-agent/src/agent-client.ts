@@ -380,48 +380,58 @@ export class AgentBackendClient {
     const claimDir = path.join(this.config.workDir, `claim-${claimId}`)
     await fs.promises.mkdir(claimDir, { recursive: true })
 
-    for (const f of files) {
-      const safeName = `${f.id}_${f.fieldKey}_${path.basename(f.originalFilename)}`
-      const localPath = path.join(claimDir, safeName)
-      const partialPath = `${localPath}.part`
+    await Promise.all(
+      files.map(async (f) => {
+        const cleanName = path.basename(f.originalFilename).replace(/[^a-zA-Z0-9._-]/g, "_")
+        const safeName = `${f.id}_${f.fieldKey}_${cleanName}`
+        const localPath = path.join(claimDir, safeName)
+        const partialPath = `${localPath}.part`
 
-      if (await this.isCompleteEvidenceFile(localPath, f.sizeBytes, f.contentHash)) {
-        downloadedMap.set(f.fieldKey, [...(downloadedMap.get(f.fieldKey) || []), localPath])
-        continue
-      }
-      await fs.promises.rm(localPath, { force: true }).catch(() => undefined)
-      await fs.promises.rm(partialPath, { force: true }).catch(() => undefined)
-
-      try {
-        const mediaUrl = `${this.config.backendUrl}/api/claims/${claimId}/media/${f.id}`
-        logger.info(`Downloading evidence file: ${f.fieldKey} (${f.originalFilename})...`)
-        const headers: Record<string, string> = { "X-Agent-UUID": this.config.agentUuid }
-        const authorization = operatorAuthorization()
-        if (authorization) headers.Authorization = authorization
-        const res = await this.fetchWithTimeout(mediaUrl, { headers }, 90_000)
-
-        if (res.ok && res.body) {
-          await pipeline(Readable.fromWeb(res.body as any), fs.createWriteStream(partialPath))
-          const totalBytes = (await fs.promises.stat(partialPath)).size
-          if (f.sizeBytes > 0 && totalBytes !== f.sizeBytes) {
-            throw new Error(`Evidence size mismatch for ${f.originalFilename}.`)
-          }
-          if (!(await this.isCompleteEvidenceFile(partialPath, f.sizeBytes, f.contentHash))) {
-            throw new Error(`Evidence integrity check failed for ${f.originalFilename}.`)
-          }
-          await fs.promises.rename(partialPath, localPath)
-          downloadedMap.set(f.fieldKey, [...(downloadedMap.get(f.fieldKey) || []), localPath])
-          logger.info(`Saved ${f.fieldKey} to ${localPath} (${totalBytes} bytes).`)
-        } else {
-          logger.warn(`Could not download ${f.fieldKey} (${res.status}).`)
+        if (await this.isCompleteEvidenceFile(localPath, f.sizeBytes, f.contentHash)) {
+          const list = downloadedMap.get(f.fieldKey) || []
+          list.push(localPath)
+          downloadedMap.set(f.fieldKey, list)
+          return
         }
-      } catch (err) {
+        await fs.promises.rm(localPath, { force: true }).catch(() => undefined)
         await fs.promises.rm(partialPath, { force: true }).catch(() => undefined)
-        logger.error(`Failed downloading ${f.fieldKey}:`, err)
-      }
-    }
+
+        try {
+          const mediaUrl = `${this.config.backendUrl}/api/claims/${claimId}/media/${f.id}`
+          logger.info(`Downloading evidence file in parallel: ${f.fieldKey} (${f.originalFilename})...`)
+          const headers: Record<string, string> = { "X-Agent-UUID": this.config.agentUuid }
+          const authorization = operatorAuthorization()
+          if (authorization) headers.Authorization = authorization
+          const res = await this.fetchWithTimeout(mediaUrl, { headers }, 90_000)
+
+          if (res.ok && res.body) {
+            await pipeline(Readable.fromWeb(res.body as any), fs.createWriteStream(partialPath))
+            const totalBytes = (await fs.promises.stat(partialPath)).size
+            if (f.sizeBytes > 0 && totalBytes !== f.sizeBytes) {
+              throw new Error(`Evidence size mismatch for ${f.originalFilename}.`)
+            }
+            if (!(await this.isCompleteEvidenceFile(partialPath, f.sizeBytes, f.contentHash))) {
+              throw new Error(`Evidence integrity check failed for ${f.originalFilename}.`)
+            }
+            await fs.promises.rename(partialPath, localPath)
+            const list = downloadedMap.get(f.fieldKey) || []
+            list.push(localPath)
+            downloadedMap.set(f.fieldKey, list)
+            logger.info(`Saved ${f.fieldKey} to ${localPath} (${totalBytes} bytes).`)
+          } else {
+            logger.warn(`Could not download ${f.fieldKey} (${res.status}).`)
+          }
+        } catch (err) {
+          await fs.promises.rm(partialPath, { force: true }).catch(() => undefined)
+          logger.error(`Failed downloading ${f.fieldKey}:`, err)
+        }
+      }),
+    )
 
     const downloadedCount = Array.from(downloadedMap.values()).reduce((total, entries) => total + entries.length, 0)
+    if (files.length > 0 && downloadedCount === 0) {
+      throw new Error(`All ${files.length} evidence file downloads failed for claim ${claimId}.`)
+    }
     if (downloadedCount !== files.length) {
       throw new Error(`Downloaded ${downloadedCount} of ${files.length} evidence files. The claim will be retried.`)
     }

@@ -3917,3 +3917,29 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
   - PR #101 squashed and merged into `main` (`d0e88ce`).
   - Windows Desktop Release published: `desktop-v1.3.19.185` (`Return.App.Setup.1.3.19.exe`, 121.56 MiB).
 - **The next agent must not**: bypass `requireApprovalBeforeSubmitForMarketplace` for Flipkart or Myntra before live human verification on vendor panels; remove exact order ticket matching in `meesho.ts`; or set `checkClaimStatus` to `supported: true` for non-Meesho panels without verified live DOM readers.
+
+### 2026-11-23, Antigravity, OMSGuru Meesho cross-validation, login fail-fast, parallel evidence downloads & desktop AI LLM mode validation (1.3.20)
+- **OMSGuru Meesho Cross-Validation**:
+  - Extracted and analyzed bytecode metadata & strings from `/home/pawanshukla/Downloads/omsguru-2.3.6.zip` (`OmsGuru.exe`).
+  - Identified vendor error patterns and selectors: immediate detection of DOM error nodes matching `Please enter the correct`, `Invalid`, `incorrect`, and `.error`; identified authenticated landing URL pattern `/home` (`https://supplier.meesho.com/home`) and root; identified parallel file downloader pattern `BaseChannel._download_files_parallel` with filename sanitization and all-downloads-failed check.
+- **Implemented Fixes & Reliability Hardening**:
+  - `desktop-agent/src/portal-login.ts`:
+    - Added immediate detection of portal login error text right after credential typing in `completePortalLogin`, failing fast with actionable guidance instead of hanging for 10-15 seconds.
+    - Updated `isPortalLoggedIn` to recognize `lowerUrl.includes("/home")` and `lowerUrl.endsWith("supplier.meesho.com/")` for instant session identification.
+  - `desktop-agent/src/agent-client.ts`:
+    - Converted sequential `downloadEvidenceFiles` loop to concurrent parallel downloading via `Promise.all` with individual `.part` temporary files.
+    - Sanitized filenames using `path.basename(f.originalFilename).replace(/[^a-zA-Z0-9._-]/g, "_")`.
+    - Added explicit fail-fast check: if `files.length > 0 && downloadedCount === 0`, throws `All ${files.length} evidence file downloads failed`.
+  - `desktop-agent/portal-login.test.ts`:
+    - Added unit test assertions verifying `/home` and root `supplier.meesho.com/` as authenticated panel states (11/11 tests pass).
+- **Desktop AI / LLM Mode End-to-End Validation**:
+  - Backend AI subsystem: verified multi-provider configuration (`desktop-agent/src/ai-providers.ts` for OpenAI, Anthropic, Google Gemini, Kimi, Zai, Meta), DPAPI/OS-credential key encryption (`desktop-agent/src/ai-provider-store.ts`), task routing & monthly budget enforcement (`desktop-agent/src/ai-routing.ts`), and selector fallback proposal (`desktop-agent/src/ai-center-assist.ts`). All 84 AI tests across 11 test suites pass.
+  - Desktop Renderer UI: verified React 19 UI tabs, accessible ARIA roles, and provider configuration in `desktop/renderer/src/pages/AiCenter.tsx`. Created unit test `desktop/renderer/src/pages/AiCenter.test.tsx` (3/3 pass) and registered in `package.json` `"test"`.
+  - Built desktop renderer via `npm run desktop:renderer:build` (Vite v6.4.4, React 19, 0 errors).
+- **Verification & Checks**:
+  - `npm run typecheck` -> 0 errors (all 4 tsconfig projects).
+  - `npm test` -> 1,174 tests across 97 suites: 1,108 pass, 0 fail, 66 skipped DB checks, 0 cancelled.
+  - `graphify update .` -> 5,064 nodes, 13,342 edges, 188 communities.
+  - Bumped version `1.3.19 -> 1.3.20` (`package.json`).
+- **The next agent must not**: bypass M9's `requireApprovalBeforeSubmitForMarketplace` or `submitting`-lease gates; log or expose secrets or API keys; exceed 256MB V8 heap on desktop automation.
+
