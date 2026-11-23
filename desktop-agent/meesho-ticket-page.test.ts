@@ -8,6 +8,7 @@ import {
   TICKET_PAGE_TEXT_MAX_CHARS,
   classifyMeeshoTicketPageText,
   pickLongestTicketText,
+  extractMeeshoResolution,
 } from "./src/marketplaces/meesho.js"
 
 describe("classifyMeeshoTicketPageText", () => {
@@ -124,5 +125,37 @@ describe("pickLongestTicketText", () => {
   it("returns an empty string for empty input", () => {
     assert.equal(pickLongestTicketText([]), "")
     assert.equal(pickLongestTicketText(["", "   "]), "")
+  })
+})
+
+describe("extractMeeshoResolution", () => {
+  it("extracts approved amount from various currency formats", () => {
+    assert.deepEqual(
+      extractMeeshoResolution("Approved compensation amount of ₹618.24 will be credited"),
+      { approvedAmount: 618.24 },
+    )
+    assert.deepEqual(
+      extractMeeshoResolution("Status: Claim Approved. Approved Amount: ₹258.33. Refund processed"),
+      { approvedAmount: 258.33 },
+    )
+    assert.deepEqual(
+      extractMeeshoResolution("₹1,250.00 approved for this SPF claim"),
+      { approvedAmount: 1250.0 },
+    )
+  })
+
+  it("extracts rejection reason from portal patterns", () => {
+    const text =
+      "Status: Rejected\nReason: Outer packaging video does not clearly show the reverse waybill tracking barcode."
+    const res = extractMeeshoResolution(text)
+    assert.equal(
+      res.rejectionReason,
+      "Outer packaging video does not clearly show the reverse waybill tracking barcode",
+    )
+  })
+
+  it("returns empty object for unresolved or empty text", () => {
+    assert.deepEqual(extractMeeshoResolution(""), {})
+    assert.deepEqual(extractMeeshoResolution("Ticket is currently in progress"), {})
   })
 })

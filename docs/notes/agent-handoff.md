@@ -4046,5 +4046,30 @@ These are facts about the code as of 2026-10-10. The Application Security Engine
   - Bumped version `1.3.22 -> 1.3.23` (`package.json`).
 - **The next agent must not**: bypass M9's `requireApprovalBeforeSubmitForMarketplace` or `submitting`-lease gates; log or expose secrets or API keys; exceed 256MB V8 heap on desktop automation.
 
+### 2026-11-23, Antigravity, Live Database Claims Audit, Approved/Rejected Ticket Testing & Resolution Enhancements (1.3.24)
+- **Live Database Claims Audit (142 Total Claims)**:
+  - Executed comprehensive audit across `claims`, `claim_automation_jobs`, `claim_automation_follow_ups`, and `claim_tickets` on production database `return-scan_youthnic`.
+  - Claims Status Breakdown:
+    - `submitted`: 115 claims (Total ₹77,213.00: 77 Meesho ₹49,926, 30 Flipkart ₹19,231, 6 Myntra VB ₹6,677, 2 Myntra EJ ₹1,379) with active ticket tracking.
+    - `ready_for_claim`: 17 claims (Meesho).
+    - `waiting_for_approval`: 6 claims (Meesho).
+    - `approved`: 2 claims (Meesho) with confirmed payouts:
+      - Claim #2: Sub-Order `342207442614944832_1`, AWB `R2744240422FPL`, Ticket `794219443852`, Approved Amount: **₹618.24**.
+      - Claim #4: Sub-Order `344400518893652096_1`, AWB `R2752538828MEO`, Ticket `794219052322`, Approved Amount: **₹258.33**.
+      - Total Approved Payout: **₹876.57**.
+    - `rejected`: 0 claims permanently rejected.
+    - `manual_action_required`: 1 claim.
+    - `failed`: 1 claim.
+- **Enhanced Resolution Extraction & Terminal Priority (`desktop-agent/src/marketplaces/meesho.ts`)**:
+  - In `extractMeeshoResolution`: Enhanced regex patterns to reliably capture compound approved amounts (e.g., `Approved compensation amount of ₹618.24`) and standard portal `Reason: ...` rejection headers.
+  - In `checkClaimStatus`: Structured evaluation so terminal verdicts (`approved` with amount or `rejected` with reason) are processed first before response-demand matching. A rejection description explaining why a claim was denied is captured as the terminal rejection reason, not mistaken for an active seller proof request.
+- **Unit Testing**:
+  - Added unit tests in `desktop-agent/meesho-ticket-page.test.ts` for `extractMeeshoResolution` covering currency pattern matching, rejection reason extraction, and empty handling (16/16 tests pass).
+- **Verification & Checks**:
+  - `npm run typecheck` -> 0 errors across all 4 tsconfig projects.
+  - `npm test` -> 1,199 tests across 102 suites: **1,133 pass**, 0 fail, 66 skipped DB checks, 0 cancelled.
+  - Bumped version `1.3.23 -> 1.3.24` (`package.json`).
+- **The next agent must not**: bypass M9's `requireApprovalBeforeSubmitForMarketplace` or `submitting`-lease gates; log or expose secrets or API keys; exceed 256MB V8 heap on desktop automation.
+
 
 
